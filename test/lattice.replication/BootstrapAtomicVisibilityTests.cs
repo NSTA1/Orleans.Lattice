@@ -312,7 +312,7 @@ public partial class BootstrapAtomicVisibilityTests
                 atomicBatchSize: entry.AtomicBatchSize,
                 atomicBatchIndex: entry.AtomicBatchIndex);
         }
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await receiverLattice.GetAsync(keyA), Is.Null,
                 "After prepared-only replay, keyA must remain hidden on the receiver.");

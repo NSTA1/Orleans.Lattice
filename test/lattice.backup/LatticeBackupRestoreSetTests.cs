@@ -123,10 +123,10 @@ public sealed class LatticeBackupRestoreSetTests
 
         var restoredA = _fixture.GrainFactory.GetGrain<ILattice>(treeA);
         var restoredB = _fixture.GrainFactory.GetGrain<ILattice>(treeB);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(Str(restoredA.GetAsync("k").Result!), Is.EqualTo("a-captured"));
-            Assert.That(Str(restoredB.GetAsync("k").Result!), Is.EqualTo("b-captured"));
+            Assert.That(Str((await restoredA.GetAsync("k"))!), Is.EqualTo("a-captured"));
+            Assert.That(Str((await restoredB.GetAsync("k"))!), Is.EqualTo("b-captured"));
         });
     }
 

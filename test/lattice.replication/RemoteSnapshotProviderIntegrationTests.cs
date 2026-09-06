@@ -132,7 +132,7 @@ public class RemoteSnapshotProviderIntegrationTests
 
         // Site B's local tree must now contain every entry from site A.
         var siteBLattice = _siteB.Client.GetGrain<ILattice>(tree);
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await siteBLattice.GetAsync("a"), Is.EqualTo(new byte[] { 0x01 }));
             Assert.That(await siteBLattice.GetAsync("b"), Is.EqualTo(new byte[] { 0x02 }));

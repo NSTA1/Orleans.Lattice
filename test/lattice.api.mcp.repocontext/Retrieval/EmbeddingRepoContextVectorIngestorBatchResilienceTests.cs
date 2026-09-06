@@ -179,7 +179,7 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchResilienceTests
             async () => await Ingestor(harness).IngestSymbolsAsync(RepoId, keys, Array.Empty<string>(), Ct),
             Throws.InstanceOf<TimeoutException>());
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(
                 injector.Failed,
@@ -187,7 +187,7 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchResilienceTests
                 "the arm stops after the threshold rather than attempting all "
                 + $"{batches} batches against a saturated store");
             Assert.That(
-                EmbeddedCountAsync(harness, keys, Ct).Result,
+                await EmbeddedCountAsync(harness, keys, Ct),
                 Is.Zero,
                 "every deferred source stays unmarked, so the next reconcile picks it up");
         });

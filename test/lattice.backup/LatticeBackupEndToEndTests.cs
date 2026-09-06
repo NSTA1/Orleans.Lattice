@@ -186,12 +186,12 @@ public sealed class LatticeBackupEndToEndTests
         var restored = _restore.GrainFactory.GetGrain<ILattice>(target);
 
         // Spot-check the boundaries and the middle, then confirm the full count.
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.EntriesApplied, Is.EqualTo(keyCount));
-            Assert.That(Str(restored.GetAsync("key:00000").Result!), Is.EqualTo("value-0"));
-            Assert.That(Str(restored.GetAsync("key:00250").Result!), Is.EqualTo("value-250"));
-            Assert.That(Str(restored.GetAsync("key:00499").Result!), Is.EqualTo("value-499"));
+            Assert.That(Str((await restored.GetAsync("key:00000"))!), Is.EqualTo("value-0"));
+            Assert.That(Str((await restored.GetAsync("key:00250"))!), Is.EqualTo("value-250"));
+            Assert.That(Str((await restored.GetAsync("key:00499"))!), Is.EqualTo("value-499"));
         });
 
         var restoredCount = 0;

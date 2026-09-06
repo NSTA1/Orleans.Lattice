@@ -56,12 +56,12 @@ public sealed class CoordinatedRestoreSetAtomicityTests
 
         var repl = _fixture.GrainFactory.GetGrain<ILattice>(ReplTree);
         var local = _fixture.GrainFactory.GetGrain<ILattice>(LocalTree);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(repl.CountAsync().Result, Is.EqualTo(3), "replicated member reverted to its cut");
-            Assert.That(local.CountAsync().Result, Is.EqualTo(2), "local-only member reverted to its cut");
-            Assert.That(repl.GetAsync(PostCutKey).Result, Is.Null, "replicated member dropped its post-cut entry");
-            Assert.That(local.GetAsync(PostCutKey).Result, Is.Null, "local-only member dropped its post-cut entry");
+            Assert.That(await repl.CountAsync(), Is.EqualTo(3), "replicated member reverted to its cut");
+            Assert.That(await local.CountAsync(), Is.EqualTo(2), "local-only member reverted to its cut");
+            Assert.That(await repl.GetAsync(PostCutKey), Is.Null, "replicated member dropped its post-cut entry");
+            Assert.That(await local.GetAsync(PostCutKey), Is.Null, "local-only member dropped its post-cut entry");
         });
 
         // One shared fence covers the whole group; shipping stays globally gated for
@@ -89,12 +89,12 @@ public sealed class CoordinatedRestoreSetAtomicityTests
 
         var repl = _fixture.GrainFactory.GetGrain<ILattice>(ReplTree);
         var local = _fixture.GrainFactory.GetGrain<ILattice>(LocalTree);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(repl.CountAsync().Result, Is.EqualTo(4), "replicated member is untouched by the aborted set");
-            Assert.That(local.CountAsync().Result, Is.EqualTo(3), "local-only member is untouched by the aborted set");
-            Assert.That(repl.GetAsync(PostCutKey).Result, Is.Not.Null, "replicated member kept its post-cut entry");
-            Assert.That(local.GetAsync(PostCutKey).Result, Is.Not.Null, "local-only member kept its post-cut entry");
+            Assert.That(await repl.CountAsync(), Is.EqualTo(4), "replicated member is untouched by the aborted set");
+            Assert.That(await local.CountAsync(), Is.EqualTo(3), "local-only member is untouched by the aborted set");
+            Assert.That(await repl.GetAsync(PostCutKey), Is.Not.Null, "replicated member kept its post-cut entry");
+            Assert.That(await local.GetAsync(PostCutKey), Is.Not.Null, "local-only member kept its post-cut entry");
         });
     }
 
@@ -122,10 +122,10 @@ public sealed class CoordinatedRestoreSetAtomicityTests
         // member would leave the set inconsistent.
         await repl.SetAsync(PostCutKey, Encoding.UTF8.GetBytes("repl-post"));
         await local.SetAsync(PostCutKey, Encoding.UTF8.GetBytes("local-post"));
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(repl.CountAsync().Result, Is.EqualTo(4), "replicated member advanced past the cut");
-            Assert.That(local.CountAsync().Result, Is.EqualTo(3), "local-only member advanced past the cut");
+            Assert.That(await repl.CountAsync(), Is.EqualTo(4), "replicated member advanced past the cut");
+            Assert.That(await local.CountAsync(), Is.EqualTo(3), "local-only member advanced past the cut");
         });
 
         var setId = set.SetManifest.SetId;

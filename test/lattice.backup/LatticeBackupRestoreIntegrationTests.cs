@@ -58,11 +58,11 @@ public sealed class LatticeBackupRestoreIntegrationTests
             Assert.That(result.TargetTreeId, Is.EqualTo(target));
         });
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(Str(restored.GetAsync("k1").Result!), Is.EqualTo("v1"));
-            Assert.That(Str(restored.GetAsync("k2").Result!), Is.EqualTo("v2"));
-            Assert.That(Str(restored.GetAsync("k3").Result!), Is.EqualTo("v3"));
+            Assert.That(Str((await restored.GetAsync("k1"))!), Is.EqualTo("v1"));
+            Assert.That(Str((await restored.GetAsync("k2"))!), Is.EqualTo("v2"));
+            Assert.That(Str((await restored.GetAsync("k3"))!), Is.EqualTo("v3"));
         });
 
         // Every restored entry carries the source's causal envelope verbatim: same
@@ -112,12 +112,12 @@ public sealed class LatticeBackupRestoreIntegrationTests
         await _fixture.Restore.RestoreAsync(new LatticeRestoreRequest(increment.BackupId, target));
 
         var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(Str(restored.GetAsync("k1").Result!), Is.EqualTo("v1-updated"), "overwrite folded");
-            Assert.That(restored.GetAsync("k2").Result, Is.Null, "delete folded");
-            Assert.That(Str(restored.GetAsync("k3").Result!), Is.EqualTo("v3"), "untouched base entry survives");
-            Assert.That(Str(restored.GetAsync("k4").Result!), Is.EqualTo("v4"), "new key folded");
+            Assert.That(Str((await restored.GetAsync("k1"))!), Is.EqualTo("v1-updated"), "overwrite folded");
+            Assert.That(await restored.GetAsync("k2"), Is.Null, "delete folded");
+            Assert.That(Str((await restored.GetAsync("k3"))!), Is.EqualTo("v3"), "untouched base entry survives");
+            Assert.That(Str((await restored.GetAsync("k4"))!), Is.EqualTo("v4"), "new key folded");
         });
     }
 
@@ -172,12 +172,12 @@ public sealed class LatticeBackupRestoreIntegrationTests
 
         var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.EntriesApplied, Is.EqualTo(2));
-            Assert.That(Str(restored.GetAsync("a:1").Result!), Is.EqualTo("va1"));
-            Assert.That(Str(restored.GetAsync("a:2").Result!), Is.EqualTo("va2"));
-            Assert.That(restored.GetAsync("b:1").Result, Is.Null);
+            Assert.That(Str((await restored.GetAsync("a:1"))!), Is.EqualTo("va1"));
+            Assert.That(Str((await restored.GetAsync("a:2"))!), Is.EqualTo("va2"));
+            Assert.That(await restored.GetAsync("b:1"), Is.Null);
         });
     }
 
@@ -198,11 +198,11 @@ public sealed class LatticeBackupRestoreIntegrationTests
 
         var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.EntriesApplied, Is.EqualTo(1));
-            Assert.That(Str(restored.GetAsync("k1").Result!), Is.EqualTo("v1"));
-            Assert.That(restored.GetAsync("k2").Result, Is.Null);
+            Assert.That(Str((await restored.GetAsync("k1"))!), Is.EqualTo("v1"));
+            Assert.That(await restored.GetAsync("k2"), Is.Null);
         });
     }
 
@@ -248,9 +248,9 @@ public sealed class LatticeBackupRestoreIntegrationTests
 
         var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
         var crdtHasElement = await restored.OrSet("crdt1").ContainsAsync(Bytes("e1"));
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(Str(restored.GetAsync("lww1").Result!), Is.EqualTo("v1"));
+            Assert.That(Str((await restored.GetAsync("lww1"))!), Is.EqualTo("v1"));
             Assert.That(crdtHasElement, Is.True,
                 "the converged CRDT state restores as valid CRDT bytes.");
         });
@@ -280,13 +280,13 @@ public sealed class LatticeBackupRestoreIntegrationTests
 
         var result = await _fixture.Restore.RestoreAsync(new LatticeRestoreRequest(backup.BackupId, target));
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             // k1 had no live value, so the backup value converges in.
-            Assert.That(Str(existing.GetAsync("k1").Result!), Is.EqualTo("backup-v1"));
+            Assert.That(Str((await existing.GetAsync("k1"))!), Is.EqualTo("backup-v1"));
             // k2's live write is causally newer than the backup, so last-writer-wins
             // keeps it: the restore is a faithful merge, not a blind overwrite.
-            Assert.That(Str(existing.GetAsync("k2").Result!), Is.EqualTo("live-newer-v2"));
+            Assert.That(Str((await existing.GetAsync("k2"))!), Is.EqualTo("live-newer-v2"));
             Assert.That(result.EntriesApplied, Is.EqualTo(2));
         });
     }
@@ -311,24 +311,24 @@ public sealed class LatticeBackupRestoreIntegrationTests
         var result = await _fixture.Restore.RestoreAsync(
             new LatticeRestoreRequest(backup.BackupId, target, mode: LatticeRestoreMode.ShadowCutover));
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.Mode, Is.EqualTo(LatticeRestoreMode.ShadowCutover));
             Assert.That(result.ShadowPhysicalTreeId, Is.Not.Null);
             Assert.That(result.PreviousPhysicalTreeId, Is.EqualTo(target));
             // After cutover the logical tree resolves to the shadow: backup data is
             // live, the pre-cutover key is gone.
-            Assert.That(Str(live.GetAsync("k1").Result!), Is.EqualTo("backup-v1"));
-            Assert.That(live.GetAsync("live-key").Result, Is.Null);
+            Assert.That(Str((await live.GetAsync("k1"))!), Is.EqualTo("backup-v1"));
+            Assert.That(await live.GetAsync("live-key"), Is.Null);
         });
 
         await _fixture.Restore.RevertRestoreAsync(result);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             // The prior tree is retained and the revert swings the alias back.
-            Assert.That(Str(live.GetAsync("live-key").Result!), Is.EqualTo("live-value"));
-            Assert.That(live.GetAsync("k1").Result, Is.Null);
+            Assert.That(Str((await live.GetAsync("live-key"))!), Is.EqualTo("live-value"));
+            Assert.That(await live.GetAsync("k1"), Is.Null);
         });
     }
 
@@ -393,7 +393,7 @@ public sealed class LatticeBackupRestoreIntegrationTests
 
         // Fail-closed: nothing was installed into the target.
         var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
-        Assert.That(restored.GetAsync("k1").Result, Is.Null);
+        Assert.That(await restored.GetAsync("k1"), Is.Null);
     }
 
     // ---- Validation trust boundary --------------------------------------

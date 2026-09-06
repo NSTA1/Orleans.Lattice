@@ -186,7 +186,7 @@ public sealed class TenantAdminCapabilityScopeTests
         var authorizer = new LatticeTenantAdminAuthorizer(harness.Gate);
         var root = new LatticeSubject("root");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.Platform, root), Is.True);
             Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.ForTenant(Acme), root), Is.True);
@@ -206,7 +206,7 @@ public sealed class TenantAdminCapabilityScopeTests
         var authorizer = new LatticeTenantAdminAuthorizer(harness.Gate);
         var mallory = new LatticeSubject("mallory");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.Platform, mallory), Is.False);
             Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.ForTenant(Acme), mallory), Is.False);
@@ -226,7 +226,7 @@ public sealed class TenantAdminCapabilityScopeTests
             new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow }, DelegatedTenantGrant("acme-admin", Acme));
         var authorizer = new LatticeTenantAdminAuthorizer(harness.Gate);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.Platform, LatticeSubject.Anonymous), Is.False);
             Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.ForTenant(Acme), LatticeSubject.Anonymous), Is.False);
@@ -242,7 +242,7 @@ public sealed class TenantAdminCapabilityScopeTests
         var authorizer = new LatticeTenantAdminAuthorizer(harness.Gate);
         var mallory = new LatticeSubject("mallory");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.Platform, mallory), Is.False);
             Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.ForTenant(Acme), mallory), Is.False);
@@ -257,7 +257,7 @@ public sealed class TenantAdminCapabilityScopeTests
         var authorizer = new LatticeTenantAdminAuthorizer(harness.Gate);
         var acmeAdmin = new LatticeSubject("acme-admin");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.ForTenant(Beta), acmeAdmin), Is.False, "cross-tenant");
             Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.Platform, acmeAdmin), Is.False, "escalation");

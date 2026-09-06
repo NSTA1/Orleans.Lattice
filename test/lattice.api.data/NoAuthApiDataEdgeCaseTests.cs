@@ -45,11 +45,11 @@ public sealed class NoAuthApiDataEdgeCaseTests
 
         await _fixture.Api.SetManyAsync(tree, upserts);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(_fixture.Api.GetAsync(tree, "a").Result.Value, Is.EqualTo(new byte[] { 1 }));
-            Assert.That(_fixture.Api.GetAsync(tree, "b").Result.Value, Is.EqualTo(new byte[] { 2 }));
-            Assert.That(_fixture.Api.GetAsync(tree, "c").Result.Value, Is.EqualTo(new byte[] { 3 }));
+            Assert.That((await _fixture.Api.GetAsync(tree, "a")).Value, Is.EqualTo(new byte[] { 1 }));
+            Assert.That((await _fixture.Api.GetAsync(tree, "b")).Value, Is.EqualTo(new byte[] { 2 }));
+            Assert.That((await _fixture.Api.GetAsync(tree, "c")).Value, Is.EqualTo(new byte[] { 3 }));
         });
     }
 
@@ -102,12 +102,12 @@ public sealed class NoAuthApiDataEdgeCaseTests
 
         var outcome = await _fixture.Api.SetManyAtomicCrossTreeAsync(batches, "edge-xt-del-op");
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
-            Assert.That(_fixture.Api.GetAsync(treeA, "kept").Result.Value, Is.EqualTo(new byte[] { 1 }));
-            Assert.That(_fixture.Api.GetAsync(treeB, "fresh").Result.Value, Is.EqualTo(new byte[] { 2 }));
-            Assert.That(_fixture.Api.GetAsync(treeB, "gone").Result.Found, Is.False);
+            Assert.That((await _fixture.Api.GetAsync(treeA, "kept")).Value, Is.EqualTo(new byte[] { 1 }));
+            Assert.That((await _fixture.Api.GetAsync(treeB, "fresh")).Value, Is.EqualTo(new byte[] { 2 }));
+            Assert.That((await _fixture.Api.GetAsync(treeB, "gone")).Found, Is.False);
         });
     }
 

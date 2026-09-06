@@ -125,9 +125,9 @@ public sealed class RepoContextVectorWriterMembershipTests
 
         var metadata = grains.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(metadata.ExistsAsync(RepoContextKeys.Vector(RepoId, vectorId), Ct).Result, Is.True,
+            Assert.That(await metadata.ExistsAsync(RepoContextKeys.Vector(RepoId, vectorId), Ct), Is.True,
                 "The metadata presence key lands on the store.");
             Assert.That(members.Contains(SourceId(key)), Is.False,
                 "Membership is the caller's per-batch responsibility (AddMembersAsync), not folded by StoreAsync.");
@@ -151,9 +151,9 @@ public sealed class RepoContextVectorWriterMembershipTests
 
         var metadata = grains.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(metadata.ExistsAsync(RepoContextKeys.Vector(RepoId, vectorId), Ct).Result, Is.False,
+            Assert.That(await metadata.ExistsAsync(RepoContextKeys.Vector(RepoId, vectorId), Ct), Is.False,
                 "Retire deletes the source's metadata presence key.");
             Assert.That(members.Contains(SourceId(key)), Is.False,
                 "Retire observed-removes the source from the membership set so the tally stays honest.");

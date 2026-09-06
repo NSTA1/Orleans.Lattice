@@ -110,11 +110,11 @@ public class ReplicationApplyIntegrationTests
 
         await apply.ApplyDeleteRangeAsync("a", "z", HybridLogicalClock.Zero, TwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(lattice.GetAsync("a").Result, Is.Null);
-            Assert.That(lattice.GetAsync("m").Result, Is.Null);
-            Assert.That(lattice.GetAsync("y").Result, Is.Null);
+            Assert.That(await lattice.GetAsync("a"), Is.Null);
+            Assert.That(await lattice.GetAsync("m"), Is.Null);
+            Assert.That(await lattice.GetAsync("y"), Is.Null);
         });
     }
 
@@ -175,11 +175,11 @@ public class ReplicationApplyIntegrationTests
 
         await hwmTreeA.TryAdvanceAsync(origin, Hlc(100));
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(hwmTreeB.GetAsync(origin).Result, Is.EqualTo(HybridLogicalClock.Zero));
+            Assert.That(await hwmTreeB.GetAsync(origin), Is.EqualTo(HybridLogicalClock.Zero));
             // Different origin on the same tree as Site A also reports Zero.
-            Assert.That(hwmTreeA.GetAsync("site-c").Result, Is.EqualTo(HybridLogicalClock.Zero));
+            Assert.That(await hwmTreeA.GetAsync("site-c"), Is.EqualTo(HybridLogicalClock.Zero));
         });
     }
 

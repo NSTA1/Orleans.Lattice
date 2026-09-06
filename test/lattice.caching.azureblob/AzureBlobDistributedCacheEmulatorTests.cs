@@ -176,7 +176,7 @@ public sealed class AzureBlobDistributedCacheEmulatorTests
 
         await cacheA.SetAsync("same", Encoding.UTF8.GetBytes("from-a"), new DistributedCacheEntryOptions());
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await cacheA.GetAsync("same"), Is.EqualTo(Encoding.UTF8.GetBytes("from-a")));
             Assert.That(await cacheB.GetAsync("same"), Is.Null);

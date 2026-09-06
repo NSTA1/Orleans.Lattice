@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests;
 
@@ -61,30 +62,6 @@ public sealed class LatticeStorageUsagePollerTests
     }
 
     /// <summary>
-    /// Polls <paramref name="condition"/> until it holds or the timeout
-    /// expires, returning whether it was ever observed to hold. Positive
-    /// assertions wait only as long as they must (and get a generous
-    /// ceiling, so a slow CI agent cannot fail them); negative assertions
-    /// are expressed as "the earliest observable evidence never appeared
-    /// within a window far longer than the configured cadence".
-    /// </summary>
-    private static async Task<bool> WaitUntilAsync(Func<bool> condition, int timeoutMs = 10000)
-    {
-        var deadline = Environment.TickCount64 + timeoutMs;
-        while (Environment.TickCount64 < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(10);
-        }
-
-        return condition();
-    }
-
-    /// <summary>
     /// Awaits <paramref name="task"/> under a bounded deadline, failing the
     /// test with <paramref name="because"/> rather than hanging the run if
     /// the task never settles.
@@ -141,7 +118,7 @@ public sealed class LatticeStorageUsagePollerTests
         // immediately then the timer drives subsequent ones. Polling for
         // the evidence keeps the test fast when the loop is prompt and
         // patient when a loaded CI agent delays the thread pool.
-        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0), Is.True,
+        await TestPoll.UntilAsync(() => walPolls.Count > 0,
             "an enabled poller must reach the admin grain's WAL poll");
         await poller.StopAsync(CancellationToken.None);
 
@@ -178,7 +155,7 @@ public sealed class LatticeStorageUsagePollerTests
         // first observed poll is a sound happens-after signal for it -
         // unlike a fixed sleep, which asserts on whatever the loop
         // happened to have reached.
-        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0), Is.True,
+        await TestPoll.UntilAsync(() => walPolls.Count > 0,
             "the poller must start its WAL loop, which happens only after the horizon is sized");
         await poller.StopAsync(CancellationToken.None);
 
@@ -205,7 +182,7 @@ public sealed class LatticeStorageUsagePollerTests
         var poller = CreatePoller(factory, new LatticeOptions { StorageUsagePollInterval = TimeSpan.FromSeconds(5) }, out var metrics);
 
         await poller.StartAsync(CancellationToken.None);
-        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0), Is.True,
+        await TestPoll.UntilAsync(() => walPolls.Count > 0,
             "the poller must start its WAL loop, which happens only after the horizon is sized");
         await poller.StopAsync(CancellationToken.None);
 
@@ -233,7 +210,7 @@ public sealed class LatticeStorageUsagePollerTests
         // "Swallows the fault and keeps ticking" is only demonstrated by a
         // second tick arriving after the first one threw, so wait for that
         // rather than for an arbitrary number of milliseconds.
-        Assert.That(await WaitUntilAsync(() => walPolls.Count >= 2), Is.True,
+        await TestPoll.UntilAsync(() => walPolls.Count >= 2,
             "the poller must swallow a failing poll and tick again");
         // The poller swallows the fault and keeps ticking; stopping is clean.
         Assert.That(async () => await poller.StopAsync(CancellationToken.None), Throws.Nothing);
@@ -273,7 +250,7 @@ public sealed class LatticeStorageUsagePollerTests
             out _);
 
         await poller.StartAsync(CancellationToken.None);
-        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0 && deepPolls.Count > 0), Is.True,
+        await TestPoll.UntilAsync(() => walPolls.Count > 0 && deepPolls.Count > 0,
             "both the WAL loop and the deep loop must reach the admin grain");
         await poller.StopAsync(CancellationToken.None);
 
@@ -311,7 +288,7 @@ public sealed class LatticeStorageUsagePollerTests
         // Waiting on several deep ticks gives the (incorrectly-started) WAL
         // loop far more opportunity to fire than a fixed sleep did, so the
         // negative assertion below is stronger, not weaker.
-        Assert.That(await WaitUntilAsync(() => deepPolls.Count >= 3), Is.True,
+        await TestPoll.UntilAsync(() => deepPolls.Count >= 3,
             "the deep loop must reach the admin grain repeatedly on its own cadence");
         await poller.StopAsync(CancellationToken.None);
 
@@ -347,7 +324,7 @@ public sealed class LatticeStorageUsagePollerTests
             out var metrics);
 
         await poller.StartAsync(CancellationToken.None);
-        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0), Is.True,
+        await TestPoll.UntilAsync(() => walPolls.Count > 0,
             "the poller must start its poll loops, which happens only after the horizon is sized");
         await poller.StopAsync(CancellationToken.None);
 
@@ -381,7 +358,7 @@ public sealed class LatticeStorageUsagePollerTests
 
         await poller.StartAsync(CancellationToken.None);
         // The immediate first poll still runs; only the wait cadence is clamped.
-        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0), Is.True,
+        await TestPoll.UntilAsync(() => walPolls.Count > 0,
             "the clamped interval must still let the immediate first poll run");
         await poller.StopAsync(CancellationToken.None);
 

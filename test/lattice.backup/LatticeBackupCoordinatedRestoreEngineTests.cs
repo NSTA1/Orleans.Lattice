@@ -141,10 +141,10 @@ public sealed partial class LatticeBackupCoordinatedRestoreEngineTests
 
         // The alias still resolves to the live tree: the build phase must be
         // invisible to readers until the commit phase swaps it.
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(Str(live.GetAsync("live-only").Result!), Is.EqualTo("still-here"));
-            Assert.That(live.GetAsync("k1").Result, Is.Null,
+            Assert.That(Str((await live.GetAsync("live-only"))!), Is.EqualTo("still-here"));
+            Assert.That(await live.GetAsync("k1"), Is.Null,
                 "the restored entries must not be visible before the cutover is committed");
         });
     }
@@ -198,11 +198,11 @@ public sealed partial class LatticeBackupCoordinatedRestoreEngineTests
         await Engine.CommitShadowAsync(shadow);
 
         var after = _fixture.GrainFactory.GetGrain<ILattice>(target);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(Str(after.GetAsync("k1").Result!), Is.EqualTo("v1"));
-            Assert.That(Str(after.GetAsync("k2").Result!), Is.EqualTo("v2"));
-            Assert.That(after.GetAsync("live-only").Result, Is.Null,
+            Assert.That(Str((await after.GetAsync("k1"))!), Is.EqualTo("v1"));
+            Assert.That(Str((await after.GetAsync("k2"))!), Is.EqualTo("v2"));
+            Assert.That(await after.GetAsync("live-only"), Is.Null,
                 "after the cutover the alias must resolve to the restored shadow, not the old tree");
         });
     }
@@ -226,7 +226,7 @@ public sealed partial class LatticeBackupCoordinatedRestoreEngineTests
         await _fixture.Restore.RevertRestoreAsync(shadow);
 
         var reverted = _fixture.GrainFactory.GetGrain<ILattice>(target);
-        Assert.That(Str(reverted.GetAsync("live-only").Result!), Is.EqualTo("pre-cutover"),
+        Assert.That(Str((await reverted.GetAsync("live-only"))!), Is.EqualTo("pre-cutover"),
             "the commit must retain the previous physical tree so a revert restores it");
     }
 

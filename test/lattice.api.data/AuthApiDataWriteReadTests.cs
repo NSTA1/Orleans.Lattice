@@ -148,10 +148,10 @@ public sealed class AuthApiDataWriteReadTests
             removed = await _fixture.Api.DeleteAsync(tree, "k1");
         }
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(removed, Is.True);
-            Assert.That(_fixture.ReadRawAsync(tree, "k1").Result, Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(tree, "k1"), Is.Null);
         });
     }
 
@@ -170,7 +170,7 @@ public sealed class AuthApiDataWriteReadTests
                 async () => await _fixture.Api.DeleteAsync(tree, "k1"));
         }
 
-        Assert.That(_fixture.ReadRawAsync(tree, "k1").Result, Is.EqualTo(new byte[] { 1 }));
+        Assert.That(await _fixture.ReadRawAsync(tree, "k1"), Is.EqualTo(new byte[] { 1 }));
     }
 
     [Test]
@@ -193,11 +193,11 @@ public sealed class AuthApiDataWriteReadTests
                 new DataRangeDeleteRequest { TreeId = tree, StartInclusive = "k00", EndExclusive = "k99" });
         }
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.DeletedCount, Is.EqualTo(6));
-            Assert.That(_fixture.ReadRawAsync(tree, "k00").Result, Is.Null);
-            Assert.That(_fixture.ReadRawAsync(tree, "zzz").Result, Is.EqualTo(new byte[] { 99 }));
+            Assert.That(await _fixture.ReadRawAsync(tree, "k00"), Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(tree, "zzz"), Is.EqualTo(new byte[] { 99 }));
         });
     }
 
@@ -218,7 +218,7 @@ public sealed class AuthApiDataWriteReadTests
                     new DataRangeDeleteRequest { TreeId = tree, StartInclusive = "k0", EndExclusive = "k9" }));
         }
 
-        Assert.That(_fixture.ReadRawAsync(tree, "k1").Result, Is.EqualTo(new byte[] { 1 }));
+        Assert.That(await _fixture.ReadRawAsync(tree, "k1"), Is.EqualTo(new byte[] { 1 }));
     }
 
     [Test]
@@ -237,7 +237,7 @@ public sealed class AuthApiDataWriteReadTests
             async () => await _fixture.Api.DeleteRangeAsync(
                 new DataRangeDeleteRequest { TreeId = tree, StartInclusive = "k0", EndExclusive = "k9" }));
 
-        Assert.That(_fixture.ReadRawAsync(tree, "k1").Result, Is.EqualTo(new byte[] { 1 }));
+        Assert.That(await _fixture.ReadRawAsync(tree, "k1"), Is.EqualTo(new byte[] { 1 }));
     }
 
     [Test]
@@ -266,10 +266,10 @@ public sealed class AuthApiDataWriteReadTests
         }
 
         // No partial state: neither the allowed nor the denied key was applied.
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(_fixture.ReadRawAsync(tree, "a/1").Result, Is.Null);
-            Assert.That(_fixture.ReadRawAsync(tree, "b/1").Result, Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(tree, "a/1"), Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(tree, "b/1"), Is.Null);
         });
     }
 
@@ -294,10 +294,10 @@ public sealed class AuthApiDataWriteReadTests
             await _fixture.Api.SetManyAtomicAsync(tree, batch, "op-atomic-ok-1");
         }
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(_fixture.ReadRawAsync(tree, "a/1").Result, Is.EqualTo(new byte[] { 1 }));
-            Assert.That(_fixture.ReadRawAsync(tree, "a/2").Result, Is.EqualTo(new byte[] { 2 }));
+            Assert.That(await _fixture.ReadRawAsync(tree, "a/1"), Is.EqualTo(new byte[] { 1 }));
+            Assert.That(await _fixture.ReadRawAsync(tree, "a/2"), Is.EqualTo(new byte[] { 2 }));
         });
     }
 
@@ -324,10 +324,10 @@ public sealed class AuthApiDataWriteReadTests
                 async () => await _fixture.Api.SetManyAtomicCrossTreeAsync(batches, "op-xt-1"));
         }
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(_fixture.ReadRawAsync(treeA, "k").Result, Is.Null);
-            Assert.That(_fixture.ReadRawAsync(treeB, "k").Result, Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(treeA, "k"), Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(treeB, "k"), Is.Null);
         });
     }
 
@@ -354,11 +354,11 @@ public sealed class AuthApiDataWriteReadTests
             outcome = await _fixture.Api.SetManyAtomicCrossTreeAsync(batches, "op-xt-ok-1");
         }
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
-            Assert.That(_fixture.ReadRawAsync(treeA, "k").Result, Is.EqualTo(new byte[] { 1 }));
-            Assert.That(_fixture.ReadRawAsync(treeB, "k").Result, Is.EqualTo(new byte[] { 2 }));
+            Assert.That(await _fixture.ReadRawAsync(treeA, "k"), Is.EqualTo(new byte[] { 1 }));
+            Assert.That(await _fixture.ReadRawAsync(treeB, "k"), Is.EqualTo(new byte[] { 2 }));
         });
     }
 

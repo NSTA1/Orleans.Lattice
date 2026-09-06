@@ -337,7 +337,7 @@ public sealed class FileWalShardRecoveryTests
 
         using var shard = CreateShard();
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await shard.GetHighestOffsetAsync(CancellationToken.None), Is.EqualTo(-1L));
             Assert.That(await shard.GetLowestOffsetAsync(CancellationToken.None), Is.EqualTo(-1L));
@@ -458,7 +458,7 @@ public sealed class FileWalShardRecoveryTests
 
         await shard.TrimAsync(5L, CancellationToken.None);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await shard.GetHighestOffsetAsync(CancellationToken.None), Is.EqualTo(-1L));
             Assert.That(await shard.GetRetainedByteSizeAsync(CancellationToken.None), Is.Zero);

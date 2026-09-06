@@ -101,11 +101,11 @@ public sealed class RepoContextContentReconcilerTests
         var result = await Reconciler(harness).ReconcileAsync(
             RepoId, _repoRoot, added: [], updated: [], removedPaths: [], backfill: [file], Ct);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.ProcessedPaths, Does.Contain("src/Old.cs"),
                 "A pre-existing file with no content record yet is healed by the back-fill.");
-            Assert.That(ReadContentAsync(harness, "src/Old.cs").Result, Is.Not.Null);
+            Assert.That(await ReadContentAsync(harness, "src/Old.cs"), Is.Not.Null);
         });
     }
 

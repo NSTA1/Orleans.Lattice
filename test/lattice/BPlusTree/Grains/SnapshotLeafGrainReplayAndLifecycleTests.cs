@@ -482,7 +482,7 @@ public sealed class SnapshotLeafGrainReplayAndLifecycleTests
     {
         var grain = await SeededOpenGrainAsync(Row("a", [1]), Row("b", [2]), Row("c", [3]), Row("d", [4]));
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That((await grain.GetEntriesAsync(endExclusive: "c")).Select(e => e.Key),
                 Is.EqualTo(new[] { "a", "b" }));
@@ -500,7 +500,7 @@ public sealed class SnapshotLeafGrainReplayAndLifecycleTests
     {
         var grain = await SeededOpenGrainAsync(Row("a", [1]), Row("b", [2]), Row("c", [3]));
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That((await grain.GetEntriesAsync(limit: 2)).Select(e => e.Key),
                 Is.EqualTo(new[] { "a", "b" }));

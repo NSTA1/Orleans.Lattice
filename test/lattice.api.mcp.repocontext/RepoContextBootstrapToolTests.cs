@@ -149,12 +149,12 @@ public sealed class RepoContextBootstrapToolTests
         });
 
         var tree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(tree.GetAsync(RepoContextKeys.File(RepoId, "src/Program.cs"), Ct).Result, Is.Not.Null);
-            Assert.That(tree.GetAsync(RepoContextKeys.File(RepoId, "src/Util.cs"), Ct).Result, Is.Not.Null);
-            Assert.That(tree.GetAsync(RepoContextKeys.File(RepoId, "README.md"), Ct).Result, Is.Not.Null);
-            Assert.That(tree.GetAsync(RepoContextKeys.Repo(RepoId), Ct).Result, Is.Not.Null);
+            Assert.That(await tree.GetAsync(RepoContextKeys.File(RepoId, "src/Program.cs"), Ct), Is.Not.Null);
+            Assert.That(await tree.GetAsync(RepoContextKeys.File(RepoId, "src/Util.cs"), Ct), Is.Not.Null);
+            Assert.That(await tree.GetAsync(RepoContextKeys.File(RepoId, "README.md"), Ct), Is.Not.Null);
+            Assert.That(await tree.GetAsync(RepoContextKeys.Repo(RepoId), Ct), Is.Not.Null);
         });
     }
 
@@ -229,11 +229,11 @@ public sealed class RepoContextBootstrapToolTests
         });
 
         var tree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(tree.GetAsync(RepoContextKeys.File(RepoId, "gone.cs"), Ct).Result, Is.Null,
+            Assert.That(await tree.GetAsync(RepoContextKeys.File(RepoId, "gone.cs"), Ct), Is.Null,
                 "The pruned file's structural record is removed.");
-            Assert.That(tree.GetAsync(RepoContextKeys.File(RepoId, "keep.cs"), Ct).Result, Is.Not.Null);
+            Assert.That(await tree.GetAsync(RepoContextKeys.File(RepoId, "keep.cs"), Ct), Is.Not.Null);
         });
     }
 
@@ -274,7 +274,7 @@ public sealed class RepoContextBootstrapToolTests
         // The structural records committed before the fault, proving the writes are
         // durable at the point of interruption.
         var tree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
-        Assert.That(tree.GetAsync(RepoContextKeys.File(RepoId, "a.cs"), Ct).Result, Is.Not.Null);
+        Assert.That(await tree.GetAsync(RepoContextKeys.File(RepoId, "a.cs"), Ct), Is.Not.Null);
 
         // Second run resumes: the already-written files match by digest, so nothing
         // is re-added or duplicated - the structural resume is a clean no-op over

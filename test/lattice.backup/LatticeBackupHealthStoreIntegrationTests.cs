@@ -89,7 +89,7 @@ public sealed class LatticeBackupHealthStoreIntegrationTests
 
         var removed = await Store.RemoveAsync("h-del");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(removed, Is.True);
             Assert.That(await Store.GetReportAsync("h-del"), Is.Null);

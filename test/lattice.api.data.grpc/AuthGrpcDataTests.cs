@@ -157,10 +157,10 @@ public sealed class AuthGrpcDataTests
         await CallAsync(_host.Methods.Set, new DataSetRequest { TreeId = tree, Key = "k1", Value = new byte[] { 1 } }, Writer);
         var response = await CallAsync(_host.Methods.Delete, new DataDeleteRequest { TreeId = tree, Key = "k1" }, Writer);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(response.Removed, Is.True);
-            Assert.That(_fixture.ReadRawAsync(tree, "k1").Result, Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(tree, "k1"), Is.Null);
         });
     }
 
@@ -239,11 +239,11 @@ public sealed class AuthGrpcDataTests
         var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
             _host.Methods.SetManyAtomic, request, Writer));
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
-            Assert.That(_fixture.ReadRawAsync(tree, "a/1").Result, Is.Null, "no partial state after a denied atomic batch");
-            Assert.That(_fixture.ReadRawAsync(tree, "b/1").Result, Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(tree, "a/1"), Is.Null, "no partial state after a denied atomic batch");
+            Assert.That(await _fixture.ReadRawAsync(tree, "b/1"), Is.Null);
         });
     }
 
@@ -270,10 +270,10 @@ public sealed class AuthGrpcDataTests
 
         await CallAsync(_host.Methods.SetManyAtomic, request, Writer);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(_fixture.ReadRawAsync(tree, "a/1").Result, Is.EqualTo(new byte[] { 1 }));
-            Assert.That(_fixture.ReadRawAsync(tree, "a/2").Result, Is.EqualTo(new byte[] { 2 }));
+            Assert.That(await _fixture.ReadRawAsync(tree, "a/1"), Is.EqualTo(new byte[] { 1 }));
+            Assert.That(await _fixture.ReadRawAsync(tree, "a/2"), Is.EqualTo(new byte[] { 2 }));
         });
     }
 
@@ -312,12 +312,12 @@ public sealed class AuthGrpcDataTests
         var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
             _host.Methods.SetManyAtomic, mismatched, Writer));
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.FailedPrecondition));
             Assert.That(ex.Status.Detail, Does.Contain("different set of keys"));
             Assert.That(ex.Status.Detail, Does.Not.Contain("cluster logs"));
-            Assert.That(_fixture.ReadRawAsync(tree, "b/1").Result, Is.Null,
+            Assert.That(await _fixture.ReadRawAsync(tree, "b/1"), Is.Null,
                 "no partial state after a rejected key-set-mismatch retry");
         });
     }
@@ -344,11 +344,11 @@ public sealed class AuthGrpcDataTests
         var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
             _host.Methods.SetManyAtomicCrossTree, request, Writer));
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
-            Assert.That(_fixture.ReadRawAsync(treeA, "k").Result, Is.Null);
-            Assert.That(_fixture.ReadRawAsync(treeB, "k").Result, Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(treeA, "k"), Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(treeB, "k"), Is.Null);
         });
     }
 
@@ -375,11 +375,11 @@ public sealed class AuthGrpcDataTests
 
         var response = await CallAsync(_host.Methods.SetManyAtomicCrossTree, request, Writer);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(response.Outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
-            Assert.That(_fixture.ReadRawAsync(treeA, "k").Result, Is.EqualTo(new byte[] { 1 }));
-            Assert.That(_fixture.ReadRawAsync(treeB, "k").Result, Is.EqualTo(new byte[] { 2 }));
+            Assert.That(await _fixture.ReadRawAsync(treeA, "k"), Is.EqualTo(new byte[] { 1 }));
+            Assert.That(await _fixture.ReadRawAsync(treeB, "k"), Is.EqualTo(new byte[] { 2 }));
         });
     }
 
@@ -422,11 +422,11 @@ public sealed class AuthGrpcDataTests
         var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
             _host.Methods.SetManyAtomicCrossTree, mismatched, Writer));
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.FailedPrecondition));
             Assert.That(ex.Status.Detail, Does.Not.Contain("cluster logs"));
-            Assert.That(_fixture.ReadRawAsync(treeA, "different").Result, Is.Null,
+            Assert.That(await _fixture.ReadRawAsync(treeA, "different"), Is.Null,
                 "no partial state after a rejected key-set-mismatch retry");
         });
     }
@@ -469,11 +469,11 @@ public sealed class AuthGrpcDataTests
             new DataRangeDeleteRequest { TreeId = tree, StartInclusive = "k00", EndExclusive = "k99" },
             Writer);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.DeletedCount, Is.EqualTo(5));
-            Assert.That(_fixture.ReadRawAsync(tree, "k00").Result, Is.Null);
-            Assert.That(_fixture.ReadRawAsync(tree, "zzz").Result, Is.EqualTo(new byte[] { 99 }));
+            Assert.That(await _fixture.ReadRawAsync(tree, "k00"), Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(tree, "zzz"), Is.EqualTo(new byte[] { 99 }));
         });
     }
 
@@ -492,10 +492,10 @@ public sealed class AuthGrpcDataTests
             new DataRangeDeleteRequest { TreeId = tree, StartInclusive = "k0", EndExclusive = "k9" },
             Writer));
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
-            Assert.That(_fixture.ReadRawAsync(tree, "k1").Result, Is.EqualTo(new byte[] { 1 }));
+            Assert.That(await _fixture.ReadRawAsync(tree, "k1"), Is.EqualTo(new byte[] { 1 }));
         });
     }
 
@@ -517,11 +517,11 @@ public sealed class AuthGrpcDataTests
             new DataSetRequest { TreeId = tree, Key = "k2", Value = new byte[] { 2 } },
             "some-other-subject"));
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(_fixture.ReadRawAsync(tree, "k1").Result, Is.EqualTo(new byte[] { 1 }));
+            Assert.That(await _fixture.ReadRawAsync(tree, "k1"), Is.EqualTo(new byte[] { 1 }));
             Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
-            Assert.That(_fixture.ReadRawAsync(tree, "k2").Result, Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(tree, "k2"), Is.Null);
         });
     }
 
@@ -545,10 +545,10 @@ public sealed class AuthGrpcDataTests
             },
             Writer);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(_fixture.ReadRawAsync(tree, "a").Result, Is.EqualTo(new byte[] { 1 }));
-            Assert.That(_fixture.ReadRawAsync(tree, "b").Result, Is.EqualTo(new byte[] { 2 }));
+            Assert.That(await _fixture.ReadRawAsync(tree, "a"), Is.EqualTo(new byte[] { 1 }));
+            Assert.That(await _fixture.ReadRawAsync(tree, "b"), Is.EqualTo(new byte[] { 2 }));
         });
     }
 
@@ -563,10 +563,10 @@ public sealed class AuthGrpcDataTests
             new DataSetManyRequest { TreeId = tree, Upserts = { new DataEntry { Key = "a", Value = new byte[] { 1 } } } },
             Writer));
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
-            Assert.That(_fixture.ReadRawAsync(tree, "a").Result, Is.Null);
+            Assert.That(await _fixture.ReadRawAsync(tree, "a"), Is.Null);
         });
     }
 

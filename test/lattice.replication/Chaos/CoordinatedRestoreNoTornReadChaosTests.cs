@@ -148,12 +148,12 @@ public sealed class CoordinatedRestoreNoTornReadChaosTests
         }
 
         // Deterministic end state: both clusters restored to the cut, no re-advance.
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(us.CountAsync().Result, Is.EqualTo(CutCount), "US restored to the cut");
-            Assert.That(eu.CountAsync().Result, Is.EqualTo(CutCount), "EU restored to the cut");
-            Assert.That(us.GetAsync(ReworkKey).Result, Is.Null, "no post-cut fact re-appears on US");
-            Assert.That(eu.GetAsync(FinalKey).Result, Is.Null, "no post-cut fact re-appears on EU");
+            Assert.That(await us.CountAsync(), Is.EqualTo(CutCount), "US restored to the cut");
+            Assert.That(await eu.CountAsync(), Is.EqualTo(CutCount), "EU restored to the cut");
+            Assert.That(await us.GetAsync(ReworkKey), Is.Null, "no post-cut fact re-appears on US");
+            Assert.That(await eu.GetAsync(FinalKey), Is.Null, "no post-cut fact re-appears on EU");
         });
     }
 

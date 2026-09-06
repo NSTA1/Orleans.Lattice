@@ -109,11 +109,11 @@ public class CompressedReplicationApplyIntegrationTests
 
         await apply.ApplyDeleteRangeAsync("a", "z", HybridLogicalClock.Zero, CompressedTwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(lattice.GetAsync("a").Result, Is.Null);
-            Assert.That(lattice.GetAsync("m").Result, Is.Null);
-            Assert.That(lattice.GetAsync("y").Result, Is.Null);
+            Assert.That(await lattice.GetAsync("a"), Is.Null);
+            Assert.That(await lattice.GetAsync("m"), Is.Null);
+            Assert.That(await lattice.GetAsync("y"), Is.Null);
         });
     }
 

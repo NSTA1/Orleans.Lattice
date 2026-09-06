@@ -143,11 +143,11 @@ public sealed class CrossTreeAtomicWriteAcrossCutoverChaosTests
 
         Assert.That(finalOutcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed),
             "After the cutover storm the cross-tree saga must still commit a fresh batch.");
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(Str(a.GetAsync("final").Result), Is.EqualTo("a-final"),
+            Assert.That(Str(await a.GetAsync("final")), Is.EqualTo("a-final"),
                 "Tree A must show the final atomic write.");
-            Assert.That(Str(b.GetAsync("final").Result), Is.EqualTo("b-final"),
+            Assert.That(Str(await b.GetAsync("final")), Is.EqualTo("b-final"),
                 "The cut-over tree B must show the final atomic write, proving it self-healed and is not wedged.");
         });
     }

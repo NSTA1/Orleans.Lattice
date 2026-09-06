@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Indexing;
 public sealed class RepoIndexRunnerTests
 {
     [Test]
-    public void StartIndexAsync_and_GetProgressAsync_delegate_to_the_job_grain()
+    public async Task StartIndexAsync_and_GetProgressAsync_delegate_to_the_job_grain()
     {
         using var harness = new RepoIndexRunnerHarness();
         var progress = new RepoIndexProgress
@@ -32,7 +32,7 @@ public sealed class RepoIndexRunnerTests
         harness.Job.GetProgressAsync().Returns(Task.FromResult(progress));
         var runner = harness.CreateRunner();
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await runner.StartIndexAsync(harness.Request()), Is.EqualTo(progress));
             Assert.That(await runner.GetProgressAsync(RepoIndexRunnerHarness.RepoId), Is.EqualTo(progress));
@@ -214,7 +214,7 @@ public sealed class RepoIndexRunnerTests
         Assert.That(
             await RepoIndexRunnerHarness.WaitForAsync(() => !runner.Cancel(RepoIndexRunnerHarness.RepoId)),
             Is.True);
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             await harness.Job.DidNotReceive().FailAsync(Arg.Any<string>());
             await harness.Job.DidNotReceive().CompleteAsync(Arg.Any<RepoIndexProgressUpdate>(), Arg.Any<long>());
@@ -235,7 +235,7 @@ public sealed class RepoIndexRunnerTests
 
         Assert.That(cancelled, Is.True, "Cancel reports whether it found a run to stop.");
         await runner.CancelAndWaitAsync(RepoIndexRunnerHarness.RepoId);
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             await harness.Job.DidNotReceive().CompleteAsync(Arg.Any<RepoIndexProgressUpdate>(), Arg.Any<long>());
             await harness.Job.DidNotReceive().FailAsync(Arg.Any<string>());

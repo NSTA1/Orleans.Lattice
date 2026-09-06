@@ -140,7 +140,7 @@ public sealed class GrainIndexEnrollmentIntegrationTests
         await Grains.GetGrain<IIndexedUserGrain>(Key).DeactivateAsync();
         Assert.That(await Grains.GetGrain<IIndexedUserGrain>(Key).GetAgeAsync(), Is.EqualTo(31));
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(
                 await GrainsAtAsync(GrainIndexEnrollmentClusterFixture.UsersIndex, "Age", 31),
@@ -158,7 +158,7 @@ public sealed class GrainIndexEnrollmentIntegrationTests
         const string Key = "seen-marker";
         await Grains.GetGrain<IIndexedUserGrain>(Key).SetAsync(20, "FR");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(
                 await HasSeenMarkerAsync(GrainIndexEnrollmentClusterFixture.UsersIndex, Key), Is.True,
@@ -184,7 +184,7 @@ public sealed class GrainIndexEnrollmentIntegrationTests
 
         await grain.SetAsync(18, "GB");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(
                 await GrainsAtAsync(GrainIndexEnrollmentClusterFixture.UsersIndex, "Age", 18),
@@ -238,7 +238,7 @@ public sealed class GrainIndexEnrollmentIntegrationTests
             Throws.InstanceOf<InvalidOperationException>(),
             "A failed index write must reach the caller, or it becomes drift nobody can see.");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(harness.State.WriteCount, Is.EqualTo(1),
                 "The grain's own state is committed before the index batch is attempted, so an "
@@ -270,7 +270,7 @@ public sealed class GrainIndexEnrollmentIntegrationTests
         // up: a drain built fresh over the real trees, with the real store.
         var result = await Drainer().DrainAsync(GrainIndexOutboxOptions.DefaultMaxBatchSize, CancellationToken.None);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.Applied, Is.GreaterThanOrEqualTo(1));
             Assert.That(result.Failed, Is.Zero);
@@ -311,7 +311,7 @@ public sealed class GrainIndexEnrollmentIntegrationTests
         const string Key = "eventual-write";
         await Grains.GetGrain<IEventualUserGrain>(Key).SetAsync(88, "NO");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(
                 await GrainsAtAsync(GrainIndexEnrollmentClusterFixture.EventualIndex, "Age", 88),
@@ -341,7 +341,7 @@ public sealed class GrainIndexEnrollmentIntegrationTests
 
         await grain.ClearAsync();
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(
                 await GrainsAtAsync(GrainIndexEnrollmentClusterFixture.UsersIndex, "Age", 99),
@@ -359,7 +359,7 @@ public sealed class GrainIndexEnrollmentIntegrationTests
         const string Key = "base-class";
         await Grains.GetGrain<IBaseClassUserGrain>(Key).SetAsync(23, "PT");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(
                 await GrainsAtAsync(GrainIndexEnrollmentClusterFixture.BaseClassIndex, "Age", 23),
@@ -397,7 +397,7 @@ public sealed class GrainIndexEnrollmentIntegrationTests
         const string Key = "interface-scoped";
         await Grains.GetGrain<IIndexedUserGrain>(Key).SetAsync(41, "ES");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(
                 await HasSeenMarkerAsync(GrainIndexEnrollmentClusterFixture.UsersIndex, Key), Is.True);

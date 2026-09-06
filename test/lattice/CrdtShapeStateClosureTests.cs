@@ -84,6 +84,20 @@ public class CrdtShapeStateClosureTests
         Assert.That(writer.WrittenSpan.ToArray(), Is.EqualTo(expected));
     }
 
+    [Test]
+    public void AtLeastOneShape_exposesTheStreamingSerialisationLane()
+    {
+        // Anti-vacuity guard for SerializeStateInto_whenPresent_matchesSerializeState:
+        // that case Assert.Pass()es whenever a shape has no streaming lane, so if the
+        // lane were dropped from every factory the whole matrix would go green without
+        // ever comparing a byte. This test fails in exactly that scenario.
+        var withStreamingLane = AllShapes()
+            .Select(c => (CrdtShape)c.Arguments[0]!)
+            .Count(s => s.SerializeStateInto is not null);
+
+        Assert.That(withStreamingLane, Is.GreaterThan(0), "at least one CrdtShape factory must supply SerializeStateInto, otherwise the streaming round-trip matrix passes vacuously");
+    }
+
     // ---- constructor null-guards ----------------------------------------
 
     private static Func<byte[], object> DeserState => _ => new object();

@@ -48,11 +48,11 @@ public sealed class LatticeBackupControlColdRestoreTests
             new LatticeRestoreRequest(backup.BackupId, target));
 
         var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.EntriesApplied, Is.EqualTo(2));
-            Assert.That(Str(restored.GetAsync("k1").Result!), Is.EqualTo("v1"));
-            Assert.That(Str(restored.GetAsync("k2").Result!), Is.EqualTo("v2"));
+            Assert.That(Str((await restored.GetAsync("k1"))!), Is.EqualTo("v1"));
+            Assert.That(Str((await restored.GetAsync("k2"))!), Is.EqualTo("v2"));
         });
         Assert.That(await _fixture.Catalog.GetAsync(backup.BackupId), Is.Not.Null,
             "the recovered cluster is left with a correct catalog");
@@ -76,7 +76,7 @@ public sealed class LatticeBackupControlColdRestoreTests
             Throws.InstanceOf<LatticeAuthorizationDeniedException>());
 
         var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
-        Assert.That(restored.GetAsync("k1").Result, Is.Null);
+        Assert.That(await restored.GetAsync("k1"), Is.Null);
     }
 
     [Test]
