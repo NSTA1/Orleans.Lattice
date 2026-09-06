@@ -128,28 +128,7 @@ internal sealed partial class ReplicationApplier
         while (i < entries.Count)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var startTreeId = entries[i].TreeId;
-            var startOrigin = entries[i].OriginClusterId;
-            // The wire merge-mode is part of the run key, not just the run's
-            // first entry. The receiver gate classifies a run from its
-            // representative first entry, while dispatch inside the run switches
-            // on each entry's own Mode - so segmenting on (tree, origin) alone
-            // let a peer head a run with one conforming entry and smuggle
-            // entries carrying an arbitrary merge algebra behind it, past the
-            // gate. Including Mode means a mode change starts a new run that is
-            // classified on its own merits and dead-lettered if it disagrees
-            // with the locally-resolved mode. A legitimate batch carries a
-            // batch-constant mode per run, so this never splits a well-formed
-            // run and costs one extra comparison per entry.
-            var startMode = entries[i].Mode;
-            var j = i + 1;
-            while (j < entries.Count
-                && string.Equals(entries[j].TreeId, startTreeId, StringComparison.Ordinal)
-                && string.Equals(entries[j].OriginClusterId, startOrigin, StringComparison.Ordinal)
-                && entries[j].Mode == startMode)
-            {
-                j++;
-            }
+            var j = FindRunEndExclusive(entries, i);
 
             var runResult = await ApplyRunSegmentAsync(entries, i, j, cancellationToken).ConfigureAwait(false);
             if (runResult.Applied)
@@ -168,6 +147,56 @@ internal sealed partial class ReplicationApplier
         }
 
         return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
+    }
+
+    /// <summary>
+    /// Scans forward from <paramref name="start"/> and returns the exclusive end
+    /// of the contiguous <c>(treeId, originClusterId, mode)</c> run that entry
+    /// heads.
+    /// <para>
+    /// The wire merge-mode is part of the run key, not just the run's
+    /// representative first entry. The receiver gate classifies a run from that
+    /// first entry, while dispatch inside the run switches on each entry's own
+    /// <c>Mode</c> - so segmenting on <c>(tree, origin)</c> alone let a peer head
+    /// a run with one conforming entry and smuggle entries carrying an arbitrary
+    /// merge algebra behind it, past the gate. Including <c>Mode</c> means a mode
+    /// change starts a new run that is classified on its own merits and
+    /// dead-lettered if it disagrees with the locally-resolved mode. A legitimate
+    /// batch carries a batch-constant mode per run, so this never splits a
+    /// well-formed run and costs one extra comparison per entry.
+    /// </para>
+    /// <para>
+    /// <see cref="WalRecord"/> is a wide <c>readonly record struct</c>, so every
+    /// read through the <see cref="IReadOnlyList{T}"/> indexer copies the whole
+    /// record onto the stack and the JIT cannot elide the repeats across the
+    /// interface call. Binding the head and each candidate once turns the three
+    /// copies per entry the compound condition used to pay into one. Keeping the
+    /// scan in this synchronous helper - rather than inline in the <c>async</c>
+    /// caller - also keeps the wide struct out of the caller's state machine.
+    /// </para>
+    /// </summary>
+    private static int FindRunEndExclusive(IReadOnlyList<WalRecord> entries, int start)
+    {
+        var head = entries[start];
+        var startTreeId = head.TreeId;
+        var startOrigin = head.OriginClusterId;
+        var startMode = head.Mode;
+
+        var j = start + 1;
+        while (j < entries.Count)
+        {
+            var candidate = entries[j];
+            if (!string.Equals(candidate.TreeId, startTreeId, StringComparison.Ordinal)
+                || !string.Equals(candidate.OriginClusterId, startOrigin, StringComparison.Ordinal)
+                || candidate.Mode != startMode)
+            {
+                break;
+            }
+
+            j++;
+        }
+
+        return j;
     }
 
     /// <summary>
