@@ -226,9 +226,11 @@ public sealed class RepoContextSelfIndexGrainScanTests
     {
         var harness = new SelfIndexGrainHarness();
 
-        // Fill exactly one page so the scan reports more files remain and hands back
-        // a resume point instead of ending the cycle.
-        for (var i = 0; i < SelfIndexGrainHarness.PageSize; i++)
+        // Seed one more than a page holds, so the scan genuinely has files left
+        // after this page and hands back a resume point instead of ending the
+        // cycle. Seeding exactly PageSize would fill the page AND exhaust the
+        // range in the same moment, which is completion, not continuation.
+        for (var i = 0; i <= SelfIndexGrainHarness.PageSize; i++)
         {
             harness.SeedEmbeddedFile($"src/File{i:D4}.cs");
         }
@@ -243,6 +245,33 @@ public sealed class RepoContextSelfIndexGrainScanTests
                 "A page that filled hands back the successor of its last key so the walk continues.");
             Assert.That(harness.State.State.NextSweepAfterTicks, Is.Zero,
                 "A mid-flight scan is not put behind the cooldown; the next tick continues it.");
+        });
+    }
+
+    [Test]
+    public async Task A_page_that_exactly_exhausts_the_file_range_ends_the_cycle_without_a_resume_key()
+    {
+        var harness = new SelfIndexGrainHarness();
+
+        // Exactly a page of clean files: the page fills and the range is exhausted
+        // in the same moment. Inferring "more remains" from the fill alone parks a
+        // resume key into an empty remainder, so every sweep buys a further tick
+        // that scans nothing before it can conclude the walk is done.
+        for (var i = 0; i < SelfIndexGrainHarness.PageSize; i++)
+        {
+            harness.SeedEmbeddedFile($"src/File{i:D4}.cs");
+        }
+
+        await ArmedPastReconcileAsync(harness);
+
+        await harness.TickAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.State.State.ResumeKey, Is.Null,
+                "The range is exhausted, so the scan completes and clears its checkpoint.");
+            Assert.That(harness.State.State.NextSweepAfterTicks, Is.GreaterThan(0),
+                "A completed scan goes behind the cooldown rather than scheduling a wasted continuation tick.");
         });
     }
 

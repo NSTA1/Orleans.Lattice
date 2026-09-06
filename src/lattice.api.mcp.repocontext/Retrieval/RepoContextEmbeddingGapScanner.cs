@@ -69,17 +69,27 @@ internal sealed class RepoContextEmbeddingGapScanner
         // Collect this page's file keys (bounded by pageSize), then resolve coverage
         // for exactly those keys with one bounded point-probe, so the sweep never
         // holds an unbounded membership scan open (issue #1556).
+        //
+        // One entry beyond the page bound is probed so has-more is derived from the
+        // range itself rather than from the page having filled. Those are not the
+        // same thing: a range holding exactly pageSize keys fills the page and is
+        // simultaneously exhausted, and inferring more from the fill alone would
+        // hand back a resume key into an empty remainder and buy a wasted scan on
+        // every sweep. This mirrors RepoContextPortability.EnumerateAsync.
         var pageKeys = new List<string>(pageSize);
+        var hasMore = false;
         await foreach (var key in tree
             .ScanKeysAsync(start, end, cancellationToken: cancellationToken)
             .ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            pageKeys.Add(key);
-            if (pageKeys.Count >= pageSize)
+            if (pageKeys.Count == pageSize)
             {
+                hasMore = true;
                 break;
             }
+
+            pageKeys.Add(key);
         }
 
         if (pageKeys.Count == 0)
@@ -103,10 +113,8 @@ internal sealed class RepoContextEmbeddingGapScanner
             }
         }
 
-        // No gap in this page. If the page filled, more files may remain, so hand
-        // back the successor of the last key as the next resume point; otherwise
-        // the repository's file range is exhausted.
-        var hasMore = pageKeys.Count >= pageSize;
+        // No gap in this page. Has-more was derived from the range while scanning,
+        // so a page that filled a now-exhausted range correctly reports completion.
         var nextResumeKey = hasMore ? pageKeys[^1] + "\u0000" : null;
         return new GapScanPage(GapFound: false, HasMore: hasMore, NextResumeKey: nextResumeKey);
     }

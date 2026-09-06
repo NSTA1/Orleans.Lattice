@@ -148,6 +148,40 @@ public sealed class RepoContextEmbeddingGapScannerTests
     }
 
     [Test]
+    public async Task ScanFilePageAsync_reports_completion_when_a_full_page_exhausts_the_range()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+
+        // Seed exactly as many files as the page holds, so the page fills and the
+        // range is exhausted at the same moment. Deriving has-more from the page
+        // having filled cannot tell those apart and claims a further page exists.
+        var keys = new List<string>();
+        foreach (var name in new[] { "a.cs", "b.cs", "c.cs", "d.cs" })
+        {
+            await SeedFileAsync(harness, name);
+            keys.Add(RepoContextKeys.File(RepoId, name));
+        }
+
+        await Writer(harness).AddMembersAsync(RepoId, keys, Ct);
+
+        var page = await Scanner(harness).ScanFilePageAsync(RepoId, resumeKeyInclusive: null, pageSize: 4, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.GapFound, Is.False, "Every seeded file is a live member.");
+            Assert.That(
+                page.HasMore,
+                Is.False,
+                "The page filled, but it also consumed the whole range, so no further page remains.");
+            Assert.That(
+                page.NextResumeKey,
+                Is.Null,
+                "An exhausted range hands back no resume key, so the sweep buys no wasted follow-up scan.");
+        });
+    }
+
+    [Test]
     public async Task ScanFilePageAsync_reports_no_gap_for_a_contentless_marked_file()
     {
         await using var harness = await RepoContextMcpHarness.StartAsync(
