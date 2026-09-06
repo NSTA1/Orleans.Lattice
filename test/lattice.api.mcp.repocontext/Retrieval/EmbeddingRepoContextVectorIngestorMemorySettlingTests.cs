@@ -313,7 +313,7 @@ public sealed class EmbeddingRepoContextVectorIngestorMemorySettlingTests
         Assert.Multiple(() =>
         {
             Assert.That(injector.Failed, Is.GreaterThan(0));
-            Assert.That(recorded, Is.Empty,
+            Assert.That(recorded.Keys, Is.Empty,
                 "No marker claims an embedding, because no membership write landed.");
         });
     }
