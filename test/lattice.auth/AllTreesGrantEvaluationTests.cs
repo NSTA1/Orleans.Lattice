@@ -450,7 +450,7 @@ public sealed class AllTreesGrantEvaluationTests
     }
 
     [Test]
-    public void HasAnyGrant_all_trees_deny_does_not_hide_a_tree_with_a_specific_allow()
+    public void HasAnyGrant_all_trees_deny_hides_a_tree_despite_a_specific_allow()
     {
         var rules = new[]
         {
@@ -459,9 +459,11 @@ public sealed class AllTreesGrantEvaluationTests
         };
         var policy = CompiledPolicy.Compile(rules);
 
-        // HasAnyGrant is a pure "any resolved allow" signal: the specific allow keeps
-        // the tree visible even though a real read would be denied by the wildcard.
-        Assert.That(PolicyEvaluator.HasAnyGrant(policy, Enabled(), Subject("alice"), Tree, LatticeOperation.Read), Is.True);
+        // Tier 1 gives the all-trees deny precedence over the specific allow, and the
+        // all-trees verdict is resolved tree-wide, so every key of the tree resolves
+        // deny. The existence-hiding probe must agree with that enforcement decision
+        // rather than advertising a tree the subject cannot read a single key of.
+        Assert.That(PolicyEvaluator.HasAnyGrant(policy, Enabled(), Subject("alice"), Tree, LatticeOperation.Read), Is.False);
     }
 
     // ---- Compiled snapshot -----------------------------------------------

@@ -265,13 +265,14 @@ internal static class PolicyEvaluator
     /// <summary>
     /// <c>true</c> when <paramref name="subject"/> can read at least one key of
     /// <paramref name="treeId"/> under <paramref name="operation"/> - the
-    /// structural "any grant" signal that existence-hiding needs. Under default
-    /// allow a subject reads every tree it is not explicitly denied on - unless a
-    /// whole-tree deny with no allow carve-out removes the entire keyspace, which
-    /// enforcement resolves as a deny for every key, so the probe hides the tree
-    /// too rather than out-reaching the enforcement decision. Otherwise the subject
-    /// needs at least one allow rule whose effective decision at its own scope
-    /// resolves to allow (see <see cref="CompiledTree.HasAnyResolvedAllow"/>). This
+    /// structural "any grant" signal that existence-hiding needs. The probe mirrors
+    /// the enforcement tiers so it never out-reaches them: an all-trees deny (tier 1)
+    /// or a whole-tree deny with no allow carve-out (tier 2) removes the entire
+    /// keyspace, which enforcement resolves as a deny for every key, so the probe
+    /// hides the tree. Otherwise, under default allow a subject reads every tree it
+    /// is not explicitly denied on; under default deny the subject needs at least one
+    /// allow rule whose effective decision at its own scope resolves to allow (see
+    /// <see cref="CompiledTree.HasAnyResolvedAllow"/>) or an all-trees allow. This
     /// distinguishes a partial (prefix) grant - which must keep the tree visible -
     /// from no grant at all, which a plain collection decision cannot do (that is
     /// allow-with-filter for every subject once the tree carries per-key rules).
@@ -283,6 +284,18 @@ internal static class PolicyEvaluator
         string treeId,
         LatticeOperation operation)
     {
+        // Tier 1: an all-trees deny wins outright over every specific-tree rule and
+        // over the default effect, and the all-trees verdict is resolved tree-wide
+        // (hence uniform across keys), so it removes the entire keyspace. Enforcement
+        // resolves deny for every key, so the probe hides the tree rather than
+        // out-reaching that decision.
+        if (HasAllTreesDeny(policy, options, subject, treeId, operation))
+        {
+            return false;
+        }
+
+        var hasTree = policy.TryGetTree(treeId, out var tree) && tree is not null;
+
         if (options.DefaultEffect == LatticeEffect.Allow)
         {
             // Default-allow: a subject reads every tree it is not explicitly denied
@@ -291,33 +304,76 @@ internal static class PolicyEvaluator
             // the subject can read nothing. An existence probe must never out-reach
             // that enforcement decision (see PolicyAccessGate), so hide such a tree
             // rather than reporting a grant the subject does not have.
-            if (policy.TryGetTree(treeId, out var deniedTree) && deniedTree is not null)
-            {
-                var treeWide = deniedTree.ResolvePoint(
-                    subject, operation, key: null, options.UserRuleBeatsGroupRuleAtEqualScope);
-                if (treeWide.Matched
-                    && treeWide.Effect == LatticeEffect.Deny
-                    && !deniedTree.HasAnyResolvedAllow(subject, operation, options.UserRuleBeatsGroupRuleAtEqualScope))
-                {
-                    return false;
-                }
-            }
-
-            return true;
+            return !hasTree || !DeniesEveryKey(tree!, options, subject, operation);
         }
 
-        if (!policy.TryGetTree(treeId, out var tree) || tree is null)
+        if (!hasTree)
         {
             // No specific-tree rules; the all-trees tier may still grant.
             return HasAllTreesAllow(policy, options, subject, treeId, operation);
         }
 
-        if (tree.HasAnyResolvedAllow(subject, operation, options.UserRuleBeatsGroupRuleAtEqualScope))
+        if (tree!.HasAnyResolvedAllow(subject, operation, options.UserRuleBeatsGroupRuleAtEqualScope))
         {
             return true;
         }
 
+        // Tier 2: the specific tree's own verdict beats an all-trees allow, so a
+        // whole-tree deny with no allow carve-out denies every key and the all-trees
+        // allow below is never reached by enforcement.
+        if (DeniesEveryKey(tree!, options, subject, operation))
+        {
+            return false;
+        }
+
         return HasAllTreesAllow(policy, options, subject, treeId, operation);
+    }
+
+    /// <summary>
+    /// <c>true</c> when <paramref name="tree"/>'s own rules deny every one of its
+    /// keys for <paramref name="subject"/> and <paramref name="operation"/>: the
+    /// whole-tree scope resolves deny and no rule at any scope resolves allow, so
+    /// every key falls through to that tree-wide deny. Enforcement then resolves
+    /// deny for every key (tier 2 of <see cref="ResolveTiered"/>, which beats an
+    /// all-trees allow), so an existence probe must hide such a tree.
+    /// </summary>
+    private static bool DeniesEveryKey(
+        CompiledTree tree,
+        LatticeAuthOptions options,
+        in LatticeSubject subject,
+        LatticeOperation operation)
+    {
+        var treeWide = tree.ResolvePoint(
+            subject, operation, key: null, options.UserRuleBeatsGroupRuleAtEqualScope);
+        return treeWide.Matched
+            && treeWide.Effect == LatticeEffect.Deny
+            && !tree.HasAnyResolvedAllow(subject, operation, options.UserRuleBeatsGroupRuleAtEqualScope);
+    }
+
+    /// <summary>
+    /// <c>true</c> when the all-trees (<c>Tree:*</c>) tier resolves a whole-tree
+    /// <b>deny</b> for <paramref name="subject"/> and <paramref name="operation"/> on
+    /// <paramref name="treeId"/>. Tier 1 of <see cref="ResolveTiered"/> gives that
+    /// deny precedence over every specific-tree rule and over the default effect,
+    /// and the all-trees verdict is resolved tree-wide - hence uniform across keys -
+    /// so it removes the entire keyspace. Gated exactly as enforcement through
+    /// <see cref="ShouldConsultAllTrees"/>.
+    /// </summary>
+    private static bool HasAllTreesDeny(
+        CompiledPolicy policy,
+        LatticeAuthOptions options,
+        in LatticeSubject subject,
+        string treeId,
+        LatticeOperation operation)
+    {
+        if (!ShouldConsultAllTrees(policy, options, treeId))
+        {
+            return false;
+        }
+
+        var all = policy.AllTrees!.ResolvePoint(
+            subject, operation, key: null, options.UserRuleBeatsGroupRuleAtEqualScope);
+        return all.Matched && all.Effect == LatticeEffect.Deny;
     }
 
     /// <summary>
@@ -328,9 +384,9 @@ internal static class PolicyEvaluator
     /// listings while being readable. Gated exactly as enforcement: skipped when
     /// the flag is off, no <c>"*"</c> bucket exists, or the tree is a control-plane
     /// namespace (reserved authorization or tenant registry) / the sentinel. A
-    /// wildcard <b>deny</b> is deliberately not consulted here: existence-hiding is
-    /// a pure "any resolved allow" signal, so a wildcard deny never hides a tree the
-    /// subject can otherwise read.
+    /// wildcard <b>deny</b> is handled ahead of this by
+    /// <see cref="HasAllTreesDeny"/>, which hides the tree outright because tier 1
+    /// gives that deny precedence over every other rule.
     /// </summary>
     private static bool HasAllTreesAllow(
         CompiledPolicy policy,
