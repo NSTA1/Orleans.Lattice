@@ -65,6 +65,18 @@ internal static class MetricEmissionScanner
         var files = new List<(string Relative, string Text)>();
         var names = new HashSet<string>(StringComparer.Ordinal);
 
+        // Instrument names are scoped to the declaring type, not the whole tree.
+        // A type may be split across partial files following the repository's
+        // {TypeName}.{Concern}.cs convention (for example ViewMaintainerGrain.cs
+        // declares the instruments that ViewMaintainerGrain.Aggregation.cs
+        // emits), so a file's in-scope instrument set is the union declared
+        // across its partial-class group - keyed by (directory, basename before
+        // the first '.'). Folding every instrument name in the tree into one
+        // global set instead makes any local, field, or collection that merely
+        // shares a name with an instrument declared in an unrelated type read as
+        // an untagged emission site (see the WalCommitLogWriter workaround).
+        var groupNames = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
         foreach (var path in Directory.EnumerateFiles(Path.Combine(repoRoot, "src"), "*.cs", SearchOption.AllDirectories))
         {
             if (HygieneRepository.HasExcludedSegment(path))
@@ -80,14 +92,24 @@ internal static class MetricEmissionScanner
             // Windows and '/' elsewhere - so an un-normalized path matches the
             // registry on a developer machine and matches nothing in Linux CI,
             // silently turning every exemption lookup into a miss.
-            files.Add((Path.GetRelativePath(repoRoot, path).Replace('\\', '/'), text));
+            var relative = Path.GetRelativePath(repoRoot, path).Replace('\\', '/');
+            files.Add((relative, text));
+
+            if (!groupNames.TryGetValue(TypeGroupKey(relative), out var group))
+            {
+                group = new HashSet<string>(StringComparer.Ordinal);
+                groupNames[TypeGroupKey(relative)] = group;
+            }
+
             foreach (Match m in InstrumentDeclaration.Matches(text))
             {
                 names.Add(m.Groups[1].Value);
+                group.Add(m.Groups[1].Value);
             }
             foreach (Match m in InstrumentAssignment.Matches(text))
             {
                 names.Add(m.Groups[1].Value);
+                group.Add(m.Groups[1].Value);
             }
         }
 
@@ -110,9 +132,17 @@ internal static class MetricEmissionScanner
             var metricFile = text.Contains("Metrics", StringComparison.Ordinal)
                 || text.Contains("Meter", StringComparison.Ordinal);
 
+            var localNames = groupNames.TryGetValue(TypeGroupKey(relative), out var g)
+                ? g
+                : EmptyNames;
+
             foreach (Match m in call.Matches(text))
             {
-                if (m.Groups[2].Success && !metricFile)
+                // A bare-identifier match is trusted only when the identifier is
+                // an instrument declared in this file's own declaring type (its
+                // partial-class group). An instrument name that belongs to a
+                // different type is a name collision, not an emission here.
+                if (m.Groups[2].Success && (!metricFile || !localNames.Contains(m.Groups[2].Value)))
                 {
                     continue;
                 }
@@ -128,6 +158,23 @@ internal static class MetricEmissionScanner
         }
 
         return sites;
+    }
+
+    private static readonly HashSet<string> EmptyNames = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The partial-class group key for a repo-relative source path: its
+    /// directory plus the file's basename up to the first '.'. Partial files of
+    /// one type ({TypeName}.{Concern}.cs) share a key; distinct types do not.
+    /// </summary>
+    private static string TypeGroupKey(string relative)
+    {
+        var slash = relative.LastIndexOf('/');
+        var directory = slash < 0 ? string.Empty : relative[..slash];
+        var name = slash < 0 ? relative : relative[(slash + 1)..];
+        var dot = name.IndexOf('.');
+        var prefix = dot < 0 ? name : name[..dot];
+        return directory + "/" + prefix;
     }
 
     private static void Add(List<EmissionSite> sites, string relative, string text, int start, int open, string instrument)

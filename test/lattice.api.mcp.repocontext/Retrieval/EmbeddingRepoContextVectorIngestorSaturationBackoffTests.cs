@@ -120,6 +120,104 @@ public sealed class EmbeddingRepoContextVectorIngestorSaturationBackoffTests
     }
 
     /// <summary>
+    /// The case the failure-counting backoff cannot see, and the one the live box
+    /// actually exhibited (issue #2078): every batch <em>succeeds</em> - the embed
+    /// completes, the vectors store, the membership write returns - and yet the
+    /// next pass selects exactly the same symbols again, because the flags never
+    /// become observable. No batch failed, so no failure counter trips; the loop is
+    /// only visible by comparing one pass's selection against the last pass's
+    /// landed work.
+    /// <para>
+    /// Non-observability is modelled by deleting the membership flags between
+    /// passes. That is the observable condition on the box - a write that reports
+    /// success but is not readable afterwards - reproduced deterministically
+    /// instead of by saturating a tree until its leaves stop answering.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_pass_that_reselects_what_the_last_pass_landed_backs_off_though_every_batch_succeeded()
+    {
+        var injector = new LatticeTreeFaultInjector
+        {
+            TreeId = RepoContextTrees.VectorMembership,
+            Method = "ApplyCrdtDeltaManyAsync",
+            FailFirst = 0,
+        };
+        var counter = new LatticeTreeCallCounter { TreeId = RepoContextTrees.VectorMembership };
+        await using var harness = await RepoContextMcpHarness.StartAsync(Options(injector, counter), Ct);
+        await SeedSymbolsAsync(harness, Ct);
+        var ingestor = Ingestor(harness);
+
+        var membership = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+        var membershipPrefix = RepoContextKeys.VectorMembershipsPrefix(RepoId);
+
+        async Task LoseTheFlagsAsync() => await membership.DeleteRangeAsync(
+            membershipPrefix, RepoContextPortability.PrefixUpperBound(membershipPrefix), Ct);
+
+        var first = await ingestor.IngestSymbolsAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
+        Assert.That(first, Is.EqualTo(SymbolCount),
+            "Precondition: a clean pass embeds and records every symbol, with no batch failing.");
+
+        // The writes reported success but are not readable, so the next pass sees
+        // the identical gap - the exact shape of the loop on the live box.
+        await LoseTheFlagsAsync();
+
+        var second = await ingestor.IngestSymbolsAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
+        Assert.That(second, Is.EqualTo(SymbolCount),
+            "The repeat pass re-embeds the same symbols - this is the wasted work - and detects the repeat.");
+
+        await LoseTheFlagsAsync();
+        counter.Reset();
+
+        var third = await ingestor.IngestSymbolsAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(third, Is.EqualTo(0),
+                "The third pass stands the back-fill down instead of re-embedding the same symbols a third "
+                + "time. Without the repeat detector this pass embeds all "
+                + $"{SymbolCount} again, forever, which is issue #2078.");
+            Assert.That(counter.Count("GetManyAsync"), Is.EqualTo(0),
+                "and it does not probe the membership tree either, so the tree gets a pass to drain - the "
+                + "load that sustains the loop is what has to stop.");
+        });
+    }
+
+    /// <summary>
+    /// The detector must not fire on a healthy repository. When the flags written
+    /// by one pass are readable by the next, the gap selection is empty and there
+    /// is nothing to repeat, so the back-fill keeps running pass after pass.
+    /// </summary>
+    [Test]
+    public async Task A_pass_whose_flags_are_observable_never_engages_the_repeat_backoff()
+    {
+        var injector = new LatticeTreeFaultInjector
+        {
+            TreeId = RepoContextTrees.VectorMembership,
+            Method = "ApplyCrdtDeltaManyAsync",
+            FailFirst = 0,
+        };
+        var counter = new LatticeTreeCallCounter { TreeId = RepoContextTrees.VectorMembership };
+        await using var harness = await RepoContextMcpHarness.StartAsync(Options(injector, counter), Ct);
+        var keys = await SeedSymbolsAsync(harness, Ct);
+        var ingestor = Ingestor(harness);
+
+        await ingestor.IngestSymbolsAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
+        await ingestor.IngestSymbolsAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
+
+        counter.Reset();
+        var embedded = await ingestor.IngestSymbolsAsync(RepoId, new[] { keys[0] }, Array.Empty<string>(), Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(embedded, Is.EqualTo(1), "The changed symbol is embedded normally,");
+            Assert.That(counter.Count("GetManyAsync"), Is.GreaterThan(0),
+                "and the back-fill still probes coverage, proving the repeat detector left a healthy "
+                + "repository alone rather than standing its back-fill down.");
+        });
+    }
+
+    /// <summary>
     /// Backing off must defer opportunistic work only. A symbol the reconcile
     /// reported as changed is stale in the index until it is re-embedded, so it is
     /// embedded on every pass regardless of the backoff.
