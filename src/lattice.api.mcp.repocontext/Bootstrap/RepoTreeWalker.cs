@@ -1,4 +1,6 @@
 using System.IO;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
@@ -304,7 +306,7 @@ internal static class RepoTreeWalker
             && knownFiles is not null;
         var knownByDir = pruneEnabled ? GroupKnownByDirectory(knownFiles!) : null;
         var childDirsByParent = pruneEnabled
-            ? GroupDirectoriesByParent(pruning!.PreviousDirectoryMtimes!.Keys)
+            ? GroupDirectoriesByParent(pruning!.PreviousDirectoryMtimes!)
             : null;
 
         // Explicit depth-first walk over real directories only, so a symlinked or
@@ -351,7 +353,7 @@ internal static class RepoTreeWalker
                         included.Add((ToAbsolute(root, relativePath), relativePath, meta.SizeBytes, 0));
                     }
 
-                    pruning!.PrunedFileCount += directFiles.Count;
+                    pruning!.PrunedFileCount += directFiles.Length;
                 }
 
                 pruning!.PrunedDirectoryCount++;
@@ -505,21 +507,69 @@ internal static class RepoTreeWalker
     /// Groups the stored file facts by their parent directory (repository-relative POSIX
     /// path, with a root-level file keyed by the empty string), so a pruned directory can
     /// carry its direct files forward without re-scanning them.
+    /// <para>
+    /// Built in two passes so each directory gets exactly one bucket allocation at its
+    /// exact final width, instead of a <see cref="List{T}"/> per directory that grows
+    /// from empty and abandons every intermediate backing array. The first pass counts
+    /// into a cell that also carries the bucket; the second pass allocates each bucket on
+    /// its first touch and then fills forward, reusing the counted cell as the fill
+    /// cursor. Holding the count and the bucket in one dictionary value means each pass
+    /// hashes the directory once, so the whole method costs two probes per file rather
+    /// than the three a separate count map and bucket map would need.
+    /// </para>
+    /// <para>
+    /// Both passes key on the parent <b>span</b> through a
+    /// <see cref="Dictionary{TKey, TValue}.AlternateLookup{TAlternateKey}"/>, so the
+    /// parent substring is materialised once per <i>directory</i> rather than once per
+    /// <i>file</i>. On a tree with many files per directory that removes the single
+    /// largest allocation in this method - the old shape allocated one throwaway parent
+    /// string for every file on every reconcile pass.
+    /// </para>
     /// </summary>
-    private static Dictionary<string, List<(string Relative, StoredFileMeta Meta)>> GroupKnownByDirectory(
+    private static Dictionary<string, (string Relative, StoredFileMeta Meta)[]> GroupKnownByDirectory(
         IReadOnlyDictionary<string, StoredFileMeta> knownFiles)
     {
-        var byDirectory = new Dictionary<string, List<(string Relative, StoredFileMeta Meta)>>(StringComparer.Ordinal);
+        var buckets = new Dictionary<string, (int Cursor, (string Relative, StoredFileMeta Meta)[] Items)>(
+            StringComparer.Ordinal);
+        var lookup = buckets.GetAlternateLookup<ReadOnlySpan<char>>();
+
+        foreach (var relativePath in knownFiles.Keys)
+        {
+            var parent = ParentDirectorySpan(relativePath);
+            ref var cell = ref CollectionsMarshal.GetValueRefOrNullRef(lookup, parent);
+            if (Unsafe.IsNullRef(ref cell))
+            {
+                buckets[parent.ToString()] = (1, []);
+            }
+            else
+            {
+                cell.Cursor++;
+            }
+        }
+
         foreach (var (relativePath, meta) in knownFiles)
         {
-            var parent = ParentDirectory(relativePath);
-            if (!byDirectory.TryGetValue(parent, out var files))
+            ref var cell = ref CollectionsMarshal.GetValueRefOrNullRef(
+                lookup, ParentDirectorySpan(relativePath));
+
+            // A counted bucket always has a width of at least one, so an empty array can
+            // only mean "not yet allocated"; allocating here lets the counting pass and
+            // the filling pass share a single cursor field.
+            if (cell.Items.Length == 0)
             {
-                files = [];
-                byDirectory[parent] = files;
+                cell.Items = new (string Relative, StoredFileMeta Meta)[cell.Cursor];
+                cell.Cursor = 0;
             }
 
-            files.Add((relativePath, meta));
+            cell.Items[cell.Cursor++] = (relativePath, meta);
+        }
+
+        var byDirectory = new Dictionary<string, (string Relative, StoredFileMeta Meta)[]>(
+            buckets.Count,
+            StringComparer.Ordinal);
+        foreach (var (directory, cell) in buckets)
+        {
+            byDirectory[directory] = cell.Items;
         }
 
         return byDirectory;
@@ -530,12 +580,20 @@ internal static class RepoTreeWalker
     /// pruned directory can re-derive its immediate subdirectories from the prior snapshot
     /// without an enumeration. The root itself (the empty string) has no parent and is not
     /// listed as anyone's child.
+    /// <para>
+    /// Uses the same count-then-fill, span-keyed shape as
+    /// <see cref="GroupKnownByDirectory"/>: one exact-width bucket per parent, one
+    /// materialised parent string per parent rather than per child, and two probes per
+    /// child rather than three.
+    /// </para>
     /// </summary>
-    private static Dictionary<string, List<string>> GroupDirectoriesByParent(
-        IEnumerable<string> directoryRelativePaths)
+    private static Dictionary<string, string[]> GroupDirectoriesByParent(
+        IReadOnlyDictionary<string, long> previousDirectoryMtimes)
     {
-        var byParent = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (var relativeDir in directoryRelativePaths)
+        var buckets = new Dictionary<string, (int Cursor, string[] Items)>(StringComparer.Ordinal);
+        var lookup = buckets.GetAlternateLookup<ReadOnlySpan<char>>();
+
+        foreach (var relativeDir in previousDirectoryMtimes.Keys)
         {
             if (relativeDir.Length == 0)
             {
@@ -543,27 +601,54 @@ internal static class RepoTreeWalker
                 continue;
             }
 
-            var parent = ParentDirectory(relativeDir);
-            if (!byParent.TryGetValue(parent, out var children))
+            var parent = ParentDirectorySpan(relativeDir);
+            ref var cell = ref CollectionsMarshal.GetValueRefOrNullRef(lookup, parent);
+            if (Unsafe.IsNullRef(ref cell))
             {
-                children = [];
-                byParent[parent] = children;
+                buckets[parent.ToString()] = (1, []);
+            }
+            else
+            {
+                cell.Cursor++;
+            }
+        }
+
+        foreach (var relativeDir in previousDirectoryMtimes.Keys)
+        {
+            if (relativeDir.Length == 0)
+            {
+                continue;
             }
 
-            children.Add(relativeDir);
+            ref var cell = ref CollectionsMarshal.GetValueRefOrNullRef(
+                lookup, ParentDirectorySpan(relativeDir));
+
+            if (cell.Items.Length == 0)
+            {
+                cell.Items = new string[cell.Cursor];
+                cell.Cursor = 0;
+            }
+
+            cell.Items[cell.Cursor++] = relativeDir;
+        }
+
+        var byParent = new Dictionary<string, string[]>(buckets.Count, StringComparer.Ordinal);
+        foreach (var (parent, cell) in buckets)
+        {
+            byParent[parent] = cell.Items;
         }
 
         return byParent;
     }
 
     /// <summary>
-    /// Returns the parent directory of a repository-relative POSIX path, or the empty
-    /// string when the path is a direct child of the root.
+    /// Returns the parent directory of a repository-relative POSIX path as a span over
+    /// the original string, so grouping by parent costs no substring allocation.
     /// </summary>
-    private static string ParentDirectory(string relativePath)
+    private static ReadOnlySpan<char> ParentDirectorySpan(string relativePath)
     {
         var lastSlash = relativePath.LastIndexOf('/');
-        return lastSlash < 0 ? string.Empty : relativePath[..lastSlash];
+        return lastSlash < 0 ? [] : relativePath.AsSpan(0, lastSlash);
     }
 
     /// <summary>

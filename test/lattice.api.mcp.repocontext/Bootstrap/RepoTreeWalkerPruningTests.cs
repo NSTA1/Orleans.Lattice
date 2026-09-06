@@ -246,4 +246,37 @@ public sealed class RepoTreeWalkerPruningTests
 
         Assert.That(entry.Digest, Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes("x"))));
     }
+
+    /// <summary>
+    /// Pins the per-directory grouping at wide fan-out: many sibling directories, each
+    /// holding many files, must every one be carried forward exactly once and in source
+    /// order. The grouping builds exact-width buckets in a counting pass and fills them in
+    /// a second pass, so an off-by-one in either pass would drop, duplicate, or reorder a
+    /// directory's files without any narrow fixture noticing.
+    /// </summary>
+    [Test]
+    public void Walk_carries_forward_every_file_across_a_wide_fan_out_of_directories()
+    {
+        var expected = new List<string>();
+        for (var d = 0; d < 12; d++)
+        {
+            for (var f = 0; f < 7; f++)
+            {
+                var relative = $"pkg{d:D2}/area/File{f:D2}.cs";
+                Write(relative, $"{d}-{f}");
+                expected.Add(relative);
+            }
+        }
+
+        var (previous, known) = Prime();
+
+        var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = previous };
+        var entries = RepoTreeWalker.Walk(_root, null, null, knownFiles: known, pruning: pruning);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entries.Select(e => e.RelativePath), Is.EquivalentTo(expected));
+            Assert.That(entries.Select(e => e.Digest), Is.All.EqualTo(Sentinel));
+        });
+    }
 }
