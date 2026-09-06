@@ -540,24 +540,29 @@ public sealed class CrdtShape
         // commutative, associative, and idempotent, and dot union is set
         // union, so the combined delta's receiver-side apply effect equals
         // applying the two source deltas in sequence.
-        var addsByDot = new Dictionary<(TKey Key, string ReplicaId, long Counter), OrMapDeltaEntry<TKey, TValue>>();
-        var addsOrder = new List<(TKey Key, string ReplicaId, long Counter)>();
-        AppendOrMapAdds(a.Adds, addsByDot, addsOrder);
-        AppendOrMapAdds(b.Adds, addsByDot, addsOrder);
+        //
+        // The dot map holds the entry's SLOT in the result list rather than a
+        // second copy of the entry, so first-observation order is carried by
+        // the list itself. That removes the separate order list of wide dot
+        // tuples and the whole re-probe pass that previously re-hashed every
+        // dot once more to materialise the ordered array.
+        var addBound = (a.Adds?.Count ?? 0) + (b.Adds?.Count ?? 0);
+        var addSlots = new Dictionary<(TKey Key, string ReplicaId, long Counter), int>(addBound);
+        var addList = new List<OrMapDeltaEntry<TKey, TValue>>(addBound);
+        AppendOrMapAdds(a.Adds, addSlots, addList);
+        AppendOrMapAdds(b.Adds, addSlots, addList);
 
-        var adds = addsOrder.Count == 0
-            ? System.Array.Empty<OrMapDeltaEntry<TKey, TValue>>()
-            : BuildOrderedAdds(addsByDot, addsOrder);
-
-        var tombstoneSeen = new HashSet<(TKey Key, string ReplicaId, long Counter)>();
-        var tombstones = new List<OrMapDeltaTombstone<TKey>>(
-            (a.Tombstones?.Count ?? 0) + (b.Tombstones?.Count ?? 0));
+        var tombBound = (a.Tombstones?.Count ?? 0) + (b.Tombstones?.Count ?? 0);
+        var tombstoneSeen = new HashSet<(TKey Key, string ReplicaId, long Counter)>(tombBound);
+        var tombstones = new List<OrMapDeltaTombstone<TKey>>(tombBound);
         AppendOrMapTombstones(a.Tombstones, tombstones, tombstoneSeen);
         AppendOrMapTombstones(b.Tombstones, tombstones, tombstoneSeen);
 
         return new OrMapDelta<TKey, TValue>
         {
-            Adds = adds,
+            Adds = addList.Count == 0
+                ? System.Array.Empty<OrMapDeltaEntry<TKey, TValue>>()
+                : addList,
             Tombstones = tombstones.Count == 0
                 ? System.Array.Empty<OrMapDeltaTombstone<TKey>>()
                 : tombstones,
@@ -566,8 +571,8 @@ public sealed class CrdtShape
 
     private static void AppendOrMapAdds<TKey, TValue>(
         IReadOnlyList<OrMapDeltaEntry<TKey, TValue>>? source,
-        Dictionary<(TKey Key, string ReplicaId, long Counter), OrMapDeltaEntry<TKey, TValue>> byDot,
-        List<(TKey Key, string ReplicaId, long Counter)> order)
+        Dictionary<(TKey Key, string ReplicaId, long Counter), int> slots,
+        List<OrMapDeltaEntry<TKey, TValue>> adds)
         where TKey : notnull
         where TValue : ICrdt<TValue>, new()
     {
@@ -579,44 +584,34 @@ public sealed class CrdtShape
         {
             var replicaId = entry.ReplicaId ?? string.Empty;
             var dot = (entry.Key, replicaId, entry.Counter);
-            if (byDot.TryGetValue(dot, out var stored))
+            // Single probe: the miss branch writes the freshly appended slot
+            // straight into the ref the lookup already located, so a dot is
+            // hashed exactly once per occurrence instead of twice.
+            ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(slots, dot, out var existed);
+            if (existed)
             {
                 // Same dot from both sides: lattice-merge the incoming
                 // value into the stored clone. The clone is a reference,
-                // so mutating it in place is sufficient - the dictionary
-                // already holds the merged entry.
-                stored.Value.MergeFrom(entry.Value);
+                // so mutating it in place is sufficient - the list already
+                // holds the merged entry. Reached through the backing span
+                // so the wide entry struct is not copied out to get at it.
+                CollectionsMarshal.AsSpan(adds)[slot].Value.MergeFrom(entry.Value);
+                continue;
             }
-            else
-            {
-                // First occurrence: store a CLONED value so a later same-
-                // dot merge never mutates the source delta's snapshot.
-                var clone = new TValue();
-                clone.MergeFrom(entry.Value);
-                byDot[dot] = new OrMapDeltaEntry<TKey, TValue>
-                {
-                    Key = entry.Key,
-                    ReplicaId = replicaId,
-                    Counter = entry.Counter,
-                    Value = clone,
-                };
-                order.Add(dot);
-            }
-        }
-    }
 
-    private static OrMapDeltaEntry<TKey, TValue>[] BuildOrderedAdds<TKey, TValue>(
-        Dictionary<(TKey Key, string ReplicaId, long Counter), OrMapDeltaEntry<TKey, TValue>> byDot,
-        List<(TKey Key, string ReplicaId, long Counter)> order)
-        where TKey : notnull
-        where TValue : ICrdt<TValue>, new()
-    {
-        var adds = new OrMapDeltaEntry<TKey, TValue>[order.Count];
-        for (var i = 0; i < order.Count; i++)
-        {
-            adds[i] = byDot[order[i]];
+            // First occurrence: store a CLONED value so a later same-dot
+            // merge never mutates the source delta's snapshot.
+            var clone = new TValue();
+            clone.MergeFrom(entry.Value);
+            slot = adds.Count;
+            adds.Add(new OrMapDeltaEntry<TKey, TValue>
+            {
+                Key = entry.Key,
+                ReplicaId = replicaId,
+                Counter = entry.Counter,
+                Value = clone,
+            });
         }
-        return adds;
     }
 
     private static void AppendOrMapTombstones<TKey>(
@@ -665,8 +660,13 @@ public sealed class CrdtShape
         IReadOnlyList<byte[]>? a,
         IReadOnlyList<byte[]>? b)
     {
-        var result = new List<byte[]>((a?.Count ?? 0) + (b?.Count ?? 0));
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        // The union can never exceed the two sources' combined width, so the
+        // same bound presizes the dedup set as well as the result. Growing the
+        // set from empty would rehash every element through the whole prime
+        // doubling chain on a fold that already knows its own ceiling.
+        var bound = (a?.Count ?? 0) + (b?.Count ?? 0);
+        var result = new List<byte[]>(bound);
+        var seen = new HashSet<byte[]>(bound, ElementBytesComparer.Instance);
         AppendGSetElements(a, result, seen);
         AppendGSetElements(b, result, seen);
         return result;
@@ -675,7 +675,7 @@ public sealed class CrdtShape
     private static void AppendGSetElements(
         IReadOnlyList<byte[]>? source,
         List<byte[]> result,
-        HashSet<string> seen)
+        HashSet<byte[]> seen)
     {
         if (source is null)
         {
@@ -687,7 +687,7 @@ public sealed class CrdtShape
             {
                 continue;
             }
-            if (seen.Add(Convert.ToBase64String(element)))
+            if (seen.Add(element))
             {
                 result.Add(element);
             }
@@ -698,8 +698,10 @@ public sealed class CrdtShape
         IReadOnlyList<OrSetDeltaDot>? a,
         IReadOnlyList<OrSetDeltaDot>? b)
     {
-        var result = new List<OrSetDeltaDot>((a?.Count ?? 0) + (b?.Count ?? 0));
-        var seen = new HashSet<(string ReplicaId, long Counter, string Element)>();
+        var bound = (a?.Count ?? 0) + (b?.Count ?? 0);
+        var result = new List<OrSetDeltaDot>(bound);
+        var seen = new HashSet<(string ReplicaId, long Counter, byte[] Element)>(
+            bound, ElementDotComparer.Instance);
         AppendOrSetDeltaDots(a, result, seen);
         AppendOrSetDeltaDots(b, result, seen);
         return result;
@@ -708,7 +710,7 @@ public sealed class CrdtShape
     private static void AppendOrSetDeltaDots(
         IReadOnlyList<OrSetDeltaDot>? source,
         List<OrSetDeltaDot> result,
-        HashSet<(string ReplicaId, long Counter, string Element)> seen)
+        HashSet<(string ReplicaId, long Counter, byte[] Element)> seen)
     {
         if (source is null)
         {
@@ -717,18 +719,17 @@ public sealed class CrdtShape
         foreach (var dot in source)
         {
             // A dot with no element is unmergeable: OrSet.MergeDelta and
-            // RwSet.MergeDelta both skip it. Mapping it onto string.Empty would
-            // give it a legal dedup key - and Convert.ToBase64String([]) IS
-            // string.Empty, so a null-element dot and a legitimately empty-
-            // element dot sharing a (replicaId, counter) would collide and the
-            // second would be dropped, silently losing the empty-element write.
-            // Skip it here the way AppendGSetElements already does.
+            // RwSet.MergeDelta both skip it. Mapping it onto an empty element
+            // would give it a legal dedup key, so a null-element dot and a
+            // legitimately empty-element dot sharing a (replicaId, counter)
+            // would collide and the second would be dropped, silently losing
+            // the empty-element write. Skip it here the way
+            // AppendGSetElements already does.
             if (dot.Element is null)
             {
                 continue;
             }
-            var element = Convert.ToBase64String(dot.Element);
-            if (seen.Add((dot.ReplicaId ?? string.Empty, dot.Counter, element)))
+            if (seen.Add((dot.ReplicaId ?? string.Empty, dot.Counter, dot.Element)))
             {
                 result.Add(dot);
             }
@@ -739,8 +740,9 @@ public sealed class CrdtShape
         IReadOnlyList<RgaDeltaNode>? a,
         IReadOnlyList<RgaDeltaNode>? b)
     {
-        var result = new List<RgaDeltaNode>((a?.Count ?? 0) + (b?.Count ?? 0));
-        var seen = new HashSet<OrSetDot>();
+        var bound = (a?.Count ?? 0) + (b?.Count ?? 0);
+        var result = new List<RgaDeltaNode>(bound);
+        var seen = new HashSet<OrSetDot>(bound);
         AppendRgaInserts(a, result, seen);
         AppendRgaInserts(b, result, seen);
         return result;
@@ -768,8 +770,9 @@ public sealed class CrdtShape
         IReadOnlyList<OrSetDot>? a,
         IReadOnlyList<OrSetDot>? b)
     {
-        var result = new List<OrSetDot>((a?.Count ?? 0) + (b?.Count ?? 0));
-        var seen = new HashSet<OrSetDot>();
+        var bound = (a?.Count ?? 0) + (b?.Count ?? 0);
+        var result = new List<OrSetDot>(bound);
+        var seen = new HashSet<OrSetDot>(bound);
         if (a is not null)
         {
             foreach (var dot in a)
@@ -791,6 +794,62 @@ public sealed class CrdtShape
             }
         }
         return result;
+    }
+
+    /// <summary>
+    /// Structural equality over raw element bytes, used as the dedup key for
+    /// the grow-only element union. Sequence equality over the bytes is exactly
+    /// the equivalence the previous base64 surrogate key expressed - base64 is
+    /// injective over byte sequences - so the dedup verdict is unchanged while
+    /// the per-element surrogate string is no longer allocated. On the pre-ship
+    /// coalescing fold that surrogate was the dominant allocation, and because
+    /// the fold is a running left-union it re-encoded every already-accumulated
+    /// element on each subsequent combine.
+    /// </summary>
+    private sealed class ElementBytesComparer : IEqualityComparer<byte[]>
+    {
+        public static ElementBytesComparer Instance { get; } = new();
+
+        public bool Equals(byte[]? x, byte[]? y) =>
+            ReferenceEquals(x, y)
+            || (x is not null && y is not null && x.AsSpan().SequenceEqual(y));
+
+        public int GetHashCode(byte[] obj)
+        {
+            var hash = new HashCode();
+            hash.AddBytes(obj);
+            return hash.ToHashCode();
+        }
+    }
+
+    /// <summary>
+    /// Structural equality over an observed-remove dot's
+    /// <c>(replicaId, counter, element)</c> identity, keying the element on its
+    /// raw bytes rather than a throwaway base64 surrogate. Equivalent verdicts
+    /// to the surrogate form (see <see cref="ElementBytesComparer"/>), and it
+    /// keeps a null element distinguishable from an empty one because a null
+    /// element never reaches the set.
+    /// </summary>
+    private sealed class ElementDotComparer
+        : IEqualityComparer<(string ReplicaId, long Counter, byte[] Element)>
+    {
+        public static ElementDotComparer Instance { get; } = new();
+
+        public bool Equals(
+            (string ReplicaId, long Counter, byte[] Element) x,
+            (string ReplicaId, long Counter, byte[] Element) y) =>
+            x.Counter == y.Counter
+            && string.Equals(x.ReplicaId, y.ReplicaId, StringComparison.Ordinal)
+            && (ReferenceEquals(x.Element, y.Element) || x.Element.AsSpan().SequenceEqual(y.Element));
+
+        public int GetHashCode((string ReplicaId, long Counter, byte[] Element) obj)
+        {
+            var hash = new HashCode();
+            hash.Add(obj.ReplicaId, StringComparer.Ordinal);
+            hash.Add(obj.Counter);
+            hash.AddBytes(obj.Element);
+            return hash.ToHashCode();
+        }
     }
 
     private static Dictionary<string, long> PointwiseMaxLong(
