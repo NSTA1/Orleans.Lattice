@@ -131,6 +131,39 @@ internal sealed class RepoContextVectorWriter
     /// </summary>
     private const int MembershipProbeBatchSize = 256;
 
+    /// <summary>
+    /// The page size used to walk the embedded-memory-key marker range, held well
+    /// below <see cref="RepoContextPortability.DefaultPageSize"/> on purpose.
+    /// <para>
+    /// This is the interval at which the walk BANKS its progress. A page is one
+    /// bounded range read that either completes - in which case its keys and its
+    /// continuation token are durable across reconcile passes - or fails, in which
+    /// case only that page's rows are lost. The shard's own batch size is a
+    /// separate tree-level option and is unaffected by this value, so what a small
+    /// page buys is not a cheaper individual read but a finer-grained, more
+    /// frequently checkpointed one.
+    /// </para>
+    /// <para>
+    /// That matters because this range is pathologically sparse: a few hundred
+    /// markers spread over a membership tree of tens of thousands of rows whose
+    /// leaves were split when presence flags were far larger than they are now, and
+    /// leaves do not merge back. A shard filling a page walks its leaf chain until
+    /// the page is full and abandons the fill once it exceeds
+    /// <c>LatticeOptions.MaxScanPageStallDuration</c>, so on a range this
+    /// fragmented a walk can be interrupted repeatedly. With one whole-range page
+    /// every interruption discarded everything and the walk never finished, on any
+    /// pass, ever (issue #2071); with small pages each surviving page is kept and
+    /// the walk converges.
+    /// </para>
+    /// <para>
+    /// Paired with the resumable cursor in <see cref="_memoryKeyScans"/>: small
+    /// pages checkpoint often, and the cursor makes each checkpoint durable across
+    /// passes, so the two together are what stop the walk being permanently
+    /// defeated rather than merely made likelier to succeed.
+    /// </para>
+    /// </summary>
+    private const int MemoryKeyMarkerPageSize = 32;
+
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
     private readonly ILatticeReplicationContext _replication;
@@ -172,6 +205,32 @@ internal sealed class RepoContextVectorWriter
     /// which is strictly worse for the partition that was already the bottleneck.
     /// </summary>
     private readonly ConcurrentDictionary<string, Task> _countRefreshes = new();
+
+    /// <summary>
+    /// The resumable cursor of the embedded-memory-key marker scan, per repository.
+    /// <para>
+    /// Without it, a marker scan that lost a page read discarded every page it had
+    /// already paid for and restarted from the beginning on the next pass - so on a
+    /// tree where the range costs more than one page-fill ceiling to walk, the scan
+    /// got a little further each pass and never once finished (issue #2071 observed
+    /// 950, 1139, 1366, then 1867 leaves before the same ceiling fired). Keeping the
+    /// keys observed so far and the continuation token to resume from makes the
+    /// progress DURABLE across passes, so the walk completes within a bounded number
+    /// of passes however large the range is.
+    /// </para>
+    /// <para>
+    /// The entry lives only while a scan is incomplete: a scan that reaches the end
+    /// of the range removes it, so the next pass starts a fresh full walk and
+    /// observes markers that have since been added or disabled.
+    /// </para>
+    /// <para>
+    /// Carrying keys across passes is sound in both of the set's uses. As a skip
+    /// signal a stale key can only suppress a re-embed of an entry that is no longer
+    /// live, which is not walked anyway; as the recorded half of (recorded - live) a
+    /// stale key names exactly an orphan, which is what the sweep is for.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, MemoryKeyMarkerCursor> _memoryKeyScans = new();
 
     /// <summary>Creates the vector writer.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
@@ -664,14 +723,37 @@ internal sealed class RepoContextVectorWriter
     }
 
     /// <summary>
-    /// Loads every memory key currently recorded as embedded. Subtracting the live
-    /// memory keys from this set yields exactly the orphaned embeddings - entries
-    /// that expired by their own time-to-live, which no code path observes.
+    /// Loads every memory key currently recorded as embedded, as a <b>resumable</b>
+    /// walk of the marker range. Subtracting the live memory keys from a
+    /// <see cref="RepoContextMemoryKeyMarkers.Complete"/> set yields exactly the
+    /// orphaned embeddings - entries that expired by their own time-to-live, which
+    /// no code path observes.
+    /// <para>
+    /// The walk never throws on a page fault. A page read that fails - which on a
+    /// large, leaf-fragmented membership tree means the shard's page-fill ceiling
+    /// fired - banks the keys already read and the continuation token to resume
+    /// from, and returns the partial set with <c>Complete: false</c> and the fault
+    /// that stopped it. The next call resumes where this one stopped instead of
+    /// paying for those pages again, so the scan makes monotonic progress and
+    /// completes within a bounded number of passes. Before this, a scan that could
+    /// not be walked inside one ceiling restarted from the beginning every pass and
+    /// therefore never finished at all, which is what left the orphan sweep
+    /// permanently un-run in issue #2071.
+    /// </para>
+    /// <para>
+    /// Cancellation is <b>not</b> a page fault: an
+    /// <see cref="OperationCanceledException"/> propagates, because a cancelled
+    /// pass must not be recorded as a degraded one.
+    /// </para>
     /// </summary>
     /// <param name="repoId">The repository identity.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
-    /// <returns>The recorded memory keys; empty when none are embedded.</returns>
-    public async Task<IReadOnlySet<string>> LoadEmbeddedMemoryKeysAsync(
+    /// <returns>
+    /// The recorded memory keys observed so far and whether the walk reached the
+    /// end of the range; the keys are empty when none are recorded.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public async Task<RepoContextMemoryKeyMarkers> LoadEmbeddedMemoryKeysAsync(
         string repoId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
@@ -688,27 +770,76 @@ internal sealed class RepoContextVectorWriter
         // full-tree scan to EVERY reconcile pass - over the very tree whose
         // cold-start replay is already the bottleneck - to find a small subset.
         var prefix = MemoryKeysScanPrefix(repoId);
-        var keys = new HashSet<string>(StringComparer.Ordinal);
 
-        await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)
-            .ConfigureAwait(false))
+        // Resume the walk in progress, if any, rather than restarting it.
+        var resumed = _memoryKeyScans.TryGetValue(repoId, out var cursor) ? cursor : null;
+        var keys = resumed is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : new HashSet<string>(resumed.Keys, StringComparer.Ordinal);
+        var token = resumed?.ContinuationToken;
+
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // A disabled flag is a removal that still carries causal history, so
-            // only an enabled one counts as a live embedding.
-            if (!JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
-                || !TryReadSourceId(entry.Key, out var collection)
-                || !collection.StartsWith(MemoryKeyMarkerPrefix, StringComparison.Ordinal))
+            RepoContextSnapshotPage page;
+            try
             {
-                continue;
+                // Guarded like every other read on this tree, so a terminal
+                // stale-projection fault still triggers the bounded re-derivation
+                // before it is degraded into an incomplete scan.
+                var pageToken = token;
+                page = await GuardMembershipAsync(
+                        () => RepoContextPortability.EnumerateAsync(
+                            tree, prefix, pageToken, MemoryKeyMarkerPageSize, vectorExport: null, cancellationToken),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _memoryKeyScans[repoId] = new MemoryKeyMarkerCursor(keys, token);
+                return new RepoContextMemoryKeyMarkers(keys, Complete: false, Fault: ex);
             }
 
-            keys.Add(collection[MemoryKeyMarkerPrefix.Length..]);
-        }
+            foreach (var record in page.Records)
+            {
+                if (record.Value is null)
+                {
+                    continue;
+                }
 
-        return keys;
+                // A disabled flag is a removal that still carries causal history, so
+                // only an enabled one counts as a live embedding.
+                if (!JsonLatticeSerializer<OrFlag>.Default.Deserialize(record.Value).IsEnabled
+                    || !TryReadSourceId(record.Key, out var collection)
+                    || !collection.StartsWith(MemoryKeyMarkerPrefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                keys.Add(collection[MemoryKeyMarkerPrefix.Length..]);
+            }
+
+            if (!page.HasMore)
+            {
+                // The range is walked. Drop the cursor so the next call starts a
+                // fresh full walk and observes markers added or disabled since.
+                _memoryKeyScans.TryRemove(repoId, out _);
+                return new RepoContextMemoryKeyMarkers(keys, Complete: true, Fault: null);
+            }
+
+            token = page.ContinuationToken;
+        }
     }
+
+    /// <summary>
+    /// The banked progress of an embedded-memory-key marker scan that has not yet
+    /// reached the end of its range: the keys already read, and the continuation
+    /// token the next pass resumes from.
+    /// </summary>
+    /// <param name="Keys">The marker keys observed by the pages already walked.</param>
+    /// <param name="ContinuationToken">The token to resume the walk from, or <see langword="null"/> to start at the range head.</param>
+    private sealed record MemoryKeyMarkerCursor(IReadOnlySet<string> Keys, string? ContinuationToken);
 
     private Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
         => GuardMembershipAsync(async () =>        {
