@@ -1,6 +1,8 @@
 # Metric-to-panel coverage map
 
-Every instrument on the `orleans.lattice` and `orleans.lattice.replication` meters is referenced by at least one panel in the bundled dashboards. The drift-guard test in `Orleans.Lattice.Dashboards.Tests` enforces the inverse direction: every metric name a dashboard references must resolve to a live instrument.
+Almost every instrument on the `orleans.lattice` and `orleans.lattice.replication` meters is referenced by at least one panel in the bundled dashboards; the exceptions are listed as **not charted** in the tables below. The drift-guard test in `Orleans.Lattice.Dashboards.Tests` enforces the inverse direction unconditionally: every metric name a dashboard references must resolve to a live instrument.
+
+> **The forward direction is enforced only for instruments the guard can observe.** The guard discovers live instruments by forcing the type initialisers of `LatticeMetrics` and `LatticeReplicationMetrics` and listening for what they publish, plus the instrument-name constants those two classes declare. An instrument created in a field initialiser on some *other* type - a grain, say - is never constructed at test time, so the guard neither sees it nor demands a panel for it. Such an instrument can ship unpaneled with a green build, which is exactly how the `orleans.lattice.tag_index.reconcile.*` family below came to be uncharted. When you add an instrument outside those two classes, add its row here by hand.
 
 The add-on `orleans.lattice.auth` and `orleans.lattice.membership` meters are charted by the bundled Identity & Authorization dashboard. Their coverage is enforced from the owning packages: `Orleans.Lattice.Auth.Tests` and `Orleans.Lattice.Membership.Tests` each derive from the shared `MeterDashboardCoverageTestsBase`, which asserts every instrument on the meter is referenced by that dashboard (and that every token the dashboard references for the meter resolves to a live instrument).
 
@@ -202,6 +204,13 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.grainindex.backfill.total` | observable gauge (`{grain}`) | `index` | GrainIndex | Backfill progress (processed vs total) |
 | `orleans.lattice.grainindex.backfill.percent_complete` | observable gauge (`%`) | `index` | GrainIndex | Backfill percent complete |
 | `orleans.lattice.grainindex.backfill.state` | observable gauge (`{state}`) | `index` | GrainIndex | Backfill state |
+| `orleans.lattice.tag_index.reconcile.sweeps` | counter (`{sweep}`) | `index`, `outcome` | *(not charted)* | Background tag-index reconciliation sweeps, by outcome (`clean`, `repaired`, `probe_only`) |
+| `orleans.lattice.tag_index.reconcile.trees.probed` | counter (`{tree}`) | `index` | *(not charted)* | Covered trees whose digest fingerprint a sweep probed |
+| `orleans.lattice.tag_index.reconcile.trees.mismatched` | counter (`{tree}`) | `index` | *(not charted)* | Covered trees a sweep found divergent from their digest baseline |
+| `orleans.lattice.tag_index.reconcile.orphan_rows.removed` | counter (`{row}`) | `index` | *(not charted)* | Orphan membership rows removed by background reconciliation |
+| `orleans.lattice.tag_index.reconcile.duration` | histogram (ms) | `index` | *(not charted)* | Wall-clock duration of a background reconciliation sweep |
+
+The `orleans.lattice.tag_index.reconcile.*` family is emitted by the background tag-index reconciliation sweep and is documented in [Metrics](../lattice/metrics.md). No bundled dashboard charts it yet; scrape it directly, or add panels and update the rows above.
 
 ## `orleans.lattice.replication` meter
 

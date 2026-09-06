@@ -16,9 +16,11 @@ The panels reference instruments by their metric name (for example `orleans.latt
 The risk with bundled dashboards is silent drift: a renamed instrument leaves a panel charting nothing, or a newly added instrument ships with no panel. A CI test closes both directions:
 
 1. **Every referenced metric exists.** Each metric name a panel queries must resolve to a live instrument on the `orleans.lattice` or `orleans.lattice.replication` meter. A renamed or removed instrument fails the build.
-2. **Every instrument is charted.** Each live instrument on those meters must be referenced by at least one panel. A new instrument with no panel fails the build.
+2. **Every *observable* instrument is charted.** Each live instrument the guard can discover on those meters must be referenced by at least one panel. A new instrument with no panel fails the build.
 
-The authoritative human-readable view of this pairing is the [metric-to-panel map](metrics-to-panel-map.md); the test is the enforcement. Together they guarantee the bundled dashboards never reference a stale metric and never silently omit a new one.
+Direction 2 carries one caveat worth knowing. The guard discovers instruments by forcing the type initialisers of `LatticeMetrics` and `LatticeReplicationMetrics` and listening for what they publish, plus the instrument-name constants those two classes declare. An instrument created in a field initialiser on some *other* type is not constructed at test time, so the guard cannot see it and will not demand a panel for it - the `orleans.lattice.tag_index.reconcile.*` family is a live example of an unpaneled instrument with a green build. Declaring a new instrument on `LatticeMetrics` (or `LatticeReplicationMetrics`) keeps it inside the guard's reach; declaring it elsewhere means the [metric-to-panel map](metrics-to-panel-map.md) row is yours to add by hand.
+
+The authoritative human-readable view of this pairing is the [metric-to-panel map](metrics-to-panel-map.md); the test is the enforcement. Together they keep the bundled dashboards from referencing a stale metric, and from silently omitting a new instrument the guard can observe.
 
 ## No replication link dependency
 
