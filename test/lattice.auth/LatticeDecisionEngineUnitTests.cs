@@ -34,6 +34,33 @@ public sealed class LatticeDecisionEngineUnitTests
     }
 
     [Test]
+    public async Task HasAnyGrant_default_allow_with_whole_tree_deny_returns_false()
+    {
+        var engine = await EngineAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow },
+            Rule(LatticeScope.Tree("app"), LatticeEffect.Deny));
+
+        Assert.That(
+            engine.HasAnyGrant(Alice, "app", LatticeOperation.Read),
+            Is.False,
+            "a whole-tree deny removes the entire keyspace even under default-allow, so the existence probe must not out-reach the enforcement deny");
+    }
+
+    [Test]
+    public async Task HasAnyGrant_default_allow_with_whole_tree_deny_and_prefix_allow_returns_true()
+    {
+        var engine = await EngineAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow },
+            Rule(LatticeScope.Tree("app"), LatticeEffect.Deny),
+            Rule(LatticeScope.Prefix("app", "pub/")));
+
+        Assert.That(
+            engine.HasAnyGrant(Alice, "app", LatticeOperation.Read),
+            Is.True,
+            "a prefix allow carve-out keeps some keys readable, so the tree stays visible despite the whole-tree deny");
+    }
+
+    [Test]
     public async Task HasAnyGrant_whole_tree_allow_returns_true()
     {
         var engine = await EngineAsync(
