@@ -617,6 +617,20 @@ on one item drive it toward the poison threshold and into `Parked`, which is
 correct: an item that keeps evicting its holders is either mis-specified or too
 large, and both need a human rather than another attempt.
 
+**A claim marker records a CLAIMANT, not a grant.** A worker whose lease lapses
+and who re-claims its own item is continuing the same work under a new fencing
+token; custody never changed. It must **not** post a second claim marker - the
+marker's purpose is to record who holds the item, and that did not change, so a
+second one is noise in the exact trail the parking sweep counts. Disclose the
+fence movement in the item body and in the outcome marker instead.
+
+The corollary is load-bearing: **a lapse-and-re-claim by the same owner does not
+count as an attempt.** Counting it would park an item purely for taking longer
+than one lease, which inverts what parking is for - it exists to catch items that
+keep *evicting* their holders, not items that are simply long. Only a genuine
+change of custody, evidenced by a takeover marker naming a different prior owner,
+is an attempt.
+
 **Reporting a clean re-claim is mandatory, not optional.** A worker that lapses
 and successfully re-claims its own item inside the quarantine has had a
 near-miss, not a non-event. Report it. Both instances of this on the protocol's
