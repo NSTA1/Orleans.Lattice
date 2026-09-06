@@ -108,3 +108,59 @@ sequenceDiagram
 `AcceptSplitAsync` on internal nodes checks for duplicate `(separatorKey, childId)` pairs before inserting. If the same split result is delivered twice (e.g. crash recovery, message retry), the duplicate is detected and skipped. Combined with the monotonic `SplitState` on leaf and internal nodes, this makes the entire split protocol idempotent end-to-end.
 
 Internal nodes themselves use the same two-phase split pattern as leaves. If an internal node crashes mid-split, the next `AcceptSplitAsync` call resumes the incomplete split before processing the caller's promotion - routing it to the correct node (locally or to the new sibling) based on the split key.
+
+## Empty Leaf Reclaim
+
+Splitting is the only direction the tree had for a long time. A leaf was allocated whenever a key range grew past `MaxLeafKeys`, and nothing ever took one back when the range shrank again. A range that grew to a thousand leaves and was then emptied kept all thousand: each an activation to schedule, a state row to store, and a hop in every range scan that crosses it. The cost was paid in proportion to the **high-water mark** of the range rather than to the rows that are actually live, and it never subsided.
+
+`ReclaimEmptyLeavesAsync` on the shard root walks the sibling chain and folds out leaves that hold no live rows. It is deliberately conservative:
+
+- It **moves no data.** The only leaf it ever touches is one with zero live rows, so there is no migration window in which a row exists in two places or in neither.
+- The **head leaf is never folded.** It owns everything below the tree's first separator and has no predecessor to inherit that range, so a fully emptied tree still retains exactly one leaf to route to.
+- A leaf is skipped when it carries state that must outlive its rows: an in-progress split, a sticky moved-away seal, a prepared cross-shard saga bucket, or a destination-side shadow marker.
+- Each pass is **bounded** by a caller-supplied leaf count and an internal walk ceiling, so it cannot hold an activation turn open on a degenerate chain, and it is re-driven rather than run to completion.
+
+### Fold ordering
+
+The ordering is the whole of the safety argument. The WAL materialiser filters records by exactly the span each leaf declares it owns, so two leaves claiming overlapping spans would materialise the same record twice, and a range routed to a leaf whose span excludes it loses writes on the next projection rebuild.
+
+```mermaid
+sequenceDiagram
+    participant Root as ShardRootGrain
+    participant Parent as InternalGrain
+    participant Prev as Leaf P (predecessor)
+    participant Leaf as Leaf L (empty)
+    participant Next as Leaf N (successor)
+
+    Root->>Leaf: GetReclaimProbeAsync()
+    Note over Leaf: 0 live rows, no blocking state
+
+    rect rgb(255, 248, 240)
+    Note over Root,Parent: 1 - retire routing first
+    Root->>Parent: RemoveChildAsync(L)
+    Root->>Root: InvalidateRoutingTable(parent)
+    Note over Parent: no new write can reach L
+    end
+
+    rect rgb(240, 255, 240)
+    Note over Root,Prev: 2 - unlink and widen in ONE persist
+    Root->>Prev: TryUnlinkSuccessorAsync(expectedNext: L, newNext: N, absorbHigh: L.High)
+    Note over Prev: compare-and-swap - declines if a split moved P underneath
+    end
+
+    Root->>Next: SetPrevSiblingAsync(P)
+    Root->>Leaf: ClearGrainStateAsync()
+```
+
+1. **Retire routing first.** Removing the separator from the parent means no new write can reach `L`. Widening `P` first would instead let a write route to `L` while `P` also claimed the range - a permanent duplicate that never self-heals, because `L` is no longer empty and so is never reclaimed again.
+2. **Unlink and widen together.** `P` takes over both the chain link and the vacated range in a single persist. Split into two writes there is a window in which `P` routes a range its own replay filter rejects, so a write landing in that window survives in cache and vanishes on the next rebuild.
+3. **Clear last.** `L` is unreachable by routing and by the chain before any state is destroyed.
+
+Between steps 1 and 2 the tree is in a **self-healing** intermediate state: the range routes to `P` but `P` still declares the narrower span. Each pass repairs any such gap it finds before considering the next candidate, so a fold interrupted by a crash is finished by the next pass rather than left half-done. Every step is idempotent and the range widen is monotonic, so re-driving converges.
+
+### Why the unlink is a compare-and-swap
+
+Reclaim is a multi-grain sequence while the split gate is per-grain, so reclaim and split are **not** serialised with respect to each other. A split of `P` can land between the shard root reading `P`'s sibling pointer and writing it. That split inserts a new leaf `S` between `P` and `L`, and moves live rows into it. An unconditional write of the pointer the reclaim had planned would set `P.NextSibling` past `S` entirely, unlinking a leaf that holds rows which were live throughout - silent data loss caused by the reclaim path, in the growth direction.
+
+`TryUnlinkSuccessorAsync` therefore verifies that `P` still points at the leaf being folded before writing anything, and declines otherwise. A declined fold leaves `L` unrouted, still chained, still empty and claimed by nobody, which the next pass completes once the topology has settled. Declining is safe where corrupting is not, and reclaim is background work that will be re-driven anyway.
+
