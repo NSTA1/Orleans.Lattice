@@ -6,6 +6,7 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Testing;
 using Orleans.Runtime;
 using Orleans.TestingHost;
 
@@ -352,47 +353,76 @@ public sealed class WalCursorRegistryDurabilityTests
         return merged;
     }
 
+    /// <summary>
+    /// Waits for every durable pin on <paramref name="treeId"/> to be a real
+    /// (non-Zero) frontier, failing at the barrier if none is ever published.
+    /// </summary>
+    /// <remarks>
+    /// The barrier is hard on purpose. It used to fall through and return
+    /// whatever the last probe saw, which for a tree that published no pin at
+    /// all is an EMPTY map - and <see cref="MinFrontier"/> maps an empty map to
+    /// <see cref="HybridLogicalClock.Zero"/>. A caller asserting the seeded
+    /// frontier equals Zero therefore passed when the leaf published nothing,
+    /// which is precisely the state the assertion claims to rule out.
+    /// </remarks>
     private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> WaitForAnyRealPinAsync(string treeId)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-        while (DateTime.UtcNow < deadline)
-        {
-            var pins = await GetPinsAsync(treeId);
-            if (pins.Count > 0 && pins.Values.All(v => v > HybridLogicalClock.Zero))
+        IReadOnlyDictionary<string, HybridLogicalClock> pins = new Dictionary<string, HybridLogicalClock>();
+        await TestPoll.UntilAsync(
+            async () =>
             {
-                return pins;
-            }
-            await Task.Delay(50);
-        }
-
-        return await GetPinsAsync(treeId);
-    }
-
-    private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> WaitForAnyPinAsync(string treeId)
-    {
-        // Accepts ANY durable pin, including the Zero block pin an uncovered
-        // checkpointed partition legitimately publishes, so the uncovered-case
-        // seeds don't spin the full real-pin timeout.
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        var pins = await GetPinsAsync(treeId);
-        while (DateTime.UtcNow < deadline && pins.Count == 0)
-        {
-            await Task.Delay(50);
-            pins = await GetPinsAsync(treeId);
-        }
+                pins = await GetPinsAsync(treeId);
+                return pins.Count > 0 && pins.Values.All(v => v > HybridLogicalClock.Zero);
+            },
+            $"a real (non-Zero) durable materialiser pin on '{treeId}'",
+            TimeSpan.FromSeconds(20),
+            TimeSpan.FromMilliseconds(50));
 
         return pins;
     }
 
+    /// <summary>
+    /// Waits for any durable pin on <paramref name="treeId"/>, failing at the
+    /// barrier if none is ever published. See
+    /// <see cref="WaitForAnyRealPinAsync"/> for why the barrier is hard.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> WaitForAnyPinAsync(string treeId)
+    {
+        // Accepts ANY durable pin, including the Zero block pin an uncovered
+        // checkpointed partition legitimately publishes, so the uncovered-case
+        // seeds don't spin the full real-pin timeout. It still requires that a
+        // pin was published at all - "no pin" and "the Zero block pin" are
+        // different observations and only the second satisfies the callers.
+        IReadOnlyDictionary<string, HybridLogicalClock> pins = new Dictionary<string, HybridLogicalClock>();
+        await TestPoll.UntilAsync(
+            async () =>
+            {
+                pins = await GetPinsAsync(treeId);
+                return pins.Count > 0;
+            },
+            $"a durable materialiser pin (Zero block or real) on '{treeId}'",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromMilliseconds(50));
+
+        return pins;
+    }
+
+    /// <summary>
+    /// Waits for <paramref name="consumerId"/> to appear in the durable pins for
+    /// <paramref name="treeId"/>, failing at the barrier if it never does.
+    /// </summary>
     private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> WaitForPinAsync(string treeId, string consumerId)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        IReadOnlyDictionary<string, HybridLogicalClock> pins = await GetPinsAsync(treeId);
-        while (DateTime.UtcNow < deadline && !pins.ContainsKey(consumerId))
-        {
-            await Task.Delay(50);
-            pins = await GetPinsAsync(treeId);
-        }
+        IReadOnlyDictionary<string, HybridLogicalClock> pins = new Dictionary<string, HybridLogicalClock>();
+        await TestPoll.UntilAsync(
+            async () =>
+            {
+                pins = await GetPinsAsync(treeId);
+                return pins.ContainsKey(consumerId);
+            },
+            $"a durable pin for consumer '{consumerId}' on '{treeId}'",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromMilliseconds(50));
 
         return pins;
     }

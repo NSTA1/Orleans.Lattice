@@ -582,6 +582,27 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         }
         await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
+        // The alias TARGET is a second, independent authorization boundary, and it is
+        // the one that decides where the data plane actually lands. Every data-plane
+        // gate - LatticeGrain's access-gate enforcement, and the access-gate request
+        // this facade's own verbs build - is evaluated against the LOGICAL tree id,
+        // *before* the registry resolves the alias; the physical shard and leaf grains
+        // deliberately enforce no policy of their own because they are documented as
+        // reachable only through an already-authorized logical identity. Authorizing
+        // only the logical id therefore transplants an authorized logical identity
+        // onto an arbitrary physical tree: a caller holding Admin on a single tree it
+        // legitimately owns could alias that tree onto a tree it holds nothing on and
+        // then read and rewrite the target's contents through the ordinary data-plane
+        // surface, under its own tree's policy.
+        //
+        // The registry's own ThrowIfAliasEscalatesNamespace guard is namespace-shaped
+        // (it refuses a '_lattice_' target, an ordinary -> 'sys-' crossing, and a
+        // foreign-tenant target), so two ordinary same-namespace ids pass it
+        // unconditionally - which is exactly the ordinary-to-ordinary case this check
+        // closes. It mirrors the assertion the backup engine already makes at its own
+        // alias-swap seam (LatticeBackupRestoreService.AssertPhysicalBelongsToTargetAsync).
+        await _authorizer.AuthorizeTreeAdminAsync(effectivePhysicalTreeId, cancellationToken).ConfigureAwait(false);
+
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.SetAliasAsync(effectiveTreeId, effectivePhysicalTreeId).ConfigureAwait(false);
 
@@ -1112,6 +1133,24 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         ThrowIfReserved(effectiveDestinationTreeId, nameof(destinationTreeId));
         await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
+        // The destination is a second, independent authorization boundary. A snapshot
+        // CREATES its destination tree in the registry (with caller-chosen structural
+        // sizing) and then drains the source's whole contents into it, so authorizing
+        // only the source lets a caller holding Admin on one tree it owns stand up a
+        // fully-populated tree at an id it holds nothing on - bypassing both
+        // CreateTreeAsync, which authorizes the exact id being created, and
+        // BeginBulkLoadAsync, which authorizes the BulkLoad capability on it. Where a
+        // victim's policy grants a tree id they have not created yet, that plants
+        // forged content the victim subsequently reads as its own.
+        //
+        // The core's own destination guard (ThrowIfReservedSnapshotDestination) is
+        // namespace-shaped only - it refuses the '_lattice_' and 'sys-' namespaces and
+        // a foreign tenant's - and its EnforceWholeTreeAsync(Admin) is hard-bound to
+        // the SOURCE tree's id, so an ordinary same-namespace destination is otherwise
+        // ungoverned. This is the mirror of the far-side check the sibling cross-tree
+        // verb LatticeGrain.MergeAsync already makes via EnforceSourceTreeReadAsync.
+        await _authorizer.AuthorizeTreeAdminAsync(effectiveDestinationTreeId, cancellationToken).ConfigureAwait(false);
+
         // Wrap the public ILattice verb so the tree's own guards (system-tree) and
         // destination-existence / in-progress validation are inherited rather than
         // duplicated, and the core re-enforces Admin. Orchestration is accepted
@@ -1309,6 +1348,28 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // gives two tenants using one unqualified name different maintainers.
         var effectiveViewName =
             await EffectiveViewNameAsync(viewName, cancellationToken).ConfigureAwait(false);
+
+        // A view name is a named resource, and registration is last-write-wins at both
+        // layers (ViewRegistryGrain.RegisterAsync overwrites the durable record;
+        // ViewCatalog.Register overwrites the entry). Authorizing only the caller's
+        // chosen SOURCE therefore lets a caller holding Admin on any tree it owns
+        // re-point an existing view - whose incumbent source it holds nothing on - at
+        // its own tree: the maintainer then projects attacker-controlled data into the
+        // established 'view-' tree, which it cannot write to directly (the maintainer
+        // runs under a system-origin bypass), and the incumbent's owner is locked out,
+        // because RebuildViewAsync / ReconcileViewAsync / DropViewAsync all authorize
+        // against the *resolved* source, which is now the attacker's tree.
+        //
+        // So the incumbent registration is a second, independent authorization
+        // boundary: rebinding a live view requires Admin on the source it currently
+        // tails as well as on the one it is being moved to. A first-time create (no
+        // incumbent) and an idempotent re-create over the same source are unaffected.
+        var incumbent = await TryResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
+        if (incumbent is { } existing
+            && !string.Equals(existing.SourceTreeId, effectiveSourceTreeId, StringComparison.Ordinal))
+        {
+            await _authorizer.AuthorizeTreeAdminAsync(existing.SourceTreeId, cancellationToken).ConfigureAwait(false);
+        }
 
         await _viewFactory!.CreateAsync(source, effectiveViewName, descriptor, cancellationToken)
             .ConfigureAwait(false);

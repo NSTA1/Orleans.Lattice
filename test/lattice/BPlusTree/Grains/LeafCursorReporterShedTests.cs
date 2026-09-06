@@ -3,6 +3,7 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -41,19 +42,6 @@ public sealed class LeafCursorReporterShedTests
     private static string ShardKey() =>
         WalMaterialiserPinRouting.ShardKey(Tree, Consumer, WalMaterialiserPinRouting.ResolveShardCount(null));
 
-    private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 2000)
-    {
-        var deadline = Environment.TickCount64 + timeoutMs;
-        while (Environment.TickCount64 < deadline)
-        {
-            if (condition())
-            {
-                return;
-            }
-
-            await Task.Delay(10);
-        }
-    }
 
     private static (LeafCursorReporter reporter, CountingPinGrain pin) Create()
     {
@@ -75,7 +63,9 @@ public sealed class LeafCursorReporterShedTests
         // reporter's own wall-clock debounce always lets it through - which
         // leaves the shed gate as the only thing that can stop it.
         reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, HybridLogicalClock.Zero, -1);
-        await WaitUntilAsync(() => pin.Reports.Count >= 1);
+        await TestPoll.UntilAsync(() => pin.Reports.Count >= 1,
+            "the Zero block-pin seed must land before a baseline is sampled, otherwise the shed assertion below compares two zeroes and passes without the gate ever being exercised",
+            TimeSpan.FromSeconds(2));
         var baseline = pin.Reports.Count;
 
         WalMaterialiserPinPressure.ForceShedForTests(ShardKey(), durationMs: 5000);
@@ -111,14 +101,18 @@ public sealed class LeafCursorReporterShedTests
         var (reporter, pin) = Create();
 
         reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, HybridLogicalClock.Zero, -1);
-        await WaitUntilAsync(() => pin.Reports.Count >= 1);
+        await TestPoll.UntilAsync(() => pin.Reports.Count >= 1,
+            "the Zero block-pin seed must land before a baseline is sampled, otherwise the shed assertion below compares two zeroes and passes without the gate ever being exercised",
+            TimeSpan.FromSeconds(2));
         var baseline = pin.Reports.Count;
 
         WalMaterialiserPinPressure.ForceShedForTests(ShardKey(), durationMs: 1);
         await Task.Delay(50);
 
         reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100), 100);
-        await WaitUntilAsync(() => pin.Reports.Count > baseline);
+        await TestPoll.UntilAsync(() => pin.Reports.Count > baseline,
+            "reporting must resume once the shed window lapses",
+            TimeSpan.FromSeconds(2));
 
         Assert.That(pin.Reports.Count, Is.GreaterThan(baseline),
             "the shed window is a short self-tuning hold-off, not a latch: reporting must resume on its own");
@@ -130,7 +124,9 @@ public sealed class LeafCursorReporterShedTests
         var (reporter, pin) = Create();
 
         reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, HybridLogicalClock.Zero, -1);
-        await WaitUntilAsync(() => pin.Reports.Count >= 1);
+        await TestPoll.UntilAsync(() => pin.Reports.Count >= 1,
+            "the Zero block-pin seed must land before the first real frontier is shed",
+            TimeSpan.FromSeconds(2));
 
         // Shed the first real frontier. The debounce was optimistically advanced
         // before the fire-and-forget write, so unless shedding rolls it back the
@@ -143,7 +139,9 @@ public sealed class LeafCursorReporterShedTests
         // advance over nothing, so a reporter that recorded the shed report as
         // landed coalesces it away and the pin never reaches this frontier at all.
         reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100), 100);
-        await WaitUntilAsync(() => pin.Reports.Any(r => r.Frontier == Hlc(100)));
+        await TestPoll.UntilAsync(() => pin.Reports.Any(r => r.Frontier == Hlc(100)),
+            "the shed report must be retried and land",
+            TimeSpan.FromSeconds(2));
 
         Assert.That(pin.Reports.Any(r => r.Frontier == Hlc(100)), Is.True,
             "shedding is deferral, not loss: a shed report must roll the debounce back so the next checkpoint retries it");

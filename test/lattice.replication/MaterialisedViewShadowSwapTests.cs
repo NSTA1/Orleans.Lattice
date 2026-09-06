@@ -170,7 +170,7 @@ public class MaterialisedViewShadowSwapTests
             }
         }
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await ViewGrain(oldTreeId).CountAsync(), Is.EqualTo(0), "Old generation tree was not reclaimed.");
             Assert.That(await latticeView.CountAsync(), Is.EqualTo(2), "Active view must still serve every entry.");
@@ -345,7 +345,7 @@ public class MaterialisedViewShadowSwapTests
 
         static double? Sum(byte[]? bytes) => bytes is null ? null : LatticeAggregationValue.DecodeDouble(bytes);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(Sum(await latticeView.GetAsync("red")), Is.EqualTo(15));
             Assert.That(Sum(await latticeView.GetAsync("blue")), Is.EqualTo(7));
@@ -355,7 +355,7 @@ public class MaterialisedViewShadowSwapTests
 
         // Rebuild reproduces the same materialised group values.
         await latticeView.RebuildAsync();
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(Sum(await latticeView.GetAsync("red")), Is.EqualTo(15));
             Assert.That(Sum(await latticeView.GetAsync("blue")), Is.EqualTo(7));

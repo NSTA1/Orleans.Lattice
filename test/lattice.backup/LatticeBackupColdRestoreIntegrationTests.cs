@@ -52,13 +52,13 @@ public sealed class LatticeBackupColdRestoreIntegrationTests
             new LatticeRestoreRequest(backup.BackupId, target));
 
         var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.EntriesApplied, Is.EqualTo(3));
             Assert.That(result.TargetTreeId, Is.EqualTo(target));
-            Assert.That(Str(restored.GetAsync("k1").Result!), Is.EqualTo("v1"));
-            Assert.That(Str(restored.GetAsync("k2").Result!), Is.EqualTo("v2"));
-            Assert.That(Str(restored.GetAsync("k3").Result!), Is.EqualTo("v3"));
+            Assert.That(Str((await restored.GetAsync("k1"))!), Is.EqualTo("v1"));
+            Assert.That(Str((await restored.GetAsync("k2"))!), Is.EqualTo("v2"));
+            Assert.That(Str((await restored.GetAsync("k3"))!), Is.EqualTo("v3"));
         });
 
         // The recovered cluster is left with a correct catalog: the cold restore
@@ -97,22 +97,22 @@ public sealed class LatticeBackupColdRestoreIntegrationTests
             new LatticeRestoreRequest(increment.BackupId, target));
 
         var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             // The engine walked back to the base (found via the sink) and folded the
             // delta on top: overwrite, delete, and new key all applied.
             Assert.That(result.ManifestChain, Has.Count.EqualTo(2), "base + increment walked from the sink");
-            Assert.That(Str(restored.GetAsync("k1").Result!), Is.EqualTo("v1-updated"), "overwrite folded");
-            Assert.That(restored.GetAsync("k2").Result, Is.Null, "delete folded");
-            Assert.That(Str(restored.GetAsync("k3").Result!), Is.EqualTo("v3"), "untouched base entry survives");
-            Assert.That(Str(restored.GetAsync("k4").Result!), Is.EqualTo("v4"), "new key folded");
+            Assert.That(Str((await restored.GetAsync("k1"))!), Is.EqualTo("v1-updated"), "overwrite folded");
+            Assert.That(await restored.GetAsync("k2"), Is.Null, "delete folded");
+            Assert.That(Str((await restored.GetAsync("k3"))!), Is.EqualTo("v3"), "untouched base entry survives");
+            Assert.That(Str((await restored.GetAsync("k4"))!), Is.EqualTo("v4"), "new key folded");
         });
 
         // Both the base and the increment are re-catalogued from the sink.
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(_fixture.Catalog.GetAsync(baseBackup.BackupId).Result, Is.Not.Null);
-            Assert.That(_fixture.Catalog.GetAsync(increment.BackupId).Result, Is.Not.Null);
+            Assert.That(await _fixture.Catalog.GetAsync(baseBackup.BackupId), Is.Not.Null);
+            Assert.That(await _fixture.Catalog.GetAsync(increment.BackupId), Is.Not.Null);
         });
     }
 
@@ -136,11 +136,11 @@ public sealed class LatticeBackupColdRestoreIntegrationTests
         var second = await _fixture.ColdRestore.ColdRestoreAsync(request);
 
         var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(second.EntriesApplied, Is.EqualTo(first.EntriesApplied));
-            Assert.That(Str(restored.GetAsync("k1").Result!), Is.EqualTo("v1"));
-            Assert.That(Str(restored.GetAsync("k2").Result!), Is.EqualTo("v2"));
+            Assert.That(Str((await restored.GetAsync("k1"))!), Is.EqualTo("v1"));
+            Assert.That(Str((await restored.GetAsync("k2"))!), Is.EqualTo("v2"));
         });
     }
 

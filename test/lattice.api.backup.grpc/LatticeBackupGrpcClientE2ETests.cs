@@ -81,11 +81,11 @@ public sealed class LatticeBackupGrpcClientE2ETests
             Assert.That(restore.TargetTreeId, Is.EqualTo(target));
         });
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(Str(restored.GetAsync("k1").Result!), Is.EqualTo("v1"));
-            Assert.That(Str(restored.GetAsync("k2").Result!), Is.EqualTo("v2"));
-            Assert.That(Str(restored.GetAsync("k3").Result!), Is.EqualTo("v3"));
+            Assert.That(Str((await restored.GetAsync("k1"))!), Is.EqualTo("v1"));
+            Assert.That(Str((await restored.GetAsync("k2"))!), Is.EqualTo("v2"));
+            Assert.That(Str((await restored.GetAsync("k3"))!), Is.EqualTo("v3"));
         });
     }
 

@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Testing;
 using Orleans.Runtime;
 using Orleans.TestingHost;
 
@@ -54,7 +55,7 @@ public class CredentialPropagationIntegrationTests
             await tree.SetAsync("k", Encoding.UTF8.GetBytes("v"));
         }
 
-        var observed = await WaitForObservationAsync();
+        var observed = await DequeueObservationAsync();
         Assert.That(observed, Is.Not.Null, "The downstream grain must have observed a credential.");
         Assert.That(observed!.Value.Token, Is.EqualTo("edge-token"));
         Assert.That(observed.Value.Scheme, Is.EqualTo("Bearer"));
@@ -71,30 +72,36 @@ public class CredentialPropagationIntegrationTests
         // No credential scope entered - the write path must carry no credential.
         await tree.SetAsync("k", Encoding.UTF8.GetBytes("v"));
 
-        // Give the observer a moment to run, then confirm it saw a null credential.
-        LatticeCredential? observed = null;
-        for (var i = 0; i < 50 && CredentialProbeClusterFixture.Observed.IsEmpty; i++)
-        {
-            await Task.Delay(20);
-        }
-
-        Assert.That(CredentialProbeClusterFixture.Observed.TryDequeue(out observed), Is.True,
-            "The observer must have run for the write.");
+        var observed = await DequeueObservationAsync();
         Assert.That(observed, Is.Null,
             "Absent an edge credential, the downstream grain must observe null (no allocation/cost).");
     }
 
-    private static async Task<LatticeCredential?> WaitForObservationAsync()
+    /// <summary>
+    /// Waits at a hard barrier for the silo-side probe to record an observation
+    /// for the write, then dequeues it.
+    /// </summary>
+    /// <remarks>
+    /// The barrier and the dequeue are deliberately separate steps. The helper
+    /// this replaces returned a nullable credential and fell through to
+    /// <c>null</c> when its deadline elapsed - which is the very same value the
+    /// probe records when it ran and observed no credential. "The observer never
+    /// ran" and "the observer ran and saw null" were therefore indistinguishable,
+    /// so each test could only ever report the other one's failure. Waiting for
+    /// the observation to exist before reading it separates the two, and reports
+    /// a missing observation where it actually happened.
+    /// </remarks>
+    private static async Task<LatticeCredential?> DequeueObservationAsync()
     {
-        for (var i = 0; i < 50; i++)
-        {
-            if (CredentialProbeClusterFixture.Observed.TryDequeue(out var observed))
-            {
-                return observed;
-            }
-            await Task.Delay(20);
-        }
-        return null;
+        await TestPoll.UntilAsync(
+            () => !CredentialProbeClusterFixture.Observed.IsEmpty,
+            "the silo-side mutation observer to record an observation for the write",
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(20));
+
+        Assert.That(CredentialProbeClusterFixture.Observed.TryDequeue(out var observed), Is.True,
+            "The observer must have run for the write.");
+        return observed;
     }
 }
 

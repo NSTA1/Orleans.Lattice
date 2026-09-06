@@ -57,7 +57,7 @@ public sealed class CoarseTransportGateDataTests
     }
 
     [Test]
-    public void default_deny_coarse_gate_rejects_even_a_per_key_authorized_caller()
+    public async Task default_deny_coarse_gate_rejects_even_a_per_key_authorized_caller()
     {
         var headers = new global::Grpc.Core.Metadata
         {
@@ -78,6 +78,6 @@ public sealed class CoarseTransportGateDataTests
         Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
 
         // Nothing reached the facade, so nothing was persisted.
-        Assert.That(_fixture.ReadRawAsync("coarse-tree", "k1").Result, Is.Null);
+        Assert.That(await _fixture.ReadRawAsync("coarse-tree", "k1"), Is.Null);
     }
 }

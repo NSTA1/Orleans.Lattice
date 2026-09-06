@@ -1,9 +1,12 @@
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Testing;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Bootstrap;
@@ -297,16 +300,44 @@ public sealed partial class RepoContextBootstrapServicePassTests
         // invoking it needs no production seam - only reflection.
         var sink = new RecordingSink();
         var count = 0;
+        var samples = 0;
         using var walkComplete = new CancellationTokenSource();
 
-        var pump = InvokePump(sink, () => Volatile.Read(ref count), walkComplete.Token, CancellationToken.None);
+        // The pump calls currentCount() exactly once per tick, so counting the
+        // calls is a direct observation of ticks. That is what makes the
+        // coalescing claim below falsifiable: it can only be checked against
+        // ticks that actually happened while the count was unchanged.
+        var pump = InvokePump(
+            sink,
+            () => { Interlocked.Increment(ref samples); return Volatile.Read(ref count); },
+            walkComplete.Token,
+            CancellationToken.None);
 
         Volatile.Write(ref count, 7);
-        await WaitForAsync(() => sink.Updates.Any(u => u.FilesScanned == 7));
-        // A repeat sample of the same count must not be re-reported.
-        await Task.Delay(TimeSpan.FromMilliseconds(700));
+        await TestPoll.UntilAsync(
+            () => sink.Updates.Any(u => u.FilesScanned == 7),
+            "the pump to report the first sampled count (7)",
+            TimeSpan.FromSeconds(20));
+
+        // A repeat sample of the same count must not be re-reported. This used
+        // to be a fixed 700 ms sleep, which GATED the coalescing assertion on
+        // wall-clock luck: if no further tick landed inside the window, "7 was
+        // reported once" held trivially and the coalescing branch was never
+        // exercised - the assertion passed without ever seeing the behaviour it
+        // names. Waiting for two further samples of the unchanged count makes
+        // the re-report genuinely possible before it is ruled out, and returns
+        // as soon as it has happened rather than always paying 700 ms.
+        var samplesAtSeven = Volatile.Read(ref samples);
+        await TestPoll.UntilAsync(
+            () => Volatile.Read(ref samples) >= samplesAtSeven + 2,
+            "two further pump samples of the unchanged count",
+            TimeSpan.FromSeconds(20));
+
         Volatile.Write(ref count, 9);
-        await WaitForAsync(() => sink.Updates.Any(u => u.FilesScanned == 9));
+        await TestPoll.UntilAsync(
+            () => sink.Updates.Any(u => u.FilesScanned == 9),
+            "the pump to report the changed count (9)",
+            TimeSpan.FromSeconds(20));
 
         Volatile.Write(ref count, 11);
         walkComplete.Cancel();
@@ -348,15 +379,6 @@ public sealed partial class RepoContextBootstrapServicePassTests
             "PumpWalkProgressAsync", BindingFlags.NonPublic | BindingFlags.Static);
         Assert.That(method, Is.Not.Null, "PumpWalkProgressAsync was renamed; update this test.");
         return (Task)method!.Invoke(null, [sink, currentCount, walkComplete, cancellationToken])!;
-    }
-
-    private static async Task WaitForAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (DateTime.UtcNow < deadline && !condition())
-        {
-            await Task.Delay(10);
-        }
     }
 
     private void SeedUnchanged(
@@ -414,8 +436,20 @@ public sealed partial class RepoContextBootstrapServicePassTests
         private readonly Serializer<FileNode> _fileNodes =
             SerializerServices.GetRequiredService<Serializer<FileNode>>();
 
+        // The service is always given a capturing logger so a test can assert on the
+        // diagnostic lines a pass emits. It is passive (records only) and changes no
+        // behaviour, so every existing test that ignores logs is unaffected.
+        private readonly CapturingLoggerProvider _logProvider = new();
+        private readonly ILoggerFactory _loggerFactory;
+
         internal BootstrapHarness(TimeProvider? timeProvider = null, RepoContextIndexingOptions? options = null)
         {
+            _loggerFactory = LoggerFactory.Create(builder =>
+            {
+                builder.SetMinimumLevel(LogLevel.Trace);
+                builder.AddProvider(_logProvider);
+            });
+
             RepoRoot = Path.Combine(Path.GetTempPath(), "lattice-rcbootstrap-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(RepoRoot);
 
@@ -505,7 +539,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
                 new RepoContextWorkspaceGuard([]),
                 timeProvider ?? TimeProvider.System,
                 options ?? new RepoContextIndexingOptions(),
-                NullLogger<RepoContextBootstrapService>.Instance);
+                _loggerFactory.CreateLogger<RepoContextBootstrapService>());
         }
 
         internal string RepoRoot { get; }
@@ -521,6 +555,9 @@ public sealed partial class RepoContextBootstrapServicePassTests
         internal IRepoContextVectorIngestor VectorIngestor { get; }
 
         internal RepoContextBootstrapService Service { get; }
+
+        /// <summary>Every diagnostic line the service emitted, in log order.</summary>
+        internal IReadOnlyCollection<CapturedLogEntry> LogEntries => _logProvider.Entries;
 
         internal RecordingSink Progress { get; } = new();
 
@@ -615,6 +652,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
 
         public void Dispose()
         {
+            _loggerFactory.Dispose();
             try
             {
                 Directory.Delete(RepoRoot, recursive: true);

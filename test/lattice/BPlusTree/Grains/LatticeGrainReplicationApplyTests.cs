@@ -113,11 +113,11 @@ public partial class LatticeGrainReplicationApplyTests
             "site-x",
             sourceVectorClock: null);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(lattice.GetAsync("a").Result, Is.Null);
-            Assert.That(lattice.GetAsync("b").Result, Is.Null);
-            Assert.That(lattice.GetAsync("c").Result, Is.EqualTo(new byte[] { 3 })); // end-exclusive
+            Assert.That(await lattice.GetAsync("a"), Is.Null);
+            Assert.That(await lattice.GetAsync("b"), Is.Null);
+            Assert.That(await lattice.GetAsync("c"), Is.EqualTo(new byte[] { 3 })); // end-exclusive
         });
     }
 
@@ -144,12 +144,12 @@ public partial class LatticeGrainReplicationApplyTests
             sourceVectorClock: null,
             explicitMatchedKeys: new[] { "a", "c" });
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(lattice.GetAsync("a").Result, Is.Null, "matched key tombstoned");
-            Assert.That(lattice.GetAsync("b").Result, Is.EqualTo(new byte[] { 2 }), "in-range non-matching key survives");
-            Assert.That(lattice.GetAsync("c").Result, Is.Null, "matched key tombstoned");
-            Assert.That(lattice.GetAsync("d").Result, Is.EqualTo(new byte[] { 4 }), "end-exclusive bound survives");
+            Assert.That(await lattice.GetAsync("a"), Is.Null, "matched key tombstoned");
+            Assert.That(await lattice.GetAsync("b"), Is.EqualTo(new byte[] { 2 }), "in-range non-matching key survives");
+            Assert.That(await lattice.GetAsync("c"), Is.Null, "matched key tombstoned");
+            Assert.That(await lattice.GetAsync("d"), Is.EqualTo(new byte[] { 4 }), "end-exclusive bound survives");
         });
     }
 
@@ -171,10 +171,10 @@ public partial class LatticeGrainReplicationApplyTests
             sourceVectorClock: null,
             explicitMatchedKeys: Array.Empty<string>());
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(lattice.GetAsync("a").Result, Is.EqualTo(new byte[] { 1 }));
-            Assert.That(lattice.GetAsync("b").Result, Is.EqualTo(new byte[] { 2 }));
+            Assert.That(await lattice.GetAsync("a"), Is.EqualTo(new byte[] { 1 }));
+            Assert.That(await lattice.GetAsync("b"), Is.EqualTo(new byte[] { 2 }));
         });
     }
 
@@ -717,11 +717,11 @@ public partial class LatticeGrainReplicationApplyTests
 
         await apply.ApplyMergeManyAsync(items);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             for (var i = 0; i < keys.Count; i++)
             {
-                Assert.That(lattice.GetAsync(keys[i]).Result, Is.EqualTo(new byte[] { (byte)(10 + i) }), $"key {keys[i]}");
+                Assert.That(await lattice.GetAsync(keys[i]), Is.EqualTo(new byte[] { (byte)(10 + i) }), $"key {keys[i]}");
             }
         });
     }
@@ -773,10 +773,10 @@ public partial class LatticeGrainReplicationApplyTests
 
         await apply.ApplyMergeManyAsync(items);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(lattice.GetAsync("a").Result, Is.EqualTo(new byte[] { 1 }));
-            Assert.That(lattice.GetAsync(otherKey!).Result, Is.EqualTo(new byte[] { 2 }));
+            Assert.That(await lattice.GetAsync("a"), Is.EqualTo(new byte[] { 1 }));
+            Assert.That(await lattice.GetAsync(otherKey!), Is.EqualTo(new byte[] { 2 }));
         });
     }
 
@@ -812,10 +812,10 @@ public partial class LatticeGrainReplicationApplyTests
             },
         });
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(lattice.GetAsync("set").Result, Is.EqualTo(new byte[] { 7 }));
-            Assert.That(lattice.GetAsync("del").Result, Is.Null);
+            Assert.That(await lattice.GetAsync("set"), Is.EqualTo(new byte[] { 7 }));
+            Assert.That(await lattice.GetAsync("del"), Is.Null);
         });
     }
 
@@ -863,11 +863,11 @@ public partial class LatticeGrainReplicationApplyTests
         });
 
         var versioned = await lattice.GetWithVersionAsync("k");
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(versioned.Value, Is.EqualTo(new byte[] { 2 }));
             Assert.That(versioned.Version, Is.EqualTo(hlc2));
-            Assert.That(lattice.GetAsync("other").Result, Is.EqualTo(new byte[] { 3 }));
+            Assert.That(await lattice.GetAsync("other"), Is.EqualTo(new byte[] { 3 }));
         });
     }
 }

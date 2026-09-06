@@ -112,7 +112,7 @@ public class BootstrapTransientRetryIntegrationTests
             && state != LatticeBootstrapState.Failed
             && DateTimeOffset.UtcNow < deadline);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(state, Is.EqualTo(LatticeBootstrapState.LiveIncremental),
                 "Bootstrap must reach LiveIncremental despite the first transport call throwing a classified-transient fault.");

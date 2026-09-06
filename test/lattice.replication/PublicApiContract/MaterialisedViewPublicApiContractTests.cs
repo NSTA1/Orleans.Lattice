@@ -287,7 +287,13 @@ public class MaterialisedViewPublicApiContractTests
         var handle = await factory.GetAsync(MaterialisedViewPublicApiContractFixture.FilterViewName);
 
         Assert.That(handle, Is.Not.Null, "GetAsync must resolve a startup-declared view by name");
-        Assert.That(await handle!.GetLagAsync(), Is.GreaterThanOrEqualTo(0), "the resolved startup-view handle must be a live, maintainer-backed view");
+
+        // A lag of ">= 0" is vacuous - the maintainer returns 0 for an unresolved
+        // view too. Driving the handle to the source head and then asserting an
+        // exact zero lag is what actually proves it is live and maintainer-backed,
+        // and it is a read-only operation over the shared startup source.
+        await handle!.WaitForSourceHeadAsync(Barrier);
+        Assert.That(await handle.GetLagAsync(), Is.Zero, "the resolved startup-view handle must be a live, maintainer-backed view that converges to the source head");
     }
 
     [Test]

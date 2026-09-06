@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grains;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -62,9 +63,12 @@ public partial class ShardedReplogSinkTests
         // really settled by watching for a third ring that must never come.
         // Both are observations of the ring loop itself rather than a fixed
         // sleep that assumed the loop had finished.
-        await WaitUntilAsync(() => rings.Count >= 2, 5000);
+        // The trailing ring is permitted but not required - the burst may
+        // have fully folded into the in-flight ring - so this wait stays
+        // soft and only the "no third ring" claim below is asserted.
+        _ = await TestPoll.TryUntilAsync(() => rings.Count >= 2, TimeSpan.FromSeconds(5));
         Assert.That(
-            await WaitUntilAsync(() => rings.Count > 2, NoDispatchWindowMs),
+            await TestPoll.TryUntilAsync(() => rings.Count > 2, NoDispatchWindow),
             Is.False,
             "the coalesced burst must settle after the single trailing ring");
 
@@ -112,7 +116,7 @@ public partial class ShardedReplogSinkTests
         // The counter is incremented immediately before the grain call, so
         // observing the call is a sound happens-after signal for the
         // measurement - unlike a fixed sleep.
-        Assert.That(await WaitUntilAsync(() => rings.Count > 0), Is.True,
+        await TestPoll.UntilAsync(() => rings.Count > 0,
             "the fire-and-forget ring must reach the shipper");
 
         Assert.That(rung.Measurements.Sum(m => m.Value), Is.GreaterThanOrEqualTo(1),
@@ -146,11 +150,11 @@ public partial class ShardedReplogSinkTests
         // Wait for the first ring to have been dispatched before the second
         // write, so the second write is genuinely a later burst rather than
         // one that happened to land inside an unfinished sleep window.
-        Assert.That(await WaitUntilAsync(() => rings.Count >= 1), Is.True,
+        await TestPoll.UntilAsync(() => rings.Count >= 1,
             "the first write must dispatch its ring");
 
         await sink.WriteAsync("orders", CancellationToken.None);
-        Assert.That(await WaitUntilAsync(() => rings.Count >= 2), Is.True,
+        await TestPoll.UntilAsync(() => rings.Count >= 2,
             "a write after the ring loop settled must dispatch a fresh ring");
 
         await shipper.Received(2).OnDoorbellAsync(Arg.Any<CancellationToken>());

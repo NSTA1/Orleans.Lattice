@@ -5,6 +5,7 @@ using NSubstitute;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grains;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -39,36 +40,14 @@ public partial class ShardedReplogSinkTests
     }
 
     /// <summary>
-    /// Polls <paramref name="condition"/> until it holds or the timeout
-    /// expires, returning whether it was ever observed to hold. Positive
-    /// assertions wait only as long as they must (with a ceiling generous
-    /// enough that a loaded CI agent cannot fail them); negative
+    /// Window a negative assertion waits before concluding that a
+    /// fire-and-forget dispatch never happened. An order of magnitude
+    /// more generous than the fixed sleeps it replaced. Negative
     /// assertions are expressed as "the earliest observable evidence never
     /// appeared within a window far longer than the dispatch takes",
     /// which is a stronger claim than a single fixed sleep.
     /// </summary>
-    private static async Task<bool> WaitUntilAsync(Func<bool> condition, int timeoutMs = 10000)
-    {
-        var deadline = Environment.TickCount64 + timeoutMs;
-        while (Environment.TickCount64 < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(5);
-        }
-
-        return condition();
-    }
-
-    /// <summary>
-    /// Window a negative assertion waits before concluding that a
-    /// fire-and-forget dispatch never happened. An order of magnitude
-    /// more generous than the fixed sleeps it replaced.
-    /// </summary>
-    private const int NoDispatchWindowMs = 250;
+    private static readonly TimeSpan NoDispatchWindow = TimeSpan.FromMilliseconds(250);
 
     // ------------------------------------------------------------------
     // The commit-time sink is a nudge, not a WAL writer. The leaf
@@ -101,7 +80,7 @@ public partial class ShardedReplogSinkTests
         // does, so observing it is a real happens-after barrier for the
         // negative assertion below - a fixed sleep asserted against
         // whatever the ring loop happened to have reached.
-        Assert.That(await WaitUntilAsync(() => rings.Count > 0), Is.True,
+        await TestPoll.UntilAsync(() => rings.Count > 0,
             "the sink must complete its fire-and-forget doorbell dispatch");
 
         factory.DidNotReceive().GetGrain<IWalShardGrain>(Arg.Any<string>());
@@ -171,7 +150,7 @@ public partial class ShardedReplogSinkTests
         await sink.WriteAsync("orders", CancellationToken.None);
         // Doorbell ring is fire-and-forget; wait for the continuations to
         // drain rather than assuming a fixed delay was long enough.
-        Assert.That(await WaitUntilAsync(() => ringsB.Count > 0 && ringsC.Count > 0), Is.True,
+        await TestPoll.UntilAsync(() => ringsB.Count > 0 && ringsC.Count > 0,
             "both peers must have their doorbell rung");
 
         await shipperB.Received(1).OnDoorbellAsync(Arg.Any<CancellationToken>());
@@ -197,7 +176,7 @@ public partial class ShardedReplogSinkTests
         await sink.WriteAsync("orders", CancellationToken.None);
 
         Assert.That(
-            await WaitUntilAsync(() => rings.Count > 0, NoDispatchWindowMs),
+            await TestPoll.TryUntilAsync(() => rings.Count > 0, NoDispatchWindow),
             Is.False,
             "no doorbell may be dispatched while the doorbell is disabled");
         await shipperB.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
@@ -222,7 +201,7 @@ public partial class ShardedReplogSinkTests
         await sink.WriteAsync("orders", CancellationToken.None);
 
         Assert.That(
-            await WaitUntilAsync(() => rings.Count > 0, NoDispatchWindowMs),
+            await TestPoll.TryUntilAsync(() => rings.Count > 0, NoDispatchWindow),
             Is.False,
             "a null peer set must dispatch no doorbell");
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
@@ -233,7 +212,7 @@ public partial class ShardedReplogSinkTests
         await sink2.WriteAsync("orders", CancellationToken.None);
 
         Assert.That(
-            await WaitUntilAsync(() => rings.Count > 0, NoDispatchWindowMs),
+            await TestPoll.TryUntilAsync(() => rings.Count > 0, NoDispatchWindow),
             Is.False,
             "an empty peer set must dispatch no doorbell");
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
@@ -266,7 +245,7 @@ public partial class ShardedReplogSinkTests
         // The swallow only means something once the failing ring has
         // actually been dispatched - otherwise the test could pass with
         // the fault path never entered at all.
-        Assert.That(await WaitUntilAsync(() => rings.Count > 0), Is.True,
+        await TestPoll.UntilAsync(() => rings.Count > 0,
             "the failing doorbell ring must actually be dispatched, so the swallow path is exercised");
     }
 
@@ -293,7 +272,7 @@ public partial class ShardedReplogSinkTests
         await sink.WriteAsync("orders", CancellationToken.None);
 
         Assert.That(
-            await WaitUntilAsync(() => rings.Count > 0, NoDispatchWindowMs),
+            await TestPoll.TryUntilAsync(() => rings.Count > 0, NoDispatchWindow),
             Is.False,
             "malformed peer entries must be skipped rather than rung");
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());

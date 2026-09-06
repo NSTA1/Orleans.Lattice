@@ -92,7 +92,7 @@ public sealed partial class AuthAdminPolicyTests
             Assert.That(forTree, Does.Contain("r-crud"));
 
             var removed = await _fixture.Admin.RemoveRuleAsync(tree, "r-crud");
-            Assert.Multiple(async () =>
+            await Assert.MultipleAsync(async () =>
             {
                 Assert.That(removed, Is.True);
                 Assert.That(await _fixture.Admin.GetRuleAsync(tree, "r-crud"), Is.Null);

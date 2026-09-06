@@ -63,11 +63,11 @@ public class ApplyCrdtDeltaManyIntegrationTests
 
         await apply.ApplyCrdtDeltaManyAsync(items);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(Contains(lattice.GetAsync("a").Result, "apple"), Is.True);
-            Assert.That(Contains(lattice.GetAsync("b").Result, "banana"), Is.True);
-            Assert.That(Contains(lattice.GetAsync("c").Result, "cherry"), Is.True);
+            Assert.That(Contains(await lattice.GetAsync("a"), "apple"), Is.True);
+            Assert.That(Contains(await lattice.GetAsync("b"), "banana"), Is.True);
+            Assert.That(Contains(await lattice.GetAsync("c"), "cherry"), Is.True);
         });
     }
 

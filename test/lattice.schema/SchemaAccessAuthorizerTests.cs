@@ -127,7 +127,7 @@ public sealed class SchemaAccessAuthorizerTests
         var allow = Create(new CapturingAccessGate());
         var deny = Create(new CapturingAccessGate(_ => LatticeAccessDecision.Deny("no")));
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await allow.IsManageAuthorizedAsync(Tree), Is.True);
             Assert.That(await deny.IsManageAuthorizedAsync(Tree), Is.False);
@@ -140,7 +140,7 @@ public sealed class SchemaAccessAuthorizerTests
         var allow = Create(new CapturingAccessGate());
         var deny = Create(new CapturingAccessGate(_ => LatticeAccessDecision.Deny("no")));
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await allow.IsReadAuthorizedAsync(Tree), Is.True);
             Assert.That(await deny.IsReadAuthorizedAsync(Tree), Is.False);

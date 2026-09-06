@@ -69,6 +69,16 @@ internal sealed class RepoContextBootstrapPlan
 
     /// <summary>
     /// Computes the plan from the currently stored digests and a fresh scan.
+    /// <para>
+    /// Classified count-then-fill: the first pass records each scanned file's class in a
+    /// one-byte-per-file side buffer while counting the four class widths, and the second
+    /// pass fills one exact-width array per class. The prior shape grew four
+    /// <see cref="List{T}"/>s from empty, so the steady-state reconcile - where nearly
+    /// every file lands in <see cref="Unchanged"/> - walked the whole doubling chain and
+    /// abandoned every intermediate backing array, which on a large tree dominates this
+    /// method's allocation. An empty class allocates nothing at all. The digest map is
+    /// still probed exactly once per file.
+    /// </para>
     /// </summary>
     /// <param name="storedDigests">Map of repository-relative path to the digest
     /// currently stored for that file. Must not be <see langword="null"/>.</param>
@@ -83,46 +93,95 @@ internal sealed class RepoContextBootstrapPlan
         ArgumentNullException.ThrowIfNull(storedDigests);
         ArgumentNullException.ThrowIfNull(scanned);
 
-        var added = new List<RepoFileEntry>();
-        var updated = new List<RepoFileEntry>();
-        var unchanged = new List<RepoFileEntry>();
-        var metadataChanged = new List<RepoFileEntry>();
-        var scannedPaths = new HashSet<string>(scanned.Count, StringComparer.Ordinal);
+        var scannedCount = scanned.Count;
+        byte[] classes = scannedCount == 0 ? [] : new byte[scannedCount];
+        var scannedPaths = new HashSet<string>(scannedCount, StringComparer.Ordinal);
+        Span<int> widths = stackalloc int[ClassCount];
 
-        foreach (var entry in scanned)
+        for (var i = 0; i < scannedCount; i++)
         {
+            var entry = scanned[i];
             scannedPaths.Add(entry.RelativePath);
+            byte classification;
             if (!storedDigests.TryGetValue(entry.RelativePath, out var storedDigest))
             {
-                added.Add(entry);
+                classification = ClassAdded;
             }
             else if (!string.Equals(storedDigest, entry.Digest, StringComparison.Ordinal))
             {
-                updated.Add(entry);
+                classification = ClassUpdated;
             }
             else if (entry.AnchorStale)
             {
                 // Content identical to the stored digest, but the file had to be
                 // re-hashed because its stat looked stale: rewrite the node to
                 // refresh the ingest anchor without re-embedding.
-                metadataChanged.Add(entry);
+                classification = ClassMetadataChanged;
             }
             else
             {
-                unchanged.Add(entry);
+                classification = ClassUnchanged;
+            }
+
+            classes[i] = classification;
+            widths[classification]++;
+        }
+
+        RepoFileEntry[] added = widths[ClassAdded] == 0 ? [] : new RepoFileEntry[widths[ClassAdded]];
+        RepoFileEntry[] updated = widths[ClassUpdated] == 0 ? [] : new RepoFileEntry[widths[ClassUpdated]];
+        RepoFileEntry[] unchanged = widths[ClassUnchanged] == 0 ? [] : new RepoFileEntry[widths[ClassUnchanged]];
+        RepoFileEntry[] metadataChanged = widths[ClassMetadataChanged] == 0
+            ? []
+            : new RepoFileEntry[widths[ClassMetadataChanged]];
+
+        Span<int> cursors = stackalloc int[ClassCount];
+        for (var i = 0; i < scannedCount; i++)
+        {
+            var classification = classes[i];
+            var slot = cursors[classification]++;
+            switch (classification)
+            {
+                case ClassAdded:
+                    added[slot] = scanned[i];
+                    break;
+                case ClassUpdated:
+                    updated[slot] = scanned[i];
+                    break;
+                case ClassMetadataChanged:
+                    metadataChanged[slot] = scanned[i];
+                    break;
+                default:
+                    unchanged[slot] = scanned[i];
+                    break;
             }
         }
 
-        var removed = new List<string>();
+        // The prune list is empty in the steady state, so it stays lazily created:
+        // an unchanged tree must not allocate a list to report nothing.
+        List<string>? removed = null;
         foreach (var storedPath in storedDigests.Keys)
         {
             if (!scannedPaths.Contains(storedPath))
             {
+                removed ??= [];
                 removed.Add(storedPath);
             }
+        }
+
+        if (removed is null)
+        {
+            return new RepoContextBootstrapPlan(added, updated, unchanged, metadataChanged, []);
         }
 
         removed.Sort(StringComparer.Ordinal);
         return new RepoContextBootstrapPlan(added, updated, unchanged, metadataChanged, removed);
     }
+
+    // Classification codes for the count-then-fill partition. Kept as bytes so the
+    // side buffer costs one byte per scanned file.
+    private const byte ClassUnchanged = 0;
+    private const byte ClassAdded = 1;
+    private const byte ClassUpdated = 2;
+    private const byte ClassMetadataChanged = 3;
+    private const int ClassCount = 4;
 }

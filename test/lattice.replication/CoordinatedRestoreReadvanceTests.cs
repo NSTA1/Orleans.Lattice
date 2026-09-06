@@ -90,10 +90,10 @@ public sealed class CoordinatedRestoreReadvanceTests
         // each replica accepts the two post-cut facts, so both read eight facts.
         await AdvancePastCutAsync(us);
         await AdvancePastCutAsync(eu);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(us.CountAsync().Result, Is.EqualTo(8), "US advanced past the cut");
-            Assert.That(eu.CountAsync().Result, Is.EqualTo(8), "EU advanced past the cut");
+            Assert.That(await us.CountAsync(), Is.EqualTo(8), "US advanced past the cut");
+            Assert.That(await eu.CountAsync(), Is.EqualTo(8), "EU advanced past the cut");
         });
 
         // Run the coordinated restore across the two clusters as ONE saga: a real
@@ -121,14 +121,14 @@ public sealed class CoordinatedRestoreReadvanceTests
         // The #1169 fix, asserted directly: EVERY cluster is back at the cut. In the
         // bug only the restoring cluster reverted (US: 6 facts) while the peer kept
         // the advanced state (EU: 8 facts). Here both are reverted.
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(us.CountAsync().Result, Is.EqualTo(6), "US reverted to the cut");
-            Assert.That(eu.CountAsync().Result, Is.EqualTo(6), "EU reverted to the cut");
-            Assert.That(us.GetAsync(ReworkKey).Result, Is.Null, "US dropped the post-cut rework fact");
-            Assert.That(us.GetAsync(FinalKey).Result, Is.Null, "US dropped the post-cut final fact");
-            Assert.That(eu.GetAsync(ReworkKey).Result, Is.Null, "EU dropped the post-cut rework fact");
-            Assert.That(eu.GetAsync(FinalKey).Result, Is.Null, "EU dropped the post-cut final fact");
+            Assert.That(await us.CountAsync(), Is.EqualTo(6), "US reverted to the cut");
+            Assert.That(await eu.CountAsync(), Is.EqualTo(6), "EU reverted to the cut");
+            Assert.That(await us.GetAsync(ReworkKey), Is.Null, "US dropped the post-cut rework fact");
+            Assert.That(await us.GetAsync(FinalKey), Is.Null, "US dropped the post-cut final fact");
+            Assert.That(await eu.GetAsync(ReworkKey), Is.Null, "EU dropped the post-cut rework fact");
+            Assert.That(await eu.GetAsync(FinalKey), Is.Null, "EU dropped the post-cut final fact");
         });
 
         // Cross-cluster shipping stays paused until the saga globally completes
@@ -142,10 +142,10 @@ public sealed class CoordinatedRestoreReadvanceTests
         // post-cut entry can flow either way even if one existed.
         await UnionShipIfResumedAsync(us, eu);
         await UnionShipIfResumedAsync(eu, us);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(us.CountAsync().Result, Is.EqualTo(6), "no re-advance while shipping is paused");
-            Assert.That(eu.CountAsync().Result, Is.EqualTo(6), "no re-advance while shipping is paused");
+            Assert.That(await us.CountAsync(), Is.EqualTo(6), "no re-advance while shipping is paused");
+            Assert.That(await eu.CountAsync(), Is.EqualTo(6), "no re-advance while shipping is paused");
         });
 
         // Global completion observed (every participant flipped): the fence resumes
@@ -161,12 +161,12 @@ public sealed class CoordinatedRestoreReadvanceTests
         // without the epic.
         await UnionShipIfResumedAsync(us, eu);
         await UnionShipIfResumedAsync(eu, us);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(us.CountAsync().Result, Is.EqualTo(6), "US stays restored after shipping resumes");
-            Assert.That(eu.CountAsync().Result, Is.EqualTo(6), "EU stays restored after shipping resumes");
-            Assert.That(us.GetAsync(ReworkKey).Result, Is.Null, "no post-cut fact re-appears on US");
-            Assert.That(eu.GetAsync(FinalKey).Result, Is.Null, "no post-cut fact re-appears on EU");
+            Assert.That(await us.CountAsync(), Is.EqualTo(6), "US stays restored after shipping resumes");
+            Assert.That(await eu.CountAsync(), Is.EqualTo(6), "EU stays restored after shipping resumes");
+            Assert.That(await us.GetAsync(ReworkKey), Is.Null, "no post-cut fact re-appears on US");
+            Assert.That(await eu.GetAsync(FinalKey), Is.Null, "no post-cut fact re-appears on EU");
         });
     }
 

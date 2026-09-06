@@ -61,7 +61,7 @@ public sealed class ReplicationAccessAuthorizerTests
     {
         var granted = new ReplicationAccessAuthorizer(new TreeScopedAccessGate(Tree));
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await granted.IsAuthorizedAsync(Tree), Is.True);
             Assert.That(await granted.IsAuthorizedAsync("other"), Is.False);
