@@ -128,16 +128,40 @@ internal abstract class CoordinatorGrain<TSelf>(
     protected virtual string LogContext => context.GrainId.Key.ToString() ?? "";
 
     /// <summary>
+    /// The bounded inter-attempt backoff used when the keepalive reminder
+    /// registration in <see cref="StartCoordinatorAsync"/> races Orleans'
+    /// asynchronous reminder-service startup. Defaults to
+    /// <see cref="ReminderServiceReadiness.DefaultRegistrationBackoff"/>; exposed as
+    /// an override only so a unit test can drive the retry budget without real
+    /// delays, exactly as <see cref="ReminderServiceReadiness"/> exposes its
+    /// backoff-injectable core for the same reason.
+    /// </summary>
+    protected virtual IReadOnlyList<TimeSpan> KeepaliveRegistrationBackoff
+        => ReminderServiceReadiness.DefaultRegistrationBackoff;
+
+    /// <summary>
     /// Registers the keepalive reminder and starts the phase-processing
     /// grain timer. Derived classes call this after persisting intent.
     /// </summary>
     protected async Task StartCoordinatorAsync()
     {
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
-            reminderName: KeepaliveReminderName,
-            dueTime: KeepaliveReminderPeriod,
-            period: KeepaliveReminderPeriod);
+        // The keepalive reminder is this coordinator's crash-recovery anchor - a
+        // durability guarantee for the in-progress work, not a best-effort
+        // first-write bootstrap - so it has no natural re-attempt seam and must not
+        // be dropped. Orleans' reminder service initialises asynchronously after the
+        // silo reaches Active, so a coordinator started inside that window can see
+        // the transient "Reminder Service is still initializing" fault. Wait it out
+        // with the same bounded retry the atomic-write saga's essential keepalive
+        // uses rather than failing the caller's operation; any other fault, and a
+        // transient that never clears within the retry budget, still surfaces with
+        // its original shape.
+        await ReminderServiceReadiness.RetryWhileInitializingAsync(
+            () => reminderRegistry.RegisterOrUpdateReminder(
+                callingGrainId: context.GrainId,
+                reminderName: KeepaliveReminderName,
+                dueTime: KeepaliveReminderPeriod,
+                period: KeepaliveReminderPeriod),
+            KeepaliveRegistrationBackoff);
         StartPhaseTimer();
     }
 

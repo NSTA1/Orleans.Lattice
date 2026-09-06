@@ -418,13 +418,24 @@ internal sealed class RepoContextBootstrapService
             var xrefBackfill = SelectXrefBackfill(plan.Unchanged, storedMeta);
             var backfill = UnifyBackfill(symbolBackfill, contentBackfill, xrefBackfill);
 
+            // Always log the reconcile plan, including a fully converged no-op pass.
+            // Gating this line on "did anything change" is what made a converged pass
+            // (0 added / 0 updated / 0 removed, legitimately nothing to do) and a pass
+            // that never measured (a skipped arm) indistinguishable in the log
+            // (#2088): a reader polling for a "0 added, 0 updated, 0 removed" line to
+            // confirm convergence was waiting for a line that by construction never
+            // appeared. On a diagnostic path, "measured nothing" must be positively
+            // reported rather than inferred from silence. Counting the chunks is a pure
+            // tally, so it is safe to compute on a no-op pass; the apply work below
+            // stays gated so a no-op still commits nothing.
+            var chunksTotal = ComputeChunkCount(plan, backfill.Count);
+            _logger.LogInformation(
+                "Repo {RepoId}: plan - {Added} added, {Updated} updated, {MetadataChanged} anchor-refreshed, {Removed} removed, {Unchanged} unchanged, {SymbolBackfill} symbol back-fill, {ContentBackfill} content back-fill, {XrefBackfill} xref back-fill; {Chunks} chunk(s) to commit.",
+                repoId, plan.Added.Count, plan.Updated.Count, plan.MetadataChanged.Count, plan.RemovedPaths.Count, plan.Unchanged.Count, symbolBackfill.Count, contentBackfill.Count, xrefBackfill.Count, chunksTotal);
+
             if (!plan.IsNoOp || backfill.Count > 0)
             {
                 phase = RepoIndexPhase.Applying;
-                var chunksTotal = ComputeChunkCount(plan, backfill.Count);
-                _logger.LogInformation(
-                    "Repo {RepoId}: plan - {Added} added, {Updated} updated, {MetadataChanged} anchor-refreshed, {Removed} removed, {Unchanged} unchanged, {SymbolBackfill} symbol back-fill, {ContentBackfill} content back-fill, {XrefBackfill} xref back-fill; {Chunks} chunk(s) to commit.",
-                    repoId, plan.Added.Count, plan.Updated.Count, plan.MetadataChanged.Count, plan.RemovedPaths.Count, plan.Unchanged.Count, symbolBackfill.Count, contentBackfill.Count, xrefBackfill.Count, chunksTotal);
                 await ReportAsync(
                     progress,
                     new RepoIndexProgressUpdate
@@ -661,11 +672,16 @@ internal sealed class RepoContextBootstrapService
                 var symbolsEmbedded = await _vectorIngestor.IngestSymbolsAsync(
                     repoId, changedSymbolKeys, prunedSymbolKeys, cancellationToken)
                     .ConfigureAwait(false);
-                if (symbolsEmbedded > 0)
-                {
-                    _logger.LogInformation(
-                        "Repo {RepoId}: embedded {Symbols} symbol passage(s).", repoId, symbolsEmbedded);
-                }
+
+                // Log the symbol-embedding tally unconditionally, including the zero
+                // case. Suppressing zero (#2088) made "this pass embedded no symbol
+                // passages because the set was already converged" indistinguishable
+                // from "the symbol arm never ran": on a healthy steady-state
+                // repository the tally is legitimately 0 on almost every pass, so the
+                // suppressed line was exactly the evidence an operator needed to
+                // confirm the arm executed and found nothing to do.
+                _logger.LogInformation(
+                    "Repo {RepoId}: embedded {Symbols} symbol passage(s).", repoId, symbolsEmbedded);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
