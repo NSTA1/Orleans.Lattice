@@ -303,7 +303,7 @@ public sealed class OnyxEmbeddingProviderTests
         var downProvider = CreateProvider(down);
         var thrownProvider = CreateProvider(thrown);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await downProvider.IsAvailableAsync(), Is.False);
             Assert.That(await thrownProvider.IsAvailableAsync(), Is.False);

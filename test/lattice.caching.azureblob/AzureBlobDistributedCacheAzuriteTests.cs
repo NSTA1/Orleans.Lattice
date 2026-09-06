@@ -249,7 +249,7 @@ public sealed class AzureBlobDistributedCacheAzuriteTests
 
         await cacheA.SetAsync("same", Encoding.UTF8.GetBytes("from-a"), new DistributedCacheEntryOptions());
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await cacheA.GetAsync("same"), Is.EqualTo(Encoding.UTF8.GetBytes("from-a")));
             Assert.That(await cacheB.GetAsync("same"), Is.Null);
@@ -312,7 +312,7 @@ public sealed class AzureBlobDistributedCacheAzuriteTests
         await cache.SetAsync("a", Encoding.UTF8.GetBytes("1"), new DistributedCacheEntryOptions());
         await cache.SetAsync("b", Encoding.UTF8.GetBytes("2"), new DistributedCacheEntryOptions());
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await cache.GetAsync("a"), Is.EqualTo(Encoding.UTF8.GetBytes("1")));
             Assert.That(await cache.GetAsync("b"), Is.EqualTo(Encoding.UTF8.GetBytes("2")));

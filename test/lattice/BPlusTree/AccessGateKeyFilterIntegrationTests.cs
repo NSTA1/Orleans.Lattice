@@ -274,7 +274,7 @@ public partial class AccessGateKeyFilterIntegrationTests
         // Nothing was copied: the refusal happens before the merge coordinator
         // is engaged, so no source entry ever reaches the destination.
         ConfigurableAccessGate.Reset();
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await target.GetAsync("secret/one"), Is.Null);
             Assert.That(await target.GetAsync("secret/two"), Is.Null);

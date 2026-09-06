@@ -54,7 +54,7 @@ public class ShardRootLeafKeyDescentIntegrationTests
         var treeName = $"keydescent-empty-{Guid.NewGuid():N}";
         var (_, shard) = await CreateSingleShardTreeAsync(treeName);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await shard.GetLeafIdForKeyAsync(null), Is.Null);
             Assert.That(await shard.GetLeafIdForKeyAsync("anything"), Is.Null);

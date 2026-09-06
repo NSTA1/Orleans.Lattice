@@ -17,7 +17,7 @@ public sealed class DenyAllReplicationApiAuthorizerTests
     {
         var authorizer = new DenyAllReplicationApiAuthorizer();
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await authorizer.IsAuthorizedAsync(Context(LatticeReplicationApiOperation.EnableReplication), default), Is.False);
             Assert.That(await authorizer.IsAuthorizedAsync(Context(LatticeReplicationApiOperation.DisableReplication), default), Is.False);
@@ -31,7 +31,7 @@ public sealed class DenyAllReplicationApiAuthorizerTests
     {
         var authorizer = new AllowAllReplicationApiAuthorizer();
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await authorizer.IsAuthorizedAsync(Context(LatticeReplicationApiOperation.EnableReplication), default), Is.True);
             Assert.That(await authorizer.IsAuthorizedAsync(Context(LatticeReplicationApiOperation.DisableReplication), default), Is.True);

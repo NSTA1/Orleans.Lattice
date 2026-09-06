@@ -22,7 +22,7 @@ public sealed class TenantAdminApiAuthorizerTests
     {
         var authorizer = new DenyTenantAdminApiAuthorizer();
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await authorizer.IsAuthorizedAsync(Context(LatticeTenantAdminApiOperation.CreateTenant), default), Is.False);
             Assert.That(await authorizer.IsAuthorizedAsync(Context(LatticeTenantAdminApiOperation.DeleteTenant), default), Is.False);
@@ -35,7 +35,7 @@ public sealed class TenantAdminApiAuthorizerTests
     {
         var authorizer = new AllowAllTenantAdminApiAuthorizer();
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await authorizer.IsAuthorizedAsync(Context(LatticeTenantAdminApiOperation.CreateTenant), default), Is.True);
             Assert.That(await authorizer.IsAuthorizedAsync(Context(LatticeTenantAdminApiOperation.DeleteTenant), default), Is.True);

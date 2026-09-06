@@ -411,7 +411,7 @@ public class BoundedLeafWalkTests
             if (!await walk.MoveNextAsync()) break;
         }
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(visited, Is.EqualTo(leafIds));
             Assert.That(walk.Completed, Is.True);

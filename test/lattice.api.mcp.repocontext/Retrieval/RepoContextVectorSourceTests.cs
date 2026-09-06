@@ -129,7 +129,7 @@ public sealed class RepoContextVectorSourceTests
         var (trees, source) = Create();
         trees.Write(RepoId, "vec-a", "repo/acme/file/src/A.cs", Space, Vector(1));
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await source.ContainsAsync("vec-a", Ct), Is.True);
             Assert.That(await source.ContainsAsync("vec-missing", Ct), Is.False);
