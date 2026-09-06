@@ -102,4 +102,67 @@ public static class TestPoll
         Assert.Fail(
             $"Timed out after {effectiveTimeout.TotalMilliseconds:0}ms waiting for: {because}");
     }
+
+    /// <summary>
+    /// Asynchronous-probe form of
+    /// <see cref="TryUntilAsync(Func{bool}, TimeSpan?, TimeSpan?)"/>, for a
+    /// condition that can only be observed by awaiting something (a grain call,
+    /// a store read). Use it only for a negative assertion, where the caller
+    /// asserts on the returned value.
+    /// </summary>
+    /// <param name="condition">The observation to poll for.</param>
+    /// <param name="timeout">The deadline; defaults to <see cref="DefaultTimeout"/>.</param>
+    /// <param name="cadence">The sampling interval; defaults to <see cref="DefaultCadence"/>.</param>
+    public static async Task<bool> TryUntilAsync(
+        Func<Task<bool>> condition,
+        TimeSpan? timeout = null,
+        TimeSpan? cadence = null)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+
+        var deadline = Environment.TickCount64 + (long)(timeout ?? DefaultTimeout).TotalMilliseconds;
+        var delay = cadence ?? DefaultCadence;
+
+        while (Environment.TickCount64 < deadline)
+        {
+            if (await condition())
+            {
+                return true;
+            }
+
+            await Task.Delay(delay);
+        }
+
+        // One final sample, for the same reason as the synchronous form: the
+        // condition may have become true while the last delay was in flight.
+        return await condition();
+    }
+
+    /// <summary>
+    /// Asynchronous-probe form of
+    /// <see cref="UntilAsync(Func{bool}, string, TimeSpan?, TimeSpan?)"/>, for a
+    /// condition that can only be observed by awaiting something. Fails at the
+    /// barrier when the deadline elapses, so a caller that samples a value
+    /// immediately afterwards can never sample it from a state the barrier
+    /// never reached.
+    /// </summary>
+    /// <param name="condition">The observation to wait for.</param>
+    /// <param name="because">What the caller is waiting for, quoted in the failure.</param>
+    /// <param name="timeout">The deadline; defaults to <see cref="DefaultTimeout"/>.</param>
+    /// <param name="cadence">The sampling interval; defaults to <see cref="DefaultCadence"/>.</param>
+    public static async Task UntilAsync(
+        Func<Task<bool>> condition,
+        string because,
+        TimeSpan? timeout = null,
+        TimeSpan? cadence = null)
+    {
+        var effectiveTimeout = timeout ?? DefaultTimeout;
+        if (await TryUntilAsync(condition, effectiveTimeout, cadence))
+        {
+            return;
+        }
+
+        Assert.Fail(
+            $"Timed out after {effectiveTimeout.TotalMilliseconds:0}ms waiting for: {because}");
+    }
 }
