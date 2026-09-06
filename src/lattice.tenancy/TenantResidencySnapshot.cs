@@ -48,6 +48,13 @@ internal sealed class TenantResidencySnapshot
     /// entries win on a duplicate key, so the caller may pass an already-deduplicated
     /// map.
     /// </summary>
+    /// <remarks>
+    /// A dictionary source already guarantees unique keys, so the defensive dedup
+    /// pass has nothing to do and is skipped outright - which is the shape the
+    /// maintainer always passes, having just scanned the registry into a map. Any
+    /// other source is deduplicated as before, into a map presized from the
+    /// source's own count where that is available without enumerating it.
+    /// </remarks>
     /// <param name="statuses">The per-tenant local-region statuses of configured tenants.</param>
     /// <returns>An immutable snapshot over a copy of <paramref name="statuses"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="statuses"/> is <c>null</c>.</exception>
@@ -56,7 +63,14 @@ internal sealed class TenantResidencySnapshot
     {
         ArgumentNullException.ThrowIfNull(statuses);
 
-        var deduped = new Dictionary<TenantId, TenantRegionStatus>();
+        if (statuses is IReadOnlyDictionary<TenantId, TenantRegionStatus>)
+        {
+            return new TenantResidencySnapshot(statuses.ToFrozenDictionary());
+        }
+
+        var deduped = statuses.TryGetNonEnumeratedCount(out var count) && count > 0
+            ? new Dictionary<TenantId, TenantRegionStatus>(count)
+            : [];
         foreach (var pair in statuses)
         {
             deduped[pair.Key] = pair.Value;

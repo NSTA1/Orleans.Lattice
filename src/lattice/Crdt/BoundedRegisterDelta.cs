@@ -41,4 +41,41 @@ public readonly record struct BoundedRegisterDelta
 
     /// <summary>A reusable no-op delta that carries no candidate.</summary>
     public static BoundedRegisterDelta Empty { get; } = new();
+
+    /// <summary>
+    /// Compares two deltas by value, with <see cref="Value"/> and
+    /// <see cref="OrderKey"/> compared by content. The compiler-generated
+    /// record-struct equality compares each byte array with
+    /// <see cref="EqualityComparer{T}.Default"/> - reference equality for a
+    /// <see cref="byte"/> array - so two deltas built from independently
+    /// allocated but byte-identical payloads (including a delta and its
+    /// post-serialization self) would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The delta to compare against.</param>
+    public bool Equals(BoundedRegisterDelta other) =>
+        HasValue == other.HasValue
+        && BytesEqual(Value, other.Value)
+        && BytesEqual(OrderKey, other.OrderKey);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(HasValue);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        if (OrderKey is { } orderKey)
+        {
+            hash.AddBytes(orderKey);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

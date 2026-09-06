@@ -157,7 +157,7 @@ public sealed class RepoContextVectorWriterBatchedMembershipTests
             Assert.That(batchedApplies, Is.EqualTo(1),
                 "The memory-key markers land in one batched apply, so a batch of entries is embedded once.");
             Assert.That(perKeyApplies, Is.Zero);
-            Assert.That(memoryKeys, Is.SubsetOf(recorded),
+            Assert.That(memoryKeys, Is.SubsetOf(recorded.Keys),
                 "Each marked entry is still recorded under its own key, prefix stripped on read.");
         });
     }

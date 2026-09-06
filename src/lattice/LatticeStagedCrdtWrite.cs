@@ -72,4 +72,41 @@ public readonly record struct LatticeStagedCrdtWrite
     /// cross-cluster convergence.
     /// </summary>
     public byte[] Delta { get; }
+
+    /// <summary>
+    /// Compares two staged writes by value, with <see cref="Value"/> and
+    /// <see cref="Delta"/> compared by content. The compiler-generated
+    /// record-struct equality compares each byte array with
+    /// <see cref="EqualityComparer{T}.Default"/> - reference equality for a
+    /// <see cref="byte"/> array - so two tokens built from independently
+    /// allocated but byte-identical payloads would otherwise never compare
+    /// equal.
+    /// </summary>
+    /// <param name="other">The staged write to compare against.</param>
+    public bool Equals(LatticeStagedCrdtWrite other) =>
+        string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && BytesEqual(Value, other.Value)
+        && BytesEqual(Delta, other.Delta);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Key, StringComparer.Ordinal);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        if (Delta is { } delta)
+        {
+            hash.AddBytes(delta);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

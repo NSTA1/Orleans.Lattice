@@ -69,4 +69,41 @@ public readonly record struct LwwRegisterDelta
         IsTombstone = true,
         OriginClusterId = originClusterId,
     };
+
+    /// <summary>
+    /// Compares two deltas by value, with <see cref="Value"/> compared by
+    /// content. The compiler-generated record-struct equality compares the
+    /// <see cref="Value"/> byte array with <see cref="EqualityComparer{T}.Default"/> -
+    /// reference equality for a <see cref="byte"/> array - so two deltas built
+    /// from independently allocated but byte-identical payloads (including a
+    /// delta and its post-serialization self) would otherwise never compare
+    /// equal.
+    /// </summary>
+    /// <param name="other">The delta to compare against.</param>
+    public bool Equals(LwwRegisterDelta other) =>
+        BytesEqual(Value, other.Value)
+        && Timestamp.Equals(other.Timestamp)
+        && IsTombstone == other.IsTombstone
+        && ExpiresAtTicks == other.ExpiresAtTicks
+        && string.Equals(OriginClusterId, other.OriginClusterId, StringComparison.Ordinal);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        hash.Add(Timestamp);
+        hash.Add(IsTombstone);
+        hash.Add(ExpiresAtTicks);
+        hash.Add(OriginClusterId, StringComparer.Ordinal);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

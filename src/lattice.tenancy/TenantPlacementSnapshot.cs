@@ -35,6 +35,15 @@ internal sealed class TenantPlacementSnapshot
     /// Builds a snapshot from the given per-tenant placements. Later entries win on
     /// a duplicate key, so the caller may pass an already-deduplicated map.
     /// </summary>
+    /// <remarks>
+    /// A dictionary source already guarantees unique keys, so the defensive dedup
+    /// pass has nothing to do and is skipped outright - which is the shape the
+    /// maintainer always passes, having just scanned the registry into a map. Any
+    /// other source is deduplicated as before, into a map presized from the
+    /// source's own count where that is available without enumerating it, so the
+    /// copy is not rehashed through the 3/7/17/37/71/... prime bucket chain on
+    /// the way to a size the caller already knew.
+    /// </remarks>
     /// <param name="placements">The per-tenant placement bindings.</param>
     /// <returns>An immutable snapshot over a copy of <paramref name="placements"/>.</returns>
     public static TenantPlacementSnapshot Build(
@@ -42,9 +51,16 @@ internal sealed class TenantPlacementSnapshot
     {
         ArgumentNullException.ThrowIfNull(placements);
 
+        if (placements is IReadOnlyDictionary<TenantId, TenantPlacement>)
+        {
+            return new TenantPlacementSnapshot(placements.ToFrozenDictionary());
+        }
+
         // Deduplicate last-writer-wins so a duplicate tenant id (which the registry
         // never produces, but a test feed might) cannot throw from the frozen build.
-        var deduped = new Dictionary<TenantId, TenantPlacement>();
+        var deduped = placements.TryGetNonEnumeratedCount(out var count) && count > 0
+            ? new Dictionary<TenantId, TenantPlacement>(count)
+            : [];
         foreach (var pair in placements)
         {
             deduped[pair.Key] = pair.Value;

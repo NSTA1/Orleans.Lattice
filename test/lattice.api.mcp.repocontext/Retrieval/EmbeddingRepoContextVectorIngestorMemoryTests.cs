@@ -460,10 +460,12 @@ public sealed class EmbeddingRepoContextVectorIngestorMemoryTests
         {
             // The empty case is asserted first and the positive case second, so a
             // fixture that never reached the store cannot make all three pass.
-            Assert.That(beforeAny, Is.Empty, "Nothing is recorded before the first mark.");
-            Assert.That(afterMark, Is.EquivalentTo(new[] { key }),
+            Assert.That(beforeAny.Keys, Is.Empty, "Nothing is recorded before the first mark.");
+            Assert.That(beforeAny.Complete, Is.True, "and an empty range is a complete read, not a stalled one.");
+            Assert.That(afterMark.Keys, Is.EquivalentTo(new[] { key }),
                 "The mark records the entry's own record key, not its source id.");
-            Assert.That(afterUnmark, Is.Empty, "and the unmark clears it.");
+            Assert.That(afterMark.Complete, Is.True, "The healthy range scan reports complete.");
+            Assert.That(afterUnmark.Keys, Is.Empty, "and the unmark clears it.");
         });
     }
 
@@ -522,7 +524,7 @@ public sealed class EmbeddingRepoContextVectorIngestorMemoryTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(memoryKeys, Is.EquivalentTo(new[] { memoryKey }),
+            Assert.That(memoryKeys.Keys, Is.EquivalentTo(new[] { memoryKey }),
                 "Only the memory marker is returned - the file and symbol members are outside the scanned range.");
             Assert.That(members, Has.Count.EqualTo(2),
                 "and the ordinary membership set still holds exactly the file and the symbol,");
@@ -618,7 +620,7 @@ public sealed class EmbeddingRepoContextVectorIngestorMemoryTests
 
         await writer.MarkMemoryEmbeddedAsync(RepoId, Array.Empty<string>(), Ct);
 
-        Assert.That(await writer.LoadEmbeddedMemoryKeysAsync(RepoId, Ct), Is.Empty,
+        Assert.That((await writer.LoadEmbeddedMemoryKeysAsync(RepoId, Ct)).Keys, Is.Empty,
             "An empty batch writes nothing rather than creating a stray record.");
     }
 

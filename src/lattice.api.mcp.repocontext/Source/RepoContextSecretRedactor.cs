@@ -61,26 +61,40 @@ internal static class RepoContextSecretRedactor
         while (schemeIndex >= 0)
         {
             var authorityStart = schemeIndex + 3;
-            var authorityEnd = authorityStart;
-            while (authorityEnd < text.Length && !IsAuthorityTerminator(text[authorityEnd]))
+
+            // Locate the userinfo/host boundary '@' by scanning only up to a
+            // character that cannot appear unencoded in a userinfo component. The
+            // RFC 3986 sub-delims - ',', ';', '(', ')' and '\'' among them - are
+            // legal in userinfo, so they must NOT bound this scan: stopping at one
+            // that sits inside the userinfo (a password such as "p,ss") would hide
+            // the '@' and leave the whole credential unredacted.
+            var userinfoEnd = authorityStart;
+            while (userinfoEnd < text.Length && !IsUserinfoTerminator(text[userinfoEnd]))
             {
-                authorityEnd++;
+                userinfoEnd++;
             }
 
-            var authority = text.AsSpan(authorityStart, authorityEnd - authorityStart);
-            var at = authority.LastIndexOf('@');
+            var at = text.AsSpan(authorityStart, userinfoEnd - authorityStart).LastIndexOf('@');
+            var hostStart = at >= 0 ? authorityStart + at + 1 : authorityStart;
+
+            // The host runs from just past the userinfo to the first character that
+            // ends the authority for logging purposes - a path separator, whitespace,
+            // a quote, or a sub-delim that bounds a URL embedded in prose - so a
+            // trailing token or a following URL is never swallowed into the host.
+            var hostEnd = hostStart;
+            while (hostEnd < text.Length && !IsAuthorityTerminator(text[hostEnd]))
+            {
+                hostEnd++;
+            }
 
             builder.Append(text, cursor, authorityStart - cursor);
             if (at >= 0)
             {
-                builder.Append(Placeholder).Append('@').Append(authority[(at + 1)..]);
-            }
-            else
-            {
-                builder.Append(authority);
+                builder.Append(Placeholder).Append('@');
             }
 
-            cursor = authorityEnd;
+            builder.Append(text, hostStart, hostEnd - hostStart);
+            cursor = hostEnd;
             schemeIndex = text.IndexOf("://", cursor, StringComparison.Ordinal);
         }
 
@@ -90,4 +104,13 @@ internal static class RepoContextSecretRedactor
 
     private static bool IsAuthorityTerminator(char c) =>
         c is '/' or '\\' or ' ' or '\t' or '\r' or '\n' or '"' or '\'' or ')' or ',' or ';';
+
+    // The characters that cannot appear unencoded in a URL userinfo component
+    // (RFC 3986 section 3.2.1) and therefore definitively end it: a path, query, or
+    // fragment separator, whitespace, or a double quote. Sub-delims (',', ';', '(',
+    // ')', '\'' and the rest) are deliberately absent because they are legal in
+    // userinfo - treating them as boundaries would truncate the scan before the '@'
+    // and leak an embedded credential.
+    private static bool IsUserinfoTerminator(char c) =>
+        c is '/' or '\\' or '?' or '#' or ' ' or '\t' or '\r' or '\n' or '"';
 }

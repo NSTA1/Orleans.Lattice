@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -64,11 +65,21 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     internal const int MaxConsecutiveBatchFailures = 3;
 
     /// <summary>
-    /// The recorded-marker set used when the real one could not be read, so a
-    /// failed read degrades to "no marker evidence this pass" rather than failing
-    /// the arm. Shared and immutable because it is only ever read.
+    /// The most passes the symbol arm will ever skip its gap back-fill after the
+    /// vector plane looked saturated. The skip budget doubles with each consecutive
+    /// saturated pass (1, 2, 4, ...) and is clamped here, so a plane that stays
+    /// saturated is still re-probed regularly rather than abandoned, and a
+    /// transiently unlucky pass costs one skipped back-fill.
     /// </summary>
-    private static readonly IReadOnlySet<string> EmptyMemoryKeys =
+    internal const int MaxSymbolGapScanBackoffPasses = 8;
+
+    /// <summary>
+    /// The stand-in coverage set used when real coverage could not be read, or was
+    /// deliberately not read, so a missing probe degrades to "no coverage evidence
+    /// this pass" rather than failing the arm. Shared and immutable because it is
+    /// only ever read.
+    /// </summary>
+    private static readonly IReadOnlySet<string> EmptyKeySet =
         new HashSet<string>(StringComparer.Ordinal);
 
     private readonly RepoContextVectorWriter _writer;
@@ -76,6 +87,31 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     private readonly Serializer _serializer;
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly ILogger<EmbeddingRepoContextVectorIngestor> _logger;
+
+    /// <summary>
+    /// The symbol arm's per-repository gap-back-fill backoff, carried across
+    /// reconcile passes because the ingestor is a singleton.
+    /// <para>
+    /// The arm's back-fill is a whole-symbol-space walk with a membership probe per
+    /// page, and every symbol it selects costs an embed, a vector store, and a
+    /// membership write. When the membership tree is saturated those writes time
+    /// out, the symbols stay unmarked, and the next pass selects the very same set -
+    /// so the arm drives the failing tree exactly as hard again, and that load is
+    /// itself what keeps the writes failing (issue #2071). The batch loop already
+    /// refuses to add load <i>within</i> a pass once
+    /// <see cref="MaxConsecutiveBatchFailures"/> consecutive batches fail to record;
+    /// this is the same rule applied <i>across</i> passes, which is the timescale
+    /// the loop actually runs on.
+    /// </para>
+    /// <para>
+    /// A skipped pass still embeds every symbol the reconcile reported as CHANGED -
+    /// correctness is never deferred, only the opportunistic back-fill of symbols
+    /// that already have vectors and are merely missing a flag. The entry is
+    /// removed by the first full pass that completes without saturation, so the arm
+    /// returns to normal the moment the plane recovers.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, SymbolGapScanBackoff> _symbolGapScanBackoff = new();
 
     /// <summary>Creates the embedding vector ingestor.</summary>
     /// <param name="writer">The writer that persists vectors onto the reserved trees. Must not be <see langword="null"/>.</param>
@@ -320,6 +356,22 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // unchanged symbol is skipped without a payload read.
         var changed = new HashSet<string>(changedSymbolKeys, StringComparer.Ordinal);
 
+        // When the previous pass gave the plane up as saturated, this pass embeds
+        // only the symbols the reconcile named as changed and leaves the gap
+        // back-fill alone: no membership probe per page, and no re-embed of symbols
+        // that already have vectors and are only missing a flag. That is what lets
+        // the membership tree drain, so the writes the back-fill needs can finally
+        // land instead of the arm re-driving a failing tree every pass forever.
+        var skipGapScan = ClaimSymbolGapScanSkip(repoId);
+        if (skipGapScan)
+        {
+            _logger.LogInformation(
+                "Repo {RepoId}: the vector plane looked saturated on a recent pass, so this pass embeds only the "
+                + "{Changed} changed symbol(s) and defers the gap back-fill to let the membership tree drain.",
+                repoId,
+                changed.Count);
+        }
+
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Symbol);
         var prefix = RepoContextKeys.SymbolsPrefix(repoId);
         var sources = new List<EmbeddingSource>();
@@ -350,25 +402,28 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             // whole arm: without coverage for this page we cannot tell embedded
             // from missing, so we skip the page rather than guess, and the next
             // pass picks up whatever it was hiding.
-            IReadOnlySet<string> embeddedMembers;
-            try
+            IReadOnlySet<string> embeddedMembers = EmptyKeySet;
+            if (!skipGapScan)
             {
-                embeddedMembers = await _writer
-                    .ProbeEmbeddedMembersAsync(repoId, pageKeys, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                firstProbeFailure ??= ex;
-                probeFailures++;
-                _logger.LogWarning(
-                    ex,
-                    "Repo {RepoId}: the embedding-coverage probe failed for a page of {Count} symbol(s); skipping "
-                    + "the page and continuing. Its symbols are re-checked on the next reconcile.",
-                    repoId,
-                    pageKeys.Count);
-                token = page.HasMore ? page.ContinuationToken : null;
-                continue;
+                try
+                {
+                    embeddedMembers = await _writer
+                        .ProbeEmbeddedMembersAsync(repoId, pageKeys, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    firstProbeFailure ??= ex;
+                    probeFailures++;
+                    _logger.LogWarning(
+                        ex,
+                        "Repo {RepoId}: the embedding-coverage probe failed for a page of {Count} symbol(s); skipping "
+                        + "the page and continuing. Its symbols are re-checked on the next reconcile.",
+                        repoId,
+                        pageKeys.Count);
+                    token = page.HasMore ? page.ContinuationToken : null;
+                    continue;
+                }
             }
 
             foreach (var record in page.Records)
@@ -379,7 +434,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 }
 
                 var sourceKey = record.Key;
-                if (!changed.Contains(sourceKey) && embeddedMembers.Contains(VectorCodec.SourceId(sourceKey)))
+                if (!changed.Contains(sourceKey)
+                    && (skipGapScan || embeddedMembers.Contains(VectorCodec.SourceId(sourceKey))))
                 {
                     continue;
                 }
@@ -397,8 +453,24 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
         while (token is not null);
 
-        var symbolsEmbedded = await EmbedAndStoreAsync(repoId, sources, onProgress: null, cancellationToken)
-            .ConfigureAwait(false);
+        EmbedOutcome outcome;
+        try
+        {
+            outcome = await EmbedAndStoreReportingLandedAsync(repoId, sources, onProgress: null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A pass that landed NOTHING still throws, so the arm reports
+            // incomplete - but it is also the most saturated pass there is, and the
+            // backoff has to see it. Recording only the returned outcome would miss
+            // exactly the case the re-embed loop actually shows up in.
+            RecordSymbolGapScanOutcome(repoId, saturated: true, skippedGapScan: skipGapScan);
+            throw;
+        }
+
+        var symbolsEmbedded = outcome.Landed.Count;
+        RecordSymbolGapScanOutcome(repoId, outcome.Saturated, skipGapScan);
 
         // Same rule as the batch boundary: a pass that achieved nothing at all
         // still has to surface its fault, but one that made progress counts as
@@ -415,6 +487,76 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
         return symbolsEmbedded;
     }
+
+    /// <summary>
+    /// Consumes one pass of the symbol arm's gap-back-fill skip budget, if any is
+    /// outstanding, and reports whether this pass should skip the back-fill.
+    /// </summary>
+    /// <param name="repoId">The repository about to run its symbol arm.</param>
+    /// <returns><see langword="true"/> when this pass must embed only changed symbols.</returns>
+    private bool ClaimSymbolGapScanSkip(string repoId)
+    {
+        if (!_symbolGapScanBackoff.TryGetValue(repoId, out var backoff) || backoff.Remaining <= 0)
+        {
+            return false;
+        }
+
+        // A concurrent pass may have consumed the same budget; either outcome is
+        // sound, so a single compare-and-swap attempt is enough - a lost race just
+        // means the other pass took the skip and this one does the back-fill.
+        var next = backoff with { Remaining = backoff.Remaining - 1 };
+        return _symbolGapScanBackoff.TryUpdate(repoId, next, backoff);
+    }
+
+    /// <summary>
+    /// Folds one symbol-arm pass into the gap-back-fill backoff: a saturated pass
+    /// doubles the skip budget (clamped by <see cref="MaxSymbolGapScanBackoffPasses"/>),
+    /// while a clean pass that actually ran the back-fill clears it outright.
+    /// </summary>
+    /// <param name="repoId">The repository whose pass just finished.</param>
+    /// <param name="saturated">Whether the pass deferred batches because the vector plane looked saturated.</param>
+    /// <param name="skippedGapScan">Whether the pass skipped the gap back-fill, so it is no evidence the plane recovered.</param>
+    private void RecordSymbolGapScanOutcome(string repoId, bool saturated, bool skippedGapScan)
+    {
+        if (saturated)
+        {
+            var updated = _symbolGapScanBackoff.AddOrUpdate(
+                repoId,
+                _ => new SymbolGapScanBackoff(Remaining: 1, Streak: 1),
+                (_, current) =>
+                {
+                    var streak = Math.Min(current.Streak + 1, 30);
+                    var budget = Math.Min(1 << Math.Min(streak - 1, 30), MaxSymbolGapScanBackoffPasses);
+                    return new SymbolGapScanBackoff(budget, streak);
+                });
+
+            _logger.LogWarning(
+                "Repo {RepoId}: the symbol arm deferred batches because the vector plane looked saturated "
+                + "(consecutive saturated passes: {Streak}); skipping the gap back-fill for the next {Passes} pass(es) "
+                + "so the membership tree can drain. Changed symbols are still embedded meanwhile.",
+                repoId,
+                updated.Streak,
+                updated.Remaining);
+            return;
+        }
+
+        // Only a pass that actually ran the back-fill is evidence the plane
+        // recovered; a skipped pass never touched the membership tree hard enough
+        // to find out, so it must not clear the budget it was granted by.
+        if (!skippedGapScan && _symbolGapScanBackoff.TryRemove(repoId, out _))
+        {
+            _logger.LogInformation(
+                "Repo {RepoId}: the symbol arm completed a full gap back-fill without saturation; backoff cleared.",
+                repoId);
+        }
+    }
+
+    /// <summary>
+    /// The symbol arm's outstanding gap-back-fill skip budget for one repository.
+    /// </summary>
+    /// <param name="Remaining">How many further passes must skip the back-fill.</param>
+    /// <param name="Streak">Consecutive saturated passes, which sets the next budget.</param>
+    private readonly record struct SymbolGapScanBackoff(int Remaining, int Streak);
 
     /// <summary>
     /// Embeds the repository's durable agent-memory entries as their own passages
@@ -477,28 +619,45 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // loses the flag. Either being present is sufficient evidence, and each is
         // only ever written after the corresponding vectors landed.
         //
-        // The load is itself a whole-set range scan over the membership tree, so it
-        // is one more thing that can time out under the very pressure it exists to
-        // tolerate. Losing it degrades to the previous behaviour - the source-id
-        // flag alone - rather than failing the arm, and an empty recorded set also
-        // makes the orphan sweep a no-op, which is the safe direction: it declines
-        // to retire anything rather than mistaking an unreadable set for an empty
-        // one and sweeping live embeddings away.
-        IReadOnlySet<string> recordedMemoryKeys;
-        try
+        // The load is itself a range scan over the membership tree, so it is one
+        // more thing that can fail under the very pressure it exists to tolerate.
+        // The load walks the marker range in small, resumable pages: a page fault
+        // banks the pages already read and resumes from them next pass, so the walk
+        // completes within a bounded number of passes instead of restarting from
+        // the beginning and never finishing (issue #2071). The two halves of the
+        // result are used differently, which is why they are reported separately -
+        // the partial keys are always safe as a skip signal (a marker is only ever
+        // written after its vectors landed), but only a COMPLETE set may drive the
+        // orphan sweep, or an unread page would look like a retired entry.
+        var markers = await _writer
+            .LoadEmbeddedMemoryKeysAsync(repoId, cancellationToken)
+            .ConfigureAwait(false);
+        var recordedMemoryKeys = markers.Keys;
+        if (!markers.Complete)
         {
-            recordedMemoryKeys = await _writer
-                .LoadEmbeddedMemoryKeysAsync(repoId, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            recordedMemoryKeys = EmptyMemoryKeys;
             _logger.LogWarning(
-                ex,
-                "Repo {RepoId}: could not read the embedded-memory-key markers; falling back to the source-id "
-                + "flag alone for this pass and skipping the orphan sweep.",
-                repoId);
+                markers.Fault,
+                "Repo {RepoId}: the embedded-memory-key marker scan did not finish this pass; using the "
+                + "{Count} marker(s) banked so far as a skip signal, resuming the walk on the next reconcile, "
+                + "and deferring the orphan sweep until the set is complete. Passes so far: {Passes}.",
+                repoId,
+                recordedMemoryKeys.Count,
+                markers.Passes);
+        }
+        else
+        {
+            // Logged deliberately, and at information rather than debug: the
+            // failure this fix addresses shows up as the scan NEVER completing, and
+            // "the warning stopped" is a much weaker signal than "the range was
+            // exhausted", because the warning also stops if the scan is never
+            // reached at all. The pass count distinguishes a walk that resumed
+            // banked progress from one that happened to finish in a single call.
+            _logger.LogInformation(
+                "Repo {RepoId}: the embedded-memory-key marker scan exhausted the range after {Passes} pass(es), "
+                + "recording {Count} marker(s); the orphan sweep can run.",
+                repoId,
+                markers.Passes,
+                recordedMemoryKeys.Count);
         }
 
         // Every memory key that is live right now. Collected during the same walk
@@ -539,7 +698,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                embeddedMembers = EmptyMemoryKeys;
+                embeddedMembers = EmptyKeySet;
                 _logger.LogWarning(
                     ex,
                     "Repo {RepoId}: the embedded-member probe failed for a page of {Count} memory entr(ies); "
@@ -597,11 +756,19 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
         while (token is not null);
 
-        await SweepOrphanedMemoryVectorsAsync(repoId, liveKeys, recordedMemoryKeys, cancellationToken)
-            .ConfigureAwait(false);
+        // The sweep retires what is recorded but no longer live, so it may only run
+        // on a COMPLETE recorded set: an unread page is indistinguishable from a
+        // retired entry, and an incomplete set simply means the walk resumes next
+        // pass. Declining to sweep is the safe direction - it retires nothing
+        // rather than risking a live embedding.
+        if (markers.Complete)
+        {
+            await SweepOrphanedMemoryVectorsAsync(repoId, liveKeys, recordedMemoryKeys, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
-        var landed = await EmbedAndStoreReportingLandedAsync(repoId, sources, onProgress: null, cancellationToken)
-            .ConfigureAwait(false);
+        var landed = (await EmbedAndStoreReportingLandedAsync(repoId, sources, onProgress: null, cancellationToken)
+            .ConfigureAwait(false)).Landed;
 
         // Record only what actually landed. Marking every source the pass intended
         // to embed would assert an embedding that a failed batch never stored, and
@@ -760,7 +927,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         Func<int, CancellationToken, ValueTask>? onProgress,
         CancellationToken cancellationToken)
         => (await EmbedAndStoreReportingLandedAsync(repoId, sources, onProgress, cancellationToken)
-            .ConfigureAwait(false)).Count;
+            .ConfigureAwait(false)).Landed.Count;
 
     /// <summary>
     /// The variant of <see cref="EmbedAndStoreAsync"/> that reports <b>which</b>
@@ -777,8 +944,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// <param name="sources">The sources to embed.</param>
     /// <param name="onProgress">Optional incremental progress callback.</param>
     /// <param name="cancellationToken">Cancels the pass.</param>
-    /// <returns>The source keys whose vectors were stored and whose membership was recorded.</returns>
-    private async Task<List<string>> EmbedAndStoreReportingLandedAsync(
+    /// <returns>The source keys whose vectors were stored and whose membership was recorded, and whether the vector plane looked saturated.</returns>
+    private async Task<EmbedOutcome> EmbedAndStoreReportingLandedAsync(
         string repoId,
         IReadOnlyList<EmbeddingSource> sources,
         Func<int, CancellationToken, ValueTask>? onProgress,
@@ -787,7 +954,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var landed = new List<string>();
         if (sources.Count == 0)
         {
-            return landed;
+            return new EmbedOutcome(landed, Saturated: false);
         }
 
         // Flatten every source's passages into one unit list, remembering each
@@ -815,6 +982,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var batchEmbedded = 0;
         var failedBatches = 0;
         var consecutiveBatchFailures = 0;
+        var saturated = false;
         Exception? firstBatchFailure = null;
         var pendingMembers = new List<string>();
         for (var start = 0; start < unitTexts.Count; start += EmbedBatchSize)
@@ -912,6 +1080,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // source is simply unmarked, so the next pass picks it up.
                 if (consecutiveBatchFailures >= MaxConsecutiveBatchFailures)
                 {
+                    saturated = true;
                     var deferred = unitTexts.Count - (start + count);
                     _logger.LogWarning(
                         "Repo {RepoId}: {Failures} consecutive batches failed to record; the vector plane looks "
@@ -952,8 +1121,23 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             throw firstBatchFailure;
         }
 
-        return landed;
+        return new EmbedOutcome(landed, saturated);
     }
+
+    /// <summary>
+    /// What one batched embed-and-store pass achieved: the sources that genuinely
+    /// landed (vectors stored <i>and</i> membership recorded), and whether the pass
+    /// gave up early because the vector plane looked saturated.
+    /// </summary>
+    /// <param name="Landed">The source keys whose vectors were stored and whose membership was recorded.</param>
+    /// <param name="Saturated">
+    /// <see langword="true"/> when the pass hit
+    /// <see cref="MaxConsecutiveBatchFailures"/> consecutive record failures and
+    /// deferred its remaining batches. It is the arm's one deterministic saturation
+    /// signal, and the caller uses it to decide whether to drive the same tree
+    /// again on the next pass.
+    /// </param>
+    private readonly record struct EmbedOutcome(List<string> Landed, bool Saturated);
 
     /// <summary>
     /// Builds the passage text for a symbol: its kind, fully-qualified name, and -
