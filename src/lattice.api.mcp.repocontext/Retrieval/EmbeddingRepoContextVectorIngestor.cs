@@ -639,8 +639,24 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 markers.Fault,
                 "Repo {RepoId}: the embedded-memory-key marker scan did not finish this pass; using the "
                 + "{Count} marker(s) banked so far as a skip signal, resuming the walk on the next reconcile, "
-                + "and deferring the orphan sweep until the set is complete.",
+                + "and deferring the orphan sweep until the set is complete. Passes so far: {Passes}.",
                 repoId,
+                recordedMemoryKeys.Count,
+                markers.Passes);
+        }
+        else
+        {
+            // Logged deliberately, and at information rather than debug: the
+            // failure this fix addresses shows up as the scan NEVER completing, and
+            // "the warning stopped" is a much weaker signal than "the range was
+            // exhausted", because the warning also stops if the scan is never
+            // reached at all. The pass count distinguishes a walk that resumed
+            // banked progress from one that happened to finish in a single call.
+            _logger.LogInformation(
+                "Repo {RepoId}: the embedded-memory-key marker scan exhausted the range after {Passes} pass(es), "
+                + "recording {Count} marker(s); the orphan sweep can run.",
+                repoId,
+                markers.Passes,
                 recordedMemoryKeys.Count);
         }
 

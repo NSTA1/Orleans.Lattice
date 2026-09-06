@@ -156,6 +156,9 @@ public sealed class RepoContextVectorWriterResumableMarkerScanTests
 
             Assert.That(resumed.Keys, Is.EquivalentTo(keys), "The resumed walk sees every marker,");
             Assert.That(resumed.Complete, Is.True, "and reports complete,");
+            Assert.That(resumed.Passes, Is.GreaterThan(1),
+                "reporting the passes the walk actually took, which is what makes 'the range was exhausted "
+                + "after N passes' observable in a log rather than inferred from an absent warning.");
             Assert.That(resumeReads, Is.LessThan(freshReads),
                 "having cost less than a whole walk because it resumed from the banked continuation token "
                 + "instead of re-reading the range from the start.");
@@ -163,6 +166,8 @@ public sealed class RepoContextVectorWriterResumableMarkerScanTests
             Assert.That(fresh.Keys, Is.EquivalentTo(keys),
                 "and the pass after completion walks the whole range again rather than serving a stale "
                 + "cursor, so a marker added or disabled since is still observed.");
+            Assert.That(fresh.Passes, Is.EqualTo(1),
+                "counting from one again, because completion dropped the cursor and this is a new walk.");
         });
     }
 }
