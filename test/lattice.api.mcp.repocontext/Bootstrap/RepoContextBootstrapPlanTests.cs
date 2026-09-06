@@ -167,6 +167,59 @@ public sealed class RepoContextBootstrapPlanTests
     }
 
     [Test]
+    public void Each_partition_preserves_the_scan_order_of_its_members()
+    {
+        // The diff classifies in one pass and fills exact-width partitions in a
+        // second, so an off-by-one in either pass would silently reorder or drop a
+        // member. Interleave the four classes so no partition is contiguous in the
+        // source, then pin every partition's order against the scan order.
+        var stored = new Dictionary<string, string>(StringComparer.Ordinal);
+        var scanned = new List<RepoFileEntry>();
+        var expectedAdded = new List<string>();
+        var expectedUpdated = new List<string>();
+        var expectedUnchanged = new List<string>();
+        var expectedMetadata = new List<string>();
+
+        for (var i = 0; i < 16; i++)
+        {
+            var path = $"f{i:D2}.cs";
+            switch (i % 4)
+            {
+                case 0:
+                    scanned.Add(Entry(path, "d1"));
+                    expectedAdded.Add(path);
+                    break;
+                case 1:
+                    stored[path] = "old";
+                    scanned.Add(Entry(path, "new"));
+                    expectedUpdated.Add(path);
+                    break;
+                case 2:
+                    stored[path] = "same";
+                    scanned.Add(Entry(path, "same"));
+                    expectedUnchanged.Add(path);
+                    break;
+                default:
+                    stored[path] = "same";
+                    scanned.Add(StaleEntry(path, "same"));
+                    expectedMetadata.Add(path);
+                    break;
+            }
+        }
+
+        var plan = RepoContextBootstrapPlan.Compute(stored, scanned);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Added.Select(e => e.RelativePath), Is.EqualTo(expectedAdded));
+            Assert.That(plan.Updated.Select(e => e.RelativePath), Is.EqualTo(expectedUpdated));
+            Assert.That(plan.Unchanged.Select(e => e.RelativePath), Is.EqualTo(expectedUnchanged));
+            Assert.That(plan.MetadataChanged.Select(e => e.RelativePath), Is.EqualTo(expectedMetadata));
+            Assert.That(plan.RemovedPaths, Is.Empty);
+        });
+    }
+
+    [Test]
     public void Compute_rejects_a_null_stored_map()
         => Assert.Throws<ArgumentNullException>(
             () => RepoContextBootstrapPlan.Compute(null!, Array.Empty<RepoFileEntry>()));

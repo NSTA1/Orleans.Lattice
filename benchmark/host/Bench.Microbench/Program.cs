@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -323,6 +323,13 @@ if (string.Equals(suite, "authcompiletrims", StringComparison.OrdinalIgnoreCase)
     Console.WriteLine("[microbench] suite   -> authcompiletrims (AuthPolicyCompileTrimBenchmarks)");
     var authCompileTrimsSummary = BenchmarkRunner.Run<AuthPolicyCompileTrimBenchmarks>(config);
     return authCompileTrimsSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "ingestapplytrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> ingestapplytrims (IngestPlanAndSequentialApplyBenchmarks)");
+    var ingestApplyTrimsSummary = BenchmarkRunner.Run<IngestPlanAndSequentialApplyBenchmarks>(config);
+    return ingestApplyTrimsSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "tenancycompiletrims", StringComparison.OrdinalIgnoreCase))
