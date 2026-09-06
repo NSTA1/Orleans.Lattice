@@ -221,7 +221,7 @@ public sealed class RepoContextGitSourceRegistryTests
     }
 
     [Test]
-    public void FromEnvironment_resolves_a_per_repository_token_and_isolates_it()
+    public async Task FromEnvironment_resolves_a_per_repository_token_and_isolates_it()
     {
         SetVariable(RepoContextGitSourceRegistry.ReposVariable, "one;two");
         SetVariable(RepoContextGitSourceRegistry.VariableName("one", "URL"), "u1");
@@ -231,8 +231,8 @@ public sealed class RepoContextGitSourceRegistryTests
         var registry = RepoContextGitSourceRegistry.FromEnvironment();
         var provider = RepoContextEnvironmentGitCredentialProvider.FromEnvironment(registry);
 
-        var first = provider.ResolveAsync(registry.Find("one")!, CancellationToken.None).AsTask().Result;
-        var second = provider.ResolveAsync(registry.Find("two")!, CancellationToken.None).AsTask().Result;
+        var first = await provider.ResolveAsync(registry.Find("one")!, CancellationToken.None);
+        var second = await provider.ResolveAsync(registry.Find("two")!, CancellationToken.None);
 
         Assert.Multiple(() =>
         {

@@ -24,13 +24,13 @@ public partial class ShardHealingOrchestratorGrainTests
     /// the survivor and the donor leaves the routing map, exactly as the real
     /// swap phase does.
     /// </summary>
-    private static void CommitPendingFold(Harness h)
+    private static async Task CommitPendingFoldAsync(Harness h)
     {
         var tracked = h.State.State.InFlightDonorShardIndices;
         if (tracked.Count == 0) return;
 
         var donor = tracked[^1];
-        var survivor = h.ConsolidationOf(donor).GetProgressAsync().Result.SurvivorShardIndex;
+        var survivor = (await h.ConsolidationOf(donor).GetProgressAsync()).SurvivorShardIndex;
         if (survivor < 0)
         {
             // The orchestrator admitted this sweep, so the survivor is whatever
@@ -56,7 +56,7 @@ public partial class ShardHealingOrchestratorGrainTests
 
     /// <summary>
     /// Captures which survivor the orchestrator aimed a fold at, so
-    /// <see cref="CommitPendingFold"/> can model the real swap. Substitutes
+    /// <see cref="CommitPendingFoldAsync"/> can model the real swap. Substitutes
     /// record the call, so the aim is read back from the received arguments.
     /// </summary>
     private static void RecordAim(Harness h, int donor)
@@ -94,7 +94,7 @@ public partial class ShardHealingOrchestratorGrainTests
         for (var sweep = 0; sweep < maxSweeps; sweep++)
         {
             await h.Grain.RunHealingPassAsync();
-            CompleteAdmittedFold(h);
+            await CompleteAdmittedFoldAsync(h);
 
             counts.Add(h.CurrentMap().GetPhysicalShardIndices().Count);
             if (h.State.State.LastDecision == ShardHealingDecision.NotOverSplit) break;
@@ -107,14 +107,14 @@ public partial class ShardHealingOrchestratorGrainTests
     /// fold to a durable commit: the donor's slots move to the survivor and the
     /// donor leaves the routing map.
     /// </summary>
-    private static bool CompleteAdmittedFold(Harness h)
+    private static async Task<bool> CompleteAdmittedFoldAsync(Harness h)
     {
         if (h.State.State.LastDecision != ShardHealingDecision.Admitted) return false;
         var tracked = h.State.State.InFlightDonorShardIndices;
         if (tracked.Count == 0) return false;
 
         RecordAim(h, tracked[^1]);
-        CommitPendingFold(h);
+        await CommitPendingFoldAsync(h);
         return true;
     }
 
@@ -191,7 +191,7 @@ public partial class ShardHealingOrchestratorGrainTests
         for (var sweep = 0; sweep < 500; sweep++)
         {
             await h.Grain.RunHealingPassAsync();
-            CompleteAdmittedFold(h);
+            await CompleteAdmittedFoldAsync(h);
 
             var map = h.CurrentMap();
             var live = map.GetPhysicalShardIndices();
@@ -282,7 +282,7 @@ public partial class ShardHealingOrchestratorGrainTests
             }
 
             await h.Grain.RunHealingPassAsync();
-            if (CompleteAdmittedFold(h)) folds++;
+            if (await CompleteAdmittedFoldAsync(h)) folds++;
 
             counts.Add(h.CurrentMap().GetPhysicalShardIndices().Count);
         }
@@ -393,7 +393,7 @@ public partial class ShardHealingOrchestratorGrainTests
             h.SetMap(map);
 
             await h.Grain.RunHealingPassAsync();
-            if (CompleteAdmittedFold(h)) map = h.CurrentMap();
+            if (await CompleteAdmittedFoldAsync(h)) map = h.CurrentMap();
 
             count = map.GetPhysicalShardIndices().Count;
             state = h.State.State;

@@ -159,7 +159,7 @@ public partial class BPlusLeafGrainTests
 
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             // Every partition was asked, rather than the sweep stopping at the
             // first fault.

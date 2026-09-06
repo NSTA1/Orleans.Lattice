@@ -135,12 +135,12 @@ public class MembershipResolutionCacheTests
     }
 
     [Test]
-    public void Clear_drops_every_entry()
+    public async Task Clear_drops_every_entry()
     {
         var (cache, _) = CreateCache();
         var subject = new LatticeSubject("alice");
 
-        _ = cache.ResolveAsync("tok", Resolver(subject, null, () => { }), default).AsTask().Result;
+        _ = await cache.ResolveAsync("tok", Resolver(subject, null, () => { }), default);
         Assert.That(cache.Count, Is.EqualTo(1));
 
         cache.Clear();

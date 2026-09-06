@@ -51,7 +51,7 @@ public sealed class LatticeTelemetryApiGrpcOptionsTests
     }
 
     [Test]
-    public void The_deny_authorizer_refuses_every_call()
+    public async Task The_deny_authorizer_refuses_every_call()
     {
         var context = new LatticeTelemetryApiAuthorizationContext(
             new FakeServerCallContext(
@@ -60,12 +60,12 @@ public sealed class LatticeTelemetryApiGrpcOptionsTests
             "lattice.ops.rate");
 
         Assert.That(
-            new DenyTelemetryApiAuthorizer().IsAuthorizedAsync(context, CancellationToken.None).Result,
+            await new DenyTelemetryApiAuthorizer().IsAuthorizedAsync(context, CancellationToken.None),
             Is.False);
     }
 
     [Test]
-    public void The_allow_all_authorizer_permits_every_call()
+    public async Task The_allow_all_authorizer_permits_every_call()
     {
         var context = new LatticeTelemetryApiAuthorizationContext(
             new FakeServerCallContext(
@@ -74,7 +74,7 @@ public sealed class LatticeTelemetryApiGrpcOptionsTests
             targetId: null);
 
         Assert.That(
-            new AllowAllTelemetryApiAuthorizer().IsAuthorizedAsync(context, CancellationToken.None).Result,
+            await new AllowAllTelemetryApiAuthorizer().IsAuthorizedAsync(context, CancellationToken.None),
             Is.True);
     }
 
