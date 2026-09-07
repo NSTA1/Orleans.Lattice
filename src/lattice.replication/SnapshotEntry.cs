@@ -178,4 +178,59 @@ public readonly record struct SnapshotEntry
     /// through the typed-delta fold.
     /// </summary>
     [Id(11)] public Orleans.Lattice.LatticeMergeMode Mode { get; init; }
+
+    /// <summary>
+    /// Compares two entries by value, with <see cref="Value"/> and
+    /// <see cref="Delta"/> compared by content. The compiler-generated
+    /// record-struct equality compares each <see cref="byte"/> array with
+    /// <see cref="EqualityComparer{T}.Default"/> (reference equality), so two
+    /// structurally identical entries built from independently allocated but
+    /// byte-identical payloads - and, in particular, an entry and its
+    /// post-serialization self - would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The entry to compare against.</param>
+    public bool Equals(SnapshotEntry other) =>
+        string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && BytesEqual(Value, other.Value)
+        && Timestamp.Equals(other.Timestamp)
+        && IsPrepared == other.IsPrepared
+        && IsTombstone == other.IsTombstone
+        && TransactionId == other.TransactionId
+        && SourceShardIndex == other.SourceShardIndex
+        && AtomicBatchSize == other.AtomicBatchSize
+        && AtomicBatchIndex == other.AtomicBatchIndex
+        && ExpiresAtTicks == other.ExpiresAtTicks
+        && BytesEqual(Delta, other.Delta)
+        && Mode == other.Mode;
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Key, StringComparer.Ordinal);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        hash.Add(Timestamp);
+        hash.Add(IsPrepared);
+        hash.Add(IsTombstone);
+        hash.Add(TransactionId);
+        hash.Add(SourceShardIndex);
+        hash.Add(AtomicBatchSize);
+        hash.Add(AtomicBatchIndex);
+        hash.Add(ExpiresAtTicks);
+        if (Delta is { } delta)
+        {
+            hash.AddBytes(delta);
+        }
+
+        hash.Add(Mode);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
