@@ -54,12 +54,54 @@ internal sealed partial class BPlusLeafGrain
     /// bumped on every state-advancing operation. The wrapper is shared
     /// between the leaf's bumper and the cache's reader so the bumper
     /// can <see cref="Interlocked.Increment(ref long)"/> the field
-    /// directly without a per-tick dict indexer assignment. Absence of
-    /// an entry implies "primary leaf is not activated on this silo" --
-    /// the only silo whose activation populates the entry -- which
-    /// forces the cache to its existing cross-grain refresh path.
+    /// directly without a per-tick dict indexer assignment.
+    /// <para>
+    /// Absence of an entry implies "primary leaf is not activated on this
+    /// silo" -- the only silo whose activation populates the entry. Note
+    /// carefully that this has <em>two</em> causes, not one: the primary may
+    /// live on another silo (permanent, the steady state), or it may be a
+    /// same-silo primary that is currently deactivated (transient - see the
+    /// <see cref="RetireLocalRevision"/> call on the deactivation path).
+    /// Both write the same "no entry", so a consumer cannot tell them apart
+    /// from a single observation and must not treat absence as evidence of
+    /// the cross-silo case alone. <see cref="LeafCacheGrain"/> therefore
+    /// distinguishes them over <em>time</em>, by reacting to the
+    /// absent-to-present edge, rather than by interpreting one reading.
+    /// </para>
     /// </summary>
     private static readonly ConcurrentDictionary<GrainId, StrongBox<long>> LeafRevisionRegistry = new();
+
+    /// <summary>
+    /// Process-wide monotonic floor that every new activation's cookie is
+    /// seeded above. Its sole purpose is to make a cookie value unique over
+    /// a leaf's whole process lifetime rather than merely over one
+    /// activation, because <see cref="LeafCacheGrain"/> compares cookies for
+    /// <em>equality</em> and treats an equal pair as "provably fresh".
+    /// <para>
+    /// Seeding each activation at <c>0</c> would not give that: the registry
+    /// entry is removed on deactivation, so a re-activation would restart the
+    /// count and could republish a value a cache had already observed under a
+    /// previous activation. The cache would then read "equal" and skip its
+    /// refresh permanently -- an unbounded staleness, strictly worse than the
+    /// bounded TTL path an absent entry falls through to.
+    /// </para>
+    /// <para>
+    /// The floor is advanced on two events, which between them cover every
+    /// way an activation can end, so no width assumption about "bumps per
+    /// activation" is needed:
+    /// <list type="bullet">
+    /// <item><description><see cref="RetireLocalRevision"/> raises it past the
+    /// activation's final value when deactivation removes the entry.</description></item>
+    /// <item><description>If deactivation does <em>not</em> run (an aborted
+    /// activation), the entry survives and the next activation's
+    /// <c>GetOrAdd</c> reuses the same box, so the count simply continues
+    /// upward and is monotonic for that reason instead.</description></item>
+    /// </list>
+    /// Uniqueness is only required per leaf, so a single shared floor across
+    /// leaves is sufficient (and cheaper than a per-leaf one).
+    /// </para>
+    /// </summary>
+    private static long RevisionSeedFloor;
 
     /// <summary>
     /// Per-activation cached reference to this leaf's revision box.
@@ -75,13 +117,14 @@ internal sealed partial class BPlusLeafGrain
     /// Reads the same-silo revision cookie for <paramref name="leafId"/>.
     /// Returns <c>true</c> iff the primary leaf is currently activated
     /// on the calling silo and has bumped the cookie at least once.
-    /// Cookies start at <c>1</c> after the first bump and increase
-    /// monotonically; deactivation removes the entry, so a re-activation
-    /// also re-starts at <c>1</c>. A reader compares the returned value
-    /// against its own last-observed cookie; the comparison covers both
-    /// "no advance since last observation" and the rarer "primary was
-    /// re-activated and has not yet caught up to the previously-observed
-    /// cookie" -- both correctly force a cross-grain refresh.
+    /// Cookies increase monotonically within an activation and every
+    /// activation is seeded above <see cref="RevisionSeedFloor"/>, so a
+    /// value is unique over the leaf's whole process lifetime: a
+    /// re-activated primary can never republish a value a reader observed
+    /// under an earlier activation. That is what lets a reader treat an
+    /// equal pair as "no advance since last observation"; any other
+    /// relation -- greater, lesser, or an absent entry -- forces a
+    /// cross-grain refresh.
     /// </summary>
     internal static bool TryGetLeafRevision(GrainId leafId, out long revision)
     {
@@ -120,8 +163,72 @@ internal sealed partial class BPlusLeafGrain
     private void BumpLocalRevision()
     {
         var box = _localRevisionBox ??=
-            LeafRevisionRegistry.GetOrAdd(context.GrainId, static _ => new StrongBox<long>(0L));
+            LeafRevisionRegistry.GetOrAdd(
+                context.GrainId,
+                static _ => new StrongBox<long>(Interlocked.Increment(ref RevisionSeedFloor)));
         Volatile.Write(ref box.Value, box.Value + 1);
+    }
+
+    /// <summary>
+    /// Retires this activation's same-silo revision cookie on deactivation,
+    /// raising <see cref="RevisionSeedFloor"/> past the activation's final
+    /// value first so that no later activation of any leaf can republish a
+    /// value a <see cref="LeafCacheGrain"/> may still hold as its
+    /// last-observed cookie. Removing the entry keeps the registry bounded by
+    /// the live-leaf set rather than the lifetime-leaf set; raising the floor
+    /// is what makes that removal safe rather than merely cheap.
+    /// </summary>
+    private void RetireLocalRevision()
+    {
+        _localRevisionBox = null;
+
+        // Raise the floor BEFORE removing the entry, not after. The removal
+        // is what makes a concurrent re-activation's GetOrAdd create a fresh
+        // box seeded from the floor, so removing first opens a window in
+        // which that seed can be drawn from a floor that has not yet been
+        // raised past this activation's high-water - which is precisely the
+        // cross-activation collision the floor exists to prevent. Raising
+        // first closes it: a racing GetOrAdd either finds the old box (and
+        // continues its count upward, monotone for that reason) or creates a
+        // new one from an already-raised floor.
+        if (!LeafRevisionRegistry.TryGetValue(context.GrainId, out var box))
+        {
+            return;
+        }
+
+        RaiseSeedFloorTo(Interlocked.Read(ref box.Value));
+
+        if (LeafRevisionRegistry.TryRemove(context.GrainId, out var removed))
+        {
+            // Re-raise against the value observed at removal. Between the
+            // read above and the removal the box is still reachable, so a
+            // late bump could have advanced it; raising again is idempotent
+            // when nothing moved and closes that residue when it did.
+            RaiseSeedFloorTo(Interlocked.Read(ref removed.Value));
+        }
+    }
+
+    /// <summary>
+    /// Monotonically raises <see cref="RevisionSeedFloor"/> to at least
+    /// <paramref name="value"/>. Never lowers it, and is safe against
+    /// concurrent raisers: each iteration re-reads the value the failed
+    /// compare-and-exchange observed, so the loop makes progress rather than
+    /// spinning on a stale expectation.
+    /// </summary>
+    private static void RaiseSeedFloorTo(long value)
+    {
+        var floor = Interlocked.Read(ref RevisionSeedFloor);
+
+        while (floor < value)
+        {
+            var observed = Interlocked.CompareExchange(ref RevisionSeedFloor, value, floor);
+            if (observed == floor)
+            {
+                break;
+            }
+
+            floor = observed;
+        }
     }
 
     /// <summary>

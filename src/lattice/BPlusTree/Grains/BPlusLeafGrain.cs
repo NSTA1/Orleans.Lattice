@@ -107,15 +107,16 @@ internal sealed partial class BPlusLeafGrain(
         {
             DisposeProjectionHasher();
 
-            // Remove this activation's same-silo revision cookie so a
-            // future re-activation starts fresh and any same-silo
-            // LeafCacheGrain that may still hold _lastSeenPrimaryRevision
-            // from this activation falls through to the cross-grain
-            // refresh path on its next read. Cookies are best-effort,
-            // not correctness-critical, but pruning keeps the registry
-            // bounded by the live-leaf set rather than the lifetime-leaf
-            // set.
-            LeafRevisionRegistry.TryRemove(context.GrainId, out _);
+            // Retire this activation's same-silo revision cookie. Removing
+            // the entry keeps the registry bounded by the live-leaf set
+            // rather than the lifetime-leaf set; RetireLocalRevision first
+            // raises the process-wide seed floor past this activation's
+            // final value, so a future re-activation is seeded strictly
+            // above every cookie this one published and can never
+            // republish a value a same-silo LeafCacheGrain still holds as
+            // its last-observed cookie (which the cache reads as "provably
+            // fresh" and would seal on indefinitely).
+            RetireLocalRevision();
         }
     }
 
@@ -636,6 +637,7 @@ internal sealed partial class BPlusLeafGrain(
     private async Task<SplitResult?> SetCoreAsync(string key, byte[] value, long expiresAtTicks)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {
@@ -849,6 +851,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(entries);
         if (entries.Count == 0)
         {
@@ -923,6 +926,7 @@ internal sealed partial class BPlusLeafGrain(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(entries);
         if (entries.Count == 0)
         {
@@ -1372,6 +1376,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<bool> DeleteAsync(string key)
     {
         EnsureInternalOrigin(LatticeOperation.Delete);
+        using var _mutationScope = EnterMutationScope();
         var isPrepared = LatticePreparedContext.Current;
 
         // For non-prepared deletes, the absent / tombstoned short-circuit
@@ -1489,6 +1494,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
+        using var _mutationScope = EnterMutationScope();
         // Collect matching keys. Entries is a SortedDictionary so we can
         // break early once we pass endExclusive - but we must still report
         // whether we observed a key >= endExclusive so the shard
@@ -2435,6 +2441,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
 #if LATTICE_DIAG
         // DIAG leaf-cross-leaf-merge: fires when a sibling leaf or
         // a split-source leaf hands a batch of LWW values into this
@@ -2847,6 +2854,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {

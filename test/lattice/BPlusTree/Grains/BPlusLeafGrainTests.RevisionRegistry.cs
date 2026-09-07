@@ -179,40 +179,77 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Re_activation_starts_revision_at_one_not_previous_high()
+    public async Task Re_activation_never_republishes_a_previous_activations_cookie()
     {
-        // The dangling-cookie race shape: a cache observed cookie N from
-        // an activation that has now deactivated. If the new activation
-        // started at N+1, a quiescent re-activation could trick the cache
-        // into thinking nothing had changed. The fix removes the entry
-        // on deactivation; the new activation lazy-creates a fresh
-        // StrongBox starting at 0 and the first bump moves it to 1.
-        // Cache-side comparison (1 != N) correctly forces a refresh.
+        // The invariant LeafCacheGrain actually depends on, which is NOT
+        // "the counter restarts low".
+        //
+        // The cache compares cookies for equality and treats an equal pair as
+        // provably fresh:
+        //
+        //     if (sameSiloRev == _lastSeenPrimaryRevision) return;
+        //
+        // That return happens BEFORE the TTL gate, so an equal reading skips
+        // the refresh with no bounded fallback to heal it.
+        //
+        // An earlier revision of this test asserted the opposite - that a
+        // re-activation restarts the counter below the previous activation's
+        // high value - on the reasoning that starting at N+1 "could trick the
+        // cache into thinking nothing had changed". That reasoning was
+        // inverted. Seeding ABOVE the previous high cannot collide: the entry
+        // is absent until the first bump (so the cache takes its cross-grain
+        // path), and every value published thereafter is one the cache has
+        // never seen. Restarting LOW is what collides - an activation that
+        // counts back up through a value the cache already observed makes the
+        // equality check fire on stale state, permanently.
+        //
+        // So the assertion below is the strengthened form: no cookie
+        // published by a later activation may equal any cookie a previous
+        // activation published. Asserting disjointness of the observed sets
+        // rather than a single inequality is deliberate - it fails against an
+        // implementation that merely starts higher but could still wrap or
+        // re-enter the earlier range.
         var unique = $"reactivate-{Guid.NewGuid():N}";
         var leafId = GrainId.Create("leaf", unique);
 
         var first = CreateGrain(replicaId: unique);
+        var publishedByFirst = new List<long>();
         for (int i = 0; i < 5; i++)
         {
             await first.SetAsync($"k{i}", Encoding.UTF8.GetBytes("v"));
+            Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var seen), Is.True);
+            publishedByFirst.Add(seen);
         }
 
-        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var atDeactivate), Is.True);
-        Assert.That(atDeactivate, Is.GreaterThanOrEqualTo(5));
+        Assert.That(publishedByFirst, Is.Unique,
+            "precondition: the first activation must publish a distinct cookie per write");
 
         await ((IGrainBase)first).OnDeactivateAsync(
             new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"),
             CancellationToken.None);
-        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False);
+        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False,
+            "deactivation must remove the entry so the registry stays bounded by the live-leaf set");
 
-        // Second activation of the same GrainId.
+        // Second activation of the same GrainId, writing MORE times than the
+        // first did. Under the old restart-at-one behaviour this walks
+        // straight back through every value the first activation published,
+        // so the disjointness assertion below is not vacuous.
         var second = CreateGrain(replicaId: unique);
-        await second.SetAsync("kfirst", Encoding.UTF8.GetBytes("v"));
+        var publishedBySecond = new List<long>();
+        for (int i = 0; i < 10; i++)
+        {
+            await second.SetAsync($"j{i}", Encoding.UTF8.GetBytes("v"));
+            Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var seen), Is.True);
+            publishedBySecond.Add(seen);
+        }
 
-        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var afterReactivate), Is.True);
-        Assert.That(afterReactivate, Is.LessThan(atDeactivate),
-            "re-activation should restart the per-activation counter, not continue the previous activation's high value");
-        Assert.That(afterReactivate, Is.GreaterThanOrEqualTo(1));
+        Assert.That(publishedBySecond.Intersect(publishedByFirst), Is.Empty,
+            "a re-activation must never republish a cookie value a cache may still hold as its "
+            + "last-observed reading; the cache treats an equal pair as provably fresh and returns "
+            + "before the TTL gate, so a collision is unbounded staleness with nothing to heal it");
+
+        Assert.That(publishedBySecond[0], Is.GreaterThan(publishedByFirst[^1]),
+            "the new activation must be seeded above the previous activation's high-water mark");
     }
 
     [Test]

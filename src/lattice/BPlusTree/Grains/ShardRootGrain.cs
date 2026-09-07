@@ -148,6 +148,157 @@ internal sealed partial class ShardRootGrain(
     private const int MaxRetries = 2;
 
     /// <summary>
+    /// The first delay before retrying a write that was refused by a leaf
+    /// mid-retirement, and the floor of the exponential ramp.
+    /// <para>
+    /// Every other exception on the retry path is a genuine transient fault
+    /// whose recovery is driven by Orleans, so retrying immediately is right.
+    /// <see cref="LeafRetiredException"/> is different in kind: it is thrown by
+    /// a leaf the reclaim pass has latched closed, and it clears only when that
+    /// pass moves the leaf's routing entry. Retrying with no delay issues every
+    /// attempt inside that window, against the same latched leaf, because
+    /// routing does not move until the pass moves it - so a bounded, transient
+    /// condition would surface to the caller as a hard failure almost every
+    /// time it was hit.
+    /// </para>
+    /// <para>
+    /// Sizing the wait needs the true width of that window, which is wider than
+    /// a single hop. The latch is taken in <c>TryBeginRetirementAsync</c>,
+    /// which returns <em>before</em> the sibling-chain CAS, so the window opens
+    /// there and closes only when routing moves. It spans
+    /// <c>TryUnlinkSuccessorAsync</c> (one grain call to the predecessor) and
+    /// then <c>RetireRoutingAsync</c>, whose <c>RemoveChildAsync</c> call to the
+    /// parent is itself retried up to <see cref="MaxRetries"/> times. The floor
+    /// is therefore two grain calls, and the ceiling includes a whole nested
+    /// retry loop - not the one hop an earlier revision of this comment
+    /// claimed.
+    /// </para>
+    /// <para>
+    /// The write side must be allowed to outlast that worst case, and a count
+    /// of short attempts cannot be sized against it without silently coupling
+    /// two budgets that know nothing about each other. So this path is bounded
+    /// by a deadline (<see cref="LatticeOptions.LeafRetirementRetryDeadline"/>)
+    /// rather than by <see cref="MaxRetries"/>, and that deadline carries the
+    /// full derivation.
+    /// </para>
+    /// <para>
+    /// <b>The ramp is what keeps the deadline affordable.</b> A fixed short
+    /// delay across a deadline measured in seconds is a retry storm: every
+    /// attempt is certain to be rejected, and the storm contends the very
+    /// grain calls the fold needs to make progress, so waiting longer makes
+    /// the latch last longer - positive feedback, and the backoff chosen to
+    /// survive a slow fold becomes a mechanism for causing one. Doubling from
+    /// this floor to <see cref="LeafRetirementBackoffCeiling"/> keeps the
+    /// common short latch responsive while cutting the call volume of a long
+    /// one by nearly an order of magnitude.
+    /// </para>
+    /// <para>
+    /// <b>The jitter is not decoration.</b> Concurrent writers that all take
+    /// an identical delay synchronise into lockstep waves and arrive together,
+    /// which is the worst possible arrival pattern for the thing they are
+    /// waiting on. Spreading each delay decorrelates them.
+    /// </para>
+    /// <para>
+    /// That is not a self-block, and the reason is worth stating because it is
+    /// the obvious objection. This wait is only ever taken on
+    /// <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> dispatch
+    /// paths - <c>SetManyAsync</c> and its predicated variant - whose turns do
+    /// not hold the shard-root activation exclusively. The reclaim fold
+    /// therefore continues to make progress during the delay and clears the
+    /// latch, which is what makes waiting the right response. A
+    /// non-interleaved write path cannot observe this exception at all,
+    /// because it cannot overlap <c>ReclaimEmptyLeavesAsync</c> in the first
+    /// place; the clause is kept uniformly at every retry site so it stays
+    /// correct if another method is marked interleaving later.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan LeafRetirementBackoffFloor = TimeSpan.FromMilliseconds(5);
+
+    /// <summary>
+    /// The ceiling of the leaf-retirement backoff ramp. Bounds how coarse the
+    /// polling of a long-held latch becomes, so a write never waits much
+    /// beyond this past the moment the latch actually clears.
+    /// </summary>
+    private static readonly TimeSpan LeafRetirementBackoffCeiling = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// The leaf-retirement retry deadline in force for this shard's tree.
+    /// <para>
+    /// Read from the activation's cached options so the retry path stays
+    /// synchronous; before the first resolution completes it falls back to the
+    /// default, which is the correct value for every tree that does not
+    /// override it. See <see cref="LatticeOptions.LeafRetirementRetryDeadline"/>
+    /// for the derivation of that default and the inequality it satisfies.
+    /// </para>
+    /// </summary>
+    private TimeSpan LeafRetirementRetryDeadline =>
+        _cachedOptions?.LeafRetirementRetryDeadline ?? LatticeOptions.DefaultLeafRetirementRetryDeadline;
+
+    /// <summary>
+    /// Decides whether a failed leaf dispatch should be retried. Ordinary
+    /// transient faults stay bounded by <see cref="MaxRetries"/> attempts,
+    /// because each one is an independent failure and retrying forever would
+    /// hide a real outage. <see cref="LeafRetiredException"/> is bounded by
+    /// <see cref="LatticeOptions.LeafRetirementRetryDeadline"/> instead, so the
+    /// write side is sized against the reclaim fold's worst case rather than
+    /// against an unrelated attempt budget.
+    /// </summary>
+    private static bool ShouldRetryLeafDispatch(Exception ex, int attempt, DateTime deadlineUtc) =>
+        ex is LeafRetiredException
+            ? DateTime.UtcNow < deadlineUtc
+            : ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries;
+
+    /// <summary>
+    /// Waits out a leaf retirement window before a retry, and returns
+    /// immediately for every other retryable fault. Returns <c>true</c> when
+    /// the caller should retry without consuming its ordinary attempt budget,
+    /// which keeps the <see cref="LeafRetiredException"/> deadline independent
+    /// of <see cref="MaxRetries"/>.
+    /// </summary>
+    private async Task<bool> BackOffIfLeafRetiredAsync(Exception ex, int retiredAttempts, DateTime deadlineUtc)
+    {
+        if (ex is not LeafRetiredException) return false;
+
+        var remaining = deadlineUtc - DateTime.UtcNow;
+        if (remaining <= TimeSpan.Zero) return false;
+
+        var delay = NextLeafRetirementDelay(retiredAttempts, remaining);
+
+        logger.LogDebug(
+            "Shard {ShardIndex} of tree '{TreeId}' had a write refused by a leaf mid-retirement; waiting {BackoffMs}ms for the reclaim fold to clear the latch before retrying.",
+            MyShardIndex,
+            TreeId,
+            delay.TotalMilliseconds);
+
+        await Task.Delay(delay);
+        return true;
+    }
+
+    /// <summary>
+    /// Computes the next leaf-retirement backoff: an exponential ramp from
+    /// <see cref="LeafRetirementBackoffFloor"/> to
+    /// <see cref="LeafRetirementBackoffCeiling"/>, spread by up to half its own
+    /// width to decorrelate concurrent writers, and never longer than the
+    /// deadline has left to run.
+    /// </summary>
+    private static TimeSpan NextLeafRetirementDelay(int attempt, TimeSpan remaining)
+    {
+        // Cap the shift before it is applied: attempt is unbounded on this
+        // path (the deadline bounds it, not a count), and shifting past the
+        // width of the operand is undefined rather than saturating.
+        var doublings = Math.Min(attempt, 8);
+        var scaled = LeafRetirementBackoffFloor.TotalMilliseconds * (1 << doublings);
+        var capped = Math.Min(scaled, LeafRetirementBackoffCeiling.TotalMilliseconds);
+
+        // Full jitter over the lower half keeps the ramp's shape while
+        // ensuring two writers that entered together do not leave together.
+        var jittered = capped * (0.5 + (Random.Shared.NextDouble() * 0.5));
+
+        var delay = TimeSpan.FromMilliseconds(jittered);
+        return delay < remaining ? delay : remaining;
+    }
+
+    /// <summary>
     /// Per-activation gate that serialises every shard-root
     /// <c>state.WriteStateAsync()</c> call. <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.SetManyAsync"/>
     /// is annotated <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for throughput, which
@@ -408,6 +559,8 @@ internal sealed partial class ShardRootGrain(
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
+        var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
+        var retiredAttempts = 0;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -426,8 +579,10 @@ internal sealed partial class ShardRootGrain(
                 await forwardTask;
                 return;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
+
                 // The failed grain will be deactivated by Orleans. On retry, a fresh
                 // activation loads clean state and the recovery guards resume any
                 // interrupted split.
@@ -444,6 +599,8 @@ internal sealed partial class ShardRootGrain(
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
+        var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
+        var retiredAttempts = 0;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -463,8 +620,10 @@ internal sealed partial class ShardRootGrain(
                 await forwardTask;
                 return;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
+
             }
         }
     }
@@ -477,6 +636,8 @@ internal sealed partial class ShardRootGrain(
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
+        var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
+        var retiredAttempts = 0;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -506,8 +667,10 @@ internal sealed partial class ShardRootGrain(
                 await forwardTask;
                 return null;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
+
                 // The failed grain will be deactivated by Orleans. On retry, a fresh
                 // activation loads clean state and the recovery guards resume any
                 // interrupted split.
@@ -523,6 +686,8 @@ internal sealed partial class ShardRootGrain(
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
+        var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
+        var retiredAttempts = 0;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -554,8 +719,10 @@ internal sealed partial class ShardRootGrain(
                 await TrackShadowForward((key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return true;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
+
             }
         }
     }
@@ -573,6 +740,8 @@ internal sealed partial class ShardRootGrain(
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
+        var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
+        var retiredAttempts = 0;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -587,8 +756,10 @@ internal sealed partial class ShardRootGrain(
 
                 return result.Version;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
+
             }
         }
     }
@@ -1028,6 +1199,8 @@ internal sealed partial class ShardRootGrain(
         IBPlusLeafGrain leaf,
         List<KeyValuePair<string, byte[]>> slice)
     {
+        var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
+        var retiredAttempts = 0;
         for (int attempt = 0; ; attempt++)
         {
             var rpcTs = Stopwatch.GetTimestamp();
@@ -1040,8 +1213,10 @@ internal sealed partial class ShardRootGrain(
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
+
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
@@ -1259,6 +1434,8 @@ internal sealed partial class ShardRootGrain(
         List<KeyValuePair<string, byte[]>> slice,
         LatticePredicateNode predicate)
     {
+        var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
+        var retiredAttempts = 0;
         for (int attempt = 0; ; attempt++)
         {
             var rpcTs = Stopwatch.GetTimestamp();
@@ -1271,8 +1448,10 @@ internal sealed partial class ShardRootGrain(
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
+
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
@@ -1335,6 +1514,8 @@ internal sealed partial class ShardRootGrain(
         ThrowIfRejectedForKey(key);
         RecordWrite();
 
+        var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
+        var retiredAttempts = 0;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -1380,8 +1561,10 @@ internal sealed partial class ShardRootGrain(
                 await forwardTask;
                 return result;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
+
                 // Retry - same rationale as SetAsync.
             }
         }
@@ -2360,14 +2543,18 @@ internal sealed partial class ShardRootGrain(
     /// </summary>
     private async Task<GrainId> TraverseToLeafWithRetryAsync(string key)
     {
+        var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
+        var retiredAttempts = 0;
         for (int attempt = 0; ; attempt++)
         {
             try
             {
                 return await TraverseToLeafAsync(key);
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
+
             }
         }
     }
@@ -2387,6 +2574,8 @@ internal sealed partial class ShardRootGrain(
         foreach (var k in group.Keys) { pivotKey = k; break; }
         // group is never empty here (callers only invoke with non-empty groups).
 
+        var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
+        var retiredAttempts = 0;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -2400,8 +2589,10 @@ internal sealed partial class ShardRootGrain(
 
                 return;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
+
             }
         }
     }
