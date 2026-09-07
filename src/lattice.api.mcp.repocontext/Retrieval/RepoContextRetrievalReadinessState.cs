@@ -28,8 +28,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <see cref="RepoContextRetrievalReadinessPhase.KeywordOnly"/>, and a host with
 /// nothing onboarded yet reports
 /// <see cref="RepoContextRetrievalReadinessPhase.NothingRegistered"/>. Both are ready:
-/// there is no vector plane to wait for, and no indexed content to wait on. Both are
-/// kept distinct from <see cref="RepoContextRetrievalReadinessPhase.Serving"/> on
+/// there is no vector plane to wait for, and nothing registered to retrieve from. Both
+/// are kept distinct from <see cref="RepoContextRetrievalReadinessPhase.Serving"/> on
 /// purpose, because only <see cref="MarkServing"/> may assert that a semantic
 /// retrieval actually succeeded.
 /// </para>
@@ -205,7 +205,7 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
 
     /// <summary>
     /// Records that the vector plane demonstrably served semantic retrieval. Clears any
-    /// outstanding fault episode, and promotes a keyword-only or nothing-indexed host
+    /// outstanding fault episode, and promotes a keyword-only or nothing-registered host
     /// that has acquired a working plane. Idempotent.
     /// <para>
     /// <b>Invariant: call this only where a semantic retrieval actually succeeded.</b>
@@ -269,15 +269,15 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
             Volatile.Write(ref _phase, KeywordOnlyRaw);
 
             // Single-shot by design: a host that first reported ready as
-            // nothing-indexed keeps that tag, because that is what it truthfully
+            // nothing-registered keeps that tag, because that is what it truthfully
             // reached first.
             StampReady(PhaseKeywordOnlyTag);
         }
     }
 
     /// <summary>
-    /// Records that no repository is indexed at all, so the vector plane holds nothing
-    /// it could fail to serve and readiness must not block: refusing to report ready
+    /// Records that no repository is registered, so there is nothing this host could be
+    /// asked to retrieve from and readiness must not block: refusing to report ready
     /// here would wedge a fresh box before its first repository could ever be onboarded.
     /// <para>
     /// This is deliberately <b>not</b> <see cref="MarkServing"/>. It asserts only "there

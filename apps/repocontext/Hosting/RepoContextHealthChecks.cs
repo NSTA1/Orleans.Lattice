@@ -72,8 +72,8 @@ public sealed class RepoContextReadinessHealthCheck(RepoContextReadinessState st
 /// keyword recall is that deployment's intended steady state, not a degradation. A
 /// host that has onboarded no repository yet reports
 /// <see cref="RepoContextRetrievalReadinessPhase.NothingRegistered"/>, which is also
-/// healthy: there is nothing indexed that the vector plane could fail to serve, and
-/// holding traffic back would stop the very calls that onboard the first repository.
+/// healthy: there is nothing the vector plane could be asked to serve, and holding
+/// traffic back would stop the very calls that onboard the first repository.
 /// </para>
 /// <para>
 /// <b>It never flaps.</b> The check is a pure reader of
@@ -98,7 +98,7 @@ public sealed class RepoContextRetrievalReadinessHealthCheck(RepoContextRetrieva
 
     private static readonly Task<HealthCheckResult> NothingRegistered = Task.FromResult(
         HealthCheckResult.Healthy(
-            "Nothing indexed: no repository is onboarded, so the vector plane holds nothing it could fail to serve."));
+            "Nothing registered: no repository is onboarded, so there is nothing the vector plane could be asked to serve."));
 
     private static readonly Task<HealthCheckResult> Building = Task.FromResult(
         HealthCheckResult.Unhealthy(

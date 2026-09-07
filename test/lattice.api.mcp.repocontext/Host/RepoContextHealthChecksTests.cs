@@ -135,7 +135,7 @@ public sealed class RepoContextHealthChecksTests
     }
 
     [Test]
-    public async Task Retrieval_readiness_is_healthy_when_nothing_is_indexed_yet()
+    public async Task Retrieval_readiness_is_healthy_when_no_repository_is_registered_yet()
     {
         using var state = new RepoContextRetrievalReadinessState(new SettableTimeProvider());
         state.MarkNothingRegistered();
@@ -146,8 +146,8 @@ public sealed class RepoContextHealthChecksTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Status, Is.EqualTo(HealthStatus.Healthy),
-                "Holding traffic back from a box with nothing indexed would stop the calls that onboard the first repository.");
-            Assert.That(result.Description, Does.Contain("Nothing indexed"));
+                "Holding traffic back from a box with no repository registered would stop the calls that onboard the first one.");
+            Assert.That(result.Description, Does.Contain("Nothing registered"));
         });
     }
 
