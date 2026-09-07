@@ -1,0 +1,256 @@
+using Orleans.Lattice.BPlusTree.State;
+
+namespace Orleans.Lattice.BPlusTree.Grains;
+
+/// <summary>
+/// Durable unresolved-replay-work partial for <see cref="BPlusLeafGrain"/>
+/// (issue #2165).
+/// <para>
+/// Activation-time replay defers two classes of record and, because neither
+/// survives a teardown, used to clamp the incremental flush ceiling below them
+/// for the whole of the activation:
+/// </para>
+/// <list type="number">
+/// <item>An <b>unresolved saga prepare</b>. Applying it populates the
+/// activation-scoped <c>_pendingTx</c> bucket, which no snapshot captures, so
+/// advancing the checkpoint past it would lose the prepared write when its
+/// terminal arrived in a later activation.</item>
+/// <item>An <b>undrained deferred terminal</b> (<c>TxCommit</c> /
+/// <c>TxAbort</c> / <c>DeleteRange</c>) on a partition that pass 1 does not
+/// absorb last. Its mutation is genuinely unapplied until pass 2.</item>
+/// </list>
+/// <para>
+/// Issue #2089 narrowed the resulting livelock by awarding the single pass-1
+/// drain slot to the partition with the largest backlog, and said in terms
+/// what it had left behind: "This NARROWS the livelock, it does not remove it
+/// - the other N-1 partitions still cannot drain in pass 1. Removing it needs
+/// a durable record of unresolved deferred work so a resumed replay need not
+/// re-read it." This file is that record.
+/// </para>
+/// <para>
+/// The mechanism is deliberately small. Every deferred record is written
+/// verbatim into <see cref="LeafNodeState.UnresolvedReplayWork"/> before the
+/// flush that advances past it, so the two land in the SAME
+/// <c>WriteStateAsync</c> - the checkpoint can never become durable without
+/// the record that licenses it, and the pair can never be torn. A resumed
+/// activation replays the ledger back into <c>_pendingTx</c> and the pass-2
+/// deferred list before it reads a single WAL slice, so the work is
+/// reconstructed rather than re-read, and the partition banks forward progress
+/// on every activation instead of recomputing the identical pin.
+/// </para>
+/// <para>
+/// Nothing here widens the pass-1 drain slot. The cross-partition dependency
+/// argument that keeps that slot at one - a terminal in partition P may have
+/// prepares in an unabsorbed partition Q, and a range delete in P may target
+/// Sets in Q - is untouched and still holds: deferred work is still applied in
+/// pass 2, and only in pass 2. What changes is that the ceiling no longer has
+/// to wait for pass 2 to be REACHED before it can move.
+/// </para>
+/// </summary>
+internal sealed partial class BPlusLeafGrain
+{
+    /// <summary>
+    /// Membership mirror of <see cref="LeafNodeState.UnresolvedReplayWork"/>,
+    /// keyed by (partition, offset). The clamp sites consult it once per
+    /// candidate offset, so the list is never scanned linearly on the flush
+    /// path. Rebuilt from the persisted list on first use per activation and
+    /// kept in step by every mutating helper below.
+    /// </summary>
+    private HashSet<(int Partition, long Offset)>? _durableReplayWorkIndex;
+
+    /// <summary>
+    /// Rebuilds <see cref="_durableReplayWorkIndex"/> from the persisted list.
+    /// Cheap and idempotent; the list is bounded by
+    /// <c>LatticeOptions.MaxDurableUnresolvedReplayWork</c> and is empty in the
+    /// steady state.
+    /// </summary>
+    private HashSet<(int Partition, long Offset)> DurableReplayWorkIndex()
+    {
+        if (_durableReplayWorkIndex is not null)
+            return _durableReplayWorkIndex;
+
+        var index = new HashSet<(int, long)>();
+        var work = state.State.UnresolvedReplayWork;
+        if (work is not null)
+        {
+            foreach (var entry in work)
+                index.Add((entry.Partition, entry.Offset));
+        }
+        return _durableReplayWorkIndex = index;
+    }
+
+    /// <summary>
+    /// Reports whether (<paramref name="partition"/>,
+    /// <paramref name="offset"/>) is durably recorded, and therefore whether
+    /// the flush ceiling may advance past it. Consulted by both clamp sites -
+    /// <c>TryFlushRecoveredCeilingAsync</c>'s deferred-offset bound and
+    /// <see cref="MinUnresolvedPrepareOffsetForPartition"/>'s prepare bound -
+    /// so the two can never disagree about which offsets are covered.
+    /// </summary>
+    internal bool IsUnresolvedReplayWorkRecorded(int partition, long offset) =>
+        _durableReplayWorkIndex is null
+            ? state.State.UnresolvedReplayWork is { Count: > 0 } && DurableReplayWorkIndex().Contains((partition, offset))
+            : _durableReplayWorkIndex.Contains((partition, offset));
+
+    /// <summary>
+    /// Records one piece of unresolved replay work durably, returning
+    /// <see langword="true"/> when the caller may therefore let the flush
+    /// ceiling advance past <paramref name="offset"/>.
+    /// <para>
+    /// Returns <see langword="false"/> once the ledger reaches
+    /// <paramref name="cap"/>. That is a deliberate safe degradation rather
+    /// than an error: the caller then clamps exactly as it did before this
+    /// change, which is slow but has shipped in every previous release. The
+    /// cap exists only for the pathological case of sagas whose terminals
+    /// never arrive, which would otherwise grow the persisted leaf row without
+    /// bound.
+    /// </para>
+    /// <para>
+    /// The write is to the in-memory state row only. It becomes durable when
+    /// the checkpoint flush that it licenses persists the row, which is what
+    /// makes the pair atomic: there is no window in which the checkpoint is
+    /// durable and the record is not.
+    /// </para>
+    /// </summary>
+    private bool TryRecordUnresolvedReplayWork(int partition, long offset, in LatticeMutation mutation, int cap)
+    {
+        if (cap <= 0)
+            return false;
+
+        var index = DurableReplayWorkIndex();
+        if (index.Contains((partition, offset)))
+            return true;
+
+        var work = state.State.UnresolvedReplayWork ??= [];
+        if (work.Count >= cap)
+            return false;
+
+        work.Add(new UnresolvedReplayWorkEntry(partition, offset, mutation));
+        index.Add((partition, offset));
+        return true;
+    }
+
+    /// <summary>
+    /// Strikes the record for (<paramref name="partition"/>,
+    /// <paramref name="offset"/>) off the ledger once its work has actually
+    /// been applied - a deferred terminal draining in pass 2. Ignores an
+    /// offset that was never recorded.
+    /// </summary>
+    private void ResolveUnresolvedReplayWork(int partition, long offset)
+    {
+        var work = state.State.UnresolvedReplayWork;
+        if (work is null || work.Count == 0)
+            return;
+
+        for (var i = 0; i < work.Count; i++)
+        {
+            if (work[i].Partition != partition || work[i].Offset != offset)
+                continue;
+            work.RemoveAt(i);
+            _durableReplayWorkIndex?.Remove((partition, offset));
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Strikes every record belonging to <paramref name="transactionId"/> off
+    /// the ledger. Called from the saga terminal paths alongside
+    /// <c>RemovePendingTxOffsetsForTransaction</c>, so a committed or aborted
+    /// saga releases its durable footprint at exactly the moment it releases
+    /// its in-memory clamp. A saga whose per-key prepares hashed across several
+    /// WAL partitions has one record per partition; all of them go.
+    /// </summary>
+    private void ResolveUnresolvedReplayWorkForTransaction(Guid transactionId)
+    {
+        var work = state.State.UnresolvedReplayWork;
+        if (work is null || work.Count == 0 || transactionId == Guid.Empty)
+            return;
+
+        for (var i = work.Count - 1; i >= 0; i--)
+        {
+            if (work[i].Mutation.TransactionId != transactionId)
+                continue;
+            _durableReplayWorkIndex?.Remove((work[i].Partition, work[i].Offset));
+            work.RemoveAt(i);
+        }
+    }
+
+    /// <summary>
+    /// Reconstructs previously recorded replay work at the start of an
+    /// activation, BEFORE pass 1 reads a single WAL slice - the whole point of
+    /// the ledger.
+    /// <para>
+    /// A recorded prepare is re-applied through the identical
+    /// <see cref="ILeafProjection.Apply(in LatticeMutation)"/> path a re-read
+    /// would have taken, so <c>_pendingTx</c> is rebuilt exactly as before. A
+    /// recorded terminal is appended to <paramref name="deferredTerminals"/> so
+    /// pass 2 drains it in the ordinary way. Neither is added back to the
+    /// in-memory <c>DeferredOffsetLedger</c>: doing so would re-impose the very
+    /// clamp the record exists to lift, leaving the fix inert.
+    /// </para>
+    /// <para>
+    /// A record at an offset the imminent replay will re-read anyway (above
+    /// the effective checkpoint for its partition, which is the case whenever
+    /// the cold-cache override drives the checkpoint back to -1) is DROPPED
+    /// rather than restored, so the WAL read remains the single source for it
+    /// and nothing is applied twice. The invariant is exactly: the ledger
+    /// covers the offsets this replay will not re-read.
+    /// </para>
+    /// </summary>
+    private void RestoreUnresolvedReplayWork(
+        ILeafProjection projection,
+        int partitionCount,
+        long? checkpointOverride,
+        List<DeferredTerminal> deferredTerminals)
+    {
+        var work = state.State.UnresolvedReplayWork;
+        if (work is null || work.Count == 0)
+            return;
+
+        // Deterministic reconstruction order: partition, then WAL offset. The
+        // persisted order is already this, but a row written by a different
+        // sweep order must not change what the leaf rebuilds.
+        var ordered = new List<UnresolvedReplayWorkEntry>(work);
+        ordered.Sort(static (a, b) =>
+        {
+            var byPartition = a.Partition.CompareTo(b.Partition);
+            return byPartition != 0 ? byPartition : a.Offset.CompareTo(b.Offset);
+        });
+
+        List<UnresolvedReplayWorkEntry>? kept = null;
+        foreach (var entry in ordered)
+        {
+            if (entry.Partition < 0 || entry.Partition >= partitionCount)
+            {
+                // The tree's partition count shrank under this leaf. The record
+                // is not addressable by this activation, but discarding it
+                // would lose the work outright, so keep it untouched for an
+                // activation that can address it.
+                (kept ??= []).Add(entry);
+                continue;
+            }
+
+            var checkpoint = checkpointOverride ?? GetPersistedCheckpointForPartition(entry.Partition);
+            if (entry.Offset > checkpoint)
+                continue; // Replay re-reads it; the WAL stays the single source.
+
+            (kept ??= []).Add(entry);
+
+            using (LatticeApplyOffsetContext.BeginScope(entry.Partition, entry.Offset))
+            {
+                if (entry.Mutation.IsPrepared)
+                {
+                    projection.Apply(entry.Mutation);
+                }
+                else
+                {
+                    deferredTerminals.Add(
+                        new DeferredTerminal(entry.Partition, entry.Offset, entry.Mutation));
+                }
+            }
+        }
+
+        state.State.UnresolvedReplayWork = kept;
+        _durableReplayWorkIndex = null;
+    }
+}

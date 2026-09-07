@@ -1367,6 +1367,41 @@ public class LatticeOptions
     public const int DefaultMaxLeafReplayEntries = 10_000;
 
     /// <summary>
+    /// Maximum number of unresolved replay-work records
+    /// (<c>UnresolvedReplayWorkEntry</c>) a leaf will carry in its durable
+    /// state so its incremental flush ceiling may advance past them
+    /// (issue #2165).
+    /// <para>
+    /// A leaf's flush ceiling is clamped below every unresolved saga prepare
+    /// and every undrained deferred terminal, because neither survives an
+    /// activation teardown in memory. Recording that work durably removes the
+    /// need to re-read it, which is what lets a partition that never wins the
+    /// single pass-1 drain slot bank forward progress instead of replaying the
+    /// identical range on every activation. The records are struck off as the
+    /// work resolves, so in the steady state the list is empty and this bound
+    /// is never approached.
+    /// </para>
+    /// <para>
+    /// The bound exists for the pathological case only: a stream of sagas
+    /// whose terminals never arrive would otherwise grow the persisted leaf
+    /// row without limit. Past the bound the leaf simply stops recording and
+    /// the ceiling falls back to the pre-#2165 clamping behaviour, which is
+    /// slow but never unsafe - it is the behaviour that shipped for every
+    /// release before this one.
+    /// </para>
+    /// <para>
+    /// Setting this to zero disables the mechanism, restoring the pre-#2165
+    /// behaviour in which the clamp is the only thing keeping unresolved work
+    /// alive across a teardown. That path still ships - it is what runs once
+    /// the bound is reached - so it is guarded independently.
+    /// </para>
+    /// </summary>
+    public int MaxDurableUnresolvedReplayWork { get; set; } = DefaultMaxDurableUnresolvedReplayWork;
+
+    /// <summary>Default value for <see cref="MaxDurableUnresolvedReplayWork"/> (1 024).</summary>
+    public const int DefaultMaxDurableUnresolvedReplayWork = 1_024;
+
+    /// <summary>
     /// Maximum interval between durable persistences of a leaf grain's
     /// projection-checkpoint offset (the
     /// <c>ILeafProjection.SetCheckpointOffsetAsync</c> seam introduced

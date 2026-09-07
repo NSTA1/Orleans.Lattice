@@ -95,7 +95,8 @@ public partial class BPlusLeafGrainTests
         FakePersistentState<LeafNodeState> state,
         ILeafReplayCoordinatorGrain[] coordinators,
         ILeafSnapshotStorageGrain snapshotStub,
-        int reclassifyEveryN = 0)
+        int reclassifyEveryN = 0,
+        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>())
@@ -124,6 +125,7 @@ public partial class BPlusLeafGrainTests
             MaterialiserCheckpointInterval = TimeSpan.Zero,
             LeafSnapshotReClassifyEveryNCheckpoints = reclassifyEveryN,
             WalPartitions = coordinators.Length,
+            MaxDurableUnresolvedReplayWork = maxDurableUnresolvedReplayWork,
         };
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
@@ -200,7 +202,8 @@ public partial class BPlusLeafGrainTests
     private static async Task<List<long>> RunInterruptedReplaysAsync(
         FakePersistentState<LeafNodeState> state,
         Func<CancellationTokenSource, ILeafReplayCoordinatorGrain[]> buildCoordinators,
-        int attempts)
+        int attempts,
+        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork)
     {
         var store = new InMemorySnapshotStore();
         var observed = new List<long>();
@@ -209,7 +212,8 @@ public partial class BPlusLeafGrainTests
         {
             using var cts = new CancellationTokenSource();
             var grain = BuildFlushCeilingLeaf(
-                state, buildCoordinators(cts), store.Stub, reclassifyEveryN: 1);
+                state, buildCoordinators(cts), store.Stub, reclassifyEveryN: 1,
+                maxDurableUnresolvedReplayWork: maxDurableUnresolvedReplayWork);
 
             try
             {
@@ -548,7 +552,11 @@ public partial class BPlusLeafGrainTests
         var partitionZeroPersists = new List<long>();
         state.OnWriteState = s => partitionZeroPersists.Add(s.ProjectionCheckpointOffset);
 
-        var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub);
+        // Guards the NO-RECORD path (issue #2165): with no durable record of
+        // the deferred DeleteRange, the clamp is the only thing that stops it
+        // being lost, so partition 0 must hold its ceiling. The ledgered path
+        // is guarded by its own counterpart below.
+        var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub, maxDurableUnresolvedReplayWork: 0);
 
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
@@ -566,6 +574,82 @@ public partial class BPlusLeafGrainTests
         Assert.That(await grain.GetAsync("m5"), Is.Null);
         Assert.That(await grain.GetAsync("m6"), Is.Null);
         Assert.That(await grain.GetAsync("z7"), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task Ledgered_cross_partition_delete_range_advances_the_ceiling_without_losing_the_delete()
+    {
+        // Enabled-path counterpart to
+        // Cross_partition_delete_range_still_holds_the_incremental_ceiling
+        // (issue #2165). This is the highest-risk shape in the change: if
+        // advancing the ceiling past a deferred range delete dropped it, a
+        // whole key range would silently survive a delete. The counterpart
+        // therefore asserts BOTH halves - the ceiling advances (the fix), AND
+        // the range delete still lands on every partition's keys (the
+        // invariant the clamp used to protect).
+        //
+        // Identical topology to the no-record guard: partition 1 carries the
+        // larger backlog so pass 1 sweeps partition 0 first, leaving it
+        // genuinely non-drain-eligible. On the deployed box 7 of 8 partitions
+        // are in exactly this position on every activation.
+        var p0 = BuildObservableCoordinator(
+            head: 5,
+            sliceSize: 2,
+            tail: 0,
+            onRead: null,
+            FlushSet(1, "m1"),
+            FlushSet(2, "m2"),
+            FlushDeleteRange(3),
+            FlushSet(4, "z4"),
+            FlushSet(5, "z5"));
+
+        var p1 = BuildObservableCoordinator(
+            head: 8,
+            sliceSize: 2,
+            tail: 0,
+            onRead: null,
+            FlushSet(1, "m5"),
+            FlushSet(2, "m6"),
+            FlushSet(3, "z7"),
+            FlushSet(4, "z8"),
+            FlushSet(5, "z9"),
+            FlushSet(6, "za"),
+            FlushSet(7, "zb"),
+            FlushSet(8, "zc"));
+
+        var state = NewFlushCeilingState();
+        var store = new InMemorySnapshotStore();
+
+        // Sample the ledger at each persist, so we can prove the record was
+        // durable AT THE MOMENT the ceiling advanced - not merely present at
+        // some later point, which would not survive a teardown.
+        var persists = new List<(long Offset, int Ledgered)>();
+        state.OnWriteState = s => persists.Add((s.ProjectionCheckpointOffset, s.UnresolvedReplayWork?.Count ?? 0));
+
+        var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub, maxDurableUnresolvedReplayWork: 1024);
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(persists.Select(p => p.Offset), Does.Contain(4L),
+            "With the deferred DeleteRange durably recorded, partition 0 advances past it in pass 1 "
+            + "instead of freezing at 2 until pass 2 - which on a non-last partition never arrives.");
+
+        var advancing = persists.Where(p => p.Offset >= 3L).ToList();
+        Assert.That(advancing, Is.Not.Empty);
+        Assert.That(advancing.All(p => p.Ledgered >= 1), Is.True,
+            "Every persist that advanced to or past the deferred DeleteRange must have carried the "
+            + "record in the same state write - atomicity is what makes advancing safe.");
+
+        // The invariant the clamp protected is unchanged: the range delete
+        // still orders after every partition's Sets, including the
+        // cross-partition ones it could not see in pass 1.
+        Assert.That(await grain.GetAsync("m5"), Is.Null, "cross-partition in-range key is still deleted");
+        Assert.That(await grain.GetAsync("m6"), Is.Null, "cross-partition in-range key is still deleted");
+        Assert.That(await grain.GetAsync("z7"), Is.Not.Null, "out-of-range key is untouched");
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5L),
+            "Reconciliation still converges on partition 0's applied frontier.");
+        Assert.That(state.State.UnresolvedReplayWork ?? [], Is.Empty,
+            "Once pass 2 drains the terminal the record is resolved, so the ledger does not grow without bound.");
     }
 
     [Test]
@@ -706,7 +790,11 @@ public partial class BPlusLeafGrainTests
         var persistedOffsets = new List<long>();
         state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
 
-        var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub);
+        // Guards the NO-RECORD path (issue #2165). This test's own comment
+        // states the rationale precisely - "a resumed replay has to re-read
+        // the prepare" - and that holds exactly when the prepare is not
+        // recorded durably, which is what this configuration pins.
+        var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub, maxDurableUnresolvedReplayWork: 0);
 
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
@@ -996,5 +1084,209 @@ public partial class BPlusLeafGrainTests
         Assert.That(small, Is.GreaterThan(0L), "the measurement must have observed the replay");
         Assert.That(large, Is.LessThan(small * 3),
             $"replay allocation must stay linear in the record count (256 -> {small} bytes, 512 -> {large} bytes)");
+    }
+
+    // Shared scenario for the two-arm #2165 discriminator below. The two arms
+    // differ ONLY in whether the durable replay-work ledger is enabled, so the
+    // comparison is made inside one binary, in one test run, with no source
+    // stashing and therefore no dependence on a clean working tree. That
+    // matters: the conventional "stash the fix and re-run" control is unsafe
+    // in this repository because the stash stack is shared across every linked
+    // worktree on the machine, so a sibling agent's stash can land in the
+    // control arm and manufacture a red result that was never earned.
+    private static async Task<List<long>> RunPinnedSagaPartitionScenarioAsync(
+        int maxDurableUnresolvedReplayWork)
+    {
+        var txId = Guid.NewGuid();
+        var state = NewFlushCeilingState();
+
+        // Both partitions must hold a REAL checkpoint. BuildPassOneSweepOrder
+        // sorts a partition whose backlog is not comparable (the -1 "nothing
+        // applied" sentinel) strictly FIRST, so leaving partition 1 at the
+        // sentinel would hand partition 0 the last slot - and with it the
+        // drain eligibility this scenario exists to deny it. Production always
+        // has a real checkpoint on every partition, so seeding both is the
+        // faithful shape, not a convenience.
+        state.State.ProjectionCheckpointOffsetsByPartition = [0L, 0L];
+
+        return await RunInterruptedReplaysAsync(
+            state,
+            cts =>
+            [
+                // Partition 0: the saga backlog. Smaller (12) than partition 1
+                // (20), so the backlog-ASCENDING sweep absorbs it FIRST and it
+                // is never the drain-eligible last partition. The teardown
+                // below lands inside partition 0's own scan, so partition 1 is
+                // never swept at all and its backlog never shrinks - which is
+                // what keeps the ordering stable across every attempt.
+                BuildObservableCoordinator(
+                    head: 12,
+                    sliceSize: 2,
+                    tail: state.State.ProjectionCheckpointOffset,
+                    onRead: read =>
+                    {
+                        // Tear the activation down as the second slice is
+                        // served, so pass 1 never finishes and pass 2 - which
+                        // would drain the terminal and lift both clamps - never
+                        // runs. This is the 30 s RuntimeRequested teardown.
+                        if (read == 2)
+                            cts.Cancel();
+                    },
+                    WindowWithASelfContainedSaga(txId)),
+                // Partition 1: a larger, saga-free backlog, so it wins the
+                // drain slot on every sweep and partition 0 never does.
+                BuildObservableCoordinator(
+                    head: 20,
+                    sliceSize: 2,
+                    tail: 0,
+                    onRead: null,
+                    [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
+            ],
+            attempts: 12,
+            maxDurableUnresolvedReplayWork: maxDurableUnresolvedReplayWork);
+    }
+
+    [Test]
+    public async Task Pinned_saga_partition_relives_the_livelock_when_replay_work_is_not_recorded()
+    {
+        // CONTROL ARM (red without the fix) for issue #2165 - the residual
+        // #2089's own comment documents but does not remove. With the durable
+        // ledger DISABLED this asserts the defect is present, so the arm is a
+        // permanent in-suite regression test rather than a transient stash.
+        //
+        // #2089 moved the single drain-eligible pass-1 slot to the partition
+        // with the LARGEST backlog. That converges only while exactly one
+        // partition is backlogged. Here TWO are, and the saga sits on the
+        // SMALLER one, so the slot goes to the other partition and the saga
+        // partition is non-drain-eligible on every single activation.
+        //
+        // Every activation then recomputes the identical pin:
+        //   offset 2 is an unresolved prepare  -> ceiling <= 1
+        //   offset 3 is its deferred terminal  -> ceiling <= 2
+        // so the ceiling lands on 1, equals the checkpoint already persisted
+        // by the first attempt, and TryFlushRecoveredCeilingAsync returns
+        // without flushing. Pass 2 - the only thing that lifts either clamp -
+        // is never reached because the activation is torn down inside pass 1.
+        //
+        // That is the production shape measured on the deployed repocontext
+        // image: leaf bplusleaf/6262caad..., partition 2 of 8, 69 activations
+        // over 6h51m52s at ONE distinct checkpoint value, delta ZERO.
+        var observed = await RunPinnedSagaPartitionScenarioAsync(
+            maxDurableUnresolvedReplayWork: 0);
+
+        Assert.That(observed, Has.Count.EqualTo(12),
+            "The scenario must run every attempt: converging early would mean the pin is absent "
+            + "and this arm is no longer measuring the defect. Observed: "
+            + string.Join(", ", observed));
+        Assert.That(observed.Distinct().Count(), Is.EqualTo(1),
+            "Without a durable record of the unresolved prepare and its deferred terminal, every "
+            + "activation must re-derive the identical clamped ceiling and bank nothing - one "
+            + "distinct checkpoint across every attempt, delta ZERO. Observed: "
+            + string.Join(", ", observed));
+        Assert.That(observed[^1], Is.LessThan(12L),
+            "The pinned partition must never reach the head of its window.");
+    }
+
+    [Test]
+    public async Task Successive_interrupted_replays_converge_when_the_saga_partition_never_wins_the_drain_slot()
+    {
+        // DISCRIMINATOR (green with the fix). Identical scenario to the
+        // control arm above; the ONLY difference is that the unresolved
+        // prepare and the undrained deferred terminal are now recorded
+        // durably, so the ceiling need not clamp behind work a resumed replay
+        // will not have to re-read. The drain slot is NOT widened - the
+        // cross-partition dependency argument that keeps it at one still
+        // holds, and pass 2 remains the only place a terminal drains.
+        var observed = await RunPinnedSagaPartitionScenarioAsync(
+            maxDurableUnresolvedReplayWork: 1024);
+
+        Assert.That(observed, Is.Ordered.Ascending.And.Unique,
+            "Each interrupted activation must advance the saga partition's persisted checkpoint "
+            + "strictly. A repeated value is the #2165 livelock: the partition re-reads the "
+            + "identical range forever because the unresolved prepare and its undrained deferred "
+            + "terminal pin the ceiling at the checkpoint that is already persisted. Observed: "
+            + string.Join(", ", observed));
+        Assert.That(observed[^1], Is.EqualTo(12L),
+            "Successive interrupted activations must converge on the head of the window.");
+    }
+
+    [Test]
+    public async Task Unresolved_replay_work_is_recorded_durably_and_reconstructs_the_saga_outcome()
+    {
+        // GUARD on the mechanism the convergence above relies on: the ceiling
+        // may only pass an unresolved prepare or an undrained deferred
+        // terminal because that work is durably recorded in the leaf's own
+        // state, so the resumed replay reconstructs it instead of re-reading
+        // it. Assert both halves - that the record exists while the work is
+        // outstanding, and that the saga's prepared write still lands.
+        var txId = Guid.NewGuid();
+        var state = NewFlushCeilingState();
+
+        // Attempt 1: absorb the prepare (offset 2) and the terminal (offset 3)
+        // on a non-drain-eligible partition, then tear down.
+        using (var cts = new CancellationTokenSource())
+        {
+            var store = new InMemorySnapshotStore();
+            var grain = BuildFlushCeilingLeaf(
+                state,
+                [
+                    BuildObservableCoordinator(
+                        head: 12, sliceSize: 4, tail: 0,
+                        onRead: read => { if (read == 2) cts.Cancel(); },
+                        WindowWithASelfContainedSaga(txId)),
+                    BuildObservableCoordinator(
+                        head: 20, sliceSize: 2, tail: 0, onRead: null,
+                        [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
+                ],
+                store.Stub,
+                reclassifyEveryN: 1,
+                maxDurableUnresolvedReplayWork: 1024);
+
+            try
+            {
+                await ((IGrainBase)grain).OnActivateAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected: the activation is torn down inside pass 1.
+            }
+        }
+
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.GreaterThan(1L),
+            "The ceiling must pass the unresolved prepare at offset 2 and the deferred terminal "
+            + "at offset 3 once both are durably recorded.");
+        Assert.That(state.State.UnresolvedReplayWork, Is.Not.Null.And.Not.Empty,
+            "Work the ceiling was allowed to pass must be durably recorded, or the advance has "
+            + "licensed a checkpoint past an offset nothing can reconstruct.");
+
+        // Attempt 2: run to completion. The recorded prepare and terminal are
+        // reconstructed from state (they are BELOW the checkpoint, so the WAL
+        // is never re-read for them) and the saga's write must still commit.
+        var finalStore = new InMemorySnapshotStore();
+        var resumed = BuildFlushCeilingLeaf(
+            state,
+            [
+                BuildObservableCoordinator(
+                    head: 12, sliceSize: 4,
+                    tail: state.State.ProjectionCheckpointOffset,
+                    onRead: null,
+                    WindowWithASelfContainedSaga(txId)),
+                BuildObservableCoordinator(
+                    head: 20, sliceSize: 20, tail: 0, onRead: null,
+                    [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
+            ],
+            finalStore.Stub,
+            reclassifyEveryN: 1,
+            maxDurableUnresolvedReplayWork: 1024);
+
+        await ((IGrainBase)resumed).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(await resumed.GetAsync("g02"), Is.Not.Null,
+            "The saga's prepared write must still be committed by the reconstructed terminal - "
+            + "advancing the checkpoint past it must not silently drop it.");
+        Assert.That(resumed.PendingTransactionCount, Is.Zero,
+            "The reconstructed terminal must resolve the reconstructed prepare.");
+        Assert.That(state.State.UnresolvedReplayWork, Is.Null.Or.Empty,
+            "Resolved work must be struck off the durable record rather than accumulating.");
     }
 }

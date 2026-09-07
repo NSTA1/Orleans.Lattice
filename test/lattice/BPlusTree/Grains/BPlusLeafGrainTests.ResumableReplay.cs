@@ -117,7 +117,8 @@ public partial class BPlusLeafGrainTests
         FakePersistentState<LeafNodeState> state,
         ILeafReplayCoordinatorGrain coordinator,
         ILeafSnapshotStorageGrain snapshotStub,
-        int reclassifyEveryN)
+        int reclassifyEveryN,
+        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
@@ -147,6 +148,7 @@ public partial class BPlusLeafGrainTests
             // deterministic; the multi-partition safety of the incremental
             // clamp is covered by the deferred-terminal and prepare tests.
             WalPartitions = 1,
+            MaxDurableUnresolvedReplayWork = maxDurableUnresolvedReplayWork,
         };
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
@@ -354,7 +356,12 @@ public partial class BPlusLeafGrainTests
         var persistedOffsets = new List<long>();
         state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
 
-        var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 0);
+        var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 0,
+            // Guards the NO-RECORD path (issue #2165). The comment above states
+            // the rationale precisely - "a resumed replay must re-read the
+            // prepare" - and that holds exactly when the prepare is not
+            // recorded durably, which is what this configuration pins.
+            maxDurableUnresolvedReplayWork: 0);
 
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
