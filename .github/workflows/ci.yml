@@ -94,7 +94,7 @@ jobs:
           prefixes='feat|fix|docs|test|tests|perf|chore|ci|refactor|build|deps|revert|release'
 
           if ! printf '%s' "${BRANCH}" | grep -Eq "^(${prefixes})/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*$"; then
-            echo "::error::Branch '${BRANCH}' does not follow the naming convention (see .github/copilot-instructions.md). Use '<type>/<kebab-case-description>' where <type> is one of: ${prefixes//|/, }. Rename with the rename_branch tool (agents) or 'git branch -m' plus a re-push, then update this PR."
+            echo "::error::Branch '${BRANCH}' does not follow the naming convention (see .github/copilot-instructions.md). Use '<type>/<kebab-case-description>' where <type> is one of: ${prefixes//|/, }. Push to a conforming name with an explicit refspec - 'git push <remote> HEAD:refs/heads/<type>/<description>' - which works regardless of what your local or harness-generated branch is called, then update this PR. Agents: prefer this over a rename tool, which may be single-shot and may re-apply a harness username prefix to the name you choose."
             failed=1
           fi
 

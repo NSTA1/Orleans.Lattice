@@ -530,7 +530,8 @@ sequenceDiagram
     W->>GH: Claim comment on the mirrored issue
     W->>GH: Pull request into the item's baseBranch
     W->>L: repocontext_renew_claim / repocontext_release_claim
-    W-->>PM: send_session_message (delivery_mode: immediate)
+    W->>L: repocontext_remember (completion report, workstream topic)
+    W-->>PM: send_session_message - NUDGE pointing at the memory key
     PM->>L: repocontext_claim_status (read-only, advisory)
     PM->>PM: Re-ground, then report progress to the owner
 ```
@@ -547,6 +548,20 @@ Concretely:
    `kickoff.agent` set to the backlog worker agent's registered name
    (`Backlog Worker`), `kickoff.mode: "autopilot"`, and
    `coordinate_with_creator: true`.
+
+   **State two things in the kickoff prompt, every time: your own session id, and
+   the workstream memory topic the worker is to report under.** Neither is
+   discoverable by a worker. Without the session id it must guess a recipient
+   from the session list, and that guess gets worse as the list grows - on this
+   protocol's first live run a worker guessed wrong and delivered its report to
+   an unrelated session. Without the topic it must invent one, and an entry filed
+   under an invented topic is findable only by someone who guesses the same name.
+
+   This is a convenience, not a safety net. The worker's report is durable and
+   addressable whether or not it can find you, because it writes to the bus
+   before it messages anyone. Telling it who you are saves it a guess; it does
+   not make its run correct. If you ever catch yourself relying on the message
+   rather than the record, re-read principle 11.
 
    **Do not set `notify_on_idle`.** A worker accounts for its whole run in its
    Phase 8 report, so the notification carries nothing the report does not, and
@@ -589,10 +604,23 @@ Concretely:
    converse never holds: an item that reads as free is not thereby safe to deploy
    onto, because under the lease clamp that is exactly how a live worker's item
    reads. Evidence of work outranks an unheld lease every time.
-8. **Report afterwards.** Re-ground and account for what each worker did: the item,
-   the claim outcome, the branch and pull request, CI state, and whether the item
-   completed, released, or expired. A deployment you cannot report on afterwards
-   was not a deployment, it was a hope.
+8. **Report afterwards, and read the bus rather than waiting to be told.** Scan
+   the workstream topic (`repocontext_scan` scope `MemoryTopic`) before every
+   status check and every integration. A worker's completion report is written
+   there before it messages you, so the record is available whether or not its
+   nudge arrived, and it is still there after your session restarts.
+
+   **Do not treat silence as absence of progress.** On epic #1830 a coordinator
+   asked every sub-agent to post to the bus and then did not read it: six reports
+   sat readable in memory while both sides waited on a lossy channel, and three
+   finished sessions were discovered only by inspecting git branches. Asking for
+   the bus and then watching the inbox is the failure mode, and it is the one a
+   manager is most prone to.
+
+   Account for what each worker did: the item, the claim outcome, the branch and
+   pull request, CI state, and whether the item completed, released, or expired.
+   A deployment you cannot report on afterwards was not a deployment, it was a
+   hope.
 
 ## Phase 7 - Maintain the backlog
 
@@ -632,9 +660,10 @@ and whenever the human asks for a sweep:
    and re-`remember` anything that matters beyond it under `decisions`, `gotchas`
    or `conventions` with **no TTL**, keeping the rationale and the original
    `author`, and linking it to the code it describes so a later `recall` flags it
-   stale. Let the purely operational handoffs expire on their one-week TTL. Skipping
-   this is how an epic's hard-won knowledge evaporates a week after it ships while
-   the coordination chatter is what lapses last.
+   stale. Then retire the purely operational handoffs deliberately with `forget` -
+   they carry no TTL, because silent expiry gives their loss no author and no
+   moment. Skipping the promotion step is how an epic's hard-won knowledge
+   evaporates while the coordination chatter outlives it.
 4. **Keep the graph consistent with GitHub.** Work the divergence table from Phase 0
    step 11 to closure rather than merely reporting it twice. Remember mirroring is
    one-way for content: a human editing an issue body is the source of truth, and

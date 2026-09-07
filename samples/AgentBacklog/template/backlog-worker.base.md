@@ -110,6 +110,32 @@ These are non-negotiable. Each encodes a specific failure mode.
    `{conventionsDoc}`; reference
    them, do not restate them.
 
+   **Never rename your session branch, and never push it by name.** A session
+   harness typically creates your worktree on a generated branch - often carrying
+   a username, often with no `<type>/` prefix - and both forms fail the CI branch
+   guard. The rename tool your harness offers may be single-shot and may re-apply
+   the harness prefix to whatever name you choose, so a worker that reaches for it
+   can burn its one correction and still hold an illegal name. Do not reach for
+   it, and never use `git branch -m`: the branch is harness-managed.
+
+   Instead, **make your local branch name irrelevant** by pushing with an explicit
+   refspec to the name the item requires:
+
+   ```text
+   git push <remote> HEAD:refs/heads/<type>/<description>
+   ```
+
+   The guard reads the pull request's head ref, not your local branch, so this
+   passes regardless of what the harness called your worktree. The full branching
+   and targeting rules are in [6a](#6a---implementation-mode).
+
+   **This is a principle and not a step in implementation mode because you will
+   hit it before you get there.** The branch question arrives the moment a harness
+   hands you a worktree - in any mode, including research and integration items
+   that never produce a pull request at all. A rule filed only where it is
+   *used* is never read by the worker who needs it *early*, which is exactly how
+   operating principle 12 came to be phrased the way it is.
+
 9. **Do not build a reaper.** Lease expiry-reclaim *is* the stale-claim reaper. A
    competing sweeper that clears claims it thinks are dead will race the lock and
    corrupt exactly the invariant the lock exists to hold.
@@ -155,6 +181,16 @@ These are non-negotiable. Each encodes a specific failure mode.
     A wedged manager is not a private cost to it. While it restarts it is not
     reviewing your work, not answering the question blocking you, and not
     merging anything.
+
+    **The lane governs how a message is delivered. It does not make a message a
+    record.** No lane is reliable enough to carry the only copy of anything: a
+    correctly addressed message still fails if the recipient has restarted, been
+    replaced, or was never who you thought it was. So for any message that
+    carries content someone may need later - a blocker, a question, a ruling
+    request, a correction, a completion report - **write it to the workstream
+    memory topic first and let the message point at it**. Phase 8 sets out the
+    ladder in full; it applies to interim messages too, and interim messages are
+    where the exposure actually is.
 
 ## The run at a glance
 
@@ -669,8 +705,17 @@ release last.**
    rationale, gotchas that cost you time, conventions you had to infer. Use a
    deterministic `id` you choose, set `author` to your run identity, and link the
    entry to the code it depends on so a later `recall` flags it stale. If you are
-   inside a grouping, post a handoff to the workstream topic with
-   `ttlSeconds: 604800`.
+   inside a grouping, post a handoff to the workstream topic, following the
+   repository's convention for coordination-entry TTL.
+
+   **Your Phase 8 completion report is not one of these handoffs, and must not
+   carry a TTL.** A handoff ("T12 integrated at 2dbeecba") loses its value when
+   the workstream ends; a completion report is the record of what happened to a
+   backlog item, and it is the only account of your run that outlives your
+   session. It is a ledger entry, not a handoff - the same distinction the
+   protocol already draws when it forbids a TTL on a backlog item, and for the
+   identical reason: expiry is silent and unlogged, so the loss arrives with no
+   event anywhere to explain it.
 4. Mirror the outcome: post the `outcome ... result=complete` comment on the
    issue and close it if the merged pull request did not already.
 5. `repocontext_release_claim(key, fencingToken)`. Release is idempotent; a stale
@@ -760,11 +805,70 @@ you completed, released, refused or exited empty:
   are the findings that never reach anyone if you leave them out, because nothing
   else in the system is looking.
 
-**Send it on the immediate lane**, like every other message to your manager:
-`delivery_mode: "immediate"`, passed explicitly. The rule and its reasoning are
-operating principle 12; this report is the single most dangerous message to get
-wrong, because by construction it arrives while the manager is busy supervising
-the workers that are still running.
+### Write it to the bus first. The memory entry IS the report
+
+**The report is the memory entry. The message is only a pointer to it.**
+
+Before you send anything to anyone, write the account above to the workstream
+memory topic with `repocontext_remember`:
+
+- **Topic** - the workstream topic named in your dispatch. If your dispatch did
+  not name one, use the grouping's topic; if there is no grouping, use the item
+  id. Say in the report which one you chose.
+- **Id** - stable and predictable, so the entry is addressable without a search
+  and revisable in place: `<item>-completion-report`.
+- **`author`** - your session identity. On a shared topic, provenance is what
+  makes an entry actionable.
+- **TTL** - do not invent one. Follow the repository's canonical convention
+  (`conventions/memory-is-the-cross-session-channel-of-record`) and whatever
+  supersedes it; this protocol does not set a TTL policy of its own.
+
+Then **nudge** your manager: `send_session_message` on the immediate lane
+(`delivery_mode: "immediate"`, per operating principle 12), carrying a short
+pointer - the item, the outcome in one line, and the memory key. Not the report.
+
+Send the nudge **even when the report is long**, and send it **even if you are
+unsure who your coordinator is**. A nudge is cheap and a misrouted pointer is
+harmless, because the content is already durable and addressable by anyone.
+
+**This is what makes the coordinator's identity a convenience rather than a
+correctness requirement.** A worker that cannot identify its manager still
+completes correctly: it posts to the bus, releases its claim, and is done. Your
+run is not defined by whether a message arrived.
+
+### If a rung is unavailable, fall down the ladder - and say which rung you used
+
+Report on the highest rung that is actually working:
+
+1. **The memory bus** (`repocontext_remember`) - the channel of record.
+2. **A comment on the mirrored GitHub issue**, if repocontext is unavailable.
+   You are already posting claim comments there, so this rung costs nothing new,
+   and it is durable and addressable in a way chat is not.
+3. **The chat message itself**, only if both of the above are unavailable.
+
+When you fall back, **say so explicitly and in the message**: state that the
+report is unbacked, that this message is the only copy, and that the recipient
+must persist it. A silent fallback quietly reintroduces exactly the failure this
+ladder exists to prevent, and it does it invisibly.
+
+Do not skip a rung because a lower one seems easier. Chat is the only channel
+here with no durability at all: it is invisible to a session that was not there,
+does not survive a session ending or a context window rolling over, and cannot be
+read by a sibling that starts an hour later.
+
+### Why this is not belt-and-braces
+
+Reporting over chat alone has failed repeatedly in this repository, and it has
+failed in both directions. On epic #1830 six sub-agents sent complete, correct
+reports that never arrived or arrived hours late - several after the coordinator
+had already integrated the work they announced - while the same content sat
+readable in memory the whole time. On this protocol's first live run a worker's
+Phase 8 report was delivered to an unrelated session, and was recovered only
+because its verdict had also been written to `decisions/` and to the issue.
+
+Note what those two incidents have in common: **the analysis was never the thing
+that was lost. The record was.** A protocol that routes its record through its
+least durable channel will keep paying that cost.
 
 ## Boundaries (what this agent does NOT do)
 
