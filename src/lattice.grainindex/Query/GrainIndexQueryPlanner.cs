@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Linq.Expressions;
 
 namespace Orleans.Lattice.GrainIndex.Query;
@@ -607,7 +608,80 @@ internal static class GrainIndexQueryPlanner
     }
 
     private static bool ReferencesParameter(Expression expression, ParameterExpression parameter) =>
-        ParameterFinder.Contains(expression, parameter);
+        ContainsParameter(expression, parameter);
+
+    /// <summary>
+    /// Allocation-free, early-exit answer to "does this sub-expression mention
+    /// the lambda parameter?". The planner asks this up to twice per binary
+    /// atom while routing a predicate, and the <see cref="ExpressionVisitor"/>
+    /// it used to delegate to allocates a fresh visitor per call and always
+    /// walks the whole sub-tree, even once the answer is known.
+    /// <para>
+    /// The switch enumerates the node shapes a routable predicate is built
+    /// from. Anything else - a member/list initialiser, a block, a switch -
+    /// falls back to <see cref="ParameterFinder"/>, so an unrecognised node
+    /// kind degrades to the previous behaviour rather than silently answering
+    /// <c>false</c> and mis-routing the query.
+    /// </para>
+    /// </summary>
+    private static bool ContainsParameter(Expression? expression, ParameterExpression target)
+    {
+        switch (expression)
+        {
+            case null:
+                return false;
+            case ParameterExpression parameterExpression:
+                return ReferenceEquals(parameterExpression, target);
+            case ConstantExpression:
+                return false;
+            case UnaryExpression unary:
+                return ContainsParameter(unary.Operand, target);
+            case MemberExpression member:
+                return ContainsParameter(member.Expression, target);
+            case TypeBinaryExpression typeBinary:
+                return ContainsParameter(typeBinary.Expression, target);
+            case BinaryExpression binary:
+                return ContainsParameter(binary.Left, target)
+                    || ContainsParameter(binary.Right, target)
+                    || ContainsParameter(binary.Conversion, target);
+            case ConditionalExpression conditional:
+                return ContainsParameter(conditional.Test, target)
+                    || ContainsParameter(conditional.IfTrue, target)
+                    || ContainsParameter(conditional.IfFalse, target);
+            case MethodCallExpression call:
+                return ContainsParameter(call.Object, target)
+                    || ContainsAnyParameter(call.Arguments, target);
+            case InvocationExpression invocation:
+                return ContainsParameter(invocation.Expression, target)
+                    || ContainsAnyParameter(invocation.Arguments, target);
+            case NewExpression construction:
+                return ContainsAnyParameter(construction.Arguments, target);
+            case NewArrayExpression newArray:
+                return ContainsAnyParameter(newArray.Expressions, target);
+            case IndexExpression index:
+                return ContainsParameter(index.Object, target)
+                    || ContainsAnyParameter(index.Arguments, target);
+            case LambdaExpression lambda:
+                return ContainsAnyParameter(lambda.Parameters, target)
+                    || ContainsParameter(lambda.Body, target);
+            default:
+                return ParameterFinder.Contains(expression, target);
+        }
+    }
+
+    private static bool ContainsAnyParameter<TExpression>(
+        ReadOnlyCollection<TExpression> expressions,
+        ParameterExpression target)
+        where TExpression : Expression
+    {
+        for (var i = 0; i < expressions.Count; i++)
+        {
+            if (ContainsParameter(expressions[i], target))
+                return true;
+        }
+
+        return false;
+    }
 
     private static NotSupportedException Unsupported(string what) =>
         new($"Unsupported grain-index query construct: {what}");

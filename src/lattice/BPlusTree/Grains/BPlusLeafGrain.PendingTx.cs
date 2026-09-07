@@ -40,6 +40,15 @@ internal sealed partial class BPlusLeafGrain
     private static readonly Dictionary<string, (Guid txid, LwwValue<byte[]> value)> EmptyPendingKeys = new();
 
     /// <summary>
+    /// Caps the capacity hint applied to the per-read pending-key map built
+    /// by <see cref="SnapshotPendingForReadAsync"/>. The summed pending-tx
+    /// bucket widths are an exact upper bound on the union, but the clamp
+    /// keeps a pathologically wide pending set from over-allocating a map
+    /// that is rebuilt on every scan-path read.
+    /// </summary>
+    private const int PendingReadKeyCapacityLimit = 4096;
+
+    /// <summary>
     /// Keyed by <see cref="LatticeMutation.TransactionId"/> -&gt; key
     /// -&gt; the prepared <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>. Entries here are
     /// invisible to readers until a matching terminal mark surfaces; on
@@ -939,7 +948,16 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var txids = new List<Guid>(_pendingTx.Count);
-        var pendingKeys = new Dictionary<string, (Guid, LwwValue<byte[]>)>();
+        // Summing the per-saga bucket widths is an exact upper bound on the
+        // union's key count, and an exact count in the dominant single-saga
+        // case. Concurrent sagas overwhelmingly touch disjoint keys, so the
+        // bound stays tight; the clamp keeps a pathologically wide pending
+        // set from over-allocating this per-read map.
+        var pendingBound = 0;
+        foreach (var bucket in _pendingTx.Values)
+            pendingBound += bucket.Count;
+        var pendingKeys = new Dictionary<string, (Guid, LwwValue<byte[]>)>(
+            Math.Min(pendingBound, PendingReadKeyCapacityLimit));
         foreach (var (txid, bucket) in _pendingTx)
         {
             txids.Add(txid);

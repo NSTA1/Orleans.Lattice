@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, grainindexquerytrims, grainindexplanfolds, applymergefanout.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -246,6 +246,13 @@ if (string.Equals(suite, "readpathtrims", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> readpathtrims (ReadPathAllocationBenchmarks)");
     var readPathSummary = BenchmarkRunner.Run<ReadPathAllocationBenchmarks>(config);
     return readPathSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "terminalpendingtrim", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> terminalpendingtrim (TerminalFanOutAndPendingReadTrimBenchmarks)");
+    var terminalPendingSummary = BenchmarkRunner.Run<TerminalFanOutAndPendingReadTrimBenchmarks>(config);
+    return terminalPendingSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "readpathpresize", StringComparison.OrdinalIgnoreCase))
