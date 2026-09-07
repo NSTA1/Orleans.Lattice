@@ -1893,9 +1893,12 @@ internal sealed partial class BPlusLeafGrain
                                 + "is the quantity compared against the budget; Gap is the whole partition's "
                                 + "extent, shared with every sibling leaf pinned to it, and is only an upper "
                                 + "bound on it. The write-ahead log still covers the whole needed window, and "
-                                + "the replay flushes its checkpoint incrementally, so each activation makes "
-                                + "durable forward progress even if it is torn down early. Activation may take "
-                                + "longer than usual. A leaf whose checkpoint does not advance at all is "
+                                + "the replay flushes its checkpoint incrementally, so an activation torn down "
+                                + "early USUALLY banks durable forward progress. That is not unconditional: an "
+                                + "unresolved saga prepare clamps the incremental flush ceiling strictly below "
+                                + "its own offset, and while one is resident the activation banks nothing at "
+                                + "all (issue #2183). Activation may take longer than usual. A leaf whose "
+                                + "checkpoint does not advance at all is "
                                 + "reported separately as a fault, not by this line.",
                                 treeId,
                                 ReplicaId,
