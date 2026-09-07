@@ -179,40 +179,61 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Re_activation_starts_revision_at_one_not_previous_high()
+    public async Task Re_activation_never_republishes_a_cookie_value_from_a_previous_activation()
     {
-        // The dangling-cookie race shape: a cache observed cookie N from
-        // an activation that has now deactivated. If the new activation
-        // started at N+1, a quiescent re-activation could trick the cache
-        // into thinking nothing had changed. The fix removes the entry
-        // on deactivation; the new activation lazy-creates a fresh
-        // StrongBox starting at 0 and the first bump moves it to 1.
-        // Cache-side comparison (1 != N) correctly forces a refresh.
+        // ABA discriminator (issue #2151). The cache compares cookies for
+        // EQUALITY only, so the whole requirement is that a value observed
+        // under one activation is never republished by another. Seeding each
+        // activation at 0 broke exactly that: the registry entry is removed
+        // on deactivation and re-created on the next activation, so
+        // activation B's first bump reproduced activation A's first bump and
+        // a cache holding A's stamp returned early on "provably fresh".
+        //
+        // Classified as a DISCRIMINATOR, not a guard: it fails on the
+        // pre-fix seed (both activations publish 1, 2, 3, ...) and passes
+        // only once activations are seeded from disjoint ranges. A weaker
+        // assertion - that the re-activated leaf simply publishes SOME
+        // cookie - passes with the defect fully present.
         var unique = $"reactivate-{Guid.NewGuid():N}";
         var leafId = GrainId.Create("leaf", unique);
 
         var first = CreateGrain(replicaId: unique);
+        var observedUnderFirst = new List<long>();
         for (int i = 0; i < 5; i++)
         {
             await first.SetAsync($"k{i}", Encoding.UTF8.GetBytes("v"));
+            Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var rev), Is.True);
+            observedUnderFirst.Add(rev);
         }
-
-        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var atDeactivate), Is.True);
-        Assert.That(atDeactivate, Is.GreaterThanOrEqualTo(5));
 
         await ((IGrainBase)first).OnDeactivateAsync(
             new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"),
             CancellationToken.None);
         Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False);
 
-        // Second activation of the same GrainId.
+        // Second activation of the same GrainId, driven through the same
+        // number of writes as the first so that a per-activation counter
+        // would reproduce the first activation's values one for one.
         var second = CreateGrain(replicaId: unique);
-        await second.SetAsync("kfirst", Encoding.UTF8.GetBytes("v"));
+        var observedUnderSecond = new List<long>();
+        for (int i = 0; i < 5; i++)
+        {
+            await second.SetAsync($"k{i}", Encoding.UTF8.GetBytes("v"));
+            Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var rev), Is.True);
+            observedUnderSecond.Add(rev);
+        }
 
-        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var afterReactivate), Is.True);
-        Assert.That(afterReactivate, Is.LessThan(atDeactivate),
-            "re-activation should restart the per-activation counter, not continue the previous activation's high value");
-        Assert.That(afterReactivate, Is.GreaterThanOrEqualTo(1));
+        Assert.That(observedUnderSecond, Is.Not.Empty);
+        Assert.That(
+            observedUnderSecond.Intersect(observedUnderFirst),
+            Is.Empty,
+            "a re-activated leaf republished a cookie value that a cache may still hold from the "
+            + "previous activation; the cache compares cookies for equality, so it would return "
+            + "early on 'provably fresh' against different state (issue #2151 ABA).");
+
+        // The values must also advance within the new activation, so the
+        // seed change does not accidentally freeze the counter.
+        Assert.That(observedUnderSecond, Is.Ordered.Ascending);
     }
 
     [Test]
