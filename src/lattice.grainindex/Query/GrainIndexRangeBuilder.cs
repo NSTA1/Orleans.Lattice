@@ -20,7 +20,9 @@ namespace Orleans.Lattice.GrainIndex.Query;
 /// comparison, so a floating-point <c>&lt;</c>/<c>&lt;=</c> keeps its predicate
 /// while <c>&gt;</c>/<c>&gt;=</c> - which already exclude the lowest slot - do
 /// not. And <c>-0.0</c> and <c>+0.0</c> occupy adjacent but distinct slots while
-/// comparing equal, so an equality against zero spans both.
+/// comparing equal, so every comparison against zero treats the pair as one
+/// slot - a <c>&gt;=</c> that started at only the <c>+0.0</c> slot would drop a
+/// stored <c>-0.0</c> that satisfies it.
 /// </para>
 /// </summary>
 internal static class GrainIndexRangeBuilder
@@ -54,7 +56,7 @@ internal static class GrainIndexRangeBuilder
             if (double.IsNaN(real))
                 return TryBuildNotANumber(property, op, out ranges, out exact);
 
-            if (real == 0.0 && op is LatticeComparisonOperator.Equal or LatticeComparisonOperator.NotEqual)
+            if (real == 0.0)
                 return TryBuildSignedZero(property, op, out ranges, out exact);
         }
 
@@ -204,25 +206,75 @@ internal static class GrainIndexRangeBuilder
             return false;
         }
 
-        // The two zero slots are distinct in the key order but compare equal, so
-        // an equality against zero spans from the lower to the upper of the two.
+        // -0.0 and +0.0 compare equal but occupy adjacent, distinct slots in the
+        // key order. Treat the pair as one equivalence class - the "zero band" -
+        // so a comparison against zero includes or excludes both slots together,
+        // whichever zero literal the query happened to use. Keying only on the
+        // literal's own slot would drop the other stored zero from a >= or <=.
         if (string.CompareOrdinal(negative, positive) > 0)
         {
             (negative, positive) = (positive, negative);
         }
 
-        var span = new GrainIndexKeyRange(
-            GrainIndexKeyEncoder.ValueRangeStartInclusive(property.Name, negative),
-            GrainIndexKeyEncoder.ValueRangeEndExclusive(property.Name, positive));
+        string bandStartInclusive = GrainIndexKeyEncoder.ValueRangeStartInclusive(property.Name, negative);
+        string bandEndExclusive = GrainIndexKeyEncoder.ValueRangeEndExclusive(property.Name, positive);
+        var band = new GrainIndexKeyRange(bandStartInclusive, bandEndExclusive);
 
-        exact = true;
-        ranges = op == LatticeComparisonOperator.Equal
-            ? NonEmpty(span)
-            : GrainIndexRangeSet.Complement(
-                NonEmpty(span),
-                property.RangeStartInclusive,
-                property.RangeEndExclusive);
-        return true;
+        switch (op)
+        {
+            case LatticeComparisonOperator.Equal:
+                ranges = NonEmpty(band);
+                exact = true;
+                return true;
+
+            case LatticeComparisonOperator.NotEqual:
+                // Everything the band leaves behind, which deliberately keeps the
+                // null slot: in C# a null operand makes != true.
+                ranges = GrainIndexRangeSet.Complement(
+                    NonEmpty(band),
+                    property.RangeStartInclusive,
+                    property.RangeEndExclusive);
+                exact = true;
+                return true;
+
+            case LatticeComparisonOperator.GreaterThan:
+                // Neither zero is greater than zero, so the match set is strictly
+                // above the band; no NaN or null slot sorts there.
+                ranges = NonEmpty(new GrainIndexKeyRange(
+                    bandEndExclusive,
+                    property.RangeEndExclusive));
+                exact = true;
+                return true;
+
+            case LatticeComparisonOperator.GreaterThanOrEqual:
+                // Both zeros and every positive; NaN and null sort below the band.
+                ranges = NonEmpty(new GrainIndexKeyRange(
+                    bandStartInclusive,
+                    property.RangeEndExclusive));
+                exact = true;
+                return true;
+
+            case LatticeComparisonOperator.LessThan:
+                // Everything below the band - the negatives, plus the NaN slot the
+                // retained predicate then drops.
+                ranges = NonEmpty(new GrainIndexKeyRange(
+                    property.PresentStartInclusive,
+                    bandStartInclusive));
+                exact = false;
+                return true;
+
+            case LatticeComparisonOperator.LessThanOrEqual:
+                // The negatives and both zeros, over-including the NaN slot the
+                // retained predicate then drops.
+                ranges = NonEmpty(new GrainIndexKeyRange(
+                    property.PresentStartInclusive,
+                    bandEndExclusive));
+                exact = false;
+                return true;
+
+            default:
+                return false;
+        }
     }
 
     private static GrainIndexKeyRange ValueRange(GrainIndexQueryProperty property, string encoded) =>

@@ -177,6 +177,36 @@ public sealed class InClusterBackupSinkIntegrationTests
         });
     }
 
+    [Test]
+    public async Task ProbeAsync_resolves_an_empty_artifact_that_streamed_no_chunks()
+    {
+        // An empty increment (or empty full backup) records a descriptor with
+        // ChunkCount == 0 and writes no chunk rows, so its artifact is legitimately
+        // absent from the chunk store. The probe must resolve it rather than flag
+        // it missing - otherwise the catalog scrub would prune a valid restore
+        // point and the health monitor would raise a false alarm.
+        var scope = BackupScopeSelector.WholeTree("orders");
+        var emptyHash = BackupContentHash.Compute(Array.Empty<byte>());
+        var manifest = BackupManifestModelTests.Sample(id: "backup-probe-empty") with
+        {
+            ContentDescriptors = new[]
+            {
+                new BackupContentDescriptor(emptyHash, emptyHash, byteLength: 0, chunkCount: 0, scope),
+            },
+        };
+        await _fixture.Sink.WriteManifestAsync(manifest);
+        // Deliberately write no artifact chunks: an empty artifact has none.
+
+        var resolution = await _fixture.Sink.ProbeAsync("backup-probe-empty");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolution.ManifestPresent, Is.True);
+            Assert.That(resolution.MissingArtifactIds, Is.Empty);
+            Assert.That(resolution.IsResolvable, Is.True);
+        });
+    }
+
     private static async IAsyncEnumerable<ReadOnlyMemory<byte>> Chunks(
         byte[] payload,
         int chunkSize,
