@@ -20,4 +20,35 @@ internal readonly record struct LatticeQueueByteEntry
     /// <summary>Opaque serialized payload bytes for the entry.</summary>
     [Id(1)]
     public byte[] Value { get; init; }
+
+    /// <summary>
+    /// Compares two entries by value, with <see cref="Value"/> compared by
+    /// content. The compiler-generated record-struct equality compares the
+    /// <see cref="Value"/> byte array with <see cref="EqualityComparer{T}.Default"/>
+    /// (reference equality), so two structurally identical entries built from
+    /// independently allocated but byte-identical payloads - and, in particular,
+    /// an entry and its post-serialization self - would otherwise never compare
+    /// equal.
+    /// </summary>
+    /// <param name="other">The entry to compare against.</param>
+    public bool Equals(LatticeQueueByteEntry other) =>
+        EntryId == other.EntryId
+        && BytesEqual(Value, other.Value);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(EntryId);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
