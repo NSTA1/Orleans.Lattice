@@ -413,6 +413,40 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<GrainId?> GetLeftmostLeafIdAsync();
 
     /// <summary>
+    /// Folds up to <paramref name="maxLeaves"/> empty leaves out of this
+    /// shard's leaf chain and returns how many were reclaimed.
+    /// <para>
+    /// Splits give a key range a way to grow its leaf count; without this
+    /// there is no way back down. A range that once grew to many leaves and
+    /// was then emptied keeps every leaf it ever reached, so activation
+    /// scheduling, stored state and range-scan chain hops are all paid in
+    /// proportion to the range's high-water mark rather than to the rows that
+    /// are live now, and that cost never subsides on its own.
+    /// </para>
+    /// <para>
+    /// The pass is conservative and moves no data: it folds out only leaves
+    /// that hold no live rows and carry no split, seal or prepared
+    /// transaction that could resurrect any. Every step is idempotent, so a
+    /// pass interrupted part-way is finished by the next one. Returns zero,
+    /// rather than throwing, when the shard has nothing to reclaim, has not
+    /// been initialised, is a single-leaf tree, or is mid-way through a
+    /// shard-level split.
+    /// </para>
+    /// <para>
+    /// <paramref name="maxLeaves"/> bounds the walk as well as the fold. It
+    /// has to: probing a leaf activates it and counts its rows, and this
+    /// method holds the shard root's activation turn while it runs, so a pass
+    /// that kept walking a long chain after spending its fold budget would
+    /// head-of-line block every read and write on the shard behind thousands
+    /// of sequential grain calls, and would activate every leaf in the shard
+    /// to do it. A pass therefore stops early, and the next one resumes where
+    /// it left off rather than re-walking the same prefix, so a chain longer
+    /// than one pass's budget is still reclaimed over several passes.
+    /// </para>
+    /// </summary>
+    Task<int> ReclaimEmptyLeavesAsync(int maxLeaves);
+
+    /// <summary>
     /// Returns the <see cref="GrainId"/> of the leaf a chain walk should start
     /// at, honouring an optional resume key, or <c>null</c> if the shard's tree
     /// has not been initialised yet.

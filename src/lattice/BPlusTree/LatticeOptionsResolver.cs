@@ -684,6 +684,7 @@ internal sealed class LatticeOptionsResolver(
             WalGcStartupDelay = baseOptions.WalGcStartupDelay,
             WalGcMinInterval = baseOptions.WalGcMinInterval,
             ShardForwardTimeout = baseOptions.ShardForwardTimeout,
+            LeafRetirementRetryDeadline = baseOptions.LeafRetirementRetryDeadline,
             EmptyTreeProbeBudget = baseOptions.EmptyTreeProbeBudget,
             ActivationReadyTimeout = baseOptions.ActivationReadyTimeout,
             DigestPublishTimeout = baseOptions.DigestPublishTimeout,

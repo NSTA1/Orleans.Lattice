@@ -126,6 +126,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`LeafHydrationResidentBytes`](#leafhydrationresidentbytes) | `long` | 1 MiB | Yes (on next activation) |
 | [`LeafPartialHydrationEnabled`](#leafpartialhydrationenabled) | `bool` | `true` | Yes (on next activation) |
 | [`LeafProjectionRetention`](#leafprojectionretention) | `TimeSpan` | 7 days | Yes |
+| [`LeafRetirementRetryDeadline`](#leafretirementretrydeadline) | `TimeSpan` | 2 seconds | Yes |
 | [`LeafSnapshotBinaryEncodingEnabled`](#leafsnapshotbinaryencodingenabled) | `bool` | `true` | Yes (write side only; reads are always dual) |
 | [`LeafSnapshotMargin`](projection-rebuild.md) | `double` | 0.30 | Yes |
 | [`LeafSnapshotReClassifyEveryNCheckpoints`](projection-rebuild.md) | `int` | 64 | Yes |
@@ -567,6 +568,28 @@ Maximum age beyond which a cold leaf's persisted projection is treated as stale,
 
 This option can be changed freely at any time.
 
+### `LeafRetirementRetryDeadline`
+
+How long a write blocked by a leaf-retirement latch keeps retrying before it fails (default: **2 seconds**).
+
+Empty-leaf reclaim latches a leaf closed for the handful of grain calls between deciding to fold it and clearing its state. A write routed to that leaf inside the window is **refused, never applied**: applying it would put a record into state that is about to be destroyed. Refusing is what makes the fold safe, but on its own it would turn every write unlucky enough to arrive during an ordinary fold into a caller-visible error. This deadline is what closes that gap - the write retries with exponential backoff and jitter until the latch clears and the range is served by the leaf that now owns it.
+
+The default is derived from two regimes rather than picked:
+
+- **Transient regime.** The latch is held across the compare-and-swap and the routing retirement, and the latter retries its parent call up to three times, so the window's ceiling is four grain calls: sub-millisecond co-located, single-digit milliseconds cross-silo, plus scheduling jitter. Tens of milliseconds is a generous reading, and 2 seconds clears that by about two orders of magnitude, so jitter alone can never exhaust it.
+- **Stuck regime.** If those calls are instead hitting the Orleans response timeout (30 seconds by default), the same arithmetic gives about two minutes. The default deliberately does **not** cover that. A fold blocked for minutes is an outage, not a transient overlap, and a write that inherited its wait would exceed any caller's own timeout while reporting nothing.
+
+Exhausting the deadline throws. That is the intended behaviour, and it is the entire point of the interlock: it converts a **silent** loss of an acknowledged write into a **loud** failure the caller can retry or surface.
+
+One caveat worth stating plainly, because the safety argument rests on it: waiting is only safe because a retirement latch clears, and the call that reopens an abandoned fold can itself fail. When it does, the latch is held until the leaf deactivates - far beyond any sane value here - and the write fails loudly. That is the correct outcome, but "the latch is guaranteed to clear" is a conditional guarantee, not an unconditional one.
+
+```csharp verify
+// Fail fast instead of waiting out a fold: useful in a test suite, where a
+// blocked write should surface immediately rather than retry for seconds.
+siloBuilder.ConfigureLattice("latency-sensitive-tree", o => o.LeafRetirementRetryDeadline = TimeSpan.FromMilliseconds(500));
+```
+
+Lower this only to make a test suite fail fast; raising it trades caller latency under a slow fold for fewer surfaced faults. This option can be changed freely at any time.
 ### `LeafSnapshotBinaryEncodingEnabled`
 
 Whether a leaf snapshot capture persists its rows as a compact binary frame rather than as the legacy object graph (default: `true`).

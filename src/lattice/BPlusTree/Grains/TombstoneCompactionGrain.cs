@@ -663,6 +663,8 @@ internal sealed class TombstoneCompactionGrain(
                     RestoreShardCursor(prevCursorBeforeBatch);
                     throw;
                 }
+
+                await ReclaimEmptyLeavesForShardAsync(physicalTreeId, shardIndex);
             }
             else
             {
@@ -684,8 +686,72 @@ internal sealed class TombstoneCompactionGrain(
         }
     }
 
-    internal async Task CompleteCompactionAsync()
+    /// <summary>
+    /// Folds away the leaves this shard's compaction pass has just emptied.
+    /// Invoked once per shard, immediately after that shard's compaction is
+    /// persisted as complete.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// THIS CALL IS THE ONLY PRODUCTION TRIGGER FOR EMPTY-LEAF RECLAIM. The
+    /// reclaim mechanism on the shard root is otherwise reachable only from an
+    /// operator call and from tests, so deleting this line does not fail any
+    /// test that names <c>ReclaimEmptyLeavesAsync</c> - it simply stops leaves
+    /// ever being reclaimed in the field, which is the exact defect issue 2099
+    /// reports. <c>TombstoneCompactionReclaimWiringIntegrationTests</c> exists
+    /// to make that deletion go red; it drives the reminder and never names the
+    /// reclaim method.
+    /// </para>
+    /// <para>
+    /// Compaction is the right host rather than a reminder of its own, because
+    /// compaction is what <em>causes</em> the condition reclaim collects: a leaf
+    /// becomes empty when the grace period expires and compaction sweeps its
+    /// last tombstones. Reclaiming here therefore runs exactly when new
+    /// candidates can exist, reuses a reminder that is already registered per
+    /// tree, and adds no recurring load to a deployment - a second per-tree
+    /// reminder would fan out across every tree in the estate to poll for a
+    /// condition that only compaction can create.
+    /// </para>
+    /// <para>
+    /// It is best-effort and deliberately swallows its failures. Reclaim is
+    /// background maintenance whose work is idempotent and resumable: a leaf
+    /// missed on this pass is still empty on the next one. Letting it throw
+    /// would trip the surrounding shard retry/skip policy in
+    /// <see cref="ProcessNextShardAsync"/> and spend compaction's retry budget
+    /// on a failure that has nothing to do with compaction. It also runs
+    /// <em>after</em> the cursor persist above, so it cannot leave compaction's
+    /// progress ahead of disk however it fails.
+    /// </para>
+    /// <para>
+    /// The per-pass cap reuses <see cref="LatticeOptions.CompactionLeafBatchSize"/>
+    /// rather than introducing an option: it is already the operator's answer to
+    /// "how many leaves may one tick of this loop touch", which is the same
+    /// question, and it keeps the tick bounded so a shard whose whole keyspace
+    /// was deleted is folded over several ticks instead of in one long turn.
+    /// </para>
+    /// </remarks>
+    private async Task ReclaimEmptyLeavesForShardAsync(string physicalTreeId, int shardIndex)
     {
+        try
+        {
+            var shardRoot = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+            var reclaimed = await shardRoot.ReclaimEmptyLeavesAsync(_currentLeafBatchSize);
+            if (reclaimed > 0)
+            {
+                logger.LogDebug(
+                    "Reclaimed {Reclaimed} empty leaves from shard {ShardIndex} of tree {TreeId} after compaction.",
+                    reclaimed, shardIndex, TreeId);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Empty-leaf reclaim failed for shard {ShardIndex} of tree {TreeId}; the next compaction pass retries.",
+                shardIndex, TreeId);
+        }
+    }
+
+    internal async Task CompleteCompactionAsync()    {
         _compactionTimer?.Dispose();
         _compactionTimer = null;
 
