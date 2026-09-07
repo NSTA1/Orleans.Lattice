@@ -231,8 +231,75 @@ public sealed class RepoContextRetrievalWarmupTests
             Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
-    private static IRepoContextSemanticIndex SemanticIndex(string retrievalPath)
+    /// <summary>
+    /// The condition issue 2180 flags as untested, pinned. The short-circuit above
+    /// this loop tests "no repository is listed"; its comment used to justify that
+    /// with "nothing is indexed", which is a different and stronger claim. This
+    /// test fixes the difference in place so the next reader cannot be misled by
+    /// prose again: a LISTED repository holding no vectors takes the loop, not the
+    /// short-circuit, and leaves the host not-ready.
+    /// <para>
+    /// It also settles the two unknowns the issue left open. First, an empty
+    /// vector plane really does resolve to
+    /// <see cref="RepoContextRetrievalPath.KeywordVectorPlaneUnavailable"/>:
+    /// <c>RepoContextSearchService</c> returns it when the index yields no matches
+    /// at all. Second, the fault hold-down does NOT absorb it - the hold-down only
+    /// defers revocation for a plane that has already reached
+    /// <see cref="RepoContextRetrievalReadinessPhase.Serving"/>, and this one never
+    /// has, so it stays <see cref="RepoContextRetrievalReadinessPhase.Building"/>
+    /// immediately and for as long as the repository holds no vectors.
+    /// </para>
+    /// <para>
+    /// This is the intended semantics rather than a defect to patch:
+    /// <see cref="RepoContextRetrievalPath.KeywordVectorPlaneUnavailable"/>
+    /// classifies an empty or still-building plane as a real capability loss, so a
+    /// box that was asked to index something and cannot serve it semantically must
+    /// not report ready.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_listed_repository_holding_no_vectors_leaves_the_plane_not_ready()
     {
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var tree = SeededTree(RepoMarkers("alpha"));
+        grainFactory.GetGrain<ILattice>(Arg.Any<string>()).ReturnsForAnyArgs(tree);
+
+        var store = Store(grainFactory);
+
+        // The plane answers, but holds nothing in the query's embedding space -
+        // exactly the state a reset or a first-ingest repository is in.
+        var index = Substitute.For<IRepoContextSemanticIndex>();
+        index.RetrievalPath.Returns(RepoContextRetrievalPath.SemanticApproximate);
+        index.SearchAsync(
+                Arg.Any<string>(), Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<EmbeddingSpaceTag>(),
+                Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<RepoContextVectorMatch>>([]));
+
+        using var readiness = new RepoContextRetrievalReadinessState(new SettableTimeProvider());
+        var search = new RepoContextSearchService(
+            grainFactory, Serializer, index, store, TimeProvider.System,
+            NullLogger<RepoContextSearchService>.Instance, AvailableEmbedder(), readiness);
+        var warmup = new RepoContextRetrievalWarmup(
+            store, search, readiness, NullLogger<RepoContextRetrievalWarmup>.Instance);
+
+        var ready = await warmup.TryWarmAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ready, Is.False,
+                "A listed repository with no vectors must NOT reach the zero-repository short-circuit.");
+            Assert.That(readiness.Phase, Is.EqualTo(RepoContextRetrievalReadinessPhase.Building),
+                "The hold-down defers revocation only for a plane that already served; this one never has.");
+        });
+
+        // Proof it took the loop rather than the short-circuit: the short-circuit
+        // never issues a query at all.
+        await index.Received(1).SearchAsync(
+            "alpha", Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<EmbeddingSpaceTag>(),
+            Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    private static IRepoContextSemanticIndex SemanticIndex(string retrievalPath)    {
         var index = Substitute.For<IRepoContextSemanticIndex>();
         index.RetrievalPath.Returns(retrievalPath);
         index.SearchAsync(
