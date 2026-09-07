@@ -164,6 +164,51 @@ changes, or because it ran out of run - **does not tag the item complete**. It
 writes an honest `resumeNote`, posts `result=released`, and leaves the item live
 for the next holder. That is the normal path, not a failure.
 
+#### A directly-deployed item still gets a ledger row, authored at completion
+
+Not every item reaches a worker through the backlog. A project manager may
+deploy a worker **directly against a GitHub issue**, and should: it is the right
+move for a one-off defect that needs no dependency ordering and no ready-set
+arbitration. Such an item is never claimed, holds no lease and no fencing token,
+and never appears in a ready set. Nothing about that is wrong.
+
+What is wrong is leaving no trace. **The project manager authors a ledger row
+for a directly-deployed item when it completes**, carrying the five mandatory
+tags, `state:complete`, `pr:<n>`, and `direct-deployment`.
+
+Three rules make the row safe:
+
+- **Author it at completion, never while the work is in flight.** A live row for
+  work already underway is *claimable*: nothing in the store distinguishes it
+  from work nobody has started, so the next ready-set computation offers it and
+  a second worker can be dispatched onto an item that is already half done.
+  Authoring at completion means the row is born terminal and can never be
+  selected. This is the whole reason the row is retroactive rather than eager,
+  and it is not a compromise.
+- **Record what happened, and nothing more.** State plainly that the item was
+  directly deployed, never claimed, held no lease, and never entered a ready
+  set. Do **not** synthesise claim or lease history for a run that took none.
+  The distinction is worth being precise about, because the scruple that stops
+  an agent writing the row at all is a good instinct pointed at the wrong
+  target: fabricating a claim history would be invention, whereas a row saying
+  "completed via direct deployment, never claimed, closed by PR #N" asserts
+  nothing untrue. Truthful and retroactive is not the same as invented.
+- **The project manager writes it, not the worker.** Items are a project-manager
+  artefact - the lifecycle opens `[*] --> Drafted: authored by the project
+  manager` - and a worker authoring its own ledger row inverts that at the
+  moment it is least able to be checked, as it stands down. A worker that
+  notices it has no item to complete should **report the absence** rather than
+  do something claim-shaped.
+
+**Why the gap is worth closing at all**, given that the ready set already fails
+safe here: a missing target is reported as a dangling `blockedBy` defect and is
+never treated as satisfied, so no work is silently released. The cost is subtler
+and worse. `exists: false` reads **identically** for a benign ledger gap and for
+an item deleted while it was still gating work, and the second is precisely the
+failure that rule exists to catch. Every uncreated row makes the defect signal
+less able to mean anything. A complete ledger is what keeps the alarm credible,
+and the throughput the ledger reports honest.
+
 ### Evidence a worker may rely on
 
 The rules above say *when* a worker may assert completion. This one says what
