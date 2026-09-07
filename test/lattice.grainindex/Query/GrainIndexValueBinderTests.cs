@@ -105,6 +105,31 @@ public sealed class GrainIndexValueBinderTests
     }
 
     [Test]
+    public void A_fractional_literal_is_rejected_for_an_integral_property()
+    {
+        var binder = GrainIndexValueBinder.Create(typeof(int));
+
+        // 1.5 must not silently round to 2 and encode an exact bound the caller
+        // never wrote (which reads as a wrong or empty result); the binder reports
+        // it cannot encode instead.
+        Assert.That(binder.TryEncode(1.5, out _), Is.False);
+    }
+
+    [Test]
+    public void A_lossless_widened_literal_still_encodes_for_an_integral_property()
+    {
+        var binder = GrainIndexValueBinder.Create(typeof(int));
+
+        // The lossy-conversion guard must not over-reject: 2.0 round-trips to 2
+        // exactly, so it still encodes as the int property would.
+        Assert.Multiple(() =>
+        {
+            Assert.That(binder.TryEncode(2.0, out string encoded), Is.True);
+            Assert.That(encoded, Is.EqualTo(GrainIndexKeyEncoder.EncodeValue(2)));
+        });
+    }
+
+    [Test]
     public void An_unconvertible_literal_is_rejected()
     {
         var binder = GrainIndexValueBinder.Create(typeof(int));
