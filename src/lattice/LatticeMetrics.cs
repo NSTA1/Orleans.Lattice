@@ -259,6 +259,32 @@ public static class LatticeMetrics
     /// tests and custom OpenTelemetry exporters can subscribe by reference rather
     /// than by name.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This field must stay above every instrument declared below it, and every
+    /// instrument must be constructed from it.</b> Static field initialisers execute
+    /// in declaration order, and <c>MeterListener.Start()</c> raises
+    /// <c>InstrumentPublished</c> for already-existing instruments outside the lock
+    /// that registers the listener. A listener callback that is the first code in the
+    /// process to touch this class therefore runs this initialiser re-entrantly, part
+    /// way through: any field declared below the instrument being published is still
+    /// <see langword="null"/> at that moment.
+    /// </para>
+    /// <para>
+    /// The many fixtures that match on
+    /// <c>ReferenceEquals(instrument.Meter, LatticeMetrics.Meter)</c> would then
+    /// compare against <see langword="null"/>, never enable the instrument, and record
+    /// zero measurements without throwing - surfacing as a missing production emission
+    /// rather than a broken harness. Building every instrument from this field keeps
+    /// any such mistake loud instead: the reordered initialiser throws
+    /// <see cref="TypeInitializationException"/> on first use.
+    /// </para>
+    /// <para>
+    /// Enforced by <c>MeterFieldDeclarationOrderTests</c>; both orderings are
+    /// demonstrated by <c>MeterListeningTests</c>. See the Metrics section of
+    /// <c>.github/copilot-instructions.md</c>.
+    /// </para>
+    /// </remarks>
     public static readonly Meter Meter = new(MeterName);
 
     // --- Shard-level counters (ShardRootGrain) -----------------------------------

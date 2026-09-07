@@ -141,6 +141,59 @@ coverage, so no per-type same-silo test is needed.
 - Use `ISiloBuilder.ConfigureLattice(...)` for global or per-tree options.
 - Options are resolved via `IOptionsMonitor<LatticeOptions>.Get(treeName)`.
 
+## Metrics
+
+Instruments are published on a `Meter` owned by a per-package `*Metrics` class
+(`LatticeMetrics`, `BackupMetrics`, `LatticeAuthMetrics`, ...). A class that
+publishes onto another class's meter does not need a `Meter` field of its own -
+it inherits that meter's guarantees.
+
+### Declare the `Meter` field above every instrument
+
+In a metrics class that declares both a `Meter` field and instrument fields, the
+`Meter` field must be declared **above every instrument**, and every instrument
+must be constructed **from that field**.
+
+`MeterListener.Start()` replays the instruments that already exist and raises
+`InstrumentPublished` for that snapshot *outside* the lock that registers the
+listener. A listener callback that holds the first reference in the process to a
+metrics class therefore runs that class's static initialiser **during instrument
+publication**, re-entrantly. Static field initialisers execute in declaration
+order, so any field declared below the instrument being published is still
+`null` at that moment.
+
+Dozens of fixtures select instruments with a callback shaped like
+`ReferenceEquals(instrument.Meter, LatticeMetrics.Meter)`. Were the `Meter` field
+declared below an instrument, that comparison would run as
+`ReferenceEquals(someMeter, null)` while the instrument is published: the
+instrument is never enabled, the fixture records zero measurements, and nothing
+throws. It surfaces as `Expected: 1, But was: 0`, which reads as a missing
+*production* emission rather than a broken harness, and it is order-dependent,
+so it presents as a flake.
+
+Constructing every instrument from the class's own `Meter` field is the second
+half of the rule, and it is what keeps a violation **loud**. With
+
+```csharp
+public static readonly Meter Meter = new(MeterName);
+public static readonly Counter<long> ShardReads = Meter.CreateCounter<long>(...);
+```
+
+moving `Meter` below `ShardReads` throws `TypeInitializationException` (inner
+`NullReferenceException`) the first time the class is touched, so it cannot
+ship. Route instruments through a *private backing* meter instead, and the same
+reordering fails **silently** in the manner above. Every metrics class in `src/`
+currently takes the loud shape, which is why the fixtures that depend on the
+ordering pass.
+
+`MeterFieldDeclarationOrderTests` enforces the ordering across `src/` and fails
+loudly if its own scan matches nothing, so it cannot go vacuous.
+`MeterListeningTests` is the executable demonstration of both orderings. In new
+fixtures prefer the `Orleans.Lattice.Testing.MeterListening` helpers
+(`StartForMeter`, `StartForInstrument`): they take the meter or instrument as a
+parameter, so the owning initialiser has necessarily completed before the
+listener exists and the unsafe ordering is not expressible.
+
 ## Documentation
 
 Documentation rules - where docs live and the `csharp verify` snippet requirement - live in the **documentation** skill (`.github/skills/documentation/SKILL.md`).
