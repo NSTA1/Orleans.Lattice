@@ -172,6 +172,8 @@ This is what keeps a patch a patch. Tagging `main` instead would publish everyth
 
 Reconcile `main` afterwards with a small separate PR carrying the changelog entry and the `<Version>` bump, so trunk's history records the patch.
 
+If the patch is on a line that is no longer the newest, expect its `Docs` run to be green with a **skipped** `deploy` job - see [Only the newest release line publishes the site](#only-the-newest-release-line-publishes-the-site). That is the guard working, not a failure to investigate.
+
 ### Held-back packages
 
 A package can be deliberately withheld from a wave (see [PACKAGES.md](../PACKAGES.md), the ship/no-ship authority). It then sits on an **older** line than the rest of the family while `main` moves on beneath it, so `main` is not a valid base for patching it. Hence the invariant:
@@ -181,6 +183,44 @@ A package can be deliberately withheld from a wave (see [PACKAGES.md](../PACKAGE
 Concretely: while the Explorer family is held at `9.4.x` and the rest of the family ships `9.6.0`, both `release/9.4` and `release/9.6` stay alive. An Explorer patch is cut from `release/9.4`, because `main`'s Explorer sources have since absorbed the console rewrite ([#1790](https://github.com/NSTA1/Orleans.Lattice/issues/1790)) and cutting from trunk would drag that rewrite into a patch release.
 
 Retire a release line branch only once no shipped package still points at it.
+
+### Documentation fixes between waves
+
+The documentation site is deployed by the `Docs` workflow, and it is **not** manual-only. Three triggers, only two of which deploy:
+
+- A **pull request** builds the corpus but never deploys. The build is the link-integrity gate (`-MaxWarnings 0`), so it fails closed on any broken relative link or in-page anchor.
+- A **push of the core `lattice-v<X.Y.Z>` tag** builds and deploys automatically. It is the only tag that does: the glob is `lattice-v*`, which matches the core tag alone and not the dotted per-package tags such as `lattice.storage.file-v9.6.0`, so one wave deploys the site once rather than once per package.
+- A **manual `workflow_dispatch`** builds and deploys from whatever ref it is dispatched on.
+
+Because the deploy hangs off the core tag, the published site reflects the wave's **pinned ship commit**, not `main`. That is the intended contract: the site documents what a user can actually install.
+
+That contract is what makes `main` the wrong ref for an out-of-band docs fix. Dispatching `Docs` on `main` publishes documentation for unreleased work, silently putting the site ahead of every package on NuGet. So a docs fix reaches the site the same way a code fix reaches NuGet - through the release line:
+
+1. Merge the fix to `main` as an ordinary PR, so trunk carries it into the next wave.
+2. `git switch release/<X.Y>` and `git cherry-pick <fix-commit-from-main>`.
+3. Dispatch the workflow on that line: `gh workflow run Docs --ref release/<X.Y>`.
+
+No tag is involved: the site is a whole-repository artifact with no version of its own, so republishing it does not constitute a release and needs no `<Version>` bump or changelog entry.
+
+This is enforced rather than merely documented. The `github-pages` environment's deployment branch policy admits the tag pattern `lattice-v*` and the branch pattern `release/*`, and deliberately does **not** admit `main` - a dispatch on trunk is refused by the environment. `docs.yml` has no push trigger for `main`, so nothing legitimate needs it. A refusal presents as the zero-step `deploy` failure described in step 7 below.
+
+### Only the newest release line publishes the site
+
+GitHub Pages serves one site, and every deploy replaces it wholesale, so the published site is whichever deploy ran **last** - which is not the same thing as the newest release. That distinction matters because the `lattice-v*` trigger also matches a **core hotfix on an older line**. The family has cut exactly such tags before (`lattice-v9.4.1`, `lattice-v9.4.2`, `lattice-v9.4.3`, `lattice-v9.5.1`), so patching the core package on `release/9.5` after `9.6.0` has shipped would, unguarded, silently regress the public documentation to the older version. A dispatch on an older `release/<X.Y>` branch would do the same.
+
+`docs.yml` therefore carries a **newest-line guard**. It resolves the line the run would publish (from the tag for a push, from the branch for a dispatch), compares it against the highest `lattice-v*` tag in the repository, and allows the deploy only when the two lines match.
+
+An older line is **skipped, not failed**. The packages that hotfix publishes are perfectly legitimate; it is only the site that must not move. So the `Docs` run for an old-line hotfix is green with a skipped `deploy` job, and the guard's log says which line it saw and which line is newest. Do not "fix" that by re-running it or dispatching the site by hand - a green run with a skipped deploy is the guard working.
+
+The guard lives in the workflow file, and GitHub resolves that file **from the ref that triggered the run** - the tagged commit for a tag push, the dispatched ref for a dispatch. It never reads `main`. A guard merged only to `main` therefore protects nothing: the run that needs stopping is the one firing from the line. So the guard defends a line only if that line's own `docs.yml` carries it. Lines cut from `main` after the guard landed inherit it and need no action; `release/9.6` was cut before it existed and was backfilled onto the line directly; `release/9.4` and `release/9.5` predate `docs.yml` altogether, so they fire no `Docs` run at all and cannot move the site under any trigger. When auditing this, read the file **on the line**, not on `main`.
+
+The practical consequences are worth stating plainly:
+
+- The site always describes the newest released minor line, and no older-line activity can move it.
+- A documentation fix that must appear on the site has to reach the **newest** line. Cherry-picking it only onto an older line updates that line's sources but will never publish.
+- Once a line stops being the newest, its documentation is frozen as far as the site is concerned. There is no per-version docs archive; see the limitation below.
+
+One known limitation: the site is a single artifact built from one commit, so while a package is held back its documentation is published from the wave's commit rather than from the older line it actually shipped from. While the Explorer family sits at `9.4.x` and the rest ships `9.6.0`, the site therefore describes Explorer slightly ahead of its released surface. Versioning the site is the only real fix; the hold-back is expected to be temporary, so this is accepted for now.
 
 ## Release protocol
 
@@ -230,6 +270,8 @@ Retire a release line branch only once no shipped package still points at it.
 7. **Verify each publish run** reaches `completed/success` before declaring the release done. Failed runs leave NuGet in an inconsistent state where some packages of a coordinated release have shipped and others have not.
 
    When the wave included the core `lattice-v<X.Y.Z>` tag, also confirm the `Docs` run for that tag reached `completed/success` (`gh run list --workflow Docs --limit 5`). Its build step fails closed on any broken relative link or in-page anchor in the corpus, so a red `Docs` run means the published documentation would have shipped a broken cross-reference. That does not affect the NuGet packages already pushed - fix the link and re-run the workflow (or dispatch it manually) to republish the site.
+
+   A `Docs` run whose `build` job succeeded - including the link and anchor gate - but whose `deploy` job reports `completed/failure` with **no steps and no log** (`gh run view <id> --log-failed` answers `log not found`) was not broken by the workflow at all: it was refused by the `github-pages` environment's deployment branch policy. A wave deploys the site from a **tag** ref, so that environment has to permit one, and a policy list that names only the branch `main` will reject every release deploy while leaving the chore PR's own `Docs` run green (it never reaches `deploy`). Inspect the policy with `gh api repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies`; it must list the tag pattern `lattice-v*` **and** the branch pattern `release/*` (and, per [Documentation fixes between waves](#documentation-fixes-between-waves), must **not** list `main`). Add a missing tag policy with `gh api --method POST repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies -f name='lattice-v*' -f type='tag'`, then re-run the failed job with `gh run rerun <id> --failed`. As with a broken link, the NuGet packages already pushed are unaffected.
 
 8. **Bump the reference-architecture package pins as a post-release action.** The package version bump itself (the `<Version>` slot) belongs in the shipping chore PR alongside the changelog, per steps 1 and 4 - that is what tag-and-publish releases to NuGet. The `reference-architecture/` hosts, by contrast, consume the family through `PackageReference` to **published** NuGet packages (never `ProjectReference` into `src/`), and the `build-and-test` reference-architecture job restores those versions from nuget.org. So a pin bump to a version that has not shipped yet fails restore with `NU1102: Unable to find package ... with version (>= X.Y.Z)`. Never bump a reference-architecture pin in the same PR that ships the package - that PR cannot go green until the very package it is publishing exists. Instead, the order is: **(a)** the chore PR bumps `<Version>` + folds the changelog and merges; **(b)** the tag publishes the package (steps 6-7); **(c)** raise a **separate follow-up PR** that advances the affected `reference-architecture/**/*.csproj` pins to the just-published version(s). **You do not need to pre-verify that the new version is indexed on nuget.org.** That follow-up PR's own `build-and-test` reference-architecture lane builds every kit csproj, and because the kit consumes the family by `PackageReference` the build restores each pinned package from nuget.org - so the restore *is* the published-and-restorable gate, and a green lane is positive proof the pins resolve. If NuGet indexing has not caught up yet (it lags the publish run's `completed/success` by a few minutes) the lane fails with `NU1102` and you simply re-run it once indexing lands. The same restore runs a second time server-side at deploy time, when `az acr build` builds the three host images from `reference-architecture/`, so an unrestorable pin cannot reach a deployed environment. Only reference-architecture hosts that actually consume a bumped package need updating; leave the others untouched.
 
