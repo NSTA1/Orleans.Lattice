@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, grainindexquerytrims, grainindexplanfolds.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, grainindexquerytrims, grainindexplanfolds, applymergefanout.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -358,6 +358,13 @@ if (string.Equals(suite, "grainindexplanfolds", StringComparison.OrdinalIgnoreCa
     Console.WriteLine("[microbench] suite   -> grainindexplanfolds (GrainIndexPlanFoldBenchmarks)");
     var grainIndexPlanFoldsSummary = BenchmarkRunner.Run<GrainIndexPlanFoldBenchmarks>(config);
     return grainIndexPlanFoldsSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "applymergefanout", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> applymergefanout (ReplicationApplyAndMergeFanoutBenchmarks)");
+    var applyMergeFanoutSummary = BenchmarkRunner.Run<ReplicationApplyAndMergeFanoutBenchmarks>(config);
+    return applyMergeFanoutSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);

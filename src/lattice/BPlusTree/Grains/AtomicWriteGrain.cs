@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
@@ -1421,15 +1422,27 @@ internal sealed class AtomicWriteGrain(
         if (committed && state.State.Entries.Count > 0)
         {
             var routingForBackstop = routing ?? await lattice.GetRoutingAsync(forceRefresh: true);
-            perShardCommitted = new Dictionary<int, Dictionary<string, byte[]>>();
+            // The outer map is keyed by physical shard index and holds at most
+            // one entry per physical shard, so size it to that count once
+            // rather than rehashing it up the 3/7/17/... chain; each per-shard
+            // bucket gets the shard-fair fraction of the saga's entries for the
+            // same reason. The first-touch probe is folded to a single hash
+            // through GetValueRefOrAddDefault, replacing the miss-then-store
+            // pair that hashed the same index twice. The map stays a
+            // Dictionary rather than a dense array because the fan-out below
+            // also writes shard indices drawn from TouchedShards, which can
+            // carry a transitively-discovered shard the current routing
+            // snapshot does not list.
+            var backstopShards = routingForBackstop.Map.GetPhysicalShardIndices();
+            var backstopBucketCapacity = ShardFanout.BucketCapacity(
+                state.State.Entries.Count, backstopShards.Count);
+            perShardCommitted = new Dictionary<int, Dictionary<string, byte[]>>(backstopShards.Count);
             foreach (var entry in state.State.Entries)
             {
                 var owner = routingForBackstop.Map.Resolve(entry.Key);
-                if (!perShardCommitted.TryGetValue(owner, out var bucket))
-                {
-                    bucket = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-                    perShardCommitted[owner] = bucket;
-                }
+                ref var bucket = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                    perShardCommitted, owner, out _);
+                bucket ??= new Dictionary<string, byte[]>(backstopBucketCapacity, StringComparer.Ordinal);
                 bucket[entry.Key] = entry.Value;
             }
 #if LATTICE_DIAG
