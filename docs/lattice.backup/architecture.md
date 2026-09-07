@@ -41,9 +41,10 @@ The incremental **falls back to a full capture** when it cannot produce a sound 
 
 `ILatticeBackupRestoreService.RestoreAsync` replays a manifest chain into a target tree:
 
-1. **Read.** The manifest chain is read - a full backup, or a base plus ordered increments up to the chosen point.
-2. **Verify.** Every referenced artifact is validated against its recorded content digest. Any mismatch aborts the restore with `LatticeRestoreValidationException` before anything is installed.
-3. **Merge.** The entries are applied through the HLC-preserving seams, either **in place** (an empty-tree bulk-load fast path, or a last-writer-wins merge into existing data) or via an **atomic shadow-cutover** that builds a fresh physical tree and swaps the target's registry alias to it in one step.
+1. **Authorize.** The restore is authorized fail-closed on both of the trees it names, before anything is installed: the Restore capability over the target tree, and - only when the restore retargets the backup onto a different tree - the Backup capability over the tree each manifest in the chain was captured from. See [Authorization](#authorization).
+2. **Read.** The manifest chain is read - a full backup, or a base plus ordered increments up to the chosen point.
+3. **Verify.** Every referenced artifact is validated against its recorded content digest. Any mismatch aborts the restore with `LatticeRestoreValidationException` before anything is installed.
+4. **Merge.** The entries are applied through the HLC-preserving seams, either **in place** (an empty-tree bulk-load fast path, or a last-writer-wins merge into existing data) or via an **atomic shadow-cutover** that builds a fresh physical tree and swaps the target's registry alias to it in one step.
 
 A restore is idempotent: re-running the same request converges to the same state. A shadow-cutover restore records the physical tree it built (`ShadowPhysicalTreeId`) and the physical tree the alias resolved to beforehand (`PreviousPhysicalTreeId`).
 
@@ -72,6 +73,8 @@ Content addressing (`BackupContentHash`, lowercase hex SHA-256) is what makes th
 ## Authorization
 
 Backup and restore are dedicated capabilities (`Backup` for capture, `Restore` for author / bulk-load) evaluated against the registered core access gate through the shared enforcement helper the data plane already uses. This means the backup path inherits the gate's behaviour exactly: the system-origin bypass for infrastructure-authored turns, the zero-cost short-circuit when only the no-op core gate is registered (a cluster with no authorization add-on pays nothing), caller-subject resolution through the membership seam, and the bootstrap-administrator break-glass. A scope is authorized at its root: a partial or filtered allow is refused fail-closed, exactly as a bulk-load or admin operation is.
+
+A restore names **two** trees, and both are governed. The tree written into is authorized for `Restore`. The tree the backup was captured from - the manifest's own recorded scope - is authorized for `Backup`, the same capability every other manifest-consuming verb (describe, delete, export artifact, health) gates on, and the authority the caller would have needed to capture that manifest itself. Without it a caller holding `Restore` over a tree it owns could have the contents of a tree it holds nothing on replayed into a tree it controls, gated only on knowing a backup id. Two properties keep the rule tight. The captured-source check is **skipped when source and target are the same tree**, so the ordinary same-tree point-in-time rollback needs no `Backup` grant and only a genuine cross-tree retarget - clone, disaster recovery into a fresh id, environment seeding - requires one. And the scope put to the gate is the **effective restore scope retargeted back onto the source tree**, so a sub-scoped restore authorizes only the range actually replayed, never the whole captured scope. Every distinct source tree in the manifest chain is checked, not just the tip's: an increment inherits its base's scope on the capture path, but the sink is a trust boundary, so the chain is gated rather than inferred. `RevertRestoreAsync` and `CommitShadowAsync` consult no manifest - they move a registry alias between physical trees whose provenance is separately asserted against the target - so they gate the target alone.
 
 ## Reserved namespace
 

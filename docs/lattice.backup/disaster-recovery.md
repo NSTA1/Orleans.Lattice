@@ -91,7 +91,12 @@ shared state with the original is the sink:
    a correct catalog.
 
 It reuses `LatticeRestoreRequest` / `LatticeRestoreResult`, authorizes fail-closed
-against the target scope, and is idempotent. It throws
+against the target scope - and, when it recovers a backup into a tree other than
+the one it was captured from, additionally against the `Backup` capability over
+that captured source scope - and is idempotent. Recovering into a fresh tree id is
+a supported workflow, so plan the recovering principal's grants accordingly: it
+needs `Restore` on the new id and `Backup` on the id the backup was taken from.
+It throws
 `LatticeRestoreValidationException` when the backup is absent from the sink, the
 base chain is broken, or an artifact is missing or tampered.
 

@@ -22,7 +22,10 @@ namespace Orleans.Lattice.Backup;
 /// path into an existing one; shadow-cutover builds a fresh shadow tree and swaps
 /// the registry alias. All shard writes run under a system-origin scope so they
 /// pass the internal-origin guard, and the restore is authorized fail-closed
-/// before anything is touched.
+/// before anything is touched - on <b>both</b> of its identifiers: the
+/// <c>Restore</c> capability over the tree being written into, and, whenever the
+/// restore retargets onto a different tree, the <c>Backup</c> capability over the
+/// tree each manifest in the chain was captured from.
 /// </summary>
 internal sealed class LatticeBackupRestoreService(
     IGrainFactory grainFactory,
@@ -76,11 +79,23 @@ internal sealed class LatticeBackupRestoreService(
             var (rangeStart, rangeEnd) = ResolveRange(effectiveScope);
 
             // Fail-closed authorization with the real caller identity, before any
-            // system-origin scope is entered.
+            // system-origin scope is entered. Two identifiers are in play whenever
+            // the restore retargets: the tree written to, and the tree the manifest
+            // was captured from.
             await authorizer.AuthorizeRestoreAsync(effectiveScope, cancellationToken).ConfigureAwait(false);
+            await AuthorizeCapturedSourcesAsync([target], effectiveScope, targetTreeId, cancellationToken)
+                .ConfigureAwait(false);
 
             // Read the base chain (base-first) and validate every artifact up front.
             var chain = await BuildChainAsync(target, cancellationToken).ConfigureAwait(false);
+
+            // A chain member carries its own captured scope. The capture path makes
+            // an increment inherit its base's scope, but the sink is a trust
+            // boundary, so every distinct source tree in the chain is gated rather
+            // than inferred from the tip.
+            await AuthorizeCapturedSourcesAsync(chain, effectiveScope, targetTreeId, cancellationToken)
+                .ConfigureAwait(false);
+
             phase = LatticeBackupMetrics.PhaseVerify;
             foreach (var manifest in chain)
             {
@@ -563,8 +578,13 @@ internal sealed class LatticeBackupRestoreService(
         var (rangeStart, rangeEnd) = ResolveRange(effectiveScope);
 
         await authorizer.AuthorizeRestoreAsync(effectiveScope, cancellationToken).ConfigureAwait(false);
+        await AuthorizeCapturedSourcesAsync([target], effectiveScope, targetTreeId, cancellationToken)
+            .ConfigureAwait(false);
 
         var chain = await BuildChainAsync(target, cancellationToken).ConfigureAwait(false);
+        await AuthorizeCapturedSourcesAsync(chain, effectiveScope, targetTreeId, cancellationToken)
+            .ConfigureAwait(false);
+
         foreach (var manifest in chain)
         {
             await ValidateManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
@@ -1096,6 +1116,67 @@ internal sealed class LatticeBackupRestoreService(
 
     private static BackupScopeSelector Retarget(BackupScopeSelector scope, string targetTreeId) =>
         new(scope.Kind, targetTreeId, scope.KeyOrPrefix);
+
+    /// <summary>
+    /// Authorizes the <b>captured source scope</b> of every manifest in
+    /// <paramref name="manifests"/> whose tree differs from
+    /// <paramref name="targetTreeId"/>, so a retargeting restore can never
+    /// materialize a tree the caller holds nothing on.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A restore has two identifiers: the tree it writes into, and the tree the
+    /// backup was captured from. The target is gated by
+    /// <see cref="BackupAccessAuthorizer.AuthorizeRestoreAsync"/>. The source was
+    /// not gated at all, because the effective scope is retargeted onto the
+    /// caller-supplied target tree before the check - so a caller holding
+    /// <see cref="LatticeOperation.Restore"/> on a tree it owns could have the
+    /// contents of any other tree written into it, gated only on knowledge of a
+    /// backup id.
+    /// </para>
+    /// <para>
+    /// The source is gated with the <see cref="LatticeOperation.Backup"/>
+    /// capability, matching every other manifest-consuming verb on the backup
+    /// control facade (describe, delete, export, health), and matching the
+    /// authority the caller would have needed to capture the manifest itself.
+    /// The scope put to the gate is the effective restore scope retargeted back
+    /// onto the source tree, so only the range actually replayed is authorized -
+    /// never the whole captured scope.
+    /// </para>
+    /// <para>
+    /// A same-tree restore is skipped: the source id is then the target id, which
+    /// the restore check already covered, so the supported same-tree workflow
+    /// needs no <c>Backup</c> grant it did not need before. Only a genuine
+    /// cross-tree retarget - clone, disaster recovery into a new id, environment
+    /// seeding - now additionally requires <c>Backup</c> over the source.
+    /// </para>
+    /// </remarks>
+    private async Task AuthorizeCapturedSourcesAsync(
+        IReadOnlyList<BackupManifest> manifests,
+        BackupScopeSelector effectiveScope,
+        string targetTreeId,
+        CancellationToken cancellationToken)
+    {
+        HashSet<string>? authorized = null;
+        foreach (var manifest in manifests)
+        {
+            var sourceTreeId = manifest.Scope.TreeId;
+            if (string.Equals(sourceTreeId, targetTreeId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            authorized ??= new HashSet<string>(StringComparer.Ordinal);
+            if (!authorized.Add(sourceTreeId))
+            {
+                continue;
+            }
+
+            await authorizer
+                .AuthorizeBackupAsync(Retarget(effectiveScope, sourceTreeId), cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
 
     /// <summary>
     /// Maps a scope to its half-open key range: whole-tree is unbounded, a prefix is
