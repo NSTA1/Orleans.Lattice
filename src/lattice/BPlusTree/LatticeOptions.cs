@@ -1338,6 +1338,19 @@ public class LatticeOptions
     /// and by <see cref="WalMaterialiserMaxConcurrentReplays"/>.
     /// </para>
     /// <para>
+    /// <b>This budget is per leaf and counted after the per-leaf range
+    /// filter</b> (<c>ShouldApplyDuringReplay</c>), which is what makes it
+    /// comparable to the seam it is named after. The classifier's cheap
+    /// pre-check compares the <i>partition-wide</i> WAL gap against it, and
+    /// that gap is shared by every leaf pinned to the partition; it is a sound
+    /// upper bound (a leaf can never apply more than the gap) but it can
+    /// overstate a single leaf's work by the partition's leaf fan-out, so it
+    /// only nominates a candidate. The warning and the counter are emitted on
+    /// the exact per-leaf count taken during the replay, not on that candidate
+    /// (issue #2149). Raising this value to quieten warnings that the
+    /// pre-check alone produced is therefore the wrong remedy.
+    /// </para>
+    /// <para>
     /// Before issue #1738 an overrun was fatal: it surfaced
     /// <see cref="LeafProjectionStaleException"/> and left the tree
     /// permanently un-activatable even though its data was fully intact. A

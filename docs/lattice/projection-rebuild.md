@@ -391,18 +391,29 @@ the first is fatal:
    **This is the only trigger that routes to `ProjectionRebuildPolicy`.**
    The exact loss boundary is `tail > checkpoint + 1`: the entry *at*
    the checkpoint is already applied, so trimming it loses nothing.
-2. **Replay budget exceeded.** The gap `walHead[p] - checkpoint[p]`
+2. **Replay budget candidate.** The gap `walHead[p] - checkpoint[p]`
    exceeds `LatticeOptions.MaxLeafReplayEntries` (default `10 000`).
-   This is a **cost** signal, not a loss signal: when the WAL still
-   covers the needed window the leaf replays anyway and converges to
-   exactly the same projection, emitting a warning and the
-   `orleans.lattice.leaf.activation_replays_over_budget` counter
-   (decision `TailReplayOverBudget`). Also skipped for the -1
-   sentinel: a fresh leaf has nothing in cache to recover, and the
-   per-leaf range filter inside the materialiser
-   (`ShouldApplyDuringReplay`) drops every WAL entry outside the
-   leaf's ownership range on iteration, so the effective work is
-   bounded by the leaf's own range rather than by the apparent gap.
+   This is a **cost** signal, not a loss signal, and since issue #2149
+   it is explicitly only a **candidate**: the gap is measured across
+   the whole WAL partition, which every leaf pinned to that partition
+   shares, while `MaxLeafReplayEntries` is a **per-leaf, post-range-filter**
+   budget. The two are in different units, and on a partition carrying
+   ~1,350 leaves the gap overstates a leaf's real work by up to that
+   fan-out. What the comparison does establish is a sound **upper
+   bound**: every entry a leaf applies lies inside `(checkpoint, head]`,
+   so `applied <= gap` always holds. A gap at or under budget therefore
+   *proves* the leaf is under budget and is dismissed for free, while a
+   gap over budget proves nothing on its own and is carried into the
+   replay as a candidate (decision `TailReplayOverBudget`).
+   Confirming it in the classifier would mean reading
+   `(checkpoint, head]` before the replay reads it again - doubling the
+   most expensive part of activation - so the **verdict** is taken
+   during the replay that happens anyway, by counting the entries that
+   actually pass the per-leaf range filter
+   (`ShouldApplyDuringReplay`). The warning and the
+   `orleans.lattice.leaf.activation_replays_over_budget` counter are
+   emitted at that exact count, not at the candidate. Also skipped for
+   the -1 sentinel: a fresh leaf has nothing in cache to recover.
    The per-slice `ReplaySliceBudget` still bounds individual
    coordinator reads on this path.
 3. **Cold past retention.** The persisted projection age exceeds
@@ -441,6 +452,28 @@ the first is fatal:
 > `tree` and `partition` only - leaf count is unbounded, so it cannot be a
 > metric dimension - which means the counter measures the rate and the log
 > makes the per-leaf call.
+
+> **What the warning reports, and the stall fault (issue #2149).** The cost
+> warning now carries the quantities it actually compared: the leaf's
+> **applied entry count** (post-range-filter), the **budget**, and - so the
+> two can be reconciled against the classifier - the partition **head** and
+> **gap**. Before this, the line carried neither `head` nor `gap`, so the
+> over-budget *factor* could not be read off the instrument at all; a
+> dimensionless figure obtained by dividing an absolute WAL offset by the
+> budget survived across three issues before a measurement run caught it.
+> `applied <= gap` holds by construction, so a line violating it is
+> reporting two different windows.
+>
+> Evaluating "did the checkpoint advance?" by hand across a log is what
+> found the livelocked leaf of issue #2165, and it is exactly what stopped
+> working once benign lines outnumbered it 560:1. That evaluation is now
+> performed in-process: a leaf that re-enters replay for the same partition
+> from an **unchanged** persisted checkpoint is reported as a distinct
+> **stalled-replay fault**, on its own throttle so cost noise can never
+> suppress it. The first activation stays silent - one cold activation is
+> not a stall - and every repeat at a frozen checkpoint warns. The two
+> conditions are independent: a stalled leaf whose own work is small warns
+> as a fault and not as a slow replay, which is the #2165 shape exactly.
 
 On the healthy multi-partition path every partition's classifier
 returns `TailReplay`, and the leaf executes a two-pass replay across

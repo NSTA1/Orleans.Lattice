@@ -629,6 +629,16 @@ internal sealed partial class BPlusLeafGrain
                 $"checkpoint={checkpoint} entryCount={Cache.Count}");
 #endif
 
+            // Whether the detector elected this partition an OVER-BUDGET
+            // CANDIDATE. It is a candidate and not a verdict because the
+            // detector compares a partition-wide, pre-filter offset gap
+            // against a per-leaf, post-filter budget (issue #2149); the gap
+            // is a sound upper bound on this leaf's own work, so it can only
+            // over-elect, never under-elect. ReplayPartitionAsync confirms it
+            // below against the exact count of entries this leaf actually
+            // applies.
+            var overBudgetCandidate = false;
+
             if (detector is not null)
             {
                 var decision = await detector.ClassifyAsync(
@@ -651,90 +661,31 @@ internal sealed partial class BPlusLeafGrain
                         // MaxLeafReplayEntries, or projection age over
                         // LeafProjectionRetention) but the WAL still covers
                         // every offset this leaf needs, so the replay below
-                        // converges to exactly the same projection. Warn and
-                        // meter, then replay: a long activation is
-                        // recoverable, refusing to activate is not (#1738).
+                        // converges to exactly the same projection. Replay
+                        // regardless: a long activation is recoverable,
+                        // refusing to activate is not (#1738).
                         //
-                        // Convergence is load-bearing on the INCREMENTAL flush
-                        // (#1831), not on the replay fitting in one activation.
-                        // Before that, all durable progress rode on the
-                        // post-pass-2 reconciliation, which only runs when the
-                        // whole replay completes inside the activation window -
-                        // so an overrun large enough to outrun the response
-                        // deadline was torn down before persisting anything and
-                        // replayed the identical window forever (#1819). Do not
-                        // reintroduce a flush ceiling that can be pinned for the
-                        // whole replay; that is what turned this warning's
-                        // "converges" into a livelock at ~42k entries over.
+                        // NOTHING IS WARNED OR METERED HERE (issue #2149).
+                        // The gap trigger is expressed in partition-wide,
+                        // pre-filter offsets while MaxLeafReplayEntries is a
+                        // per-leaf, POST-filter budget, so warning here
+                        // reported a quantity that was not this leaf's work:
+                        // at the measured fan-out of ~1,350 leaves per
+                        // partition it fired 19,639 times in 6.26 hours for
+                        // leaves whose real work was one to two orders of
+                        // magnitude BELOW budget. Both the warning and the
+                        // LeafActivationOverBudgetReplays counter now live in
+                        // ReplayPartitionAsync, where the entries this leaf
+                        // actually applies are counted for free during the
+                        // replay that is happening anyway.
                         //
-                        // Tagged with the WAL partition as well as the tree
-                        // (issue #2023). Partition is bounded by
-                        // LatticeOptions.WalPartitions, so it is safe
-                        // cardinality, and without it the counter cannot be
-                        // split by the same axis the warning reports - leaving
-                        // an operator who sees a rate spike with no way to tell
-                        // whether one partition is hot or the whole tree is.
-                        // The leaf identity is deliberately NOT a tag: leaf
-                        // count is unbounded, so per-leaf detail belongs in the
-                        // log line below, not in a time series.
-                        LatticeMetrics.LeafActivationOverBudgetReplays.Add(
-                            1,
-                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                            new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
-                            LatticeTenantLabel.ForTree(treeId));
-
-                        // Gate on IsEnabled: the templated call would otherwise
-                        // allocate a params object[] and box partition,
-                        // checkpoint, and the budget on every over-budget
-                        // activation even when warnings are filtered out.
-                        //
-                        // Also THROTTLE per (tree, leaf, partition). A cold
-                        // start on a large volume re-activates these leaves
-                        // continuously, and one warning per attempt buried a
-                        // real deployment in 5,752 identical lines in fifteen
-                        // minutes - enough to make the log useless for spotting
-                        // the faults mixed in among them. The counter above
-                        // already records every occurrence, so the log's job is
-                        // only to say the condition is happening and let an
-                        // operator find the checkpoint; the rate is a metric
-                        // concern, not a logging one.
-                        //
-                        // The leaf id is load-bearing in both the key and the
-                        // message (issue #2023). `partition` is the WAL
-                        // partition ordinal, iterated [0, WalPartitions) inside
-                        // EVERY leaf's activation - it does not identify a leaf.
-                        // Keyed on (tree, partition) alone, the first leaf to
-                        // trip the budget suppressed the warning for every other
-                        // leaf in that tree and partition for a full minute, so
-                        // consecutive lines were one-per-minute samples from
-                        // arbitrary DIFFERENT leaves. Their checkpoints are not
-                        // comparable, which made the "checkpoint that does not
-                        // advance" criterion below unevaluable and produced a
-                        // false livelock report. Qualifying both the key and the
-                        // message by leaf makes successive lines for one leaf
-                        // genuinely comparable.
-                        var overBudgetLogger = ResolveLogger();
-                        if (overBudgetLogger is not null
-                            && overBudgetLogger.IsEnabled(LogLevel.Warning)
-                            && ShouldLogOverBudgetReplay(treeId, ReplicaId, partition))
-                        {
-                            overBudgetLogger.LogWarning(
-                                "Leaf projection for tree '{TreeId}' leaf '{Leaf}' WAL partition {Partition} is "
-                                + "replaying beyond the configured budget (persistedCheckpoint {Checkpoint}, "
-                                + "MaxLeafReplayEntries {Budget}). The write-ahead log still covers the whole "
-                                + "needed window, and the replay flushes its checkpoint incrementally, so each "
-                                + "activation makes durable forward progress even if it is torn down early. "
-                                + "Activation may take longer than usual. A checkpoint that does NOT advance "
-                                + "across repeats of this warning for the SAME leaf and partition is a fault, "
-                                + "not a slow replay; repeats naming different leaves are independent replays "
-                                + "and their checkpoints are not comparable.",
-                                treeId,
-                                ReplicaId,
-                                partition,
-                                checkpoint,
-                                resolvedOptions.MaxLeafReplayEntries);
-                        }
-
+                        // The candidate is still load-bearing: it is a sound
+                        // upper bound (applied <= gap), so it can only
+                        // over-elect. That is exactly what makes it safe to
+                        // use as the gate on the STALL check downstream - the
+                        // new fault line can never fire anywhere the old line
+                        // did not.
+                        overBudgetCandidate = true;
                         break;
                     case FallOffLogDecision.SnapshotThenWal:
                     case FallOffLogDecision.FullRebuildFromWal:
@@ -750,7 +701,7 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, probedHead, cancellationToken);
+            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, probedHead, resolvedOptions.MaxLeafReplayEntries, overBudgetCandidate, cancellationToken);
             partitionsAbsorbed++;
             if (advanced)
                 anyAdvanced = true;
@@ -938,17 +889,62 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="partition">The WAL partition ordinal being replayed.</param>
     /// <returns><see langword="true"/> when the warning should be emitted.</returns>
     internal static bool ShouldLogOverBudgetReplay(string treeId, string leafId, int partition)
+        => ShouldLogThrottled(OverBudgetLogStamps, treeId, leafId, partition);
+
+    /// <summary>
+    /// Throttle stamps for the stalled-replay FAULT warning, kept in a map of
+    /// their own rather than sharing <see cref="OverBudgetLogStamps"/>.
+    /// <para>
+    /// Separation is load-bearing (issue #2149). The cost warning and the fault
+    /// warning are keyed identically, so a shared map would let a cost line for
+    /// a leaf swallow the fault line for the same leaf for a whole
+    /// <see cref="OverBudgetLogInterval"/> - silencing the only signal that
+    /// found the livelocked leaf of issue #2165, which was 0.25% of warnings in
+    /// one measurement window and 59% in the next. Two maps cost one dictionary
+    /// and make the fault line unsuppressible by cost noise.
+    /// </para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<(string TreeId, string LeafId, int Partition), long> StalledReplayLogStamps = new();
+
+    /// <summary>
+    /// True when the stalled-replay fault warning for this leaf partition is due
+    /// again. Throttled on the same interval as the cost warning but through an
+    /// independent stamp map, so cost noise can never suppress a fault.
+    /// </summary>
+    /// <param name="treeId">The tree the leaf belongs to.</param>
+    /// <param name="leafId">The leaf's grain id.</param>
+    /// <param name="partition">The WAL partition ordinal being replayed.</param>
+    /// <returns><see langword="true"/> when the warning should be emitted.</returns>
+    internal static bool ShouldLogStalledReplay(string treeId, string leafId, int partition)
+        => ShouldLogThrottled(StalledReplayLogStamps, treeId, leafId, partition);
+
+    /// <summary>
+    /// Shared body of the per-(tree, leaf, partition) log throttles. Suppression
+    /// is deliberately best-effort under races: two silos may each emit one
+    /// line, which is fine - the goal is to stop a re-activation storm flooding
+    /// the log, not to guarantee exactly-once logging.
+    /// </summary>
+    /// <param name="stamps">The stamp map to evaluate and update.</param>
+    /// <param name="treeId">The tree the leaf belongs to.</param>
+    /// <param name="leafId">The leaf's grain id.</param>
+    /// <param name="partition">The WAL partition ordinal being replayed.</param>
+    /// <returns><see langword="true"/> when the warning should be emitted.</returns>
+    private static bool ShouldLogThrottled(
+        ConcurrentDictionary<(string TreeId, string LeafId, int Partition), long> stamps,
+        string treeId,
+        string leafId,
+        int partition)
     {
         var now = Stopwatch.GetTimestamp();
         var key = (treeId, leafId, partition);
-        if (!OverBudgetLogStamps.TryGetValue(key, out var last))
+        if (!stamps.TryGetValue(key, out var last))
         {
-            if (OverBudgetLogStamps.Count >= OverBudgetLogStampCapacity)
+            if (stamps.Count >= OverBudgetLogStampCapacity)
             {
-                PruneOverBudgetLogStamps(now);
+                PruneLogStamps(stamps, now);
             }
 
-            return OverBudgetLogStamps.TryAdd(key, now);
+            return stamps.TryAdd(key, now);
         }
 
         if (Stopwatch.GetElapsedTime(last, now) < OverBudgetLogInterval)
@@ -956,24 +952,27 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
-        return OverBudgetLogStamps.TryUpdate(key, now, last);
+        return stamps.TryUpdate(key, now, last);
     }
 
     /// <summary>
-    /// Drops every <see cref="OverBudgetLogStamps"/> entry that has already aged
-    /// past <see cref="OverBudgetLogInterval"/>. Such an entry would permit the
+    /// Drops every stamp that has already aged past
+    /// <see cref="OverBudgetLogInterval"/>. Such an entry would permit the
     /// next warning anyway, so removing it is semantically free - it keeps the
     /// map's retained size tracking the leaf partitions that are currently
-    /// tripping the budget rather than every leaf that ever did.
+    /// tripping the condition rather than every leaf that ever did.
     /// </summary>
+    /// <param name="stamps">The stamp map to prune.</param>
     /// <param name="now">The timestamp the calling check is evaluated at.</param>
-    private static void PruneOverBudgetLogStamps(long now)
+    private static void PruneLogStamps(
+        ConcurrentDictionary<(string TreeId, string LeafId, int Partition), long> stamps,
+        long now)
     {
-        foreach (var stamp in OverBudgetLogStamps)
+        foreach (var stamp in stamps)
         {
             if (Stopwatch.GetElapsedTime(stamp.Value, now) >= OverBudgetLogInterval)
             {
-                OverBudgetLogStamps.TryRemove(stamp);
+                stamps.TryRemove(stamp);
             }
         }
     }
@@ -1147,6 +1146,76 @@ internal sealed partial class BPlusLeafGrain
                 ActivationTemperatureLogStamps.TryRemove(stamp);
             }
         }
+    }
+
+    /// <summary>
+    /// Silo-scoped record of the persisted checkpoint each leaf partition was
+    /// last seen replaying from, used to tell a slow replay from a STALLED one
+    /// (issue #2149, fault shape of issue #2165).
+    /// <para>
+    /// The old over-budget warning stated the fault criterion in prose - "a
+    /// checkpoint that does NOT advance across repeats of this warning for the
+    /// SAME leaf and partition is a fault" - and left an operator to evaluate it
+    /// by hand across a log. That is exactly the evaluation that found the leaf
+    /// of issue #2165 (livelocked 6h52m at an unchanging checkpoint, losing
+    /// ~15.8 writes/hour), and exactly the evaluation that could not be made
+    /// once 19,604 benign lines were mixed in among the 35 that mattered. This
+    /// map performs it in the process instead.
+    /// </para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<(string TreeId, string LeafId, int Partition), long> ReplayCheckpointObservations = new();
+
+    /// <summary>
+    /// Soft cap on <see cref="ReplayCheckpointObservations"/>. Unlike the log
+    /// stamps there is no age at which an observation is free to drop - a stall
+    /// is detected by comparing against an ARBITRARILY old prior observation -
+    /// so the map is cleared wholesale when it overflows rather than pruned.
+    /// Clearing loses at most one repeat of the fault warning per affected leaf:
+    /// a genuinely stuck leaf re-activates continuously and is re-observed on
+    /// its next attempt.
+    /// </summary>
+    private const int ReplayCheckpointObservationCapacity = 8192;
+
+    /// <summary>
+    /// Records the checkpoint this leaf partition is replaying from and reports
+    /// whether it is UNCHANGED since the previous observation on this silo -
+    /// that is, whether the previous activation of this same leaf partition
+    /// made no durable forward progress at all.
+    /// </summary>
+    /// <param name="treeId">The tree the leaf belongs to.</param>
+    /// <param name="leafId">The leaf's grain id.</param>
+    /// <param name="partition">The WAL partition ordinal being replayed.</param>
+    /// <param name="checkpoint">The persisted checkpoint this replay starts from.</param>
+    /// <returns>
+    /// <see langword="true"/> when a previous observation exists for this leaf
+    /// partition and its checkpoint is identical, so the leaf is stalled.
+    /// <see langword="false"/> on the first observation (nothing to compare
+    /// against) and whenever the checkpoint has advanced.
+    /// </returns>
+    internal static bool NoteReplayCheckpointObservation(string treeId, string leafId, int partition, long checkpoint)
+    {
+        var key = (treeId, leafId, partition);
+        var stalled = ReplayCheckpointObservations.TryGetValue(key, out var previous) && previous == checkpoint;
+        if (!stalled && ReplayCheckpointObservations.Count >= ReplayCheckpointObservationCapacity)
+        {
+            ReplayCheckpointObservations.Clear();
+        }
+
+        ReplayCheckpointObservations[key] = checkpoint;
+        return stalled;
+    }
+
+    /// <summary>
+    /// Clears the throttle and observation state these warnings keep across
+    /// activations. Test seam only: the maps are static and silo-scoped, so a
+    /// test that asserts on first-observation or first-warning behaviour needs
+    /// them empty regardless of what ran before it.
+    /// </summary>
+    internal static void ResetReplayWarningStateForTests()
+    {
+        OverBudgetLogStamps.Clear();
+        StalledReplayLogStamps.Clear();
+        ReplayCheckpointObservations.Clear();
     }
 
     /// <summary>
@@ -1537,6 +1606,8 @@ internal sealed partial class BPlusLeafGrain
         ShardMap? replayShardMap,
         int maxRecordsPerTurn,
         long? probedHead,
+        int maxLeafReplayEntries,
+        bool overBudgetCandidate,
         CancellationToken cancellationToken)
     {
         var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
@@ -1550,8 +1621,76 @@ internal sealed partial class BPlusLeafGrain
         if (head <= checkpoint)
             return (false, checkpoint);
 
+        // The partition-wide extent this replay scans. It is NOT this leaf's
+        // work (issue #2149) - every sibling leaf pinned to this WAL partition
+        // contributes to it, ~1,350 of them on the measured deployment - but it
+        // IS a sound upper bound on it, and it is the quantity the detector
+        // compared against MaxLeafReplayEntries. Both warnings below report it
+        // alongside the quantity actually compared so the two can never again
+        // be conflated from the log alone.
+        var gap = head - checkpoint;
+
+        // STALL (FAULT) CHECK - issue #2149, fault shape of issue #2165.
+        //
+        // Run BEFORE the scan, so a replay torn down by the activation deadline
+        // - which is precisely the fault being detected - still reports it.
+        //
+        // Gated on the detector's over-budget CANDIDATE. That gate is what
+        // makes this line a strict SUBSET of where the old unconditional cost
+        // warning fired: this fix can silence noise but can never move the
+        // signal to somewhere an operator was not already looking. It is also
+        // sound on its own terms - a frozen checkpoint whose partition gap fits
+        // inside the budget is an idle leaf, not a livelock - and the #2165
+        // leaf's gap was >= 30,639 against a 10,000 budget, three times over.
+        //
+        // The criterion is the one the old warning stated in prose and left an
+        // operator to evaluate by hand: the checkpoint does not advance across
+        // repeats for the SAME leaf and partition. n >= 2 by construction, so
+        // a single cold activation never trips it.
+        if (NoteReplayCheckpointObservation(treeId, ReplicaId, partition, checkpoint) && overBudgetCandidate)
+        {
+            var stalledLogger = ResolveLogger();
+            if (stalledLogger is not null
+                && stalledLogger.IsEnabled(LogLevel.Warning)
+                && ShouldLogStalledReplay(treeId, ReplicaId, partition))
+            {
+                stalledLogger.LogWarning(
+                    "Leaf projection for tree '{TreeId}' leaf '{Leaf}' WAL partition {Partition} re-entered "
+                    + "replay WITHOUT its persisted checkpoint having advanced (persistedCheckpoint "
+                    + "{Checkpoint}, unchanged since this leaf partition's previous replay on this silo; WAL "
+                    + "partition head {Head}, partition gap {Gap} entries, MaxLeafReplayEntries {Budget}). "
+                    + "This is a FAULT, not a slow replay: the previous activation banked no durable forward "
+                    + "progress at all, so this leaf is not converging and writes routed to it are being lost "
+                    + "for as long as it repeats. Note the gap is the whole PARTITION's extent, shared with "
+                    + "every sibling leaf pinned to it, so it is an upper bound on this leaf's work and not a "
+                    + "measurement of it.",
+                    treeId,
+                    ReplicaId,
+                    partition,
+                    checkpoint,
+                    head,
+                    gap,
+                    maxLeafReplayEntries);
+            }
+        }
+
         var fromExclusive = checkpoint;
         long maxApplied = checkpoint;
+
+        // Exact, POST-filter count of the entries THIS leaf takes through the
+        // projection rebuild seam - the unit MaxLeafReplayEntries is actually
+        // documented in (issue #2149). Deferred terminals count: this same leaf
+        // applies them in pass 2, so they are its work too.
+        //
+        // Counting here costs one increment per applied entry inside a scan
+        // that is happening anyway. Establishing the same figure in the
+        // detector, as a pre-check, would instead mean reading (checkpoint,
+        // head] before the replay and then reading it again to perform the
+        // replay - doubling the most expensive part of activation, and doubling
+        // exactly the read whose ~30 s overrun IS the livelock of issue #2165.
+        // That is why the verdict lives here and not there.
+        long appliedEntries = 0;
+        var overBudgetWarned = false;
 
         // Cooperative-yield budget (issue #1030): a long-tailed WAL would let
         // this replay monopolise its activation turn and block the silo
@@ -1629,6 +1768,113 @@ internal sealed partial class BPlusLeafGrain
                     state.State.HighKeyExclusive,
                     replayShardMap))
                 {
+                    // This entry is this leaf's own work: it either goes
+                    // through ILeafProjection.Apply now, or is deferred to
+                    // pass 2 where THIS leaf applies it. Either way it counts
+                    // against MaxLeafReplayEntries, which is defined in
+                    // exactly those terms.
+                    appliedEntries++;
+
+                    // OVER-BUDGET VERDICT (issue #2149). Emitted at the moment
+                    // the exact per-leaf count first crosses the budget, and
+                    // mid-scan rather than after the replay, so a teardown
+                    // later in this activation cannot swallow it.
+                    //
+                    // This replaces the pre-check warning that compared the
+                    // partition-wide gap against this per-leaf budget. At the
+                    // measured fan-out of ~1,350 leaves per partition that
+                    // comparison fired 19,639 times in 6.26 hours for leaves
+                    // whose real work was order 10^2 against a 10^4 budget -
+                    // one to two orders of magnitude BELOW budget. The count
+                    // below cannot make that error: it is the same quantity
+                    // the option documents.
+                    //
+                    // It also subsumes the detector's -1 sentinel exemption
+                    // without needing one. A brand-new leaf is exempted there
+                    // because head - (-1) charges it for every sibling's WAL
+                    // contribution; here it is charged only for entries in its
+                    // own range, so if it really does apply more than the
+                    // budget, that is a true positive worth reporting.
+                    if (!overBudgetWarned && maxLeafReplayEntries > 0 && appliedEntries > maxLeafReplayEntries)
+                    {
+                        overBudgetWarned = true;
+
+                        // Tagged with the WAL partition as well as the tree
+                        // (issue #2023). Partition is bounded by
+                        // LatticeOptions.WalPartitions, so it is safe
+                        // cardinality, and without it the counter cannot be
+                        // split by the same axis the warning reports - leaving
+                        // an operator who sees a rate spike with no way to tell
+                        // whether one partition is hot or the whole tree is.
+                        // The leaf identity is deliberately NOT a tag: leaf
+                        // count is unbounded, so per-leaf detail belongs in the
+                        // log line below, not in a time series.
+                        LatticeMetrics.LeafActivationOverBudgetReplays.Add(
+                            1,
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+                            LatticeTenantLabel.ForTree(treeId));
+
+                        // Gate on IsEnabled: the templated call would otherwise
+                        // allocate a params object[] and box every argument on
+                        // every over-budget activation even when warnings are
+                        // filtered out.
+                        //
+                        // Also THROTTLE per (tree, leaf, partition). A cold
+                        // start on a large volume re-activates these leaves
+                        // continuously, and one warning per attempt buried a
+                        // real deployment in 5,752 identical lines in fifteen
+                        // minutes - enough to make the log useless for spotting
+                        // the faults mixed in among them. The counter above
+                        // already records every occurrence, so the log's job is
+                        // only to say the condition is happening and let an
+                        // operator find the checkpoint; the rate is a metric
+                        // concern, not a logging one.
+                        //
+                        // The leaf id is load-bearing in both the key and the
+                        // message (issue #2023). `partition` is the WAL
+                        // partition ordinal, iterated [0, WalPartitions) inside
+                        // EVERY leaf's activation - it does not identify a leaf.
+                        // Keyed on (tree, partition) alone, the first leaf to
+                        // trip the budget suppressed the warning for every other
+                        // leaf in that tree and partition for a full minute, so
+                        // consecutive lines were one-per-minute samples from
+                        // arbitrary DIFFERENT leaves. Their checkpoints are not
+                        // comparable, which made the "checkpoint that does not
+                        // advance" criterion unevaluable and produced a false
+                        // livelock report. That criterion is now evaluated in
+                        // process by the stall check above; the qualification
+                        // stays because it is also what makes successive lines
+                        // for one leaf comparable to a human reader.
+                        var overBudgetLogger = ResolveLogger();
+                        if (overBudgetLogger is not null
+                            && overBudgetLogger.IsEnabled(LogLevel.Warning)
+                            && ShouldLogOverBudgetReplay(treeId, ReplicaId, partition))
+                        {
+                            overBudgetLogger.LogWarning(
+                                "Leaf projection for tree '{TreeId}' leaf '{Leaf}' WAL partition {Partition} is "
+                                + "replaying beyond the configured budget: it has taken {AppliedEntries} entries "
+                                + "through its projection rebuild seam, past MaxLeafReplayEntries {Budget} "
+                                + "(persistedCheckpoint {Checkpoint}, WAL partition head {Head}, partition gap "
+                                + "{Gap} entries). AppliedEntries is this leaf's OWN post-range-filter work and "
+                                + "is the quantity compared against the budget; Gap is the whole partition's "
+                                + "extent, shared with every sibling leaf pinned to it, and is only an upper "
+                                + "bound on it. The write-ahead log still covers the whole needed window, and "
+                                + "the replay flushes its checkpoint incrementally, so each activation makes "
+                                + "durable forward progress even if it is torn down early. Activation may take "
+                                + "longer than usual. A leaf whose checkpoint does not advance at all is "
+                                + "reported separately as a fault, not by this line.",
+                                treeId,
+                                ReplicaId,
+                                partition,
+                                appliedEntries,
+                                maxLeafReplayEntries,
+                                checkpoint,
+                                head,
+                                gap);
+                        }
+                    }
+
                     // Defer saga terminals AND DeleteRange to pass 2:
                     // - Terminals: see the DeferredTerminal docstring
                     //   for the multi-partition saga atomicity rationale.
