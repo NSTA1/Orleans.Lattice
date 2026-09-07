@@ -261,6 +261,28 @@ internal sealed partial class BPlusLeafGrain
         // here would be a redundant (idempotent but wasteful) RPC. On
         // the no-replay path (no new entries since checkpoint) we
         // still want to publish so the GC sees the leaf eagerly.
+        //
+        // Publishing no durable pin on this path is DELIBERATE, and is
+        // load-bearing in the safe direction rather than an oversight -
+        // do not "tidy" it by adding a publish call here. A data-free
+        // leaf can reach this return with its clock still at Zero,
+        // because the replay bumps a partition's max-applied offset for
+        // entries it SKIPS as belonging to another leaf's key range. Were
+        // it to publish, the frontier half would be Zero again (identical
+        // to what stands, so no gain) while the offset half would be
+        // strictly HIGHER - and a higher offset raises the WAL GC's
+        // offset floor, which REDUCES retention. That is exactly the
+        // direction the coverage gate on
+        // SeedDurableMaterialiserFrontierAsync now forbids (issue 2150),
+        // so a publish here would reintroduce a weaker form of it.
+        // Nothing is left unprotected in the meantime: both tree-id birth
+        // seams (SetTreeIdAsync and InitializeSiblingAsync) await
+        // SeedDurableMaterialiserBlockPinAsync before any routed write
+        // makes the leaf's data reachable, and that Zero frontier
+        // disables the WAL GC's cursor-trim branch outright until the
+        // leaf first checkpoints. The leaf is holding that branch OFF,
+        // not holding a weak floor - so there is no window here in which
+        // it has no pin at all.
         if (advanced)
             return;
 
