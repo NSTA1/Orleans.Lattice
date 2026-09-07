@@ -173,6 +173,20 @@ public static class GrainIndexMetrics
     /// lattice meter itself, exposed here so a test or a custom exporter can
     /// subscribe by reference without also referencing the core metrics type.
     /// </summary>
+    /// <remarks>
+    /// Must stay above every instrument declared below it, and every instrument must be
+    /// constructed from <b>this</b> field rather than from
+    /// <c>LatticeMetrics.Meter</c> directly, even though the two are the same instance.
+    /// Static field initialisers execute in declaration order, so a listener matching
+    /// <c>ReferenceEquals(instrument.Meter, GrainIndexMetrics.Meter)</c> that is the
+    /// first code in the process to touch this class would compare against
+    /// <see langword="null"/> while an instrument declared higher up is published, never
+    /// enable it, and silently record nothing. Building the instruments from this field
+    /// is what keeps such a mistake loud: it would throw
+    /// <see cref="TypeInitializationException"/> on first use instead. Enforced by
+    /// <c>MeterFieldDeclarationOrderTests</c>; demonstrated by <c>MeterListeningTests</c>.
+    /// See the Metrics section of <c>.github/copilot-instructions.md</c>.
+    /// </remarks>
     public static readonly Meter Meter = LatticeMetrics.Meter;
 
     /// <summary>

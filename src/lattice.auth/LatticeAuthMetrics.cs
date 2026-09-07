@@ -77,6 +77,16 @@ public static class LatticeAuthMetrics
     /// integration tests and custom OpenTelemetry exporters can subscribe by
     /// reference rather than by name.
     /// </summary>
+    /// <remarks>
+    /// Must stay above every instrument declared below it, and every instrument must be
+    /// constructed from it. Static field initialisers execute in declaration order, so a
+    /// listener matching <c>ReferenceEquals(instrument.Meter, LatticeAuthMetrics.Meter)</c>
+    /// that is the first code in the process to touch this class would compare against
+    /// <see langword="null"/> while an instrument declared higher up is published, never
+    /// enable it, and silently record nothing. Enforced by
+    /// <c>MeterFieldDeclarationOrderTests</c>; demonstrated by <c>MeterListeningTests</c>.
+    /// See the Metrics section of <c>.github/copilot-instructions.md</c>.
+    /// </remarks>
     public static readonly Meter Meter = new(MeterName);
 
     /// <summary>

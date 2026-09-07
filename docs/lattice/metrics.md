@@ -17,6 +17,16 @@ All instruments are owned by a single static `Meter` exposed via
 
 The name is pinned by a regression test (`LatticeMetrics_meter_name_is_orleans_lattice`) so it cannot drift.
 
+Reference-based subscription is why `LatticeMetrics` declares its `Meter` field
+above every instrument, and builds every instrument from that field. Static field
+initialisers run in declaration order, and a `MeterListener` publishes
+already-existing instruments from inside the callback that may itself be the first
+code to touch `LatticeMetrics`. An instrument declared above the `Meter` field
+would therefore be published while that field is still `null`, so a listener
+matching on `ReferenceEquals(instrument.Meter, LatticeMetrics.Meter)` would never
+enable it and would record nothing without throwing. The ordering is enforced by
+`MeterFieldDeclarationOrderTests` and demonstrated by `MeterListeningTests`.
+
 ## Tag conventions
 
 Every Lattice instrument carries a consistent set of low-cardinality tags:

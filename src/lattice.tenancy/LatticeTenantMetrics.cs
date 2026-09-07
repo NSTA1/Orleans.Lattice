@@ -127,5 +127,19 @@ public static class LatticeTenantMetrics
     /// publicly so integration tests and custom OpenTelemetry exporters can
     /// subscribe by reference rather than by name.
     /// </summary>
+    /// <remarks>
+    /// This class declares no instrument fields of its own; the per-tenant gauges are
+    /// created elsewhere from this meter. Note that this field sits at the end of the
+    /// file: if an instrument field is ever added here it must be declared <b>below</b>
+    /// this line and constructed from this field, never above it. Static field
+    /// initialisers execute in declaration order, so a listener matching
+    /// <c>ReferenceEquals(instrument.Meter, LatticeTenantMetrics.Meter)</c> that is the
+    /// first code in the process to touch this class would otherwise compare against
+    /// <see langword="null"/> while that instrument is published, never enable it, and
+    /// silently record nothing. <c>MeterFieldDeclarationOrderTests</c> begins covering
+    /// this file as soon as it declares an instrument; <c>MeterListeningTests</c>
+    /// demonstrates both orderings. See the Metrics section of
+    /// <c>.github/copilot-instructions.md</c>.
+    /// </remarks>
     public static readonly Meter Meter = new(MeterName);
 }
