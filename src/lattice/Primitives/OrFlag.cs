@@ -210,8 +210,6 @@ public sealed class OrFlag : ICrdt<OrFlag>
         Compact();
     }
 
-    private int LiveEnableCount() => OrSetDotCompaction.CountLive(Enables, Tombstones);
-
     private static void UnionInto(List<OrSetDot> target, List<OrSetDot> source)
     {
         if (source.Count == 0) return;
