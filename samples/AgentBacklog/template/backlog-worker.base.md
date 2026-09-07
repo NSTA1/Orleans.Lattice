@@ -587,9 +587,12 @@ release last.**
 
 **On success:**
 
-1. **Merge your pull request into its `baseBranch` first.** The merge is what
-   makes the item complete - the lifecycle transition is `Claimed --> Complete:
-   pull request merged into the base branch` - so everything below asserts
+1. **Land the act that makes the item complete, before you assert it.**
+
+   For an **implementation** item that act is the merge: **merge your pull
+   request into its `baseBranch` first.** The merge is what makes the item
+   complete - the lifecycle transition is `Claimed --> Complete: pull request
+   merged into the base branch` - so everything below asserts
    something that is not yet true until you have done it. Inside a grouping the
    base is the epic branch, which carries no protection, so its `build-and-test`
    run is advisory: merge once it is green rather than waiting for a check that
@@ -600,9 +603,18 @@ release last.**
    reports that as a defect. If you genuinely may not merge - review requested
    changes, or the merge is refused - you are on the failure path below, not this
    one.
+
+   For a **research** item there is no pull request, and the equivalent act is
+   getting the findings somewhere durable **outside** this item: the issue
+   comment and the `repocontext_remember` entries described in 6c. Do that
+   first, for the same reason - until it is done, the tag would assert something
+   untrue, and findings still living only in your context die with the run.
+   Recording them in the item's own `body` does not discharge this; `body` is a
+   resume pointer that no other agent parses.
 2. Write the item's final state under your fencing token: the `state:complete`
-   tag, and a `body` whose resume block reflects what actually landed (the merged
-   pull request and the sha). The tag is the only record of completeness that any
+   tag, and a `body` whose resume block reflects what actually landed - for an
+   implementation item the merged pull request and its sha, for a research item
+   the durable locations the findings now live at. The tag is the only record of completeness that any
    other agent reads; prose in `body` is never parsed. The `body` register is LWW
    and is safe only because you hold the claim; nothing else may write it while
    your claim is live. Do not write completion into a `phase:` tag - that

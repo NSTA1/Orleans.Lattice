@@ -125,7 +125,16 @@ Three rules make the tag trustworthy:
   not after a review passes. Green-and-unmerged is not complete: the lifecycle
   transition is `Claimed --> Complete: pull request merged into the base branch`,
   and an item tagged complete while its pull request is still open is a defect
-  the next ready-set computation reports.
+  the next ready-set computation reports. **An item that produces no pull
+  request completes on the equivalent durable act, not on a weaker one.** A
+  research item's product is its findings, so it completes once those findings
+  are recorded somewhere that outlives the item - the mirrored issue and durable
+  memory - and never merely because the run ended. The item's own `body` does
+  not count: it is a resume pointer rather than a deliverable, and a finding
+  that exists only in the worker's context is lost the moment the session does.
+  A design-integration item carries the further gate described under the
+  grouping model: it may not complete while a grouping it emitted still lacks
+  its dependency DAG.
 - **It is terminal and it is not a status field.** There is no `state:review`,
   no `state:in-progress`, no `state:blocked`. Everything short of terminal is
   derived from state that already exists elsewhere and is authoritative there:
