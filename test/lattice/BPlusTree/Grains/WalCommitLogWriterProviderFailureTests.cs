@@ -106,7 +106,7 @@ public class WalCommitLogWriterProviderFailureTests
         // saturation signal. The exclusion is critical because the
         // saga coordinator itself cancels in-flight RPCs as part of
         // normal control flow.
-        var release = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dispatched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var shard = Substitute.For<IWalShardGrain>();
         // The grain observes the cancellation token and throws an
         // OCE with that token when cancelled.
@@ -114,6 +114,7 @@ public class WalCommitLogWriterProviderFailureTests
             .Returns(callInfo =>
             {
                 var token = (CancellationToken)callInfo[1];
+                dispatched.TrySetResult();
                 return Task.Run(async () =>
                 {
                     await Task.Delay(Timeout.Infinite, token);
@@ -128,7 +129,11 @@ public class WalCommitLogWriterProviderFailureTests
 
         using var callerCts = new CancellationTokenSource();
         var append = writer.AppendAsync(MakeMutation(), callerCts.Token);
-        await Task.Delay(50);
+        // Cancel only once the append has provably reached the shard. A fixed sleep
+        // can cancel before dispatch, in which case the cancellation is observed on a
+        // different path and the counter claim below holds without ever exercising
+        // the caller-token exclusion this test names.
+        await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(10));
         callerCts.Cancel();
 
         Assert.That(async () => await append, Throws.InstanceOf<OperationCanceledException>());

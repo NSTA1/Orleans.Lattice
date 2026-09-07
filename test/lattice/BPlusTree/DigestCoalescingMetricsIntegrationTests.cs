@@ -1,6 +1,7 @@
 using System.Diagnostics.Metrics;
 using System.Text;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -195,9 +196,15 @@ public class DigestCoalescingMetricsIntegrationTests
             await tree.SetAsync($"k{i:D2}", Encoding.UTF8.GetBytes($"v{i}"));
         }
 
-        // The chained-fold reads can race the silo-side recorder
-        // flush so we give the listener a beat to drain.
-        await Task.Delay(20);
+        // The chained-fold reads can race the silo-side recorder flush, so wait for
+        // proof the listener drained rather than sleeping for a fixed beat. The
+        // inline count is the positive signal the closing assertion depends on, so
+        // a listener that never drained fails here instead of turning the three
+        // Is.Zero claims below into a vacuous pass on an empty recorder.
+        await TestPoll.UntilAsync(
+            () => recorder.CountFor(LatticeMetrics.PathInlineTag) > 0,
+            "at least one inline publish decision must reach the recorder before the coalescing counters are read",
+            TimeSpan.FromSeconds(10));
 
         var scheduled = recorder.CountFor(LatticeMetrics.PathCoalescedScheduledTag);
         var skipped = recorder.CountFor(LatticeMetrics.PathCoalescedSkippedTag);

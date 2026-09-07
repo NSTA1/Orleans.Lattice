@@ -1,5 +1,6 @@
 using System.Text;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -30,20 +31,28 @@ public sealed class WalPlacementMoveIntegrationTests
     private ILatticeAdmin Admin =>
         _fixture.Cluster.Client.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey);
 
+    /// <summary>
+    /// Waits until the provider's highest offset for the partition reaches
+    /// <paramref name="atLeast"/> and returns it, failing at the barrier if it never
+    /// does. The previous shape fell through silently on timeout and returned the
+    /// last probe - which is <c>-1</c> for a log that was never written - so a caller
+    /// that discarded the result simply carried on from a state the barrier had not
+    /// reached, and the real failure surfaced later or not at all.
+    /// </summary>
     private static async Task<long> WaitForHighestAsync(
         InMemoryWalStorageProvider provider, string physicalTreeId, int partition, long atLeast)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (DateTime.UtcNow < deadline)
-        {
-            var highest = await provider.GetHighestOffsetAsync(physicalTreeId, partition, CancellationToken.None);
-            if (highest >= atLeast)
+        var highest = -1L;
+        await TestPoll.UntilAsync(
+            async () =>
             {
-                return highest;
-            }
-            await Task.Delay(50);
-        }
-        return await provider.GetHighestOffsetAsync(physicalTreeId, partition, CancellationToken.None);
+                highest = await provider.GetHighestOffsetAsync(physicalTreeId, partition, CancellationToken.None);
+                return highest >= atLeast;
+            },
+            $"the WAL for '{physicalTreeId}' partition {partition} to reach offset {atLeast}",
+            TimeSpan.FromSeconds(15),
+            TimeSpan.FromMilliseconds(50));
+        return highest;
     }
 
     private static async Task WriteKeysAsync(ILattice tree, string prefix, int count)
