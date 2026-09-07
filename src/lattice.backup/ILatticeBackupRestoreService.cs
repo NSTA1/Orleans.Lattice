@@ -9,7 +9,12 @@ namespace Orleans.Lattice.Backup;
 /// last-writer-wins merge / bulk-load seams so each entry's hybrid-logical-clock,
 /// version vector, origin cluster id, expiry, and tombstone flag land bit-identical
 /// to the capture. The restore is authorized fail-closed against the
-/// <see cref="LatticeOperation.Restore"/> capability for the target scope.
+/// <see cref="LatticeOperation.Restore"/> capability for the target scope and,
+/// when the restore retargets the backup onto a tree other than the one it was
+/// captured from, additionally against the
+/// <see cref="LatticeOperation.Backup"/> capability for that captured source
+/// scope - so a cross-tree restore can never materialize a tree the caller holds
+/// nothing on.
 /// </summary>
 public interface ILatticeBackupRestoreService
 {
@@ -26,7 +31,7 @@ public interface ILatticeBackupRestoreService
     /// <returns>The restore outcome.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
     /// <exception cref="LatticeRestoreValidationException">The backup fails pre-apply validation.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope, or - on a cross-tree retarget - to back up the manifest's captured source scope.</exception>
     Task<LatticeRestoreResult> RestoreAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);
