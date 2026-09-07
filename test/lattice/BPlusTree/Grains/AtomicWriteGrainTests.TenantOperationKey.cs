@@ -5,6 +5,7 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
 using Orleans.Streams;
@@ -149,26 +150,18 @@ public partial class AtomicWriteGrainTests
     public async Task ExecuteAsync_tags_saga_metrics_with_the_whole_tenant_composed_tree_id()
     {
         var observedTrees = new List<string?>();
-        using var listener = new MeterListener();
-        listener.InstrumentPublished = (instrument, l) =>
-        {
-            if (instrument.Meter.Name == LatticeMetrics.MeterName
-                && instrument.Name == LatticeMetrics.SagaFanoutSize.Name)
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.SagaFanoutSize,
+            l => l.SetMeasurementEventCallback<int>((_, _, tags, _) =>
             {
-                l.EnableMeasurementEvents(instrument);
-            }
-        };
-        listener.SetMeasurementEventCallback<int>((_, _, tags, _) =>
-        {
-            foreach (var tag in tags)
-            {
-                if (tag.Key == LatticeMetrics.TagTree)
+                foreach (var tag in tags)
                 {
-                    observedTrees.Add(tag.Value as string);
+                    if (tag.Key == LatticeMetrics.TagTree)
+                    {
+                        observedTrees.Add(tag.Value as string);
+                    }
                 }
-            }
-        });
-        listener.Start();
+            }));
 
         var (grain, _, _, _, shard) = CreateGrain(treeId: TenantTreeId);
         shard.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));

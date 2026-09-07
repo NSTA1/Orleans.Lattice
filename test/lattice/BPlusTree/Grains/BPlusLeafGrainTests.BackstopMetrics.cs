@@ -1,6 +1,7 @@
 using System.Diagnostics.Metrics;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -90,16 +91,9 @@ public partial class BPlusLeafGrainTests
 
         public BackstopMetricRecorder()
         {
-            _listener = new MeterListener
-            {
-                InstrumentPublished = (inst, l) =>
-                {
-                    if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter))
-                        l.EnableMeasurementEvents(inst);
-                },
-            };
-            _listener.SetMeasurementEventCallback<double>(OnDouble);
-            _listener.Start();
+            _listener = MeterListening.StartForMeter(
+                LatticeMetrics.Meter,
+                l => l.SetMeasurementEventCallback<double>(OnDouble));
         }
 
         private void OnDouble(Instrument instrument, double value, ReadOnlySpan<KeyValuePair<string, object?>> tags, object? state)
