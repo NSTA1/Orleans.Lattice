@@ -163,8 +163,8 @@ public sealed class BackupHealthMonitorActivationServiceTests
     /// exception filter is evaluated at throw time, so cancelling in that window made the
     /// filter false and left the exception uncaught: it escaped <c>ExecuteAsync</c> and
     /// faulted the task. That matters beyond tidiness, because
-    /// <see cref="BackgroundServiceExceptionBehavior"/> defaults to
-    /// <see cref="BackgroundServiceExceptionBehavior.StopHost"/> - so a benign "silo not
+    /// <see cref="Microsoft.Extensions.Hosting.BackgroundServiceExceptionBehavior"/> defaults to
+    /// <see cref="Microsoft.Extensions.Hosting.BackgroundServiceExceptionBehavior.StopHost"/> - so a benign "silo not
     /// ready" arriving during shutdown could take the whole host down.
     /// <para>
     /// This drives that window deterministically rather than hoping to hit it: the fake

@@ -33,12 +33,14 @@ Each WAL entry is extended to carry causal metadata required for causal+ consist
 
 - `TreeId`
 - `ShardIndex`
-- `Offset` (monotonic per shard)
-- `Operation` (Set / Delete / DeleteRange)
-- `ValueOrDelta`
+- `Key`
+- `Op` (`MutationKind`: Set / Delete / DeleteRange)
+- `Value` **and** `Delta` - two distinct slots, not one combined field: `Value` carries a full value, `Delta` carries a typed CRDT delta, and a given entry populates whichever its merge mode calls for.
 - `OriginClusterId`
-- `SourceHlc` (Hybrid Logical Clock)
+- `Timestamp` (Hybrid Logical Clock)
 - `Mode` (`LatticeMergeMode`)
+
+The per-shard monotonic offset is **not** a field on the entry. It is assigned by the owning WAL shard as the entry is appended and travels alongside it, which is why replay can be ordered by offset without the offset being part of the entry's wire shape.
 
 ### 1.2 New fields (added for causal+)
 

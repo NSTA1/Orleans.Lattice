@@ -22,8 +22,6 @@ internal sealed class LatticeRegistryGrain(
     ITreePlacementResolver? placementResolver = null,
     TreeAliasObserverDispatcher? aliasObservers = null) : ILatticeRegistry
 {
-    private static readonly byte[] EmptyEntry = SerializeEntry(new TreeRegistryEntry());
-
     // Uses the internal ISystemLattice surface so the registry can address its
     // own backing system tree (`_lattice_trees`). The public ILattice surface
     // rejects any call targeting a reserved system-tree id and would otherwise

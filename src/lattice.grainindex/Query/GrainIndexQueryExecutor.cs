@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Orleans.Lattice.GrainIndex.Query;
 
@@ -61,13 +62,36 @@ internal sealed class GrainIndexQueryExecutor
 
         // Only a union can produce the same grain twice, so the de-duplication
         // set is allocated only when there is more than one branch.
-        var seen = disjuncts.Length > 1 ? new HashSet<string>(StringComparer.Ordinal) : null;
+        var seen = disjuncts.Length > 1 ? new SeenSet() : null;
 
         for (var i = 0; i < disjuncts.Length; i++)
         {
             var clauses = disjuncts[i].Clauses;
             if (clauses.Length == 1)
             {
+                if (seen is not null && !payloads)
+                {
+                    // The key-only union branch. A grain already reported by an
+                    // earlier disjunct is the whole reason this set exists, and
+                    // the old shape paid for it twice over: the scan cut a
+                    // grain-key string out of the raw entry key and wrapped it in
+                    // a match before the set had any say, so every duplicate
+                    // allocated a string purely to be recognised and dropped. The
+                    // set is now probed through a span over the tree's own key,
+                    // and the string is created by the insert itself, so a
+                    // duplicate costs one probe and nothing else.
+                    string unionProperty = clauses[0].Property.Name;
+                    await foreach (string entryKey in ScanEntryKeysAsync(clauses[0], pageSize, execution, cancellationToken).ConfigureAwait(false))
+                    {
+                        if (seen.TryAdd(entryKey, out string grainKey))
+                        {
+                            yield return new GrainIndexMatch(grainKey, unionProperty, NoPayload);
+                        }
+                    }
+
+                    continue;
+                }
+
                 await foreach (var match in ScanAsync(clauses[0], pageSize, execution, payloads, cancellationToken).ConfigureAwait(false))
                 {
                     if (seen is null || seen.Add(match.GrainKey))
@@ -82,17 +106,17 @@ internal sealed class GrainIndexQueryExecutor
             var candidates = await IntersectAsync(clauses, pageSize, execution, payloads, cancellationToken)
                 .ConfigureAwait(false);
 
-            foreach (var candidate in candidates)
+            foreach (var candidate in candidates.Survivors)
             {
                 if (seen is null || seen.Add(candidate.Key))
                 {
-                    yield return candidate.Value;
+                    yield return candidate.Value.Match;
                 }
             }
         }
     }
 
-    private async Task<Dictionary<string, GrainIndexMatch>> IntersectAsync(
+    private async Task<CandidateSet> IntersectAsync(
         GrainIndexScanClause[] clauses,
         int pageSize,
         GrainIndexQueryExecution execution,
@@ -103,31 +127,96 @@ internal sealed class GrainIndexQueryExecutor
         // that gets buffered and every later clause only shrinks the set. The
         // later clauses are key-only regardless of what the caller asked for:
         // their payloads are never reported, only their grain keys are.
-        var candidates = new Dictionary<string, GrainIndexMatch>(StringComparer.Ordinal);
+        var candidates = new CandidateSet();
         await foreach (var match in ScanAsync(clauses[0], pageSize, execution, payloads, cancellationToken).ConfigureAwait(false))
         {
-            candidates[match.GrainKey] = match;
+            candidates.Seed(match);
         }
 
-        for (var i = 1; i < clauses.Length && candidates.Count > 0; i++)
+        for (var pass = 1; pass < clauses.Length && candidates.Count > 0; pass++)
         {
-            // Every survivor is a key already present in candidates, so the
-            // driving set's current size is a tight upper bound; presizing to it
-            // removes the survivor dictionary's grow-from-empty rehash churn on
-            // each intersect pass of a multi-clause AND query.
-            var survivors = new Dictionary<string, GrainIndexMatch>(candidates.Count, StringComparer.Ordinal);
-            await foreach (var match in ScanAsync(clauses[i], pageSize, execution, payloads: false, cancellationToken).ConfigureAwait(false))
+            // A later clause only has to answer "is this grain still a
+            // candidate?", so it is scanned as raw entry keys and probed through
+            // a span over the tree's own string. That keeps the per-entry cost of
+            // an intersect pass to one dictionary probe and no allocation at all:
+            // the grain-key substring and the match that used to carry it were
+            // both built only to be thrown away on the overwhelming majority of
+            // entries, which do not survive.
+            var survivors = 0;
+            await foreach (string entryKey in ScanEntryKeysAsync(clauses[pass], pageSize, execution, cancellationToken).ConfigureAwait(false))
             {
-                if (candidates.TryGetValue(match.GrainKey, out var driving))
+                if (candidates.Advance(entryKey, pass))
                 {
-                    survivors[match.GrainKey] = driving;
+                    survivors++;
                 }
             }
 
-            candidates = survivors;
+            candidates.Prune(pass, survivors);
         }
 
         return candidates;
+    }
+
+    /// <summary>
+    /// Scans one clause as raw entry keys, with no grain-key projection at all.
+    /// <para>
+    /// This is the intersect path's scan. It deliberately does not share
+    /// <see cref="ScanAsync"/>'s enumerator: routing the key-only surface through
+    /// a wrapping iterator would add a state-machine hop to every entry of the
+    /// single-scan fast path, which is the shape most queries take, to save a few
+    /// lines on the path that is only reached by a multi-clause AND.
+    /// </para>
+    /// </summary>
+    private async IAsyncEnumerable<string> ScanEntryKeysAsync(
+        GrainIndexScanClause clause,
+        int pageSize,
+        GrainIndexQueryExecution execution,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var ranges = clause.Ranges;
+
+        for (var i = 0; i < ranges.Length; i++)
+        {
+            var range = ranges[i];
+
+            if (execution == GrainIndexQueryExecution.Stream)
+            {
+                var streamed = clause.Residual is { } streamPredicate
+                    ? _tree.KeysWherePredicateAsync(streamPredicate, range.StartInclusive, range.EndExclusive, false, null, cancellationToken)
+                    : _tree.KeysAsync(range.StartInclusive, range.EndExclusive, false, null, cancellationToken);
+
+                await foreach (string key in streamed.WithCancellation(cancellationToken).ConfigureAwait(false))
+                {
+                    yield return key;
+                }
+
+                continue;
+            }
+
+            string cursorId = await OpenCursorAsync(clause, range, execution, payloads: false, cancellationToken)
+                .ConfigureAwait(false);
+            try
+            {
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var page = await _tree.NextKeysAsync(cursorId, pageSize, cancellationToken).ConfigureAwait(false);
+                    var keys = page.Keys;
+                    for (var k = 0; k < keys.Count; k++)
+                    {
+                        yield return keys[k];
+                    }
+
+                    if (!page.HasMore)
+                        break;
+                }
+            }
+            finally
+            {
+                await _tree.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
     }
 
     private async IAsyncEnumerable<GrainIndexMatch> ScanAsync(
@@ -287,21 +376,160 @@ internal sealed class GrainIndexQueryExecutor
     /// </summary>
     private static bool TryReadGrainKey(string key, out string grainKey)
     {
+        if (!TryReadGrainKey(key, out ReadOnlySpan<char> span))
+        {
+            grainKey = string.Empty;
+            return false;
+        }
+
+        grainKey = new string(span);
+        return true;
+    }
+
+    /// <summary>
+    /// Locates the grain key inside an entry key without materialising it, so a
+    /// caller that only needs to look the grain up can probe with the span.
+    /// </summary>
+    private static bool TryReadGrainKey(string key, out ReadOnlySpan<char> grainKey)
+    {
         int first = key.IndexOf(GrainIndexKeyEncoder.Separator);
         if (first < 0)
         {
-            grainKey = string.Empty;
+            grainKey = default;
             return false;
         }
 
         int second = key.IndexOf(GrainIndexKeyEncoder.Separator, first + 1);
         if (second < 0)
         {
-            grainKey = string.Empty;
+            grainKey = default;
             return false;
         }
 
-        grainKey = key[(second + 1)..];
+        grainKey = key.AsSpan(second + 1);
         return true;
+    }
+
+    /// <summary>
+    /// The driving clause's matches, carrying the pass number each one last
+    /// survived so an intersect pass can prune in place instead of rebuilding the
+    /// set. Probing goes through the dictionary's span alternate lookup, which is
+    /// why the ordinal comparer is passed explicitly - the default comparer does
+    /// not support one.
+    /// </summary>
+    private sealed class CandidateSet
+    {
+        private readonly Dictionary<string, Candidate> _map = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Candidate>.AlternateLookup<ReadOnlySpan<char>> _lookup;
+
+        internal CandidateSet() => _lookup = _map.GetAlternateLookup<ReadOnlySpan<char>>();
+
+        /// <summary>How many grains are still candidates.</summary>
+        internal int Count => _map.Count;
+
+        /// <summary>The surviving candidates, keyed by grain key.</summary>
+        internal Dictionary<string, Candidate> Survivors => _map;
+
+        /// <summary>Records a driving-clause match as a candidate.</summary>
+        internal void Seed(GrainIndexMatch match) => _map[match.GrainKey] = new Candidate(match);
+
+        /// <summary>
+        /// Marks the candidate named by <paramref name="entryKey"/> as having
+        /// survived <paramref name="pass"/>, reporting whether it did.
+        /// </summary>
+        internal bool Advance(string entryKey, int pass)
+        {
+            if (!TryReadGrainKey(entryKey, out ReadOnlySpan<char> grainKey))
+                return false;
+
+            // One probe, and no string: the ref is the slot itself, so stamping
+            // the pass does not cost a second hash and lookup the way reading the
+            // value and writing it back would.
+            ref var candidate = ref CollectionsMarshal.GetValueRefOrNullRef(_lookup, grainKey);
+            if (Unsafe.IsNullRef(ref candidate) || candidate.LastPass != pass - 1)
+                return false;
+
+            candidate.LastPass = pass;
+            return true;
+        }
+
+        /// <summary>
+        /// Drops the candidates that did not survive <paramref name="pass"/>,
+        /// given how many did.
+        /// </summary>
+        internal void Prune(int pass, int survivors)
+        {
+            if (survivors == _map.Count)
+                return;
+
+            if (survivors == 0)
+            {
+                _map.Clear();
+                return;
+            }
+
+            // Removing during enumeration is supported on Dictionary<,>, so the
+            // set is pruned in place - a multi-clause AND no longer allocates a
+            // fresh survivor dictionary, and its rehash, on every pass.
+            foreach (var pair in _map)
+            {
+                if (pair.Value.LastPass != pass)
+                {
+                    _map.Remove(pair.Key);
+                }
+            }
+        }
+    }
+
+    /// <summary>One buffered candidate and the last intersect pass it survived.</summary>
+    private struct Candidate(GrainIndexMatch match)
+    {
+        /// <summary>The driving clause's match, which is what gets reported.</summary>
+        internal GrainIndexMatch Match = match;
+
+        /// <summary>The index of the last clause this candidate matched.</summary>
+        internal int LastPass = 0;
+    }
+
+    /// <summary>
+    /// The grain keys a union has already reported, so no grain is yielded twice
+    /// when it satisfies more than one disjunct.
+    /// <para>
+    /// The set is probed through its <see cref="ReadOnlySpan{T}"/> alternate
+    /// lookup, so a raw entry key can be tested against it by slicing rather than
+    /// by cutting a string first. That matters because the whole point of the set
+    /// is that some grains hit it: an already-reported grain used to allocate the
+    /// string that identified it as a duplicate. The insert is what creates the
+    /// string now, so only a grain that is actually reported pays for one.
+    /// </para>
+    /// </summary>
+    private sealed class SeenSet
+    {
+        private readonly HashSet<string> _set = new(StringComparer.Ordinal);
+        private readonly HashSet<string>.AlternateLookup<ReadOnlySpan<char>> _lookup;
+
+        internal SeenSet() => _lookup = _set.GetAlternateLookup<ReadOnlySpan<char>>();
+
+        /// <summary>Records an already-materialised grain key, reporting whether it is new.</summary>
+        internal bool Add(string grainKey) => _set.Add(grainKey);
+
+        /// <summary>
+        /// Records the grain named by <paramref name="entryKey"/>, reporting
+        /// whether it is new and, when it is, the grain key string the insert
+        /// created. A duplicate allocates nothing.
+        /// </summary>
+        internal bool TryAdd(string entryKey, out string grainKey)
+        {
+            if (!TryReadGrainKey(entryKey, out ReadOnlySpan<char> span) || !_lookup.Add(span))
+            {
+                grainKey = string.Empty;
+                return false;
+            }
+
+            // The insert materialised the key; reading it back hands out that
+            // instance rather than cutting a second copy of the same characters.
+            _lookup.TryGetValue(span, out grainKey!);
+            return true;
+        }
     }
 }

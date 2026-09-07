@@ -105,6 +105,56 @@ public sealed class GrainIndexRangeSetTests
     }
 
     [Test]
+    public void Intersect_of_three_disjoint_overlaps_keeps_all_of_them()
+    {
+        // Three overlaps exceeds the two the accumulator holds inline, so this
+        // pins the spill path that only a set produced by negation can reach.
+        var result = GrainIndexRangeSet.Intersect(
+            [Range("a", "c"), Range("e", "g"), Range("m", "p")],
+            [Range("b", "z")]);
+
+        Assert.That(result, Is.EqualTo(new[] { Range("b", "c"), Range("e", "g"), Range("m", "p") }));
+    }
+
+    [Test]
+    public void Complement_of_three_ranges_is_the_four_gaps_around_them()
+    {
+        var result = GrainIndexRangeSet.Complement(
+            [Range("c", "e"), Range("g", "i"), Range("m", "p")],
+            "a",
+            "z");
+
+        Assert.That(result, Is.EqualTo(new[]
+        {
+            Range("a", "c"),
+            Range("e", "g"),
+            Range("i", "m"),
+            Range("p", "z"),
+        }));
+    }
+
+    [Test]
+    public void Complement_of_three_ranges_round_trips_through_a_second_complement()
+    {
+        GrainIndexKeyRange[] original = [Range("c", "e"), Range("g", "i"), Range("m", "p")];
+
+        var twice = GrainIndexRangeSet.Complement(
+            GrainIndexRangeSet.Complement(original, "a", "z"),
+            "a",
+            "z");
+
+        Assert.That(twice, Is.EqualTo(original));
+    }
+
+    [Test]
+    public void Complement_of_a_trailing_range_is_the_leading_gap_only()
+    {
+        var result = GrainIndexRangeSet.Complement([Range("f", "z")], "a", "z");
+
+        Assert.That(result, Is.EqualTo(new[] { Range("a", "f") }));
+    }
+
+    [Test]
     public void Is_universe_recognises_only_the_exact_whole_range()
     {
         Assert.Multiple(() =>

@@ -265,7 +265,18 @@ One known limitation: the site is a single artifact built from one commit, so wh
 
    After each push, poll `gh run list` for a matching `event=push, headBranch=<tag>, name=Publish` run before pushing the next tag. A "no run detected within 2 min" result means the workflow trigger glob did not match - fix the trigger or the tag spelling before pushing further tags.
 
-   **The `lattice-v<X.Y.Z>` core tag also triggers the `Docs` workflow**, which rebuilds the documentation site from that commit and deploys it to GitHub Pages. It is deliberately the *only* tag that does so: the family ships in coordinated waves anchored on the core package, and the site is a single whole-repository artifact, so triggering on every per-package tag would rebuild and redeploy the identical site once per package. Push the core tag when the wave's documentation is the state you want published.
+   **The `lattice-v<X.Y.Z>` core tag also triggers the `Docs` workflow**, which rebuilds the documentation site from that commit and deploys it to GitHub Pages. It is deliberately the *only* tag that does so: the family ships in coordinated waves anchored on the core package, and the site is a single whole-repository artifact, so triggering on every per-package tag would rebuild and redeploy the identical site once per package. **Push the core `lattice-v<X.Y.Z>` tag LAST - this ordering is required, not a preference.** That single push event fires both `Publish` (the core package) and `Docs` (a live deploy of the public site), and the two cannot be decoupled: there is no way to ship the core package without also republishing the site. Ordering is therefore the only control available. Push every other tag in the wave first, verifying each as described above, and push the core tag only once they have all reached `completed/success`:
+
+   ```text
+   <every other package in the wave, one at a time, each verified>  ->  lattice-v<X.Y.Z>
+   ```
+
+   This is deliberately the *opposite* of dependency order, and the trade is a conscious one. Every other package in a wave depends on the core package and packs a `>= <X.Y.Z>` floor against it (the `<Version>` slot sets both the package version and the emitted floor), so a strict topological push - core first - would be the NuGet-ideal order: for the length of the wave, a dependent that shipped ahead of core carries a floor nothing can satisfy. That window is real, but it is small, unannounced, already blurred by NuGet indexing lag, and it **closes by itself** when the wave completes. A premature site deploy does not close by itself: it is a public artifact that stands until the next deploy, telling readers a version is available while some of its packages are not yet on NuGet. Prefer the smaller self-healing inconsistency over the visible persistent one.
+
+   Two consequences worth internalising:
+
+   - **The site's content does not depend on when the core tag is pushed.** `Docs` builds from that tag's tree, which is the wave's commit either way, so deferring the core tag changes *when* the site goes live and nothing about what it says. There is no content cost to this rule.
+   - **A core-only wave has nothing to order.** A patch that ships only `Orleans.Lattice` (as `9.5.1` did) pushes one tag, and this rule costs it nothing.
 
 7. **Verify each publish run** reaches `completed/success` before declaring the release done. Failed runs leave NuGet in an inconsistent state where some packages of a coordinated release have shipped and others have not.
 

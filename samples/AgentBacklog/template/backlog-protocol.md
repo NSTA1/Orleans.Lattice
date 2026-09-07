@@ -90,18 +90,125 @@ attribute expressed this way is filterable without reading bodies. Arbitrary
 |-----|---------|
 | `backlog` | Plain marker tag. Every item carries it. |
 | `priority:P0` .. `priority:P3` | Ordering priority. |
-| `phase:research` \| `phase:implementation` \| `phase:integration` | Which phase of its grouping the item belongs to. Set at authoring, never changed by a worker. |
-| `homeRegion:<region>` | The region in which claims for this item are taken. A claim attempted from any other region fails closed, because the underlying lock is cluster-wide and therefore region-scoped. |
+| `phase:research` \| `phase:implementation` \| `phase:integration` | Which phase of its grouping the item belongs to. Set at authoring, never changed by a worker, and it never carries execution state - a `phase:complete` or `phase:review` tag is a defect, not a status. |
+| `homeRegion:<region>` | The region in which claims for this item are taken. **Verify this is enforced before relying on it.** The intent is that a claim attempted from any other region fails closed, because the underlying lock is cluster-wide and therefore region-scoped - but that is a property of the deployment, not of the tag. On a single-region deployment `lattice_list_regions` reports only `current`, claims report region `local`, and a geographic value such as `uksouth` is **not enforced at all**: a claim from anywhere succeeds. Treat a value the cluster does not route as a **defect in the binding**, and note the failure is worse than a no-op - an unenforced safety assumption that the protocol documents as enforced is more dangerous than an absent one, because it is relied upon. |
 | `baseBranch:<branch>` | The branch this item's pull request targets. For an item in a grouping this is the **epic branch**, never `main`. |
+| `state:complete` \| `state:parked` | The item's **terminal** state, and the only execution state carried on the item. Absent means the item is live. See [Recording completion](#recording-completion). |
+| `resource:<name>` | **Optional, repeatable-by-name but one tag per distinct resource.** Names a scarce **non-file** resource the item needs exclusively - a shared test box, a physical device, a deployment slot, a rate-limited external account. Two items naming the same resource may never be in flight together, however disjoint their code radii are. **The `resource:` prefix is what makes the constraint load-bearing**, because step 8 of the ready set matches on it. A bare descriptive tag asserting the same requirement - `needs-box-exclusive`, say - is read by no step and excludes nothing, however plainly it reads to a human. |
+
+**Five tags are mandatory on every item**: `backlog`, `priority:`, `phase:`,
+`homeRegion:` and `baseBranch:`. The rest are optional. `state:` is deliberately
+not among them, because its absence is exactly what "live" means.
 
 **Exactly one tag per prefix.** Two `priority:` tags on one item means two
 authors wrote concurrently. Add-wins is what makes that visible rather than
 silent, so it is reported as a defect and reconciled, never resolved by picking
 one arbitrarily.
 
+**A missing mandatory tag is the more dangerous direction, because it is
+silent.** A duplicate is loud - two values sit where one belongs, and any reader
+trips over it. An omission gives a reader nothing to see: the item is still
+enumerated by the topic scan, still survives every narrowing step, and simply
+never gets claimed. `homeRegion:` is the worst of them, because a worker filters
+candidates to its own region, so an item naming no region matches no worker at
+all. It looks healthy in every listing and starves indefinitely. Author the five
+together, and detect the omission at step 1 of the ready set rather than
+trusting authoring discipline to hold.
+
 Keep attribute tags **low-churn**. OR-Set dots accumulate per add, so an
 attribute rewritten every run would grow a long-lived item record without bound.
-That is why execution state is deliberately not a tag (see below).
+That is why *per-run* execution state - attempts, claims, leases, review rounds -
+is deliberately not a tag (see below). The one exception is the terminal
+`state:` tag, which is written at most once in an item's life and so costs a
+single dot.
+
+### Recording completion
+
+**An item is complete when, and only when, it carries `state:complete`.** The
+tag is the record; nothing else is. Without a defined encoding every worker
+invents one, and the inventions do not agree - which is how an item ends up
+tagged `phase:complete` (clobbering a reserved authoring attribute) or described
+as finished only in prose inside `body`, where the ready-set computation cannot
+see it.
+
+Three rules make the tag trustworthy:
+
+- **It is written by the claim holder, under its fencing token, and only after
+  the thing it asserts is true.** For an implementation item that means *after*
+  the pull request is merged into its `baseBranch`, not after CI goes green and
+  not after a review passes. Green-and-unmerged is not complete: the lifecycle
+  transition is `Claimed --> Complete`, and an item tagged complete while its
+  pull request is still open is a defect the next ready-set computation
+  reports. **An item that produces no pull request completes on the equivalent
+  durable act, not on a weaker one.** A research item's product is its
+  findings, so it completes once those findings are recorded somewhere that
+  outlives the item - the mirrored issue and durable memory - and never merely
+  because the run ended. The item's own `body` does not count: it is a resume
+  pointer rather than a deliverable, and a finding that exists only in the
+  worker's context is lost the moment the session does.
+  A design-integration item carries the further gate described under the
+  grouping model: it may not complete while a grouping it emitted still lacks
+  its dependency DAG.
+- **It is terminal and it is not a status field.** There is no `state:review`,
+  no `state:in-progress`, no `state:blocked`. Everything short of terminal is
+  derived from state that already exists elsewhere and is authoritative there:
+  blocked from `blockedBy`, claimed from the claim surface, admitted from the
+  mirrored issue's labels. Adding a mutable status tag would duplicate all three
+  and churn the record besides.
+- **`body` explains, the tag decides.** The resume block says what landed and
+  what is left, for a human and for the next claim holder. It is prose and is
+  never parsed. No agent may infer completeness from it.
+
+A worker that cannot merge - because it lost its claim, because review requested
+changes, or because it ran out of run - **does not tag the item complete**. It
+writes an honest `resumeNote`, posts `result=released`, and leaves the item live
+for the next holder. That is the normal path, not a failure.
+
+### Evidence a worker may rely on
+
+The rules above say *when* a worker may assert completion. This one says what
+makes the assertion admissible. A worker that reports a measurement its own
+instrument fabricated is neither lying nor careless: it has simply never been
+told that an instrument is a thing which can itself be wrong, and a number is
+the most persuasive object an agent can put in front of a reviewer.
+
+- **Validate an instrument against a case with a known non-zero answer before
+  you trust a zero from it.** A zero from an unvalidated instrument is
+  indistinguishable from a broken instrument, and it is the most expensive kind
+  of wrong answer because it looks like a result rather than a failure. Find a
+  case whose correct outcome *requires* the quantity to be non-zero, run it, and
+  check the instrument agrees. That is one cheap run. In this protocol's first
+  live use, a worker instrumented an exception path, measured zero, and reported
+  a hypothesis refuted. The probe wrote to standard output, which the test
+  runner captures and surfaces only for *failing* tests, so on every passing run
+  it reported zero by construction. The true count on a single case was 117. By
+  then the project manager had already recorded the refutation as durable fact.
+
+- **A measurement taken over passing runs says nothing about the failing run.**
+  The failing run is by definition the one where behaviour differed. Reset per
+  run, capture per run, keep the failure. This is independent of the rule above
+  and does not substitute for it: the same worker moved its measurement onto the
+  failing run and still got a fabricated zero, because the instrument was
+  unchanged.
+
+- **Cite the artifact, not the impression.** Evidence is a machine-readable
+  per-case result that survives whatever verbosity the run happened to use. A
+  console tally is not evidence: the same worker captured "1 failed, 3 passed"
+  on a four-case fixture and could not say which case had failed, and had to
+  reproduce an event that had already happened.
+
+- **Say which claim you are making.** "Observed failing, changed, observed
+  passing" and "correct by construction and not observed to fail since" are
+  different claims of different strength. Both are legitimate and the second is
+  often the best available. Blurring them is not legitimate, because a reader
+  who is not told which one you mean will assume the stronger.
+
+The project manager carries the mirror of this obligation. Evidence is not
+authoritative merely because it is numeric, and a durable memory written from an
+unvalidated measurement propagates one worker's broken instrument into every
+later session that reads it. Ask what the instrument was and whether it was
+checked, prefer a retraction to a defence, and correct the durable record the
+moment a measurement is withdrawn.
 
 ### The item body
 
@@ -258,6 +365,29 @@ emits is an implementation grouping. Research is also not the default - where
 the shape of the work is already understood, a research phase is pure
 critical-path depth.
 
+**A `phase:research` item's deliverable is a durable memory entry plus an issue
+comment - not a branch, and not a pull request.** State this when dispatching
+one, because the default assumption of a worker built to ship code is that it
+must produce a diff. Three consequences follow:
+
+- **It does not need a branch at all**, which sidesteps the branch-naming rules
+  above entirely. A session whose workspace was auto-provisioned with a
+  generated branch name - frequently one carrying a username and no `<type>/`
+  prefix, both of which many repositories forbid outright - simply never pushes
+  it, and the non-conforming name never reaches the remote.
+- **A well-evidenced negative is a completed item, not a failed one.** Say so at
+  dispatch. A research item exists to be capable of killing the work that would
+  otherwise follow it, and a worker that believes a negative reflects on it will
+  reach for an encouraging maybe. The cheapest possible outcome of a research
+  phase is discovering early that the implementation phase must not be built.
+- **It must not touch the implementation surface.** A research item that edits
+  `src/` has silently become an implementation item without being admitted as
+  one, and its changes bypass the grouping its findings were meant to shape.
+
+If a research item genuinely must produce a file, that is a signal it was
+mis-scoped as research - and the file needs a conforming branch arranged
+deliberately, rather than an auto-generated one pushed by default.
+
 ### The integration item
 
 Every grouping terminates in exactly one designated integration item, which is
@@ -296,9 +426,57 @@ integration item passes. Concretely:
 
 - the epic record carries `baseBranch:<type>/epic/<epic-slug>`;
 - every sub-item inherits that value as its own `baseBranch:` tag;
-- sub-item branches nest under it as `<type>/epic/<epic-slug>/<item-slug>`;
+- sub-item branches are named `<type>/epic/<epic-slug>-<item-slug>`;
 - an item that is `partOf` an epic and carries `baseBranch:main` is reported as
   a defect.
+
+**The final separator is a hyphen, not a slash, and this is forced by git rather
+than chosen.** An earlier revision of this document prescribed nesting sub-items
+as `<type>/epic/<epic-slug>/<item-slug>`. That form is **unimplementable**
+whenever the epic branch is parked on the bare slug - which the first rule above
+also mandates - because git stores a branch as a file at `refs/heads/<name>`, so
+`refs/heads/X` and `refs/heads/X/anything` cannot coexist. The remote refuses it:
+
+```text
+cannot lock ref 'refs/heads/fix/epic/my-epic/my-item':
+'refs/heads/fix/epic/my-epic' exists
+```
+
+This is a directory/file ref conflict, not a policy or permissions failure, and
+no naming choice on the sub-item's side avoids it. It was found by a worker
+attempting the push, having been reviewed twice in prose without either reader
+noticing - reading a ref name does not tell you git will refuse it.
+
+Note the corollary, because it is the part that gives false assurance: **a CI
+branch-name guard will happily accept the nested form**, since it is a
+well-formed lower-case name under an allowed prefix. A guard that validates a
+string the underlying system then rejects is worse than no guard on that
+dimension, because it converts "unverified" into "verified" without adding
+verification.
+
+The alternative - parking the epic on `<type>/epic/<epic-slug>/integration` and
+leaving the namespace free for true nesting - does work, and is the better shape
+for a grouping created from scratch. It is not adopted as the default because it
+costs a rename of the epic branch and a rebase of every in-flight sub-item if
+adopted mid-grouping. Choose it at epic-creation time or not at all.
+
+**Two invariants matter more than the name, and are what a reviewer should
+actually check.** The name is a convenience; these are correctness:
+
+1. the sub-item branch is descended from the epic branch -
+   `git merge-base --is-ancestor origin/<epic-branch> HEAD` exits `0`;
+2. the sub-item's pull request **targets the epic branch, never `main`**.
+
+A sub-item that satisfies both under an off-convention name is fine and is
+reported as a naming nit. A sub-item that satisfies neither under a perfectly
+conventional name has silently bypassed the epic, and its work will not be
+collected by the integration item.
+
+**Do not use a workspace `rename_branch` affordance to satisfy this rule without
+checking its output.** In at least one environment it applies a configured
+prefix that injects a username and omits the `<type>/` prefix entirely,
+producing a name this repository forbids outright and which fails the CI guard.
+Rename the branch directly and verify the resulting name.
 
 ## Computing the ready set
 
@@ -318,24 +496,59 @@ graph, not a queue engine.
 The computation:
 
 1. `repocontext_scan` scope `MemoryTopic`, topic `backlog`, paging on the
-   continuation token, to enumerate every live item.
-2. Drop items already complete, parked, or held under a live fenced claim.
-3. For each remaining candidate, one depth-1 `repocontext_neighbors` on
-   `blockedBy`. A candidate survives when every target it names is complete.
-4. Drop survivors whose mirrored issue is not admitted (see
+   continuation token, to enumerate every live item. **Verify each item carries
+   the five mandatory tags as you page**, and report any item that does not
+   rather than silently passing over it. The check is free here, because every
+   item is already in hand, and this is the only step that sees all of them - so
+   an item malformed in a way that hides it from the later narrowing steps is
+   caught here or not at all.
+2. Drop items tagged `state:complete` or `state:parked`, and items held under a
+   live fenced claim (`repocontext_claim_status`). Completeness is read from the
+   tag and from nothing else - never from prose in `body`, and never from a
+   merged-looking pull request.
+3. **Drop grouping records.** A grouping (an epic, or any item that other items
+   declare themselves `partOf`) is a container, not a unit of work. It is
+   completed by its integration item, never claimed directly. Omitting this step
+   lets a worker claim the epic itself and duplicate the entire fan-out that the
+   decomposition just created.
+
+   Build the exclusion set **during the step-1 scan**, at no extra cost: collect
+   the target of every `partOf` edge you encounter as you page through the topic.
+   Do **not** attempt this as a reverse lookup - "who is `partOf` me?" is exactly
+   the reverse-index query this surface cannot serve, which is why the check has
+   to be a by-product of the enumeration rather than a per-candidate probe.
+
+   The same conclusion can be reached from the data alone, and belt-and-braces is
+   cheap here: a grouping should also carry `blockedBy` its own integration item,
+   which drops it at step 4 anyway. Author both. The redundancy is one-way safe -
+   it can only ever remove a container from the ready set, never admit one.
+4. For each remaining candidate, one depth-1 `repocontext_neighbors` on
+   `blockedBy`. A candidate survives when every target it names carries
+   `state:complete`.
+5. Drop survivors whose mirrored issue is not admitted (see
    [Entry gating](#entry-gating---mirror-first-admit-by-label)). This is checked
    *after* the `blockedBy` narrowing, so it costs one issue read per survivor
    rather than one per item in the topic.
-5. Sort by `(priority, createdAt, id)`, then pick from the top three to five.
+6. Sort by `(priority, createdAt, id)`, then pick from the top three to five.
    Ordering deterministically is fine and is not a defect: `repocontext_claim` is
    real mutual exclusion, so two workers converging on the same item resolve to
    exactly one proceeding and the other observing a clean refusal it can act on
    immediately. Jitter is a cheap way to spread the fan-out across candidates and
    avoid spending a round on a refusal, so it remains worth applying - but it is an
    optimisation, and no worker may rely on it for correctness.
-6. Prefer a candidate whose blast radius - its `anchoredTo` anchors plus
+7. Prefer a candidate whose blast radius - its `anchoredTo` anchors plus
    `repocontext_related` on them - is disjoint from the radii of in-flight
    items.
+8. **Exclude, rather than merely deprioritise, a candidate whose `resource:`
+   tags collide with an in-flight item's.** Step 7 is a *preference* computed
+   over `anchoredTo` **files**, so a scarce non-file resource is invisible to it:
+   an item whose real constraint is "needs exclusive use of the shared test box"
+   may have an empty code radius and will therefore look maximally disjoint and
+   sort to the front. That is the exact inversion of the truth. Resource
+   collision is a hard exclusion, not a tie-break, because the failure it
+   prevents - two agents recreating the same container under one another - is
+   not a merge conflict that surfaces loudly but a corrupted experiment that
+   reports a plausible wrong answer.
 
 A `scan` is a bulk read and therefore does **not** evaluate TTL or link
 staleness: `stale` and `staleLinks` come back `null` there, meaning "not
@@ -353,6 +566,17 @@ These are reported, never silently absorbed:
   `stale`. Re-validate the spec before spending a run on it.
 - **Duplicate attribute tag.** Two tags sharing a `key:` prefix means two
   concurrent authors. Reconcile; never pick one arbitrarily.
+- **Execution state on a `phase:` tag.** `phase:` carries the authored phase and
+  nothing else, so `phase:complete` or `phase:review` means a worker wrote a
+  status into a reserved attribute - and, because add-wins never replaces, the
+  item's real phase is either lost or now duplicated. Reconcile to the authored
+  phase plus a `state:` tag if one is warranted.
+- **Item tagged `state:complete` with an unmerged pull request.** Completion was
+  claimed before the merge that defines it. The item is not complete; the merge
+  is outstanding work.
+- **Green, mergeable pull request on an item with no live claim and no
+  `state:complete`.** The attempt died between CI passing and the merge. This is
+  the cheapest possible resume and should be picked up before any fresh item.
 - **Ready set empty while pending is not.** There is no cycle detection in the
   store, so a dependency cycle is silent permanent starvation. Alarm rather than
   exit quietly.
@@ -374,8 +598,9 @@ stateDiagram-v2
   Blocked --> Ready: every blocker completes
   Ready --> Claimed: fenced claim acquired (homeRegion only)
   Claimed --> Ready: lease expires, or the worker releases
-  Claimed --> Complete: pull request merged into the base branch
+  Claimed --> Complete: PR merged into the base branch, or equivalent durable act
   Claimed --> Parked: attempts exceed the poison threshold
+  Claimed --> Parked: the holder parks it deliberately
   Parked --> Ready: a human respecifies and re-admits
   Complete --> [*]
 ```
@@ -383,6 +608,225 @@ stateDiagram-v2
 `Claimed --> Ready` on lease expiry is the normal path, not an exception. Stale
 claims are the common case, so a claim is always lease-bounded and reclaimed on
 expiry rather than held by a flag that a killed session leaves set forever.
+
+### Parking an item - both sides, and not only on exhaustion
+
+**Parking is encoded on both sides, and the tag is the half that has effect.**
+The ready set drops parked items at step 2 by reading the `state:parked` **tag
+on the item record**; the `stale` **label on the mirrored issue** is what makes
+the park visible to a human. A park that writes only the label is not a park:
+the item survives every step of the ready set and is claimable again on the next
+tick, so the guard silently does nothing. Write both, and write them under the
+fencing token of the claim you hold, in the order tag then label - if the run
+dies between them the item is already out of the ready set and the sweep can
+finish the visible half.
+
+**The poison threshold is three, and it is a floor on parking, not the only
+route to it.** An item whose claim-marker count has reached three is parked by
+whichever worker takes it there. But a holder that establishes, at any attempt
+number, that the item cannot proceed as specified **parks it deliberately** and
+does not wait to burn the remaining attempts. The two cases that matter:
+
+- The work is blocked on a decision, a defect, or a dependency that is not
+  itself an item, so no `blockedBy` edge can express it.
+- The specification is wrong, not merely hard - the item as written cannot be
+  satisfied.
+
+Releasing instead is the failure mode this exists to prevent. `result=released`
+leaves the item live and immediately re-claimable, so the next worker draws it,
+re-derives the same finding, and releases in turn; the fleet spends a session per
+tick relearning one conclusion. A deliberate park costs one attempt and states
+the conclusion once.
+
+**Say why, in both places a later reader will look.** The `resumeNote` carries
+the finding for the next holder, and the `outcome ... result=parked` comment
+carries it for the human who must decide. A park with no stated reason is
+indistinguishable from a crash and will be unparked without the finding being
+addressed.
+
+**Parking is safe to get wrong in one direction only.** It can only ever remove
+an item from the ready set, and `Parked --> Ready` requires a human, so an
+over-eager park costs a human glance while an omitted one costs an unbounded
+loop. Park when in doubt. Parking is a **finding**, not a failed attempt, and a
+worker that parks correctly on its first attempt has done its job.
+
+### The lease is shorter than the work - renew before, never after
+
+**The cluster clamps a claim lease to a maximum of 300 seconds, and defaults to
+30 seconds when `leaseSeconds` is omitted.** A build-and-test cycle on a
+non-trivial repository exceeds both. The consequence is not hypothetical and was
+observed on the first live run of this protocol: two independent workers each
+had a claim lapse mid-build, while actively working the item.
+
+Both recovered correctly - `repocontext_claim_status` showed no other holder and
+no queue, and the re-claim returned a fencing token incremented by exactly one -
+so the mechanism behaved as designed. **The gap is that the lease duration is
+shorter than the shortest useful unit of work**, which turns a safety property
+into a routine occurrence.
+
+Why that matters more than a retry: during the lapse the item is, to any other
+worker computing the ready set, simply **unclaimed**. Step 2 drops items "held
+under a live fenced claim" and there is no live claim, so there is no state
+distinguishable from never-started. A sibling recomputing in that window would
+have found the item available and begun duplicate work on an item another worker
+was mid-build on. Nothing prevented that. Only the timing did.
+
+Rules, in force for every worker:
+
+- **Always pass `leaseSeconds` explicitly.** The 30-second default is shorter
+  than almost any real operation and will lapse under a single test run.
+- **Renew immediately BEFORE any long operation, never after it.** Treat a
+  build, a test run, or anything expected to exceed roughly two minutes as
+  requiring a renewal first. Renewing afterwards is renewing during the window
+  you needed to be covered for.
+- **On discovering a lapsed claim, re-claim and then CHECK THE FENCING TOKEN.**
+  If it incremented as expected and the holder is you, that is a clean re-claim;
+  proceed, and report it. If the holder is not you, or the token did not move as
+  expected, **stop and report** - somebody else has been working the item, and
+  continuing would produce two divergent attempts at one unit of work.
+- **Never write anything under a token you know to be stale.**
+
+Fixes worth making to the surface itself, in preference order: raise the clamp
+above a realistic build time, or make it per-phase, since a research item and a
+build item have very different natural durations; auto-renew on a timer for the
+lifetime of a long child process rather than asking a worker to predict its
+duration; and distinguish "lease expired while work was in progress" from "never
+claimed" in the ready set, so a lapse degrades to a warning rather than to
+availability.
+
+This was surfaced only because a worker volunteered an unflattering detail it
+had already recovered from. A protocol that discourages that reporting would
+have shipped this gap silently.
+
+### Detecting and picking up a dropped lease
+
+Raising the lease only makes a lapse rarer. It does not say what a lapse *means*
+or who may act on it, and that is the part that has to be specified, because the
+store cannot answer the only question that matters.
+
+**The central difficulty: a lapse has two causes and the surface cannot tell
+them apart.** An expired lease means either
+
+1. the holder is **gone** - crashed, killed, context-exhausted, session ended -
+   and the item genuinely needs picking up; or
+2. the holder is **alive and working**, and merely failed to renew in time.
+
+Both present identically: no live claim. Nothing in the lock, the item record, or
+the ready set distinguishes them, and there is no liveness signal independent of
+the renewal itself. Treating every lapse as case 1 duplicates live work; treating
+every lapse as case 2 leaks items permanently to dead agents. Neither default is
+safe, so the protocol makes the distinction *unnecessary* rather than pretending
+to resolve it.
+
+**Detection is pull, not push. Renewal IS the liveness probe.** A worker is never
+notified that its lease expired; it finds out only by attempting a renew (or a
+fenced write) and being refused. There is no callback and no interrupt. A worker
+that never renews never learns it was evicted, and will keep working - which is
+precisely case 2 seen from the inside. This is why renewal is mandatory before
+long operations rather than merely advisable: it is the only mechanism by which a
+worker discovers it has lost the item.
+
+**What fencing does and does not protect, which is the load-bearing point.** The
+monotonic fencing token makes *store* writes safe: a superseded worker's write is
+rejected, so two workers can never both mutate the item record. It protects
+nothing else. **Git, GitHub, the filesystem and any deployed environment are
+outside the fence.** A superseded worker can still push a branch, open a pull
+request, comment on an issue, or recreate a container, and none of those will be
+refused on account of a stale token.
+
+Therefore:
+
+- **Renew immediately before every externally-visible side effect, and verify the
+  token, not merely that the call succeeded.** Push, pull-request creation, issue
+  comments, and any environment mutation are all gated on a fresh, verified
+  renewal. A renewal that *returns* is not enough; the token it reports must be
+  the one you hold.
+- **On refusal, abort without side effects.** Do not push "just this branch", do
+  not open the pull request, do not comment. Report and stop.
+- **Never destroy your own work on discovering you were superseded.** The branch
+  and commits from an evicted attempt are the takeover's most useful input. Leave
+  them, and say in your report exactly where they are. Deleting them converts a
+  recoverable handover into a restart.
+
+**A lapsed item is quarantined before it becomes claimable.** It does not
+re-enter the ready set the instant the lease expires. It becomes eligible only
+after a quarantine interval that comfortably exceeds the longest plausible
+renewal gap - one full lease is the working default. This is what buys the
+distinction the store cannot make: an alive-but-late holder reclaims its own item
+inside the quarantine and continues (its fence increments, nothing else changes),
+whereas a genuinely dead holder never does, and the item is released to others
+only after that window closes. The cost is bounded latency on genuine failures;
+the benefit is that the common case stops being a race.
+
+**One full lease is the wrong quarantine while the clamp stands, and elapsed time
+is the wrong evidence.** The working default above assumes the lease
+approximates the work. It does not: the cluster clamps to 300 seconds against
+turns that routinely run for hours, so a live worker's claim spends almost all of
+its life presenting as lapsed. This was observed on the first real run - a
+productive worker sat at fence 12, mid-implementation, while `claim_status`
+reported `isHeld: false` and the item showed no unmet blockers. To any agent
+computing a ready set it was indistinguishable from abandoned work, and the lock
+would have granted it on request. A quarantine measured in lease multiples is
+therefore no protection at all here, because the window it names has already
+elapsed in the ordinary case.
+
+Until the clamp is raised, quarantine on **evidence of work, not elapsed time**.
+An item whose previous claimant shows a branch pushed, an issue comment, or a
+fencing token that has moved within the last hour is a **live holder**, whatever
+the lease says, and must not be taken over. Only the sustained absence of all
+three licenses a takeover. This inverts the default deliberately, because the two
+errors are not symmetric: waiting on genuinely dead work costs bounded latency,
+whereas taking over live work destroys an entire session's unpushed output at the
+moment it finally tries to write, and destroys it silently, since the evicted
+worker learns of the eviction only when its next fenced write is refused.
+
+**Taking over is an explicit, evidenced act.** A worker claiming an item whose
+previous claim lapsed must:
+
+1. **Read the resume block first** (`lastLocation`, `resumeNote`) and treat it as
+   **advisory**. An abandoned run leaves its branch behind but not the reasoning
+   that produced it, and the resume note was written before whatever ended the
+   run - so it describes an intent, not a verified state. Re-derive.
+2. **Verify the recorded branch against the remote** rather than trusting
+   `lastLocation`. It may not have been pushed at all - the most common shape,
+   since eviction tends to happen mid-build, before any push.
+3. **Never force-push or rewrite the prior attempt's branch.** Build on it or
+   start beside it; do not destroy the only record of what the previous holder
+   did.
+4. **Post a takeover marker on the mirrored issue** naming the prior owner, the
+   prior fencing token, and the new one. This is what makes `attempts`
+   countable - it is derived from the claim-comment trail, not stored - and it is
+   the only human-visible trace that an item changed hands.
+5. **Check for a contradicting marker before doing any work.** If the prior owner
+   posted activity *after* the takeover marker, it was case 2 and is still alive:
+   stop, report the collision, and let a human adjudicate. Two agents silently
+   working one item is the failure this whole section exists to prevent.
+
+**A takeover counts as an attempt.** It is not a free retry. Repeated takeovers
+on one item drive it toward the poison threshold and into `Parked`, which is
+correct: an item that keeps evicting its holders is either mis-specified or too
+large, and both need a human rather than another attempt.
+
+**A claim marker records a CLAIMANT, not a grant.** A worker whose lease lapses
+and who re-claims its own item is continuing the same work under a new fencing
+token; custody never changed. It must **not** post a second claim marker - the
+marker's purpose is to record who holds the item, and that did not change, so a
+second one is noise in the exact trail the parking sweep counts. Disclose the
+fence movement in the item body and in the outcome marker instead.
+
+The corollary is load-bearing: **a lapse-and-re-claim by the same owner does not
+count as an attempt.** Counting it would park an item purely for taking longer
+than one lease, which inverts what parking is for - it exists to catch items that
+keep *evicting* their holders, not items that are simply long. Only a genuine
+change of custody, evidenced by a takeover marker naming a different prior owner,
+is an attempt.
+
+**Reporting a clean re-claim is mandatory, not optional.** A worker that lapses
+and successfully re-claims its own item inside the quarantine has had a
+near-miss, not a non-event. Report it. Both instances of this on the protocol's
+first run were reported voluntarily by workers that had already recovered, and
+that is the only reason the gap was found at all - had they stayed silent, the
+protocol would have shipped with a race nobody had observed.
 
 ## Mirroring to GitHub
 
@@ -410,7 +854,7 @@ memory. It is deliberately narrow.
 
 An agent-writable backlog otherwise grows without bound and lets the fleet pick
 its own homework. The gate is **both** halves of that choice, because each
-closes a different hole, and it is enforced at step 4 of the ready-set
+closes a different hole, and it is enforced at step 5 of the ready-set
 computation:
 
 1. **Visibility is mandatory and structural.** Every item is mirrored to a
@@ -423,13 +867,35 @@ computation:
    owner approved in conversation with the project manager, is admitted at
    creation.
 
+**The label's name understates what it does.** `needs-specification` is an
+admission gate, not a to-do that an agent discharges by writing a
+specification. Two consequences follow, and both have been tripped in practice:
+
+- **Writing the specification does not admit the item.** An agent may draft the
+  spec, post it on the issue and record it in the mirrored item; only a human
+  may then remove the label. An agent that files an item, specifies it, and
+  clears the label has proposed the work and authorised it in the same breath,
+  which is the hole this gate exists to close - and it is worth strictly more
+  when the proposing agent is the one persuaded by its own argument, because
+  there is then no independent check anywhere in the loop. The project manager
+  is barred from this explicitly in its own boundaries; the prohibition applies
+  to every agent.
+- **A fully-specified issue that still carries the label is not a labelling
+  defect and must not be "corrected".** The label reports that admission is
+  outstanding, not that prose is missing. Any agent auditing or tidying labels
+  must leave it alone.
+
 This reuses the repository's existing `needs-specification` and `stale` label
 ladder rather than inventing a parallel state machine, and it keeps admission on
 the GitHub side where a human can exercise it without an agent in the loop -
 consistent with GitHub owning oversight.
 
-Poison items ride the same ladder: after N failed attempts an item is parked
-(labelled `stale`) rather than burning a whole session per scheduled tick.
+Parked items ride the same ladder: an item at the poison threshold of three
+attempts, or one a holder parked deliberately, carries `stale` on the issue
+alongside the `state:parked` tag that the ready set actually reads, rather than
+burning a whole session per scheduled tick. See "Parking an item" for why both
+halves are written and why exhaustion is not the only route. Unparking is a
+human act, exactly as admission is.
 
 ## Worked example
 

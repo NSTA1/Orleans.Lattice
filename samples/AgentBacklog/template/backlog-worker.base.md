@@ -124,6 +124,38 @@ These are non-negotiable. Each encodes a specific failure mode.
     em-dash (U+2014) and no mojibake in any issue comment, memory entry, commit
     message or tracked file you write. Plain ASCII hyphens only.
 
+12. **Every `send_session_message` to your manager passes
+    `delivery_mode: "immediate"`, explicitly, every time.** This is a property of
+    the channel, not of any particular message: status updates, questions,
+    blocker reports, ruling requests, corrections and the Phase 8 sign-off all
+    use it. There is no message to your manager for which the default lane is
+    the right choice.
+
+    **The failure is omitting the parameter, not choosing the wrong value.** It
+    defaults to `enqueue`, and no worker ever deliberately selects `enqueue` -
+    there is no reason to want it. So a rule phrased as "prefer immediate over
+    enqueue" is nearly a no-op: it offers a choice between two options the
+    worker was never consciously choosing between. Pass it explicitly, so the
+    choice is visible in what you wrote rather than inherited from a default.
+
+    A message landing on the queued lane at the instant the recipient's turn
+    ends has been observed to **wedge that session**: it never finalises as
+    idle, its queue never drains, and it accepts no further input until the
+    process is restarted. The immediate lane is delivered as steering input
+    mid-turn and does not have that failure mode.
+
+    **Interim messages are where the exposure actually is**, and the first
+    version of this rule missed them: it lived in the Phase 8 report section,
+    bound only "the report", and singled out the final sign-off. A worker in
+    Phase 5 with a blocker has no reason to be reading Phase 8, so it never met
+    the rule at the moment the rule applied. On this protocol's first live run
+    that gap crashed a project-manager session **twice**, both times on ordinary
+    mid-run correspondence. The sign-off is the worst case, not the only one.
+
+    A wedged manager is not a private cost to it. While it restarts it is not
+    reviewing your work, not answering the question blocking you, and not
+    merging anything.
+
 ## The run at a glance
 
 ```mermaid
@@ -193,10 +225,11 @@ over memory links, so "who is blocked by me?" cannot be asked. Do not design
 around a lookup this surface cannot serve.
 
 In outline: scan the `backlog` topic paging on the continuation token; drop items
-already complete, parked, or under a live claim; run one depth-1 `neighbors` call
-on `blockedBy` per surviving candidate and keep only those whose every target is
-complete; drop candidates whose mirrored issue is not admitted; then order and
-select.
+tagged `state:complete` or `state:parked` and items under a live claim; run one
+depth-1 `neighbors` call on `blockedBy` per surviving candidate and keep only
+those whose every target carries `state:complete`; drop candidates whose mirrored
+issue is not admitted; then order and select. Completeness is that tag and
+nothing else - not prose in `body`, and not your reading of a pull request.
 
 Two properties of the scan matter to you specifically:
 
@@ -218,6 +251,9 @@ Each of these is a required check, and each one is **surfaced**, never absorbed.
 | A `blockedBy` target returns `exists: false` | **Defect.** A dangling blocker is *not* a satisfied dependency. Report it and treat the dependent item as blocked. Treating absence as satisfaction is how a deleted item silently releases work that was deliberately gated on it. |
 | `recall` reports the candidate `stale` (an `anchoredTo` target drifted) | **Re-validate before spending a run.** Read the drifted anchor and the mirrored issue, and decide whether the specification still holds. If it does, refresh nothing and proceed, noting the drift. If it does not, skip the item and report it for respecification. |
 | Two tags share a `key:` prefix (for example two `priority:` tags) | **Defect.** It means two authors wrote concurrently and add-wins made the collision visible. Report it; never pick one arbitrarily. |
+| A `phase:` tag carries execution state (`phase:complete`, `phase:review`) | **Defect.** `phase:` is authored and add-wins never replaces it, so the item's real phase is now lost or duplicated. Report it; the project manager reconciles. |
+| An item tagged `state:complete` whose pull request is still open | **Defect.** Completion was claimed before the merge that defines it. Report it; the merge is outstanding work, and the item is not a satisfied `blockedBy` target. |
+| A green, mergeable pull request on an item with no live claim and no `state:complete` | The previous attempt died between CI and the merge. This is the **cheapest possible resume** - prefer it over starting a fresh item. |
 | The item is `partOf` an epic but carries `baseBranch:main` | **Defect.** Report it and skip the item. Do not guess the epic branch: guessing produces a pull request into `main` that looks perfectly normal. |
 | A grouping's fan-out is complete but its integration item is not | The grouping is **not** complete. Do not treat the epic as closable. The integration item is the next work. |
 | The candidate's mirrored issue carries `needs-specification` | Not admitted. Skip it. You never remove that label. |
@@ -344,6 +380,19 @@ Rules, all of which follow from how the surface actually behaves:
   another worker got there first: go back to Phase 2 and take the next candidate.
   `reason: "missing"` means there is no such record, which is a **defect** in the
   backlog - report it rather than creating the record yourself.
+- **A lapse is not an invitation. Check for a live holder before taking over.**
+  `granted: false, reason: "contended"` only ever fires against a lease that is
+  still *live*. Against a lapsed one the lock grants immediately and issues you a
+  strictly higher token, which fences out the previous holder's next write - and
+  because the deployed clamp is far shorter than a real work turn, a busy and
+  entirely healthy worker normally presents as lapsed. So "the lock let me have
+  it" is not evidence that the item was free. Before claiming any item whose
+  record shows a prior claimant, read `repocontext_claim_status` and treat a
+  recent claimant as a live holder unless you have positive evidence of
+  abandonment: no new commits on its branch, no new issue comments, and no fence
+  movement across the quarantine window. Absence of a live *lease* is not such
+  evidence; absence of *work* is. See "Detecting and picking up a dropped lease"
+  in the protocol.
 - **Honour the returned lease, not the one you asked for.** The lock clamps.
   Track `leaseExpiresAtUtc` and `leaseSeconds` from the result.
 - **Keep the `fencingToken` for the whole run** and present it on every
@@ -370,7 +419,7 @@ before it:
 <!-- backlog-worker: claim item=issue-2101 owner=backlog-worker/7f3a region={homeRegion} fence=41 at=2026-09-06T00:12:44Z -->
 Claimed `issue-2101`. Lease expires 2026-09-06T01:12:44Z.
 Base branch `feat/epic/backlog-mechanism`, working branch
-`feat/epic/backlog-mechanism/wal-shard-batching`.
+`feat/epic/backlog-mechanism-wal-shard-batching`.
 ```
 
 Grammar, and it is deliberately rigid:
@@ -473,10 +522,31 @@ tests), review, deliver. Run it as written. What this file adds is only the
 branching and targeting rules:
 
 - Branch from the item's `baseBranch:` tag as
-  `<type>/epic/<epic-slug>/<item-slug>` when the item is inside a grouping, and
+  `<type>/epic/<epic-slug>-<item-slug>` when the item is inside a grouping, and
   open the pull request **back into that same branch**
   (`gh pr create --base <baseBranch>`). Never a bare `epic/<slug>`; the branch
-  guard rejects it.
+  guard rejects it. **The final separator is a hyphen, not a slash, and git
+  forces that** - the epic branch is parked on the bare slug, so
+  `refs/heads/<type>/epic/<epic-slug>` already exists as a file and
+  `refs/heads/<type>/epic/<epic-slug>/<item-slug>` cannot be created beside it.
+  The remote refuses the push with `cannot lock ref`. A CI branch-name guard
+  accepts the nested form, so it will not save you. See
+  [`backlog-protocol.md`](backlog-protocol.md) for the full reasoning.
+- **Your session's own branch is not the item's branch, and may not even be a
+  legal name.** A session harness typically creates the worktree on a generated
+  branch - sometimes carrying a username, sometimes with no `<type>/` prefix at
+  all - and both forms fail the branch guard. Do not rename it, do not push it by
+  name, and do not let it become the item's branch by default. Push with an
+  explicit refspec to the name the item requires, which makes the local name
+  irrelevant:
+
+  ```text
+  git push <remote> HEAD:refs/heads/<type>/epic/<epic-slug>-<item-slug>
+  ```
+
+  When you are resuming, that same refspec is what updates the existing pull
+  request in place. Check your local branch name against the guard **before** you
+  push, not after CI rejects it.
 - A standalone item outside any grouping carries `baseBranch:main` legitimately
   and targets `main` in the ordinary way. An item that is `partOf` an epic and
   carries `baseBranch:main` is a defect (Phase 1), not a licence.
@@ -562,19 +632,48 @@ release last.**
 
 **On success:**
 
-1. Write the item's final state under your fencing token: the completion, and a
-   `body` whose resume block reflects what actually landed (the merged pull
-   request and the sha). The `body` register is LWW and is safe only because you
-   hold the claim; nothing else may write it while your claim is live.
-2. Capture durable findings with `repocontext_remember`: decisions with their
+1. **Land the act that makes the item complete, before you assert it.**
+
+   For an **implementation** item that act is the merge: **merge your pull
+   request into its `baseBranch` first.** The merge is what makes the item
+   complete - the lifecycle transition is `Claimed --> Complete: pull request
+   merged into the base branch` - so everything below asserts
+   something that is not yet true until you have done it. Inside a grouping the
+   base is the epic branch, which carries no protection, so its `build-and-test`
+   run is advisory: merge once it is green rather than waiting for a check that
+   will never gate. This is **your** call and your responsibility, not the
+   product owner's and not the project manager's. A worker that leaves a green,
+   mergeable pull request open and reports the item done has not completed it; it
+   has released it while claiming otherwise, and the next ready-set computation
+   reports that as a defect. If you genuinely may not merge - review requested
+   changes, or the merge is refused - you are on the failure path below, not this
+   one.
+
+   For a **research** item there is no pull request, and the equivalent act is
+   getting the findings somewhere durable **outside** this item: the issue
+   comment and the `repocontext_remember` entries described in 6c. Do that
+   first, for the same reason - until it is done, the tag would assert something
+   untrue, and findings still living only in your context die with the run.
+   Recording them in the item's own `body` does not discharge this; `body` is a
+   resume pointer that no other agent parses.
+2. Write the item's final state under your fencing token: the `state:complete`
+   tag, and a `body` whose resume block reflects what actually landed - for an
+   implementation item the merged pull request and its sha, for a research item
+   the durable locations the findings now live at. The tag is the only record of completeness that any
+   other agent reads; prose in `body` is never parsed. The `body` register is LWW
+   and is safe only because you hold the claim; nothing else may write it while
+   your claim is live. Do not write completion into a `phase:` tag - that
+   attribute is authored, add-wins never replaces it, and writing status there
+   destroys the item's real phase.
+3. Capture durable findings with `repocontext_remember`: decisions with their
    rationale, gotchas that cost you time, conventions you had to infer. Use a
    deterministic `id` you choose, set `author` to your run identity, and link the
    entry to the code it depends on so a later `recall` flags it stale. If you are
    inside a grouping, post a handoff to the workstream topic with
    `ttlSeconds: 604800`.
-3. Mirror the outcome: post the `outcome ... result=complete` comment on the
+4. Mirror the outcome: post the `outcome ... result=complete` comment on the
    issue and close it if the merged pull request did not already.
-4. `repocontext_release_claim(key, fencingToken)`. Release is idempotent; a stale
+5. `repocontext_release_claim(key, fencingToken)`. Release is idempotent; a stale
    or missing release reports `released: false` rather than erroring.
 
 **On failure, and this path is the normal one, not the exception:**
@@ -583,14 +682,31 @@ release last.**
    `resumeNote` saying what is done and what is left, under your token. Write it
    for a reader who was not there: the next holder will re-decide from it, and a
    note that only makes sense with your conversation in hand is worse than none.
-2. Post the `outcome ... result=released` comment.
-3. If this attempt takes the issue's claim-marker count to the poison threshold,
-   **park the item**: apply the existing `stale` label and say in the comment what
-   failed on each attempt, with `result=parked`. Parking is idempotent, so the
-   project manager's periodic sweep remains the backstop for a worker that died
-   before it could park. Unparking is a **human** act; you never remove `stale`
-   and you never remove `needs-specification`.
-4. `repocontext_release_claim(key, fencingToken)`.
+   Do **not** write `state:complete`; the item stays live for the next holder.
+2. Post the `outcome` comment. It carries `result=released` when the item stays
+   live for the next holder, and `result=parked` when you are parking it under
+   step 3 - one comment either way, never both.
+3. **Park the item** if either trigger fires. The first is exhaustion: this
+   attempt takes the issue's claim-marker count to the poison threshold. The
+   second is a finding, at any attempt number - you have established that the
+   item cannot proceed as specified, because it is blocked on something no
+   `blockedBy` edge can express (a decision, a defect, a non-item dependency) or
+   because the specification itself is unsatisfiable. Do not release and leave it
+   live in that case: the next worker draws it, re-derives your finding, and
+   releases in turn, one session per tick, for ever. Parking on the first attempt
+   is correct when the finding is real, and it is a **finding, not a failed
+   attempt**.
+4. To park, write **both halves, tag first**: `repocontext_update` the item with
+   the `state:parked` tag under your fencing token, then apply the existing
+   `stale` label to the issue and post the comment with `result=parked` saying
+   what failed on each attempt, or what you established. The tag is the half with
+   effect - the ready set drops parked items by reading it, and a park that
+   writes only the label leaves the item claimable on the next tick. Tag first so
+   that a run dying between the two still leaves the item out of the ready set.
+   Parking is idempotent, so the project manager's periodic sweep remains the
+   backstop for a worker that died before it could park. Unparking is a **human**
+   act; you never remove `stale` and you never remove `needs-specification`.
+5. `repocontext_release_claim(key, fencingToken)`.
 
 **On being superseded:** write nothing, release nothing, comment nothing, and
 report (principle 3). Your claim marker already stands as the attempt.
@@ -644,6 +760,12 @@ you completed, released, refused or exited empty:
   are the findings that never reach anyone if you leave them out, because nothing
   else in the system is looking.
 
+**Send it on the immediate lane**, like every other message to your manager:
+`delivery_mode: "immediate"`, passed explicitly. The rule and its reasoning are
+operating principle 12; this report is the single most dangerous message to get
+wrong, because by construction it arrives while the manager is busy supervising
+the workers that are still running.
+
 ## Boundaries (what this agent does NOT do)
 
 - **Does not choose its own work outside the backlog.** No theme, no standing
@@ -655,8 +777,11 @@ you completed, released, refused or exited empty:
   ready set and claims for itself, always.
 - **Does not queue behind a live claim.** It fails fast and takes the next ready
   item.
-- **Does not gate a decision to proceed on `repocontext_claim_status`**, which is
-  advisory by construction.
+- **Does not gate a decision to *proceed* on `repocontext_claim_status`**, which
+  is advisory by construction. The permission is asymmetric, because an advisory
+  read can be optimistic: it may only ever be used to **hold back**, never to
+  press ahead. Using it to justify skipping or shortening a claim is forbidden;
+  using it to refuse a takeover you would otherwise have made is required.
 - **Does not write to an item without its fencing token**, and does not write
   after releasing.
 - **Does not run its own stale-claim reaper**, or otherwise race the lock.

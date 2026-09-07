@@ -966,6 +966,69 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalThrottledAdmissionPace)));
     }
 
+    [Test]
+    public void DefaultLockLeaseDuration_zero_fails()
+    {
+        // A zero fallback lease is granted verbatim, so LeaseExpiresAtTicks equals
+        // the grant instant and the lock is reclaimable immediately - two callers
+        // can then believe they hold it.
+        var result = Validate(o => o.DefaultLockLeaseDuration = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.DefaultLockLeaseDuration)));
+    }
+
+    [Test]
+    public void DefaultLockLeaseDuration_negative_fails()
+    {
+        var result = Validate(o => o.DefaultLockLeaseDuration = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.DefaultLockLeaseDuration)));
+    }
+
+    [Test]
+    public void MaxLockLeaseDuration_zero_fails()
+    {
+        // Non-positive does not mean "no ceiling": LatticeLockGrain.ResolveLeaseTicks
+        // only clamps when the ceiling is positive, so zero silently disables the cap
+        // that every lease-duration doc promises is always applied.
+        var result = Validate(o => o.MaxLockLeaseDuration = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.MaxLockLeaseDuration)));
+    }
+
+    [Test]
+    public void MaxLockLeaseDuration_negative_fails()
+    {
+        var result = Validate(o => o.MaxLockLeaseDuration = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.MaxLockLeaseDuration)));
+    }
+
+    [Test]
+    public void MaxLockLeaseDuration_below_default_lease_fails()
+    {
+        var result = Validate(o =>
+        {
+            o.DefaultLockLeaseDuration = TimeSpan.FromMinutes(2);
+            o.MaxLockLeaseDuration = TimeSpan.FromMinutes(1);
+        });
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.MaxLockLeaseDuration)));
+    }
+
+    [Test]
+    public void MaxLockLeaseDuration_equal_to_default_lease_passes()
+    {
+        // The documented invariant is "at least the default", so the boundary must
+        // not be rejected.
+        var result = Validate(o =>
+        {
+            o.DefaultLockLeaseDuration = TimeSpan.FromMinutes(2);
+            o.MaxLockLeaseDuration = TimeSpan.FromMinutes(2);
+        });
+        Assert.That(result.Succeeded, Is.True);
+    }
+
     [TestCase(1d)]
     [TestCase(1.5d)]
     [TestCase(10d)]

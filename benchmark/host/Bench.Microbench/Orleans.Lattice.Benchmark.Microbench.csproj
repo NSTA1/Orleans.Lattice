@@ -74,6 +74,12 @@
          TenantRecord.MergeFrom join against the reproduced prior shape. No
          InternalsVisibleTo is needed - TenantRecord is public API. -->
     <ProjectReference Include="..\..\..\src\lattice.tenancy\Orleans.Lattice.Tenancy.csproj" />
+    <!-- The grain-index package is referenced so the grain-index query suite
+         (suite "grainindexquerytrims") can drive the real, shipped query
+         planner and range-set algebra rather than a copy of them. Reached via
+         InternalsVisibleTo on the grainindex csproj, since GrainIndexQueryPlanner,
+         GrainIndexQueryProperty and GrainIndexRangeSet are all internal. -->
+    <ProjectReference Include="..\..\..\src\lattice.grainindex\Orleans.Lattice.GrainIndex.csproj" />
   </ItemGroup>
 
   <ItemGroup>

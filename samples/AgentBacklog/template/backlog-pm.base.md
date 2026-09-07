@@ -265,7 +265,10 @@ flowchart TD
 | Divergence | What it usually means | Your move |
 |---|---|---|
 | Item not complete, mirrored issue closed | A human closed the issue out of band | Ask before changing memory; GitHub owns oversight |
-| Item complete, issue still open | Completion mirroring was missed | Propose closing the issue; do not overwrite its body |
+| Item tagged `state:complete`, issue still open | Completion mirroring was missed | Propose closing the issue; do not overwrite its body |
+| Item tagged `state:complete`, pull request still open | **Defect.** Completion was claimed before the merge that defines it | The item is not complete. The merge is outstanding work, and the item is not a satisfied `blockedBy` target |
+| Green, mergeable pull request, no live claim, no `state:complete` | The attempt died between CI and the merge | The cheapest possible resume. Deploy onto it before any fresh item |
+| Completion asserted only in `body` prose, with no `state:complete` tag | A worker invented its own encoding | **Defect.** Nothing reads prose. Reconcile to the tag under a claim |
 | Item claimed, no open pull request, lease not near expiry | Worker died early, or has not pushed yet | Report the lease expiry and let expiry-reclaim run; do not force-release |
 | Open pull request with no matching item | Work entered outside the backlog | Report it; propose mirroring it in as an item if it should be tracked |
 | `needs-specification` present on an item you were about to treat as ready | Correct gating, working as designed | Exclude it and tell the human it is awaiting their admission |
@@ -513,7 +516,7 @@ sequenceDiagram
     W->>GH: Claim comment on the mirrored issue
     W->>GH: Pull request into the item's baseBranch
     W->>L: repocontext_renew_claim / repocontext_release_claim
-    W-->>PM: notify_on_idle
+    W-->>PM: send_session_message (delivery_mode: immediate)
     PM->>L: repocontext_claim_status (read-only, advisory)
     PM->>PM: Re-ground, then report progress to the owner
 ```
@@ -528,8 +531,20 @@ Concretely:
 3. **Dispatch each worker as an inspectable child session**, not an opaque
    background agent, so the human can open and watch it: `create_session` with
    `kickoff.agent` set to the backlog worker agent's registered name
-   (`Backlog Worker`), `kickoff.mode: "autopilot"`,
-   `coordinate_with_creator: true`, and `notify_on_idle: "once"`.
+   (`Backlog Worker`), `kickoff.mode: "autopilot"`, and
+   `coordinate_with_creator: true`.
+
+   **Do not set `notify_on_idle`.** A worker accounts for its whole run in its
+   Phase 8 report, so the notification carries nothing the report does not, and
+   it is not free: it is a second inbound message per worker, arriving
+   asynchronously while you are mid-turn. You are the one role in the system
+   that fans out to several children and then runs long turns, so you
+   accumulate that traffic faster than any other agent, and an inbound message
+   that lands on the queued lane at the instant a turn ends has been observed to
+   wedge the receiving session: it never finalises as idle, its queue never
+   drains, and it accepts no further input until the process is restarted.
+   Halving the inbound traffic is worth more than a notification that duplicates
+   a report you are going to read anyway.
 4. **Do not pre-claim, and do not hand over a pre-selected item as an instruction.**
    The worker computes the ready set and calls `repocontext_claim` itself; that is
    what makes a PM-deployed worker and a cron-started worker interchangeable, and
@@ -544,7 +559,17 @@ Concretely:
 6. **Never deploy onto an item carrying `needs-specification`, a parked item, or an
    item whose `homeRegion` is not the region the claim would be taken in.** The
    last fails closed anyway; do not spend a session discovering that.
-7. **Report afterwards.** Re-ground and account for what each worker did: the item,
+7. **Do not deploy into a ready set whose only candidates are live-held.** A
+   worker self-selects (rule 4), so it takes whatever the ready set offers - and
+   under the current lease clamp a live, productive worker's item still presents
+   as claimable: `isHeld: false`, no unmet blockers, indistinguishable from
+   abandoned work. Deploying into that state does not produce parallelism, it
+   produces a takeover that fences the first worker out of its own item and
+   destroys its unpushed work. Before dispatching, check `repocontext_claim_status`
+   and evidence of work (recent commits, comments, fence movement) on every ready
+   candidate. If the only ready item is live-held, the correct number of workers
+   to deploy is **zero**; waiting is not idleness, it is the only safe move.
+8. **Report afterwards.** Re-ground and account for what each worker did: the item,
    the claim outcome, the branch and pull request, CI state, and whether the item
    completed, released, or expired. A deployment you cannot report on afterwards
    was not a deployment, it was a hope.

@@ -98,6 +98,40 @@ internal static class GrainIndexQueryPlanner
         if (product > MaxConjunctions)
             throw TooComplex();
 
+        // Distributing '&&' over '||' is only a genuine cross product when both
+        // sides are already unions. When one side is a single conjunction - which
+        // is what every '&&' chain with no '||' under it looks like, and so the
+        // shape of the overwhelming majority of predicates - the product is a
+        // relabelling of the other side, so its conjunctions are extended in
+        // place. Both operand lists are freshly built by the recursion below this
+        // frame and reachable from nowhere else, so extending one is not
+        // observable; the alternative allocated a fresh outer list plus one
+        // merged list, and both their backing arrays, per level of the chain.
+        if (right.Count == 1)
+        {
+            var appended = right[0];
+            for (var i = 0; i < left.Count; i++)
+            {
+                left[i].AddRange(appended);
+            }
+
+            return left;
+        }
+
+        if (left.Count == 1)
+        {
+            // Prepending keeps each conjunction's atoms in source order, which is
+            // what the general path below produces and what the residual
+            // predicate's combination order depends on.
+            var prepended = left[0];
+            for (var j = 0; j < right.Count; j++)
+            {
+                right[j].InsertRange(0, prepended);
+            }
+
+            return right;
+        }
+
         var combined = new List<List<QueryAtom>>((int)product);
         for (var i = 0; i < left.Count; i++)
         {
@@ -131,10 +165,11 @@ internal static class GrainIndexQueryPlanner
     {
         // One accumulator slot per projected property. An index projects a
         // handful of properties, so a flat array indexed by declaration ordinal
-        // beats any dictionary here.
-        var ranges = new GrainIndexKeyRange[properties.Length][];
-        var residuals = new LatticePredicateNode?[properties.Length];
-        var pointLookups = new bool[properties.Length];
+        // beats any dictionary here. The three per-property values live in one
+        // slot struct rather than three parallel arrays, so a conjunction
+        // allocates one accumulator instead of three and each atom resolves its
+        // slot once by reference instead of re-indexing three arrays.
+        var slots = new ConjunctionSlot[properties.Length];
         var touched = 0;
 
         for (var i = 0; i < atoms.Count; i++)
@@ -151,22 +186,22 @@ internal static class GrainIndexQueryPlanner
                 continue;
             }
 
-            int ordinal = analysis.Property.Ordinal;
-            if (ranges[ordinal] is null)
+            ref var slot = ref slots[analysis.Property.Ordinal];
+            if (slot.Ranges is null)
             {
                 touched++;
-                ranges[ordinal] = analysis.Ranges;
+                slot.Ranges = analysis.Ranges;
             }
             else
             {
-                ranges[ordinal] = GrainIndexRangeSet.Intersect(ranges[ordinal]!, analysis.Ranges);
+                slot.Ranges = GrainIndexRangeSet.Intersect(slot.Ranges, analysis.Ranges);
             }
 
-            if (ranges[ordinal]!.Length == 0)
+            if (slot.Ranges.Length == 0)
                 return null;
 
-            residuals[ordinal] = Combine(residuals[ordinal], analysis.Residual);
-            pointLookups[ordinal] |= analysis.PointLookup;
+            slot.Residual = Combine(slot.Residual, analysis.Residual);
+            slot.PointLookup |= analysis.PointLookup;
         }
 
         if (touched == 0)
@@ -182,15 +217,16 @@ internal static class GrainIndexQueryPlanner
         var next = 0;
         for (var ordinal = 0; ordinal < properties.Length; ordinal++)
         {
-            var clauseRanges = ranges[ordinal];
+            ref var slot = ref slots[ordinal];
+            var clauseRanges = slot.Ranges;
             if (clauseRanges is null)
                 continue;
 
             clauses[next++] = new GrainIndexScanClause(
                 properties[ordinal],
                 clauseRanges,
-                residuals[ordinal],
-                Selectivity(properties[ordinal], clauseRanges, pointLookups[ordinal]));
+                slot.Residual,
+                Selectivity(properties[ordinal], clauseRanges, slot.PointLookup));
         }
 
         SortBySelectivity(clauses);
@@ -214,22 +250,22 @@ internal static class GrainIndexQueryPlanner
         var node = LatticePredicateTranslator.Translate(
             Expression.Lambda<Func<TState, bool>>(body, parameter));
 
-        var paths = new List<string>(1);
-        CollectMemberPaths(node, paths);
+        var paths = default(MemberPathSet);
+        CollectMemberPaths(node, ref paths);
 
-        if (paths.Count == 0)
+        if (paths.IsEmpty)
             return QueryAtomPlan.Constant(EvaluateBoolean(atom));
 
-        if (paths.Count > 1)
+        if (paths.HasMoreThanOne)
         {
             throw Unsupported(
-                $"a clause over more than one projected property ({string.Join(" and ", paths)}). "
+                $"a clause over more than one projected property ({paths.Describe()}). "
                 + "An index entry carries exactly one property, so a clause spanning two of them "
                 + "matches no entry. Combine the properties with '&&' at the top level instead, "
                 + "which the planner routes as one scan per property.");
         }
 
-        string path = paths[0];
+        string path = paths.Single;
         if (path.IndexOf('.') >= 0)
         {
             throw Unsupported(
@@ -393,6 +429,28 @@ internal static class GrainIndexQueryPlanner
         }
     }
 
+    /// <summary>
+    /// One projected property's accumulated conjunction state: the key ranges its
+    /// clauses have narrowed to, the residual payload predicate they could not
+    /// route, and whether any of them was an exact point lookup.
+    /// <para>
+    /// Keeping the three together lets a conjunction allocate one slot array
+    /// rather than three parallel ones, and lets each atom bind its slot once by
+    /// reference instead of indexing three arrays five times.
+    /// </para>
+    /// </summary>
+    private struct ConjunctionSlot
+    {
+        /// <summary>The narrowed key ranges, or <c>null</c> while untouched.</summary>
+        internal GrainIndexKeyRange[]? Ranges;
+
+        /// <summary>The combined residual predicate, or <c>null</c> when fully routed.</summary>
+        internal LatticePredicateNode? Residual;
+
+        /// <summary>Whether any contributing clause was an exact point lookup.</summary>
+        internal bool PointLookup;
+    }
+
     private static GrainIndexQueryProperty? Find(GrainIndexQueryProperty[] properties, string name)
     {
         for (var i = 0; i < properties.Length; i++)
@@ -412,18 +470,11 @@ internal static class GrainIndexQueryPlanner
         return null;
     }
 
-    private static void CollectMemberPaths(in LatticePredicateNode node, List<string> paths)
+    private static void CollectMemberPaths(in LatticePredicateNode node, ref MemberPathSet paths)
     {
         if (node.Kind == LatticePredicateNodeKind.Member)
         {
-            string path = node.MemberPath ?? string.Empty;
-            for (var i = 0; i < paths.Count; i++)
-            {
-                if (string.Equals(paths[i], path, StringComparison.OrdinalIgnoreCase))
-                    return;
-            }
-
-            paths.Add(path);
+            paths.Add(node.MemberPath ?? string.Empty);
             return;
         }
 
@@ -433,8 +484,65 @@ internal static class GrainIndexQueryPlanner
 
         for (var i = 0; i < children.Length; i++)
         {
-            CollectMemberPaths(children[i], paths);
+            CollectMemberPaths(children[i], ref paths);
         }
+    }
+
+    /// <summary>
+    /// The distinct member paths one atom names, compared the way the server-side
+    /// evaluator resolves them.
+    /// <para>
+    /// A routable clause names exactly one property - that is the entry encoding's
+    /// central constraint - so the first path is held inline and the dominant case
+    /// collects nothing on the heap at all. A list is allocated only for the
+    /// multi-property clause the planner is about to reject, where the cost is
+    /// paid on the throw path rather than by every atom of every query.
+    /// </para>
+    /// </summary>
+    private struct MemberPathSet
+    {
+        private string? _first;
+        private List<string>? _rest;
+
+        /// <summary>Whether the atom named no member at all, i.e. it is constant.</summary>
+        internal readonly bool IsEmpty => _first is null;
+
+        /// <summary>Whether the atom spans more than one projected property.</summary>
+        internal readonly bool HasMoreThanOne => _rest is not null;
+
+        /// <summary>The single path named. Only valid when the set holds exactly one.</summary>
+        internal readonly string Single => _first!;
+
+        /// <summary>Records <paramref name="path"/> unless an equal path is already present.</summary>
+        internal void Add(string path)
+        {
+            if (_first is null)
+            {
+                _first = path;
+                return;
+            }
+
+            if (string.Equals(_first, path, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            if (_rest is null)
+            {
+                _rest = [path];
+                return;
+            }
+
+            for (var i = 0; i < _rest.Count; i++)
+            {
+                if (string.Equals(_rest[i], path, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+
+            _rest.Add(path);
+        }
+
+        /// <summary>Renders the paths for the unsupported-clause diagnostic.</summary>
+        internal readonly string Describe() =>
+            _rest is null ? _first ?? string.Empty : $"{_first} and {string.Join(" and ", _rest)}";
     }
 
     private static LatticePredicateNode? Combine(LatticePredicateNode? left, LatticePredicateNode? right)
@@ -449,18 +557,22 @@ internal static class GrainIndexQueryPlanner
 
     private static bool EvaluateBoolean(in QueryAtom atom)
     {
-        var value = (bool)Expression.Lambda(atom.Expression).Compile().DynamicInvoke()!;
+        var value = (bool)EvaluateConstant(atom.Expression)!;
         return atom.Negated ? !value : value;
     }
 
-    private static object? EvaluateConstant(Expression expression)
-    {
-        expression = Unwrap(expression);
-        return expression is ConstantExpression constant
-            ? constant.Value
-            : Expression.Lambda(expression).Compile().DynamicInvoke();
-    }
-
+    /// <summary>
+    /// Evaluates the constant side of a comparison through the shared
+    /// <see cref="ExpressionConstantReader"/>, which folds a constant or a
+    /// field or property chain rooted in one directly and compiles only the
+    /// shapes outside that closed set. A bound captured from the surrounding
+    /// method - which is what real predicates are made of - reaches the tree as
+    /// a member read over a display-class constant, and a plan is built afresh
+    /// on every query, so the fold is on the hot path of every query the index
+    /// serves.
+    /// </summary>
+    private static object? EvaluateConstant(Expression expression) =>
+        ExpressionConstantReader.Read(Unwrap(expression));
     private static bool TryMapComparison(ExpressionType nodeType, out LatticeComparisonOperator op)
     {
         switch (nodeType)

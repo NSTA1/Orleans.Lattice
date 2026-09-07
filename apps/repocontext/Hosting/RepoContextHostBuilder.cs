@@ -118,6 +118,11 @@ public static class RepoContextHostBuilder
             // it. Global (not per-tree) by design - see RepoContextPinBucketing.
             silo.ConfigureRepoContextPinBucketing(builder.Configuration);
 
+            // Raise the named-lock lease ceiling above the library's five-minute
+            // maximum. Backlog claims are held across a full build-and-test cycle,
+            // which routinely exceeds it - see RepoContextClaimLeases.
+            silo.ConfigureRepoContextClaimLeases(builder.Configuration);
+
             // Membership resolves the ambient credential into a subject; Auth
             // installs the default-deny gate with the bootstrap administrator that
             // seeds the local agent's grant.

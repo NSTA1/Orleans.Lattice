@@ -173,6 +173,42 @@ public sealed class GrainIndexRangeBuilderTests
     }
 
     [Test]
+    public void Greater_than_or_equal_zero_spans_both_signed_zero_slots()
+    {
+        // A stored -0.0 satisfies `>= 0.0`, so the range must start at the lower
+        // (negative) zero slot rather than the +0.0 slot, or it is dropped.
+        bool built = GrainIndexRangeBuilder.TryBuild(
+            Score, LatticeComparisonOperator.GreaterThanOrEqual, 0.0, out var ranges, out bool exact);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Is.True);
+            Assert.That(exact, Is.True);
+            Assert.That(ranges[0].StartInclusive, Is.EqualTo(
+                GrainIndexKeyEncoder.ValueRangeStartInclusive("Score", GrainIndexKeyEncoder.EncodeValue(-0.0))));
+            Assert.That(ranges[0].EndExclusive, Is.EqualTo(Score.RangeEndExclusive));
+        });
+    }
+
+    [Test]
+    public void Greater_than_zero_excludes_both_signed_zero_slots()
+    {
+        // Neither zero is strictly greater than zero, so the range must start
+        // above the upper (positive) zero slot.
+        bool built = GrainIndexRangeBuilder.TryBuild(
+            Score, LatticeComparisonOperator.GreaterThan, 0.0, out var ranges, out bool exact);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Is.True);
+            Assert.That(exact, Is.True);
+            Assert.That(ranges[0].StartInclusive, Is.EqualTo(
+                GrainIndexKeyEncoder.ValueRangeEndExclusive("Score", GrainIndexKeyEncoder.EncodeValue(0.0))));
+            Assert.That(ranges[0].EndExclusive, Is.EqualTo(Score.RangeEndExclusive));
+        });
+    }
+
+    [Test]
     public void Equality_with_not_a_number_matches_nothing()
     {
         bool built = GrainIndexRangeBuilder.TryBuild(

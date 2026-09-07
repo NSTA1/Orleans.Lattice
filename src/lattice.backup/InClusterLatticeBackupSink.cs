@@ -211,6 +211,15 @@ internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : I
                     continue;
                 }
 
+                // A legitimately empty artifact (an empty increment or empty full
+                // backup) writes no chunk rows by design, so its absence from the
+                // chunk store is expected and must not be reported as missing -
+                // doing so would let the catalog scrub prune a valid restore point.
+                if (descriptor.ChunkCount == 0)
+                {
+                    continue;
+                }
+
                 var prefix = ArtifactChunkPrefix(descriptor.ArtifactId);
                 if (!await KeyExistsAsync(prefix, cancellationToken, BackupConstants.PrefixUpperBound(prefix)).ConfigureAwait(false))
                 {

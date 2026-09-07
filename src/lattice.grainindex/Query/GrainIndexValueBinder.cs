@@ -111,6 +111,19 @@ internal sealed class TypedGrainIndexValueBinder<TProperty> : GrainIndexValueBin
                 }
 
                 boxed = Convert.ChangeType(value, Underlying, CultureInfo.InvariantCulture);
+
+                // Convert.ChangeType silently rounds a fractional value to an
+                // integral target (1.5 -> 2) rather than throwing, which would
+                // encode an exact bound the caller never wrote and make an
+                // exact-range query drop its residual predicate, yielding wrong or
+                // empty results. Reject any conversion that does not round-trip
+                // back to the original value.
+                var roundTrip = Convert.ChangeType(boxed, value.GetType(), CultureInfo.InvariantCulture);
+                if (!Equals(roundTrip, value))
+                {
+                    converted = default!;
+                    return false;
+                }
             }
 
             // Unboxing a boxed underlying value into Nullable<T> is supported by
