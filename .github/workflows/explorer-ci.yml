@@ -15,7 +15,10 @@ on:
     # so unrelated sub-PRs still skip this lane entirely, and epic branches
     # carry no required checks, so a lane that does not report cannot leave a
     # sub-PR pending.
-    branches: [main, '*/epic/**']
+    #
+    # `release/**` is included for the same reason as in `ci.yml`: a patch wave
+    # assembled on a release line otherwise gets no validation at all.
+    branches: [main, '*/epic/**', 'release/**']
     paths:
       - 'src/lattice.explorer/**'
       - 'test/lattice.explorer/**'

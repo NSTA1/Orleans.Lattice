@@ -200,12 +200,16 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   check unchanged, no `epic` prefix is added to the list above, and the epic's
   own type stays visible (a documentation epic is `docs/epic/<epic-slug>`). A
   bare `epic/<epic-slug>` is **not** the convention and fails CI.
-  - **CI runs on epic-targeted pull requests.** `.github/workflows/ci.yml`
-    triggers on `pull_request: branches: [main, '*/epic/**']`, and the advisory
-    `explorer-ci.yml` and `ui-tests.yml` lanes mirror that branch list behind
-    their own `paths:` filters. Without the second pattern a pull request into
-    an epic branch would run no checks at all, which trades serialisation for
-    no validation - keep it when editing any of those triggers. (`docs.yml` has
+  - **CI runs on epic-targeted and release-line pull requests.**
+    `.github/workflows/ci.yml` triggers on
+    `pull_request: branches: [main, '*/epic/**', 'release/**']`, and the
+    advisory `explorer-ci.yml` and `ui-tests.yml` lanes mirror that branch list
+    behind their own `paths:` filters. Without the second pattern a pull request
+    into an epic branch would run no checks at all, which trades serialisation
+    for no validation; without the third, neither would a patch wave assembled
+    on a release line, which is the least safe place to have none because a
+    patch ships straight to NuGet without ever being built on trunk - keep both
+    when editing any of those triggers. (`docs.yml` has
     no `branches:` filter and so already covers every base; `coverage.yml` and
     `publish.yml` are push-triggered and unaffected.)
   - **An epic branch must never carry branch protection, and in particular
