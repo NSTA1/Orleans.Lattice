@@ -20,6 +20,7 @@ internal sealed partial class LatticeGrain
         VersionVector? sourceVectorClock,
         long expiresAtTicks)
     {
+        EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
@@ -42,6 +43,7 @@ internal sealed partial class LatticeGrain
         string originClusterId,
         VersionVector? sourceVectorClock)
     {
+        EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
@@ -65,6 +67,7 @@ internal sealed partial class LatticeGrain
         VersionVector? sourceVectorClock,
         IReadOnlyList<string>? explicitMatchedKeys = null)
     {
+        EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
@@ -185,6 +188,7 @@ internal sealed partial class LatticeGrain
     /// <inheritdoc />
     public async Task ApplyMergeManyAsync(IReadOnlyList<ApplyMergeItem> items)
     {
+        EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(items);
 
@@ -312,6 +316,7 @@ internal sealed partial class LatticeGrain
     /// <inheritdoc />
     public async Task ApplyCrdtDeltaManyAsync(IReadOnlyList<ApplyCrdtDeltaItem> items)
     {
+        EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(items);
 
@@ -412,6 +417,7 @@ internal sealed partial class LatticeGrain
     /// <inheritdoc />
     public Task ApplyCrdtDeltaWithExpiryAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
     {
+        EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(deltaBytes);
@@ -435,6 +441,7 @@ internal sealed partial class LatticeGrain
         byte[]? delta = null,
         LatticeMergeMode mode = LatticeMergeMode.LwwRegister)
     {
+        EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
@@ -515,6 +522,7 @@ internal sealed partial class LatticeGrain
         int atomicBatchSize,
         int atomicBatchIndex)
     {
+        EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
@@ -549,6 +557,7 @@ internal sealed partial class LatticeGrain
         IReadOnlyList<string>? crossTreeWaitSet = null,
         CancellationToken cancellationToken = default)
     {
+        EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
         if (transactionId == Guid.Empty)
@@ -700,6 +709,7 @@ internal sealed partial class LatticeGrain
         string originClusterId,
         CancellationToken cancellationToken = default)
     {
+        EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
         ArgumentNullException.ThrowIfNull(observedSourceShards);

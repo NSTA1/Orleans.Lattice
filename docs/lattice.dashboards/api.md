@@ -13,7 +13,7 @@ string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Ove
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `LatticeDashboards` | static class | Retrieves the bundled Grafana dashboard JSON. | `GetGrafanaDashboardJson(LatticeDashboardKind)`, `All` |
-| `LatticeDashboardKind` | enum | Identifies one bundled dashboard, each resolving to a focused operator workflow. | `Overview`, `CommitPath`, `Replication`, `AtomicWrites`, `MaterialisedViews`, `Authorization`, `Backup`, `Scaling`, `ReplicationGrpc` |
+| `LatticeDashboardKind` | enum | Identifies one bundled dashboard, each resolving to a focused operator workflow. | `Overview`, `CommitPath`, `Replication`, `AtomicWrites`, `MaterialisedViews`, `Authorization`, `Backup`, `Scaling`, `ReplicationGrpc`, `Tenancy`, `GrainIndex` |
 
 ### `LatticeDashboards`
 
@@ -35,6 +35,8 @@ string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Ove
 | `Backup` | `orleans.lattice.backup` | Backup / restore operator view: capture / restore throughput and duration percentiles, per-backup size / artifact / entry distributions, cumulative processed throughput, retention reclaim and prune rates, incremental lag behind the base cut, capture / restore failure rates by reason, scheduler skipped-run and overrun counters, cross-tree-consistent fence selection / drain counters, and the inventory gauges. Useful only when the backup package is registered on the silo. |
 | `Scaling` | `orleans.lattice.scaling` | Autoscaling-signal operator view: the smoothed scale-in-gated and raw instantaneous scale-value gauges, the three normalised compute-pressure dimensions (activation / host-resource / WAL-dispatch), the recommended silo replica count, and the storage-axis stats. Useful only when the scaling package is registered on the silo. |
 | `ReplicationGrpc` | `orleans.lattice.replication.grpc` | Replication gRPC transport-security view: the insecure (plaintext) channel construction counter as a cumulative total and a per-second rate, broken out by peer cluster id and transport (push / saga_control / snapshot), so an accidental plaintext downgrade under `AllowPlaintextEndpoints` is visible. Useful only when the gRPC replication transport is registered on the silo. |
+| `Tenancy` | `orleans.lattice.tenancy` | Per-tenant observability view: the registered-tenant count (cluster aggregate) and, dimensioned by tenant, the usage series (stored bytes, live keys, resident memory, owned trees), the quota ceilings and burst-headroom percentage, and the durable metered overage series (bytes / keys / memory / trees). A templated `tenant` variable scopes every panel to one tenant or to all tenants. Useful only when the tenancy package is registered on the silo. |
+| `GrainIndex` | `orleans.lattice` | Grain-index operator view: each index's backfill lifecycle state and percent complete, its processed-versus-total crawl progress, its live entry count, onboarding throughput split by route (activation versus backfill), projection-latency percentiles, and index-write failure rates by route. A templated `index` variable scopes every panel to one index or to all of them. Sources the shared core meter - the grain-index package publishes no meter of its own - but the series appear only once the grain-index package is registered on the silo. |
 
 ## Enumerating every dashboard
 

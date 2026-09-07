@@ -783,9 +783,27 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         }
 
         holder.State = slice;
-        await _pinStorage!
-            .WriteStateAsync(WalMaterialiserPinRouting.BucketStateName(bucket), _context.GrainId, holder)
-            ;
+        try
+        {
+            await _pinStorage!
+                .WriteStateAsync(WalMaterialiserPinRouting.BucketStateName(bucket), _context.GrainId, holder)
+                ;
+        }
+        catch
+        {
+            // The write did not land, so this holder's ETag no longer describes
+            // any durable state we can reason about: an ETag conflict means the
+            // slot moved under us, and any other failure leaves it unknown.
+            // Evicting forces the next attempt through ReadBucketAsync for a
+            // fresh ETag.
+            //
+            // Retrying this bucket is by design (WriteDurableAsync re-arms the
+            // batch and the next flush retries it), but a retry that reuses the
+            // stale ETag conflicts identically every time, so without this the
+            // designed retry cannot terminate. See issue #2096.
+            _bucketStates.Remove(bucket);
+            throw;
+        }
     }
 
     /// <summary>Outcome tag value for a birth-path (synchronous through-write) durable pin write.</summary>

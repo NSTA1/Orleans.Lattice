@@ -424,6 +424,48 @@ the first is fatal:
 > by `WalReplayMaxRecordsPerTurn` (which yields between turns) and
 > `WalMaterialiserMaxConcurrentReplays`.
 
+> **Reading the over-budget warning (issue #2023).** The warning names the
+> tree, the **leaf grain id**, and the **WAL partition ordinal**, and it
+> states its own fault criterion: a persisted checkpoint that does not
+> advance across repeats is a fault, not a slow replay. That comparison is
+> only valid between lines naming the **same leaf and the same partition**.
+> `partition` is iterated `[0, WalPartitions)` inside *every* leaf's
+> activation, so it does not identify a leaf; before the leaf id was added,
+> consecutive lines were one-per-minute samples of arbitrary different
+> leaves, and their checkpoints appearing to repeat or move backwards was an
+> artifact of that sampling rather than a stalled replay. The log is
+> throttled per (tree, leaf, partition), starting at one line a minute and
+> doubling to a ceiling of one an hour the longer that leaf keeps reporting,
+> so a leaf that is genuinely stuck still reports an unchanging checkpoint but
+> at a decaying rate: compare consecutive lines naming that leaf, rather than
+> expecting a fixed cadence. The backoff advances only when a line is actually
+> emitted: a repeat the per-tree cap withholds keeps its place in the queue
+> instead of backing off having said nothing, so a leaf on a busy tree still
+> rotates into the budget and still yields the two comparable lines the
+> criterion needs. A clean in-budget activation retires the backoff outright,
+> so a leaf that misbehaves, recovers, and regresses hours later reports at the
+> base interval rather than inheriting the accumulated ceiling. A per-tree cap additionally bounds how many
+> *repeat* lines one tree may emit in a window, because a tree with L leaves
+> and P partitions has L x P throttle keys and so L x P times the per-key
+> rate - which is how this warning reached 46% of one deployment's container
+> log, rolling away the older entries that were the evidence needed to
+> diagnose it (issue #2100). Any repeats the cap withholds are reported as a
+> summary line, so the cap is not silent while that tree keeps replaying, and
+> a leaf partition reporting over budget for the FIRST time is exempt from it,
+> so a newly appearing condition still surfaces promptly. "First time" is a
+> property of the key's own history and not of what the gate happens to have
+> retained: internal housekeeping never restores the exemption, so the
+> exemption cannot be re-earned by churn on a large estate. It is restored only
+> after that leaf partition has been silent for a full ceiling interval, at
+> which point its return really is new information. That summary is
+> carried by a later occurrence on the tree, so a tree's final withheld tally
+> goes unreported once the condition resolves or the leaf deactivates; the
+> counter below is the exact census for that case. The
+> `orleans.lattice.leaf.activation_replays_over_budget` counter is tagged
+> `tree` and `partition` only - leaf count is unbounded, so it cannot be a
+> metric dimension - which means the counter measures the rate and the log
+> makes the per-leaf call.
+
 On the healthy multi-partition path every partition's classifier
 returns `TailReplay`, and the leaf executes a two-pass replay across
 all partitions (per-partition Set / Delete absorption with

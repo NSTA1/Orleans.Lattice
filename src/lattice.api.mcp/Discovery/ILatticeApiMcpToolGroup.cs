@@ -30,4 +30,22 @@ internal interface ILatticeApiMcpToolGroup
     /// only when the caller may use <see cref="Group"/>.
     /// </summary>
     IReadOnlyList<McpServerTool> Tools { get; }
+
+    /// <summary>
+    /// The minimum operation mask a caller must hold to be offered
+    /// <paramref name="toolName"/>. Defaults to the group's own coarse mask, so a
+    /// group that does not distinguish its tools behaves exactly as before. A
+    /// group whose mutating tools must not be reachable on a bare read grant
+    /// overrides this to return the narrower mask for those tool names.
+    /// </summary>
+    /// <param name="toolName">The advertised name of the tool being considered.</param>
+    /// <returns>The operations any one of which makes the tool reachable.</returns>
+    /// <remarks>
+    /// Enforced at <c>tools/list</c>; because the session's tool collection is what
+    /// also serves <c>tools/call</c>, a tool withheld here is unreachable at
+    /// invocation too, preserving the advertisement/invocation lock-step the MCP
+    /// surface depends on.
+    /// </remarks>
+    LatticeOperation RequiredOperationsFor(string toolName)
+        => LatticeApiMcpGroupCapabilityMap.RequiredOperations(Group);
 }
