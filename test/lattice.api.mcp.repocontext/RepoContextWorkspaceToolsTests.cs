@@ -310,16 +310,36 @@ public sealed class RepoContextWorkspaceToolsTests
         Assert.Multiple(() =>
         {
             Assert.That(reset.GetProperty("repoId").GetString(), Is.EqualTo("reindex-me"));
-            Assert.That(reset.GetProperty("entriesDeleted").GetInt32(), Is.GreaterThanOrEqualTo(3),
-                "At least both files plus the root marker are code-index entries.");
+            Assert.That(reset.GetProperty("entriesDeleted").GetInt32(), Is.GreaterThanOrEqualTo(2),
+                "At least both files are code-index entries. The root marker is preserved, not counted.");
         });
 
-        // The structural marker is gone (the code index was dropped)...
+        // The structural marker survives, rewritten with its index-derived fields
+        // cleared, so the repository stays resolvable through list_repos...
         var structural = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
-        Assert.That(await structural.GetAsync(RepoContextKeys.Repo("reindex-me"), Ct), Is.Null,
-            "The repository root marker is a code-index entry and is dropped by reset_index.");
+        Assert.That(await structural.GetAsync(RepoContextKeys.Repo("reindex-me"), Ct), Is.Not.Null,
+            "The repository root marker is preserved by reset_index so the repository stays discoverable.");
 
-        // ...but the memory tree still holds the durable entry.
+        var listedAfterReset = (await client.CallToolAsync(ListRepos, new Dictionary<string, object?>(), cancellationToken: Ct))
+            .RequireStructuredContent();
+        var resetRow = listedAfterReset.GetProperty("repos").EnumerateArray()
+            .SingleOrDefault(r => r.GetProperty("repoId").GetString() == "reindex-me");
+        Assert.That(resetRow.ValueKind, Is.Not.EqualTo(JsonValueKind.Undefined),
+            "A reset repository must still appear in list_repos - that is how a caller resolves the id "
+            + "that reaches the memory the reset preserved.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                resetRow.TryGetProperty("lastIngested", out var li) && li.ValueKind != JsonValueKind.Null,
+                Is.False,
+                "lastIngested must be cleared: the ingest it named was just deleted.");
+            Assert.That(
+                resetRow.TryGetProperty("fileCount", out var fc) && fc.ValueKind != JsonValueKind.Null,
+                Is.False,
+                "fileCount must be cleared rather than report a precise count for a deleted index.");
+        });
+
+        // ...and the memory tree still holds the durable entry.
         var scan = (await client.CallToolAsync(Scan, new Dictionary<string, object?>
         {
             ["repoId"] = "reindex-me",
@@ -343,6 +363,20 @@ public sealed class RepoContextWorkspaceToolsTests
         });
         Assert.That(await structural.GetAsync(RepoContextKeys.Repo("reindex-me"), Ct), Is.Not.Null,
             "The follow-up ingest rewrites the repository root marker.");
+
+        // The cleared fields are repopulated by the fresh ingest, so the row is
+        // once again an honest report of a live index.
+        var listedAfterReindex = (await client.CallToolAsync(ListRepos, new Dictionary<string, object?>(), cancellationToken: Ct))
+            .RequireStructuredContent();
+        var reindexedRow = listedAfterReindex.GetProperty("repos").EnumerateArray()
+            .Single(r => r.GetProperty("repoId").GetString() == "reindex-me");
+        Assert.Multiple(() =>
+        {
+            Assert.That(reindexedRow.GetProperty("lastIngested").ValueKind, Is.Not.EqualTo(JsonValueKind.Null),
+                "The fresh ingest repopulates lastIngested.");
+            Assert.That(reindexedRow.GetProperty("fileCount").GetInt32(), Is.EqualTo(2),
+                "The fresh ingest repopulates fileCount from the working files.");
+        });
     }
 
     [Test]

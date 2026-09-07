@@ -397,19 +397,9 @@ public class DigestCoalescingMetricsIntegrationTests
         public DigestPublishRecorder(string treeId)
         {
             _treeId = treeId;
-            _listener = new MeterListener
-            {
-                InstrumentPublished = (inst, l) =>
-                {
-                    if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter)
-                        && inst.Name == LatticeMetrics.LeafDigestPublishes.Name)
-                    {
-                        l.EnableMeasurementEvents(inst);
-                    }
-                },
-            };
-            _listener.SetMeasurementEventCallback<long>(OnLong);
-            _listener.Start();
+            _listener = MeterListening.StartForInstrument(
+                LatticeMetrics.LeafDigestPublishes,
+                l => l.SetMeasurementEventCallback<long>(OnLong));
         }
 
         private void OnLong(Instrument instrument, long value, ReadOnlySpan<KeyValuePair<string, object?>> tags, object? state)

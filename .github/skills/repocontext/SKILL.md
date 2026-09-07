@@ -114,4 +114,6 @@ disagree with the master file, the master file wins.
   asked for that repository to be removed; otherwise ask first. When the goal
   is to repair a wedged or stale index for a repository whose memory is worth
   keeping, reach for `reset_index` instead - it drops the code index and its
-  vectors but preserves the memory tree.
+  vectors but preserves the memory tree, and the repository stays in
+  `list_repos` with a null `lastIngested` / `fileCount` / `indexedCommit` until
+  it is re-onboarded, so the preserved memory stays discoverable.
