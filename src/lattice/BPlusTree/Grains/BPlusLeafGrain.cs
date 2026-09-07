@@ -109,16 +109,18 @@ internal sealed partial class BPlusLeafGrain(
 
             // Remove this activation's same-silo revision cookie so the
             // registry stays bounded by the live-leaf set rather than
-            // the lifetime-leaf set. While the entry is absent, a
-            // same-silo LeafCacheGrain still holding
-            // _lastSeenPrimaryRevision from this activation falls back
-            // to its TTL gate - NOT, as an earlier version of this
-            // comment claimed, to the cross-grain refresh path, which
-            // the cache reaches only when an entry is present. The next
-            // activation republishes a cookie from a disjoint range
-            // during OnActivateAsync (issue #2151), so the cache is
-            // forced onto the refresh path as soon as the leaf is back.
-            LeafRevisionRegistry.TryRemove(context.GrainId, out _);
+            // the lifetime-leaf set, and carry its final counter value
+            // into the ticket source so the next activation seeds
+            // strictly above it. While the entry is absent, a same-silo
+            // LeafCacheGrain still holding _lastSeenPrimaryRevision from
+            // this activation falls back to its TTL gate - NOT, as an
+            // earlier version of this comment claimed, to the
+            // cross-grain refresh path, which the cache reaches only
+            // when an entry is present. The next activation republishes
+            // a cookie from a strictly higher range during
+            // OnActivateAsync (issue #2151), so the cache is forced onto
+            // the refresh path as soon as the leaf is back.
+            RemoveLeafRevision(context.GrainId);
         }
     }
 

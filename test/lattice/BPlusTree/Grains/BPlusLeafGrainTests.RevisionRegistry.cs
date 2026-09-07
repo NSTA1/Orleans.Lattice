@@ -263,6 +263,117 @@ public partial class BPlusLeafGrainTests
         Assert.That(observedUnderSecond, Is.Ordered.Ascending);
     }
 
+    /// <summary>
+    /// Reflective accessor for the private <c>RevisionSeedShift</c> const, so
+    /// the overrun test below derives its arithmetic from the production
+    /// constant rather than hard-coding a copy of it that could silently
+    /// diverge if the width is ever retuned.
+    /// </summary>
+    private static int ReadRevisionSeedShiftForTest()
+    {
+        var field = typeof(BPlusLeafGrain).GetField(
+            "RevisionSeedShift",
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException(
+                "RevisionSeedShift const not found on BPlusLeafGrain - the field's name has "
+                + "changed; update this test helper to match.");
+
+        return (int)(field.GetRawConstantValue()
+            ?? throw new InvalidOperationException("RevisionSeedShift returned null"));
+    }
+
+    /// <summary>
+    /// Reflective accessor for the private <c>_revisionSeed</c> ticket source,
+    /// so the overrun test can assert the deactivate-time floor advance
+    /// directly rather than only through its downstream effect on the next
+    /// activation's seed.
+    /// </summary>
+    private static long ReadRevisionSeedForTest()
+    {
+        var field = typeof(BPlusLeafGrain).GetField(
+            "_revisionSeed",
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException(
+                "_revisionSeed field not found on BPlusLeafGrain - the field's name has changed; "
+                + "update this test helper to match.");
+
+        return (long)(field.GetValue(null)
+            ?? throw new InvalidOperationException("_revisionSeed returned null"));
+    }
+
+    [Test]
+    public async Task Re_activation_seeds_above_an_activation_that_overran_its_ticket_range()
+    {
+        // DISCRIMINATOR for the deactivate-time seed floor advance (issue
+        // #2151, PM ruling on PR #2166). The ticket shift reserves 2^24
+        // cookie values per activation, but that width is a spacing HINT and
+        // not the uniqueness guarantee: an activation that bumps past its
+        // reserved range walks into the values a later ticket would seed at,
+        // and the collision conditions are CORRELATED rather than
+        // independent - a leaf hot enough to overrun is on a workload where
+        // activations are rare, so the global ticket source has barely moved
+        // and the next ticket is exactly the adjacent one.
+        //
+        // Uniqueness is therefore made unconditional by raising the ticket
+        // source past the activation's final counter value when it
+        // deactivates. This test drives the box past its range directly
+        // rather than performing the real bumps, which would be the same
+        // assertion at several minutes of runtime.
+        //
+        // THE OVERRUN MARGIN IS A FLAKE GUARD, NOT THE DISCRIMINATING
+        // MECHANISM - stated precisely because an earlier version of this
+        // comment claimed the opposite on the strength of a control arm that
+        // had not in fact executed this test (the filter substring did not
+        // match its name). Measured properly: the control fails at a
+        // three-ticket margin AND at the margin below, so the margin is not
+        // what earns the red. What the margin buys is immunity to a false
+        // GREEN: the ticket source is process-wide and shared with every
+        // other fixture in the run, and ambient ticket consumption can only
+        // push the seed UP - satisfying the first assertion for a reason
+        // unrelated to the floor advance. A margin beyond what a whole test
+        // run can consume (tickets are bounded by leaf activations, order
+        // 10^4) removes that window rather than narrowing it.
+        var shift = ReadRevisionSeedShiftForTest();
+        var unique = $"overrun-{Guid.NewGuid():N}";
+        var leafId = GrainId.Create("leaf", unique);
+
+        var first = CreateGrain(replicaId: unique);
+        await first.SetAsync("k", Encoding.UTF8.GetBytes("v"));
+
+        var box = ReadRegistryBoxForTest(leafId)
+            ?? throw new InvalidOperationException("first activation published no cookie");
+
+        var overrun = box.Value + ((1L << 16) << shift);
+        box.Value = overrun;
+
+        await ((IGrainBase)first).OnDeactivateAsync(
+            new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"),
+            CancellationToken.None);
+
+        // The primary assertion: deactivation carried the activation's final
+        // counter value into the ticket source. Asserted directly, because
+        // the downstream effect alone is satisfiable by ambient ticket
+        // consumption whereas this is not.
+        Assert.That(
+            ReadRevisionSeedForTest(),
+            Is.GreaterThanOrEqualTo(overrun >> shift),
+            "deactivation removed the registry entry without carrying the activation's final "
+            + "counter value into the ticket source, so a later activation of the same leaf can "
+            + "seed inside the range this one already published (issue #2151 ABA). Removal and "
+            + "floor advance must happen together.");
+
+        var second = CreateGrain(replicaId: unique);
+        await ((IGrainBase)second).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var republished), Is.True);
+        Assert.That(
+            republished,
+            Is.GreaterThan(overrun),
+            "a re-activated leaf seeded at or below a cookie value the PREVIOUS activation had "
+            + "already published, so the two activations' value ranges overlap and a cache "
+            + "holding a stamp from the first can compare equal to the second (issue #2151 ABA).");
+    }
+
     [Test]
     public async Task Bump_publishes_to_a_stable_StrongBox_reference()
     {
