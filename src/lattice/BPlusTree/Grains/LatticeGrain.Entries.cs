@@ -68,7 +68,13 @@ internal sealed partial class LatticeGrain
         bool reverse,
         bool? prefetch,
         CancellationToken cancellationToken)
-        => EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, enforceAccessGate: false, cancellationToken);
+    {
+        // Asserted eagerly, before the (deferred) iterator is handed back, so a
+        // refused caller is rejected on the call itself rather than on first
+        // enumeration.
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
+        return EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, enforceAccessGate: false, cancellationToken);
+    }
 
     private async IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsyncCore(
         string? startInclusive,

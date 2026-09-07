@@ -829,6 +829,7 @@ internal sealed partial class LatticeGrain(
 
     async Task<byte[]?> ISystemLattice.GetAsync(string key, CancellationToken cancellationToken)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         using var _ = LatticeSystemTreeBoundary.Enter();
         return await GetAsyncCore(key, cancellationToken);
     }
@@ -1053,6 +1054,7 @@ internal sealed partial class LatticeGrain(
 
     async Task<bool> ISystemLattice.ExistsAsync(string key, CancellationToken cancellationToken)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         using var _ = LatticeSystemTreeBoundary.Enter();
         return await ExistsAsyncCore(key, cancellationToken);
     }
@@ -1615,6 +1617,7 @@ internal sealed partial class LatticeGrain(
 
     async Task ISystemLattice.SetAsync(string key, byte[] value, CancellationToken cancellationToken)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         using var _ = LatticeSystemTreeBoundary.Enter();
         await SetAsyncCore(key, value, cancellationToken);
     }
@@ -2721,6 +2724,7 @@ internal sealed partial class LatticeGrain(
 
     async Task<bool> ISystemLattice.DeleteAsync(string key, CancellationToken cancellationToken)
     {
+        EnsureInternalOrigin(LatticeOperation.Delete);
         using var _ = LatticeSystemTreeBoundary.Enter();
         return await DeleteAsyncCore(key, cancellationToken);
     }

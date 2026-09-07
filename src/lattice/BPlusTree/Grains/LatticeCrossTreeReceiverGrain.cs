@@ -110,6 +110,20 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         ArgumentNullException.ThrowIfNull(terminal.WaitSet);
         ArgumentNullException.ThrowIfNull(terminal.ObservedSourceShards);
 
+        // This entry point carries the caller-supplied commit/abort verdict for a
+        // whole cross-tree batch, so it is the receiver-side twin of the single-tree
+        // saga's IAtomicWriteGrain.FinalizeAsync and is guarded identically. The
+        // first terminal also freezes the wait set, origin cluster, and operation id,
+        // so an unguarded external call could poison a barrier that has not started
+        // yet as well as force a premature verdict on one in flight. Legitimate
+        // callers are the replication apply path inside the cluster trust boundary
+        // and therefore carry the internal-origin marker; the assertion is inert
+        // unless internal-origin enforcement is registered. Placed ahead of the
+        // decided/redelivery short-circuit so a settled verdict is never disclosed
+        // to an external caller either.
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, terminal.TreeId, LatticeOperation.Replication);
+
         // Already decided AND durable: a redelivered terminal re-heals
         // materialization. Return the full finalize set without re-persisting.
         // While a decision is awaiting persistence (a prior write failed mid
