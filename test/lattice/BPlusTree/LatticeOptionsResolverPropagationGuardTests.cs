@@ -28,6 +28,18 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// block, and emits the receiver-typed call sites so the fix is
 /// pinpoint-localised.
 /// </para>
+/// <para>
+/// Issue #2182 closed the guard's own version of the same hazard. It
+/// previously skipped, silently, every property whose type it could not
+/// synthesise a sentinel for - which was every nullable value type, every
+/// enum, and every delegate or interface option. Eleven properties were
+/// therefore never audited at all, and a dropped copy of a nullable option
+/// (<see cref="LatticeOptions.MaxCacheValueBytes"/>, say) passed this guard
+/// unnoticed. The guard is now total: nullable value types are sentinelled
+/// through their underlying type, enums pick a non-default member, and a
+/// type that still cannot be sentinelled is a FAILURE demanding an explicit
+/// decision rather than a skip nobody sees.
+/// </para>
 /// </summary>
 [TestFixture]
 public class LatticeOptionsResolverPropagationGuardTests
@@ -207,6 +219,65 @@ public class LatticeOptionsResolverPropagationGuardTests
             // baseline is byte-identical under any value, so no replica of the
             // tree has to agree on it.
             "MaxConcurrentSnapshotBaselineFolds",
+
+            // --- Audited under issue #2182 -------------------------------
+            // Before #2182 this guard silently skipped every property whose
+            // type it could not sentinel (nullable value types, Func<,>,
+            // interfaces), so the entries below were never checked and their
+            // bypass status was never a decision anybody recorded. Making the
+            // guard total surfaced all eleven at once. Each was traced to its
+            // consumer and confirmed to read the option directly from
+            // IOptionsMonitor rather than off a ResolvedLatticeOptions
+            // instance, so none is a live propagation defect - but the bypass
+            // is now explicit rather than an accident of the sentinel table.
+
+            // Queue capacity: LatticeQueueGrain reads
+            // optionsMonitor.Get(_queueName).QueueCapacity at enqueue time.
+            // The queue grain is keyed by queue name, not by tree id, so it
+            // never flows through the per-tree ResolvedLatticeOptions path.
+            "QueueCapacity",
+
+            // Write-size bounds: LatticeGrain.ValidateWriteSize reads them off
+            // its own `Options => optionsMonitor.Get(TreeId)` accessor at the
+            // public write boundary, which is a synchronous guard that must not
+            // await the registry round trip ResolveAsync performs.
+            "MaxKeyLength",
+            "MaxValueSizeBytes",
+
+            // Per-tree admission caps and advisory ceilings: read through the
+            // same synchronous LatticeGrain.Options accessor in
+            // EnforceAdmissionControl, and surfaced for reporting by
+            // LatticeStorageUsageGrain from its own IOptionsMonitor read.
+            "MaxLiveKeys",
+            "MaxEstimatedBytes",
+            "AdmissionAdvisoryLiveKeys",
+            "AdmissionAdvisoryBytes",
+
+            // Cluster-wide in-flight auto-split ceiling: HotShardMonitorGrain
+            // reads it off its own IOptionsMonitor-backed Options accessor.
+            // Cluster-scoped like MaxConcurrentStorageUsageTrees - it bounds
+            // the aggregate across all trees, so "which tree's override wins"
+            // has no sensible answer.
+            "MaxClusterConcurrentAutoSplits",
+
+            // Legacy per-tree WAL provider factory: the resolver consumes this
+            // itself inside ResolveWalProvider, via its own
+            // optionsMonitor.Get(treeId).WalStorageProvider read, as the
+            // fallback for trees with no placement pin. It is a delegate, so
+            // it is also not sentinel-testable.
+            "WalStorageProvider",
+
+            // WAL wall-clock retention: LatticeWalGc reads it from its own
+            // optionsMonitor.Get(treeName) snapshot (the local named `resolved`
+            // there is a plain LatticeOptions, not a ResolvedLatticeOptions),
+            // and ViewMaintainerGrain reads it via latticeOptions.Get(treeId).
+            "WalRetention",
+
+            // Idempotency retry policy: LatticeGrain.Idempotency reads
+            // Options.RetryPolicy off the same synchronous monitor-backed
+            // accessor. It is an interface instance, so it is also not
+            // sentinel-testable.
+            "RetryPolicy",
         };
 
     private sealed record TransformExpectation(Func<object?, object?> Expected);
@@ -216,11 +287,6 @@ public class LatticeOptionsResolverPropagationGuardTests
     {
         var failures = new List<string>();
 
-        var resolvedDeclaredProps = typeof(ResolvedLatticeOptions)
-            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Select(p => p.Name)
-            .ToHashSet(StringComparer.Ordinal);
-
         var latticeOptionProps = typeof(LatticeOptions)
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.GetSetMethod(nonPublic: false) is not null)
@@ -228,29 +294,32 @@ public class LatticeOptionsResolverPropagationGuardTests
 
         foreach (var prop in latticeOptionProps)
         {
-            // ResolvedLatticeOptions inherits from LatticeOptions; every
-            // LatticeOptions property is therefore reachable on the
-            // resolved type via the same name. The test still records
-            // whether the resolver explicitly assigned to it.
-            if (!resolvedDeclaredProps.Contains(prop.Name)
-                && IntentionallyBypassedProperties.Contains(prop.Name))
-            {
-                // Bypassed-by-design: skip.
-                continue;
-            }
-
+            // ResolvedLatticeOptions inherits from LatticeOptions, so every
+            // LatticeOptions property is reachable on the resolved instance
+            // under the same name whether or not the resolver assigned it.
+            // That inheritance is precisely why an omission is silent, and
+            // why this guard asserts on the observed VALUE rather than on
+            // member presence.
             if (IntentionallyBypassedProperties.Contains(prop.Name))
             {
                 continue;
             }
 
-            var sentinel = PickSentinel(prop);
-            if (sentinel is null)
+            if (!TryPickSentinel(prop, out var sentinel))
             {
-                // Property type we don't know how to sentinel-test
-                // (e.g. Func<,> for storage-provider injection). Skip
-                // and rely on the operator to add an explicit case
-                // when one becomes performance-relevant.
+                // The guard cannot synthesise a distinguishable value for this
+                // property's type, so it cannot prove the resolver copies it.
+                // That is a FAILURE, not a skip: silently ignoring a property
+                // the guard cannot check is the very hole issue #2182 closed.
+                // Resolve it by teaching TryPickSentinel the type, or by adding
+                // the property to IntentionallyBypassedProperties with a comment
+                // naming the consumer that reads it off IOptionsMonitor instead.
+                failures.Add(
+                    $"  LatticeOptions.{prop.Name} ({prop.PropertyType}) cannot be sentinel-tested by this guard,\n" +
+                    "    so its propagation through LatticeOptionsResolver is UNVERIFIED. Either add a sentinel\n" +
+                    "    branch for this type to TryPickSentinel, or add the property to\n" +
+                    "    IntentionallyBypassedProperties with a comment naming its direct\n" +
+                    "    IOptionsMonitor consumer.");
                 continue;
             }
 
@@ -295,6 +364,83 @@ public class LatticeOptionsResolverPropagationGuardTests
             "IOptionsMonitor.Get(treeId) directly, add it to IntentionallyBypassedProperties " +
             "with a comment explaining the downstream consumer).\n" +
             string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Keeps <see cref="IntentionallyBypassedProperties"/> honest in the
+    /// "still bypassed" direction: a property listed there must genuinely NOT
+    /// be propagated by the resolver. If someone adds a property to the
+    /// resolver's copy block but leaves it on the allow-list, the main guard
+    /// would skip it forever - reintroducing exactly the silent hole issue
+    /// #2182 closed, only one level up.
+    /// </summary>
+    [Test]
+    public async Task Intentionally_bypassed_properties_are_not_silently_propagated()
+    {
+        var failures = new List<string>();
+
+        var bypassed = typeof(LatticeOptions)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.GetSetMethod(nonPublic: false) is not null)
+            .Where(p => IntentionallyBypassedProperties.Contains(p.Name));
+
+        foreach (var prop in bypassed)
+        {
+            if (!TryPickSentinel(prop, out var sentinel))
+            {
+                // Not observable either way; the allow-list comment is the
+                // only available evidence and the main guard already requires
+                // one to exist.
+                continue;
+            }
+
+            var baseOptions = new LatticeOptions();
+            prop.SetValue(baseOptions, sentinel);
+            var resolver = BuildResolverFor(baseOptions);
+
+            var resolved = await resolver.ResolveAsync("user-tree-bypass-audit");
+
+            if (Equals(prop.GetValue(resolved), sentinel))
+            {
+                failures.Add(
+                    $"  LatticeOptions.{prop.Name} is listed in IntentionallyBypassedProperties, " +
+                    "but ResolveAsync does propagate it.");
+            }
+        }
+
+        Assert.That(failures, Is.Empty,
+            "IntentionallyBypassedProperties is stale. The resolver now propagates the property/properties " +
+            "below, so the allow-list entry suppresses a check that would otherwise hold. Remove the entry " +
+            "so the main propagation guard covers it again.\n" +
+            string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Keeps <see cref="IntentionallyBypassedProperties"/> honest in the
+    /// "still exists" direction: every allow-list entry must name a real
+    /// public settable <see cref="LatticeOptions"/> property. A dead entry
+    /// left behind by a rename is a latent trap - a future property reusing
+    /// that name would be silently exempted from the guard without anyone
+    /// deciding so.
+    /// </summary>
+    [Test]
+    public void Intentionally_bypassed_properties_all_name_a_real_option()
+    {
+        var actual = typeof(LatticeOptions)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.GetSetMethod(nonPublic: false) is not null)
+            .Select(p => p.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var dead = IntentionallyBypassedProperties
+            .Where(name => !actual.Contains(name))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(dead, Is.Empty,
+            "IntentionallyBypassedProperties names one or more properties that no longer exist on " +
+            "LatticeOptions. Remove the stale entry: if a future option reuses the name it would be " +
+            "exempted from the propagation guard silently.");
     }
 
     /// <summary>
@@ -360,48 +506,95 @@ public class LatticeOptionsResolverPropagationGuardTests
     }
 
     /// <summary>
-    /// Pick a sentinel value that is guaranteed to differ from both the
-    /// runtime default and any documented compile-time default the
-    /// property carries. Returning <see langword="null"/> means the
-    /// type is unsupported by the propagation guard and the property
-    /// is skipped.
+    /// Pick a sentinel value guaranteed to differ from the compile-time
+    /// default the property carries, so that observing the default on the
+    /// resolved instance is unambiguous proof the resolver never copied it.
+    /// <para>
+    /// Returns <see langword="false"/> when the property's type is one this
+    /// guard cannot sentinel. That is deliberately NOT a silent skip: the
+    /// caller turns it into a failure, because a silently skipped property is
+    /// exactly the hole this guard exists to close. Nullable value types are
+    /// unwrapped and sentinelled through their underlying type, which is what
+    /// lets the guard audit the <c>int?</c> / <c>long?</c> / <c>TimeSpan?</c>
+    /// options (issue #2182) it previously ignored.
+    /// </para>
     /// </summary>
-    private static object? PickSentinel(PropertyInfo prop)
+    private static bool TryPickSentinel(PropertyInfo prop, out object? sentinel)
     {
-        var t = prop.PropertyType;
+        sentinel = null;
+        var declared = prop.PropertyType;
+        var t = Nullable.GetUnderlyingType(declared) ?? declared;
+        var compiledDefault = prop.GetValue(new LatticeOptions());
+
         if (t == typeof(int))
         {
             // Prime well above every documented floor in the system so
             // the compaction-floor clamps are no-ops.
-            return 12289;
+            sentinel = 12289;
         }
-        if (t == typeof(long))
+        else if (t == typeof(long))
         {
-            return 12289L;
+            sentinel = 12289L;
         }
-        if (t == typeof(bool))
+        else if (t == typeof(bool))
         {
-            // Flip vs the existing default - we read the current
-            // default off a fresh LatticeOptions and pick the opposite.
-            var def = (bool)prop.GetValue(new LatticeOptions())!;
-            return !def;
+            // Flip vs the existing default.
+            sentinel = !(compiledDefault as bool? ?? false);
         }
-        if (t == typeof(TimeSpan))
+        else if (t == typeof(TimeSpan))
         {
-            return TimeSpan.FromMinutes(13) + TimeSpan.FromMilliseconds(37);
+            sentinel = TimeSpan.FromMinutes(13) + TimeSpan.FromMilliseconds(37);
         }
-        if (t == typeof(double))
+        else if (t == typeof(double))
         {
-            return 0.314159;
+            sentinel = 0.314159;
         }
-        if (t == typeof(string) || t == typeof(string).MakeByRefType())
+        else if (t == typeof(string))
         {
-            return "propagation-guard-sentinel";
+            sentinel = "propagation-guard-sentinel";
         }
-        // Anything else (Func<,>, custom enums we don't recognise, etc.)
-        // - skip silently. Add an explicit branch here if/when a
-        // performance-relevant property of a new type lands.
-        return null;
+        else if (t.IsEnum)
+        {
+            // Any declared member other than the compiled default.
+            sentinel = Enum.GetValues(t)
+                .Cast<object>()
+                .FirstOrDefault(v => !Equals(v, compiledDefault));
+            if (sentinel is null)
+            {
+                // Single-member enum: no value can differ from the default,
+                // so propagation is unobservable. Treat as unsupported rather
+                // than asserting something vacuously true.
+                return false;
+            }
+        }
+        else
+        {
+            // Func<,>, interfaces, and any other reference type we cannot
+            // synthesise a comparable value for. The caller fails the build.
+            return false;
+        }
+
+        // A sentinel that happens to equal the compiled default proves
+        // nothing - the property would "pass" even if the resolver dropped
+        // it. Perturb until it differs.
+        if (Equals(sentinel, compiledDefault))
+        {
+            sentinel = sentinel switch
+            {
+                int i => i + 1,
+                long l => l + 1L,
+                double d => d + 0.5d,
+                TimeSpan ts => ts + TimeSpan.FromMinutes(1),
+                string s => s + "-alt",
+                _ => sentinel,
+            };
+            if (Equals(sentinel, compiledDefault))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
