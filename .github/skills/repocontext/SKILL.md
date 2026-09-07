@@ -107,8 +107,11 @@ disagree with the master file, the master file wins.
   (partially embedded) index can be a worse locator than `grep` - prefer
   distinctive terms, and do not force it when your terms are too generic.
 - **Writes are destructive and fail-closed.** Never call `remember` / `update` /
-  `forget` / `add_repo` / `remove_repo` speculatively, and never `remove_repo`
-  the `lattice` repo. `remove_repo` in particular requires **explicit user
-  consent** - it drops a repository's entire indexed context, so only run it when
-  the user has explicitly asked for that repository to be removed; otherwise ask
-  first.
+  `forget` / `add_repo` / `remove_repo` / `reset_index` speculatively, and never
+  `remove_repo` the `lattice` repo. `remove_repo` in particular requires
+  **explicit user consent** - it drops a repository's entire indexed context
+  including its durable memory, so only run it when the user has explicitly
+  asked for that repository to be removed; otherwise ask first. When the goal
+  is to repair a wedged or stale index for a repository whose memory is worth
+  keeping, reach for `reset_index` instead - it drops the code index and its
+  vectors but preserves the memory tree.

@@ -238,6 +238,11 @@ public sealed class RepoContextToolHandlerValidationTests
 
     [TestCase("")]
     [TestCase("   ")]
+    public void ResetIndexAsync_rejects_a_blank_repo_id(string repoId)
+        => AssertRejects(() => RepoContextToolHandlers.ResetIndexAsync(null!, repoId), "repoId");
+
+    [TestCase("")]
+    [TestCase("   ")]
     public void IndexStatusAsync_rejects_a_blank_repo_id(string repoId)
         => AssertRejects(() => RepoContextToolHandlers.IndexStatusAsync(null!, repoId), "repoId");
 
