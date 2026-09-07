@@ -265,7 +265,10 @@ flowchart TD
 | Divergence | What it usually means | Your move |
 |---|---|---|
 | Item not complete, mirrored issue closed | A human closed the issue out of band | Ask before changing memory; GitHub owns oversight |
-| Item complete, issue still open | Completion mirroring was missed | Propose closing the issue; do not overwrite its body |
+| Item tagged `state:complete`, issue still open | Completion mirroring was missed | Propose closing the issue; do not overwrite its body |
+| Item tagged `state:complete`, pull request still open | **Defect.** Completion was claimed before the merge that defines it | The item is not complete. The merge is outstanding work, and the item is not a satisfied `blockedBy` target |
+| Green, mergeable pull request, no live claim, no `state:complete` | The attempt died between CI and the merge | The cheapest possible resume. Deploy onto it before any fresh item |
+| Completion asserted only in `body` prose, with no `state:complete` tag | A worker invented its own encoding | **Defect.** Nothing reads prose. Reconcile to the tag under a claim |
 | Item claimed, no open pull request, lease not near expiry | Worker died early, or has not pushed yet | Report the lease expiry and let expiry-reclaim run; do not force-release |
 | Open pull request with no matching item | Work entered outside the backlog | Report it; propose mirroring it in as an item if it should be tracked |
 | `needs-specification` present on an item you were about to treat as ready | Correct gating, working as designed | Exclude it and tell the human it is awaiting their admission |
