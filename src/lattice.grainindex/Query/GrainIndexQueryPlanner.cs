@@ -98,6 +98,40 @@ internal static class GrainIndexQueryPlanner
         if (product > MaxConjunctions)
             throw TooComplex();
 
+        // Distributing '&&' over '||' is only a genuine cross product when both
+        // sides are already unions. When one side is a single conjunction - which
+        // is what every '&&' chain with no '||' under it looks like, and so the
+        // shape of the overwhelming majority of predicates - the product is a
+        // relabelling of the other side, so its conjunctions are extended in
+        // place. Both operand lists are freshly built by the recursion below this
+        // frame and reachable from nowhere else, so extending one is not
+        // observable; the alternative allocated a fresh outer list plus one
+        // merged list, and both their backing arrays, per level of the chain.
+        if (right.Count == 1)
+        {
+            var appended = right[0];
+            for (var i = 0; i < left.Count; i++)
+            {
+                left[i].AddRange(appended);
+            }
+
+            return left;
+        }
+
+        if (left.Count == 1)
+        {
+            // Prepending keeps each conjunction's atoms in source order, which is
+            // what the general path below produces and what the residual
+            // predicate's combination order depends on.
+            var prepended = left[0];
+            for (var j = 0; j < right.Count; j++)
+            {
+                right[j].InsertRange(0, prepended);
+            }
+
+            return right;
+        }
+
         var combined = new List<List<QueryAtom>>((int)product);
         for (var i = 0; i < left.Count; i++)
         {
@@ -523,18 +557,22 @@ internal static class GrainIndexQueryPlanner
 
     private static bool EvaluateBoolean(in QueryAtom atom)
     {
-        var value = (bool)Expression.Lambda(atom.Expression).Compile().DynamicInvoke()!;
+        var value = (bool)EvaluateConstant(atom.Expression)!;
         return atom.Negated ? !value : value;
     }
 
-    private static object? EvaluateConstant(Expression expression)
-    {
-        expression = Unwrap(expression);
-        return expression is ConstantExpression constant
-            ? constant.Value
-            : Expression.Lambda(expression).Compile().DynamicInvoke();
-    }
-
+    /// <summary>
+    /// Evaluates the constant side of a comparison through the shared
+    /// <see cref="ExpressionConstantReader"/>, which folds a constant or a
+    /// field or property chain rooted in one directly and compiles only the
+    /// shapes outside that closed set. A bound captured from the surrounding
+    /// method - which is what real predicates are made of - reaches the tree as
+    /// a member read over a display-class constant, and a plan is built afresh
+    /// on every query, so the fold is on the hot path of every query the index
+    /// serves.
+    /// </summary>
+    private static object? EvaluateConstant(Expression expression) =>
+        ExpressionConstantReader.Read(Unwrap(expression));
     private static bool TryMapComparison(ExpressionType nodeType, out LatticeComparisonOperator op)
     {
         switch (nodeType)

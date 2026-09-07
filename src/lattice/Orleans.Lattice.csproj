@@ -55,6 +55,8 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Backup.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Schema" />
     <InternalsVisibleTo Include="Orleans.Lattice.Schema.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.GrainIndex" />
+    <InternalsVisibleTo Include="Orleans.Lattice.GrainIndex.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.State" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.State.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.State.Grpc.Tests" />

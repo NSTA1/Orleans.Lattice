@@ -62,13 +62,36 @@ internal sealed class GrainIndexQueryExecutor
 
         // Only a union can produce the same grain twice, so the de-duplication
         // set is allocated only when there is more than one branch.
-        var seen = disjuncts.Length > 1 ? new HashSet<string>(StringComparer.Ordinal) : null;
+        var seen = disjuncts.Length > 1 ? new SeenSet() : null;
 
         for (var i = 0; i < disjuncts.Length; i++)
         {
             var clauses = disjuncts[i].Clauses;
             if (clauses.Length == 1)
             {
+                if (seen is not null && !payloads)
+                {
+                    // The key-only union branch. A grain already reported by an
+                    // earlier disjunct is the whole reason this set exists, and
+                    // the old shape paid for it twice over: the scan cut a
+                    // grain-key string out of the raw entry key and wrapped it in
+                    // a match before the set had any say, so every duplicate
+                    // allocated a string purely to be recognised and dropped. The
+                    // set is now probed through a span over the tree's own key,
+                    // and the string is created by the insert itself, so a
+                    // duplicate costs one probe and nothing else.
+                    string unionProperty = clauses[0].Property.Name;
+                    await foreach (string entryKey in ScanEntryKeysAsync(clauses[0], pageSize, execution, cancellationToken).ConfigureAwait(false))
+                    {
+                        if (seen.TryAdd(entryKey, out string grainKey))
+                        {
+                            yield return new GrainIndexMatch(grainKey, unionProperty, NoPayload);
+                        }
+                    }
+
+                    continue;
+                }
+
                 await foreach (var match in ScanAsync(clauses[0], pageSize, execution, payloads, cancellationToken).ConfigureAwait(false))
                 {
                     if (seen is null || seen.Add(match.GrainKey))
@@ -466,5 +489,47 @@ internal sealed class GrainIndexQueryExecutor
 
         /// <summary>The index of the last clause this candidate matched.</summary>
         internal int LastPass = 0;
+    }
+
+    /// <summary>
+    /// The grain keys a union has already reported, so no grain is yielded twice
+    /// when it satisfies more than one disjunct.
+    /// <para>
+    /// The set is probed through its <see cref="ReadOnlySpan{T}"/> alternate
+    /// lookup, so a raw entry key can be tested against it by slicing rather than
+    /// by cutting a string first. That matters because the whole point of the set
+    /// is that some grains hit it: an already-reported grain used to allocate the
+    /// string that identified it as a duplicate. The insert is what creates the
+    /// string now, so only a grain that is actually reported pays for one.
+    /// </para>
+    /// </summary>
+    private sealed class SeenSet
+    {
+        private readonly HashSet<string> _set = new(StringComparer.Ordinal);
+        private readonly HashSet<string>.AlternateLookup<ReadOnlySpan<char>> _lookup;
+
+        internal SeenSet() => _lookup = _set.GetAlternateLookup<ReadOnlySpan<char>>();
+
+        /// <summary>Records an already-materialised grain key, reporting whether it is new.</summary>
+        internal bool Add(string grainKey) => _set.Add(grainKey);
+
+        /// <summary>
+        /// Records the grain named by <paramref name="entryKey"/>, reporting
+        /// whether it is new and, when it is, the grain key string the insert
+        /// created. A duplicate allocates nothing.
+        /// </summary>
+        internal bool TryAdd(string entryKey, out string grainKey)
+        {
+            if (!TryReadGrainKey(entryKey, out ReadOnlySpan<char> span) || !_lookup.Add(span))
+            {
+                grainKey = string.Empty;
+                return false;
+            }
+
+            // The insert materialised the key; reading it back hands out that
+            // instance rather than cutting a second copy of the same characters.
+            _lookup.TryGetValue(span, out grainKey!);
+            return true;
+        }
     }
 }
