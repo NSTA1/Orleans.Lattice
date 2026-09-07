@@ -760,6 +760,24 @@ computation:
    owner approved in conversation with the project manager, is admitted at
    creation.
 
+**The label's name understates what it does.** `needs-specification` is an
+admission gate, not a to-do that an agent discharges by writing a
+specification. Two consequences follow, and both have been tripped in practice:
+
+- **Writing the specification does not admit the item.** An agent may draft the
+  spec, post it on the issue and record it in the mirrored item; only a human
+  may then remove the label. An agent that files an item, specifies it, and
+  clears the label has proposed the work and authorised it in the same breath,
+  which is the hole this gate exists to close - and it is worth strictly more
+  when the proposing agent is the one persuaded by its own argument, because
+  there is then no independent check anywhere in the loop. The project manager
+  is barred from this explicitly in its own boundaries; the prohibition applies
+  to every agent.
+- **A fully-specified issue that still carries the label is not a labelling
+  defect and must not be "corrected".** The label reports that admission is
+  outstanding, not that prose is missing. Any agent auditing or tidying labels
+  must leave it alone.
+
 This reuses the repository's existing `needs-specification` and `stale` label
 ladder rather than inventing a parallel state machine, and it keeps admission on
 the GitHub side where a human can exercise it without an agent in the loop -
