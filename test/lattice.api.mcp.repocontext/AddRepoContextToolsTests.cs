@@ -145,7 +145,7 @@ public sealed class AddRepoContextToolsTests
                 "repocontext_search", "repocontext_index_status", "repocontext_neighbors", "repocontext_list_repos",
                 "repocontext_outline", "repocontext_changed", "repocontext_related", "repocontext_context",
                 "repocontext_stats", "repocontext_claim_status",
-                "repocontext_add_repo", "repocontext_remove_repo",
+                "repocontext_add_repo", "repocontext_remove_repo", "repocontext_reset_index",
                 "repocontext_remember", "repocontext_update", "repocontext_forget",
                 "repocontext_claim", "repocontext_renew_claim", "repocontext_release_claim",
             }));

@@ -753,12 +753,21 @@ anywhere to explain it.
   in. Never call one speculatively.
 - Do not write memory without a clear durable reason, and never `remove_repo`
   the repo you are working in.
-- **`remove_repo` requires explicit user consent.** It drops a repository's
+- **`remove_repo` requires explicit user consent, and is not the tool for repairing an index.** It drops a repository's
   entire indexed context (structural nodes, memory, and vectors), so never call
   it on your own initiative, as a cleanup step, or to "reset" an index. Invoke it
   only when the user has explicitly asked for that specific repository to be
   removed; if a task seems to need it but the user has not asked, stop and ask
-  first rather than assuming consent.
+  first rather than assuming consent. When the goal is to repair a wedged, stale,
+  or corrupt code index for a repository whose accumulated memory (decisions,
+  gotchas, conventions) is worth keeping, `reset_index` is the tool - it drops
+  the code index and every derived plane but preserves the memory tree, so the
+  repository stays queryable through its notes and a follow-up `add_repo`
+  rebuilds the code index from the working files. `reset_index` is a
+  lighter-consent operation (no memory is destroyed) but is still destructive
+  and fail-closed like every other write tool, so do not call it speculatively -
+  reach for it when the index is actually degraded and the memory is worth
+  preserving.
 
 ## Freshness and re-ingest
 

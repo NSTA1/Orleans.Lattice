@@ -39,7 +39,8 @@ public sealed class RepoContextToolGroupTests
 
     private static readonly string[] WorkspaceWriteToolNames =
         [
-            "repocontext_add_repo", "repocontext_remove_repo", "repocontext_remember",
+            "repocontext_add_repo", "repocontext_remove_repo", "repocontext_reset_index",
+            "repocontext_remember",
             "repocontext_update", "repocontext_forget",
             "repocontext_claim", "repocontext_renew_claim", "repocontext_release_claim",
         ];
@@ -108,6 +109,7 @@ public sealed class RepoContextToolGroupTests
 
     [TestCase("repocontext_add_repo")]
     [TestCase("repocontext_remove_repo")]
+    [TestCase("repocontext_reset_index")]
     public void Workspace_write_tools_are_annotated_mutating_and_destructive(string toolName)
     {
         var tool = new RepoContextToolGroup(enableWrites: true, workspaceMode: true)
@@ -199,7 +201,8 @@ public sealed class RepoContextToolGroupTests
     private static readonly string[] MutatingToolNames =
         [
             "repocontext_remember", "repocontext_update", "repocontext_forget",
-            "repocontext_add_repo", "repocontext_remove_repo", "repocontext_bootstrap",
+            "repocontext_add_repo", "repocontext_remove_repo", "repocontext_reset_index",
+            "repocontext_bootstrap",
             "repocontext_claim", "repocontext_renew_claim", "repocontext_release_claim",
         ];
 

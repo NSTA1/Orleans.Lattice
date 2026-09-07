@@ -27,6 +27,9 @@ public sealed class RepoContextWorkspaceToolsTests
     private const string AddRepo = "repocontext_add_repo";
     private const string ListRepos = "repocontext_list_repos";
     private const string RemoveRepo = "repocontext_remove_repo";
+    private const string ResetIndex = "repocontext_reset_index";
+    private const string Remember = "repocontext_remember";
+    private const string Scan = "repocontext_scan";
 
     private readonly List<string> _tempRoots = new();
 
@@ -270,6 +273,113 @@ public sealed class RepoContextWorkspaceToolsTests
             .RequireStructuredContent();
 
         Assert.That(removal.GetProperty("entriesDeleted").GetInt32(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task Reset_index_drops_the_code_index_preserves_memory_and_re_indexes_cleanly()
+    {
+        // End-to-end for repocontext_reset_index: onboard a repository, write a
+        // durable memory entry, reset the code index, and re-add the repository.
+        // The memory entry must survive the reset (that is the whole point of the
+        // new verb) and the second add_repo must rebuild the code index cleanly.
+        var workspace = NewWorkspace();
+        var repoRoot = WriteRepo(workspace, "reindex-me",
+            ("src/A.cs", "class A {}"), ("src/B.cs", "class B {}"));
+
+        await using var harness = await StartAsync(workspace, RepoContextMcpAuthPosture.Writer);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        await client.CallToolAsync(AddRepo, new Dictionary<string, object?> { ["path"] = repoRoot }, cancellationToken: Ct);
+        await client.WaitForIndexAsync("reindex-me", Ct);
+
+        // Write a durable memory entry - no explicit TTL, so it inherits the
+        // repository default or stays durable if none is configured.
+        await client.CallToolAsync(Remember, new Dictionary<string, object?>
+        {
+            ["repoId"] = "reindex-me",
+            ["topic"] = "decisions",
+            ["id"] = "keep-me",
+            ["title"] = "must survive a code-only reset",
+            ["body"] = "the reset verb preserves the memory tree",
+        }, cancellationToken: Ct);
+
+        // Reset the code index but leave the memory alone.
+        var reset = (await client.CallToolAsync(
+                ResetIndex, new Dictionary<string, object?> { ["repoId"] = "reindex-me" }, cancellationToken: Ct))
+            .RequireStructuredContent();
+        Assert.Multiple(() =>
+        {
+            Assert.That(reset.GetProperty("repoId").GetString(), Is.EqualTo("reindex-me"));
+            Assert.That(reset.GetProperty("entriesDeleted").GetInt32(), Is.GreaterThanOrEqualTo(3),
+                "At least both files plus the root marker are code-index entries.");
+        });
+
+        // The structural marker is gone (the code index was dropped)...
+        var structural = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
+        Assert.That(await structural.GetAsync(RepoContextKeys.Repo("reindex-me"), Ct), Is.Null,
+            "The repository root marker is a code-index entry and is dropped by reset_index.");
+
+        // ...but the memory tree still holds the durable entry.
+        var scan = (await client.CallToolAsync(Scan, new Dictionary<string, object?>
+        {
+            ["repoId"] = "reindex-me",
+            ["scope"] = "MemoryTopic",
+            ["topic"] = "decisions",
+        }, cancellationToken: Ct)).RequireStructuredContent();
+        var scannedIds = scan.GetProperty("entries").EnumerateArray()
+            .Select(e => e.GetProperty("id").GetString())
+            .ToArray();
+        Assert.That(scannedIds, Does.Contain("keep-me"),
+            "The memory entry captured before the reset must survive.");
+
+        // A second add_repo rebuilds the code index cleanly from the working files.
+        await client.CallToolAsync(AddRepo, new Dictionary<string, object?> { ["path"] = repoRoot }, cancellationToken: Ct);
+        var status = await client.WaitForIndexAsync("reindex-me", Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.GetProperty("filesScanned").GetInt32(), Is.EqualTo(2));
+            Assert.That(status.GetProperty("filesAdded").GetInt32(), Is.EqualTo(2),
+                "Both files are re-added on the follow-up ingest because the reset dropped their structural nodes.");
+        });
+        Assert.That(await structural.GetAsync(RepoContextKeys.Repo("reindex-me"), Ct), Is.Not.Null,
+            "The follow-up ingest rewrites the repository root marker.");
+    }
+
+    [Test]
+    public async Task Reset_of_an_unknown_repo_is_a_no_op()
+    {
+        var workspace = NewWorkspace();
+        await using var harness = await StartAsync(workspace, RepoContextMcpAuthPosture.Writer);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        var result = (await client.CallToolAsync(
+                ResetIndex, new Dictionary<string, object?> { ["repoId"] = "never-added" }, cancellationToken: Ct))
+            .RequireStructuredContent();
+
+        Assert.That(result.GetProperty("entriesDeleted").GetInt32(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task Reader_is_not_offered_reset_index()
+    {
+        var workspace = NewWorkspace();
+        await using var harness = await StartAsync(workspace, RepoContextMcpAuthPosture.Reader);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        var names = await client.ListToolNamesAsync(Ct);
+        Assert.That(names, Does.Not.Contain(ResetIndex),
+            "reset_index is destructive and must not be advertised to a read-only caller.");
+    }
+
+    [Test]
+    public async Task Writer_is_offered_reset_index_alongside_add_and_remove_repo()
+    {
+        var workspace = NewWorkspace();
+        await using var harness = await StartAsync(workspace, RepoContextMcpAuthPosture.Writer);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        var names = await client.ListToolNamesAsync(Ct);
+        Assert.That(names, Does.Contain(ResetIndex));
     }
 
     // -- Workspace boundary ----------------------------------------------------
