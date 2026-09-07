@@ -94,12 +94,26 @@ attribute expressed this way is filterable without reading bodies. Arbitrary
 | `homeRegion:<region>` | The region in which claims for this item are taken. **Verify this is enforced before relying on it.** The intent is that a claim attempted from any other region fails closed, because the underlying lock is cluster-wide and therefore region-scoped - but that is a property of the deployment, not of the tag. On a single-region deployment `lattice_list_regions` reports only `current`, claims report region `local`, and a geographic value such as `uksouth` is **not enforced at all**: a claim from anywhere succeeds. Treat a value the cluster does not route as a **defect in the binding**, and note the failure is worse than a no-op - an unenforced safety assumption that the protocol documents as enforced is more dangerous than an absent one, because it is relied upon. |
 | `baseBranch:<branch>` | The branch this item's pull request targets. For an item in a grouping this is the **epic branch**, never `main`. |
 | `state:complete` \| `state:parked` | The item's **terminal** state, and the only execution state carried on the item. Absent means the item is live. See [Recording completion](#recording-completion). |
-| `resource:<name>` | **Optional, repeatable-by-name but one tag per distinct resource.** Names a scarce **non-file** resource the item needs exclusively - a shared test box, a physical device, a deployment slot, a rate-limited external account. Two items naming the same resource may never be in flight together, however disjoint their code radii are. |
+| `resource:<name>` | **Optional, repeatable-by-name but one tag per distinct resource.** Names a scarce **non-file** resource the item needs exclusively - a shared test box, a physical device, a deployment slot, a rate-limited external account. Two items naming the same resource may never be in flight together, however disjoint their code radii are. **The `resource:` prefix is what makes the constraint load-bearing**, because step 8 of the ready set matches on it. A bare descriptive tag asserting the same requirement - `needs-box-exclusive`, say - is read by no step and excludes nothing, however plainly it reads to a human. |
+
+**Five tags are mandatory on every item**: `backlog`, `priority:`, `phase:`,
+`homeRegion:` and `baseBranch:`. The rest are optional. `state:` is deliberately
+not among them, because its absence is exactly what "live" means.
 
 **Exactly one tag per prefix.** Two `priority:` tags on one item means two
 authors wrote concurrently. Add-wins is what makes that visible rather than
 silent, so it is reported as a defect and reconciled, never resolved by picking
 one arbitrarily.
+
+**A missing mandatory tag is the more dangerous direction, because it is
+silent.** A duplicate is loud - two values sit where one belongs, and any reader
+trips over it. An omission gives a reader nothing to see: the item is still
+enumerated by the topic scan, still survives every narrowing step, and simply
+never gets claimed. `homeRegion:` is the worst of them, because a worker filters
+candidates to its own region, so an item naming no region matches no worker at
+all. It looks healthy in every listing and starves indefinitely. Author the five
+together, and detect the omission at step 1 of the ready set rather than
+trusting authoring discipline to hold.
 
 Keep attribute tags **low-churn**. OR-Set dots accumulate per add, so an
 attribute rewritten every run would grow a long-lived item record without bound.
@@ -482,7 +496,12 @@ graph, not a queue engine.
 The computation:
 
 1. `repocontext_scan` scope `MemoryTopic`, topic `backlog`, paging on the
-   continuation token, to enumerate every live item.
+   continuation token, to enumerate every live item. **Verify each item carries
+   the five mandatory tags as you page**, and report any item that does not
+   rather than silently passing over it. The check is free here, because every
+   item is already in hand, and this is the only step that sees all of them - so
+   an item malformed in a way that hides it from the later narrowing steps is
+   caught here or not at all.
 2. Drop items tagged `state:complete` or `state:parked`, and items held under a
    live fenced claim (`repocontext_claim_status`). Completeness is read from the
    tag and from nothing else - never from prose in `body`, and never from a
