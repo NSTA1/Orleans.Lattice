@@ -62,12 +62,30 @@ internal sealed class RepoContextRetrievalWarmup : IRepoContextRetrievalWarmup
             var repoIds = await _store.ListRepoIdsAsync(cancellationToken).ConfigureAwait(false);
             if (repoIds.Count == 0)
             {
-                // Nothing is indexed, so the vector plane holds nothing it could fail to
-                // serve. Blocking readiness here would wedge a fresh box before its first
-                // repository could ever be onboarded.
+                // No repository is REGISTERED, so there is nothing this host could be
+                // asked to retrieve from. Blocking readiness here would wedge a fresh
+                // box before its first repository could ever be onboarded.
+                //
+                // Read that condition precisely: it is "no repository is listed", NOT
+                // "nothing is indexed". A listed repository holding no vectors is a
+                // different state and deliberately does NOT come through here - it
+                // falls to the loop below, where the search reports
+                // KeywordVectorPlaneUnavailable (RepoContextSearchService returns it
+                // when the index yields no matches at all) and the host stays
+                // not-ready. That is the intended semantics, not an oversight:
+                // RepoContextRetrievalPath.KeywordVectorPlaneUnavailable classifies an
+                // empty or still-building plane as a real capability loss, so a box
+                // that was asked to index something and cannot serve it semantically
+                // should not claim to be ready.
+                //
+                // Widening this guard to "holds no vectors" would also cost what it
+                // exists to avoid: a vector count comes from the membership tree, the
+                // largest in the store, and paying that scan at startup is what timed
+                // out and failed the warmup on a real deployment (issue #1819). See
+                // the ids-only comment above.
                 _readiness.MarkServing();
                 _logger.LogInformation(
-                    "Repo-context retrieval warmup: no repositories are indexed, so the retrieval plane is ready with nothing to serve.");
+                    "Repo-context retrieval warmup: no repositories are registered, so the retrieval plane is ready with nothing to serve.");
                 return true;
             }
 

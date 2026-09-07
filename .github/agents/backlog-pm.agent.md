@@ -75,5 +75,35 @@ These override or extend the base for Orleans.Lattice only.
 
 5. **Commits carry no trailers**, and branch names are
    `<type>/<kebab-case-description>` and never contain a username. An epic uses
-   one shared `<type>/epic/<slug>` branch with sub-items nested beneath it. See
-   `{conventionsDoc}`.
+   one shared `<type>/epic/<slug>` branch, with sub-items branched off it as
+   `<type>/epic/<slug>-<item-slug>` - the final separator is a **hyphen, not a
+   slash**, because git stores a branch as a file at `refs/heads/<name>`, so
+   `refs/heads/X` and `refs/heads/X/anything` cannot coexist and whichever is
+   created first refuses the other. See `{conventionsDoc}`.
+
+6. **Bucket concurrently-dispatched work; do not raise it straight at `main`.**
+   When you deploy workers directly against several unrelated issues at once,
+   open one integration bucket `<type>/epic/<bucket-slug>` and target every
+   member pull request at it, then land the bucket at `main` as a single gated
+   pull request. `main` is strict-protected, so **N pull requests raised at it
+   concurrently cost `N(N+1)/2` CI cycles** - every merge invalidates every other
+   open pull request, which must then update and re-run the full suite. Bucketed
+   they cost `N+1`. The trigger is **concurrency, not count**: items raised a
+   week apart never contend and need no bucket, and one or two in flight are
+   cheaper raised directly.
+
+   Three rules stop this going wrong, and the second is the one that bites:
+
+   - **Reuse the `epic` segment. Never invent a `bucket` one.** `ci.yml` triggers
+     on `branches: [main, '*/epic/**', 'release/**']`, so a `fix/bucket/...` base
+     matches none of them and member pull requests would run **zero** CI while
+     displaying as unblocked rather than failing.
+   - **The bucket's pull request must carry every `Closes #N` itself.** GitHub
+     honours a closing keyword only when the pull request targets the **default
+     branch**, so a `Closes #N` in a member pull request is silently inert: it
+     merges, it reads correctly, and the issue stays open with no signal
+     anywhere. You own that list. Verify it with
+     `gh pr view <n> --json closingIssuesReferences`, never by reading the body.
+   - **You keep the bucket current with `main`, and review happens on the member
+     pull requests** - deferring review to the bucket turns N reviewable pull
+     requests into one unreviewable one.

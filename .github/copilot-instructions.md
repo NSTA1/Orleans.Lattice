@@ -262,6 +262,46 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     independent items is better served by ordinary pull requests straight into
     `main`. The epic branch earns its overhead only once the fan-out is wide
     enough that mutually-invalidating pull requests would dominate wall-clock.
+- **Concurrently-dispatched independent items are folded into one integration
+  bucket, not raised straight at `main`.** The epic rules above assume work that
+  was *decomposed from a parent*. Work that was never decomposed - a project
+  manager deploying workers directly against unrelated defect issues - has no
+  parent to group it, so each pull request targets `main` and they serialise
+  against each other. That reintroduces by the back door the exact `O(N^2)` cost
+  the epic branch exists to remove: `main` is strict-protected, so every merge
+  invalidates every other open pull request, which must then update and re-run
+  the full suite. **N such pull requests cost `N(N+1)/2` CI cycles; bucketed,
+  they cost `N+1`.** At six concurrent items that is 21 runs against 7.
+  - **A bucket is an ordinary epic branch and reuses the `epic` segment:
+    `<type>/epic/<bucket-slug>`.** Do **not** invent a `bucket` segment. This is
+    not a semantic compromise, it is what makes the branch validated at all:
+    `ci.yml` triggers on `branches: [main, '*/epic/**', 'release/**']`, so a
+    `fix/bucket/...` base matches none of the three and pull requests into it
+    would run **zero** CI - no build, no tests, no hygiene gates - while
+    displaying as unblocked rather than as an error. Read `epic` here as
+    "integration branch". Everything above applies unchanged: no branch
+    protection on the bucket, the hyphen separator for member branches
+    (`<type>/epic/<bucket-slug>-<item-slug>`), the owner keeps it current with
+    `main`, and review happens on the member pull requests.
+  - **Closing keywords in a member pull request DO NOTHING. The bucket's pull
+    request must carry every `Closes #N` itself.** GitHub honours a closing
+    keyword only when the pull request targets the **default branch**, so a
+    `Closes #N` in a pull request based on a bucket is silently inert - it
+    merges, it looks right, and the issue stays open. Verify with
+    `gh pr view <n> --json closingIssuesReferences`, never by reading the body.
+    This is the single most likely way bucketing goes wrong, because nothing
+    reports it: the cost of forgetting is a set of completed items left open
+    with no signal anywhere that they were meant to close.
+  - **Retarget, do not rename.** An already-raised pull request joins a bucket by
+    changing its base (`gh pr edit <n> --base <bucket>`); its head branch keeps
+    whatever name it has. The `<bucket-slug>-<item-slug>` head naming is for work
+    started after the bucket exists, and renaming in-flight branches to obtain it
+    is churn with no benefit.
+  - **Do not apply this ceremonially either.** One or two items in flight are
+    better served by ordinary pull requests straight into `main` - a bucket costs
+    one extra gated merge, which only pays for itself once concurrent items would
+    otherwise invalidate each other. The trigger is **concurrency, not count**:
+    six items raised a week apart never contend and need no bucket.
 - When a PR fully implements an issue, add a `Closes XXX` line to the PR body.
 - Never push directly to main. All changes must go through a branch and pull request.
 - The main branch has branch protection enabled with a required 'build-and-test' status check.

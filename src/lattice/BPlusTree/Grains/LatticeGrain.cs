@@ -44,7 +44,7 @@ internal sealed partial class LatticeGrain(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     LatticeOptionsResolver optionsResolver,
     IServiceProvider services,
-    ILogger<LatticeGrain> logger) : ILattice, ISystemLattice, IReplicationApplyGrain
+    ILogger<LatticeGrain> logger) : ILattice, ISystemLattice, IReplicationApplyGrain, IGrainBase
 {
     private string? _treeIdCache;
     private string TreeId => _treeIdCache ??= context.GrainId.Key.ToString()!;
@@ -3614,10 +3614,13 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
-    /// Lazily activates the per-tree autonomic loops on the first write to
-    /// this tree: the <c>HotShardMonitorGrain</c> that splits hot shards, and
-    /// the <c>ShardHealingOrchestratorGrain</c> that consolidates over-split
-    /// ones. Subsequent writes are no-ops.
+    /// Activates the per-tree autonomic loops: the <c>HotShardMonitorGrain</c>
+    /// that splits hot shards, and the <c>ShardHealingOrchestratorGrain</c>
+    /// that consolidates over-split ones. Called once from
+    /// <see cref="OnActivateAsync(CancellationToken)"/> - so a tree that has
+    /// stopped taking writes still arms - and again from every write path,
+    /// which re-attempts an arming that lost the race with reminder-service
+    /// startup. Subsequent calls are no-ops.
     /// <para>
     /// The two are bootstrapped independently rather than under one flag,
     /// because disabling adaptive splitting on a deployment whose trees are
@@ -3639,6 +3642,68 @@ internal sealed partial class LatticeGrain(
 
         await EnsureHotShardMonitorAsync();
         await EnsureShardHealingAsync();
+    }
+
+    /// <inheritdoc />
+    IGrainContext IGrainBase.GrainContext => context;
+
+    /// <summary>
+    /// Arms this tree's autonomic loops when the activation starts, so a tree
+    /// that has stopped taking writes still heals.
+    /// <para>
+    /// Every other <see cref="EnsureMonitorAsync"/> call site sits on a write
+    /// path, which made arming a function of traffic shape rather than of the
+    /// tree existing. A tree is over-split by a bulk ingest and may then serve
+    /// reads for the rest of its life, so the trees most in need of healing
+    /// were precisely the ones that never armed it. Activation is the one seam
+    /// a new entry point cannot forget to annotate, which is how the gap arose:
+    /// the arming call was added to the write verbs and the read verbs were
+    /// never revisited.
+    /// </para>
+    /// <para>
+    /// This does not make the operation-path calls redundant. They are the
+    /// retry for an arming attempt that lost the race with the reminder
+    /// service's asynchronous startup - see <see cref="EnsureShardHealingAsync"/>,
+    /// which returns without latching its flag in that case - and once armed
+    /// they cost a <c>bool</c> test rather than a call.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Arming never fails activation.</b> The catch here is deliberately
+    /// wider than the reminder-service-transient filter the two helpers apply
+    /// to themselves, because the failure modes differ in consequence rather
+    /// than in kind. Arming reaches persistent grain storage
+    /// (<c>HotShardMonitorGrain</c> writes its activation timestamp) and the
+    /// reminder table, both of which can be transiently unavailable during silo
+    /// start - exactly when activations happen. Letting that propagate would
+    /// fail the activation and take the tree offline for reads and writes,
+    /// trading a missing background loop for a total outage of the data the
+    /// loop exists to maintain.
+    /// </para>
+    /// <para>
+    /// Nothing is lost by swallowing it here. Neither helper latches its flag
+    /// on a failed attempt, so the next operation re-attempts, and the
+    /// operation-path catch is unchanged and still narrow - a non-transient
+    /// arming failure surfaces to the next writer with its original shape.
+    /// The activation attempt is strictly additive: it can arm a tree that
+    /// would not otherwise have armed, and it cannot suppress a diagnostic
+    /// that would otherwise have been raised.
+    /// </para>
+    /// </remarks>
+    public async Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await EnsureMonitorAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to arm the autonomic loops for tree {TreeId} at activation; the tree still serves reads and writes and a later operation re-attempts.",
+                TreeId);
+        }
     }
 
     private async Task EnsureHotShardMonitorAsync()

@@ -1056,8 +1056,11 @@ internal sealed partial class RepoContextStore
     /// branch, and tags) is carried across unchanged. The
     /// <see cref="RepoContextTrees.Memory"/> tree is not
     /// touched, so every memory entry survives with its fields, tags, links, and
-    /// remaining time-to-live intact. Resetting the index for an absent
-    /// repository is a no-op that reports zero deletions and invents no marker.
+    /// remaining time-to-live intact. When the sweep found index records but no
+    /// marker was present, a minimal marker is re-derived so the repository stays
+    /// enumerable; resetting the index for an absent repository (one the sweep
+    /// found nothing for) is a no-op that reports zero deletions and invents no
+    /// marker.
     /// The set of trees to
     /// sweep is the local constant <see cref="RepoContextTrees.CodeIndexTrees"/>;
     /// see that member's remarks for why the vector payload tree is included
@@ -1122,8 +1125,23 @@ internal sealed partial class RepoContextStore
         // (display name, default branch, tags) is not index-derived, so it is
         // carried across untouched.
         //
-        // An absent marker stays absent: a reset must not invent a registration
-        // for a repository that was never onboarded.
+        // A reset must not invent a registration for a repository that was never
+        // onboarded. The condition that establishes "never onboarded" is that the
+        // sweep above found NOTHING - not that the marker happens to be absent.
+        // The two are different, and conflating them left the original #2168
+        // failure mode alive in a corner: a repository holding index records but
+        // no marker is enumerable before a reset (its subtree keys carry the
+        // listing) and not enumerable after it (subtree swept, no marker to
+        // preserve), which is exactly the disappearance this verb exists to
+        // prevent. Such a state is reachable through the portability seam, whose
+        // ExportAsync is bounded by an arbitrary prefix - RepoScanPrefix covers
+        // repo/{repoId}/ and so excludes the separator-free marker key - and
+        // whose ImportAsync applies records one key at a time without atomicity.
+        //
+        // So the deletion count, not the marker's presence, is what separates the
+        // two: it is direct evidence this repository had a code index a moment
+        // ago. A zero-deletion reset still writes nothing, which keeps the
+        // never-onboarded guarantee exactly as strong as it was.
         var structural = Tree(RepoContextTrees.Structural);
         var markerKey = RepoContextKeys.Repo(repoId);
         var markerBytes = await structural.GetAsync(markerKey, cancellationToken).ConfigureAwait(false);
@@ -1137,6 +1155,17 @@ internal sealed partial class RepoContextStore
             };
 
             await structural.SetAsync(markerKey, _serializer.SerializeToArray(node), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else if (deleted > 0)
+        {
+            // Re-derived, not invented: every index-derived register is left unset,
+            // which is the same "registered, no index" shape the preserve branch
+            // above produces. There is no authored metadata to carry across - the
+            // marker that would have held it is the one that is missing - so the
+            // node is the bare key-derived identity and nothing more.
+            await structural
+                .SetAsync(markerKey, _serializer.SerializeToArray(new RepoNode { RepoId = repoId }), cancellationToken)
                 .ConfigureAwait(false);
         }
 

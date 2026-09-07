@@ -381,6 +381,100 @@ public sealed class RepoContextStoreIndexResetTests
     }
 
     /// <summary>
+    /// The discriminator for issue 2179. Marker preservation was
+    /// preserve-if-present, so a repository holding index records but no root
+    /// marker still vanished from <c>list_repos</c> across a reset - the exact
+    /// 2168 failure mode, surviving in a corner. It is enumerable before the
+    /// reset (its structural subtree keys carry the listing) and not enumerable
+    /// after it (subtree swept, no marker to preserve).
+    /// <para>
+    /// The count is what makes this a discriminator rather than a null check: a
+    /// sibling repository is seeded alongside, so the pre-fix listing is 1 and
+    /// the post-fix listing is 2.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task ResetIndexAsync_re_derives_the_root_marker_when_the_sweep_found_an_index_but_no_marker()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var store = Store(harness);
+
+        // A repository whose index records exist but whose marker does not. The
+        // portability seam reaches this state: ExportAsync is bounded by an
+        // arbitrary prefix, and RepoScanPrefix covers repo/{repoId}/ while the
+        // marker key carries no trailing separator, so a subtree-scoped snapshot
+        // restores index records with no marker among them.
+        await SeedFullRepoAsync(harness, "orphan", Ct);
+        await Tree(harness, RepoContextTrees.Structural).DeleteAsync(RepoContextKeys.Repo("orphan"), Ct);
+
+        // An ordinary sibling, so the listing count discriminates rather than
+        // merely reporting empty.
+        await SeedMarkerAsync(harness, "sibling", Ct);
+
+        var before = await store.ListReposAsync(Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.Repos.Count, Is.EqualTo(2),
+                "Precondition: the subtree keys alone keep the marker-less repository enumerable.");
+            Assert.That(before.Repos.Select(r => r.RepoId), Does.Contain("orphan"));
+        });
+
+        var result = await store.ResetIndexAsync("orphan", Ct);
+        Assert.That(result.EntriesDeleted, Is.GreaterThan(0),
+            "Precondition: the sweep must find an index, which is what proves the repository was onboarded.");
+
+        var after = await store.ListReposAsync(Ct);
+        Assert.That(after.Repos.Count, Is.EqualTo(2),
+            "A reset repository whose marker was missing must stay enumerable: the sweep just deleted its "
+            + "index, which is direct evidence it had one, so re-deriving the marker registers nothing new.");
+
+        var row = after.Repos.SingleOrDefault(r => r.RepoId == "orphan");
+        Assert.That(row, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            // The same "registered, no index" shape the preserve branch produces.
+            Assert.That(row!.LastIngested, Is.Null);
+            Assert.That(row.FileCount, Is.Null);
+            Assert.That(row.IndexedCommit, Is.Null);
+        });
+
+        // The preserved memory is now reachable by a caller who does not already
+        // know the id, which is the whole point of keeping the repository listed.
+        var survivingMemory = await Tree(harness, RepoContextTrees.Memory)
+            .GetAsync(RepoContextKeys.Memory("orphan", "decisions", "d1"), Ct);
+        Assert.That(survivingMemory, Is.Not.Null);
+    }
+
+    /// <summary>
+    /// The guard that keeps the re-derivation above from becoming "invent a
+    /// marker whenever one is missing". The discriminator is the sweep's own
+    /// deletion count, not the presence of any record at all: a repository
+    /// holding only memory records has no code index, so the sweep deletes
+    /// nothing and no registration is invented.
+    /// </summary>
+    [Test]
+    public async Task ResetIndexAsync_invents_no_marker_for_a_repository_holding_only_memory_records()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var store = Store(harness);
+
+        await Tree(harness, RepoContextTrees.Memory)
+            .SetAsync(RepoContextKeys.Memory("memory-only", "decisions", "d1"), new byte[] { 1, 2, 3 }, Ct);
+
+        var result = await store.ResetIndexAsync("memory-only", Ct);
+
+        Assert.That(result.EntriesDeleted, Is.EqualTo(0),
+            "The memory tree is never swept by a code-only reset, so the deletion count stays zero.");
+
+        var marker = await Tree(harness, RepoContextTrees.Structural)
+            .GetAsync(RepoContextKeys.Repo("memory-only"), Ct);
+        Assert.That(marker, Is.Null,
+            "A zero-deletion reset proves no code index was present, so it must invent no registration.");
+    }
+
+    /// <summary>
     /// The hard constraint from the issue: adding a code-only reset must not
     /// silently convert <c>repocontext_remove_repo</c> into a preserving verb.
     /// A full remove still tombstones every memory record.

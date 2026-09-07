@@ -7,9 +7,11 @@ namespace Orleans.Lattice.BPlusTree;
 /// triggers an online adaptive split on any shard whose observed
 /// operations-per-second exceeds <see cref="LatticeOptions.HotShardOpsPerSecondThreshold"/>.
 /// <para>
-/// Activation is started lazily by <c>LatticeGrain</c> on the first write to
-/// a tree; the grain registers a reminder so it survives silo restarts and
-/// continues monitoring without explicit re-activation.
+/// Activation is started when the tree's <c>LatticeGrain</c> activates, and
+/// re-attempted on every write so that an arming which lost the race with
+/// reminder-service startup recovers; the grain registers a reminder so it
+/// survives silo restarts and continues monitoring without explicit
+/// re-activation.
 /// </para>
 /// Key format: <c>{treeId}</c>.
 /// </summary>

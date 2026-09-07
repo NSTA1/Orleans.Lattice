@@ -115,7 +115,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.shard_root.reshard.in_flight` | histogram (`{reshard}`) | `tree` | CommitPath | Reshard runs in flight |
 | `orleans.lattice.materialiser.pin.durable_writes` | counter | `tree`, `outcome` | CommitPath | Leaf-materialiser durable pin path (issue #1030) |
 | `orleans.lattice.leaf.activation_replays` | counter | `tree`, `activation_temperature` | CommitPath | Leaf-materialiser durable pin path (issue #1030); the `cold`/`warm` arms give the activation-temperature ratio (issue #2148) |
-| `orleans.lattice.leaf.activation_replays_over_budget` | counter | `tree`, `partition` | CommitPath | Over-budget cold replay against an intact WAL (issue #1738) |
+| `orleans.lattice.leaf.activation_replays_over_budget` | counter | `tree`, `partition` | CommitPath | Per-leaf post-filter replay cost over budget against an intact WAL (issues #1738, #2149) |
 | `orleans.lattice.leaf.activation_cursor_publish_failures` | counter | `tree` | CommitPath | Leaf-materialiser durable pin path (issue #1030) |
 | `orleans.lattice.materialiser.drain_lag` | histogram (ms) | `tree` | CommitPath | Leaf-materialiser drain lag p50/p95 (issue #1030 back-pressure) |
 | `orleans.lattice.materialiser.pin.durable_write_latency` | histogram (ms) | `tree` | CommitPath | Durable pin-write latency: the only materialiser instrument that observes the retention floor rather than in-memory progress (issue #2015) |
