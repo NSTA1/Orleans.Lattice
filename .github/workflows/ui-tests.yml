@@ -34,7 +34,10 @@ on:
     # unchanged, so unrelated sub-PRs still never provision a browser, and the
     # pending-forever concern noted above cannot arise on an epic branch
     # because epic branches deliberately carry no required checks.
-    branches: [main, '*/epic/**']
+    #
+    # `release/**` is included for the same reason as in `ci.yml`: a patch wave
+    # assembled on a release line otherwise gets no validation at all.
+    branches: [main, '*/epic/**', 'release/**']
     paths:
       - 'src/lattice.explorer/**'
       - '!src/lattice.explorer/**/*.md'
