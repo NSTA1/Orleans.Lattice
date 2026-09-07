@@ -150,6 +150,52 @@ changes, or because it ran out of run - **does not tag the item complete**. It
 writes an honest `resumeNote`, posts `result=released`, and leaves the item live
 for the next holder. That is the normal path, not a failure.
 
+### Evidence a worker may rely on
+
+The rules above say *when* a worker may assert completion. This one says what
+makes the assertion admissible. A worker that reports a measurement its own
+instrument fabricated is neither lying nor careless: it has simply never been
+told that an instrument is a thing which can itself be wrong, and a number is
+the most persuasive object an agent can put in front of a reviewer.
+
+- **Validate an instrument against a case with a known non-zero answer before
+  you trust a zero from it.** A zero from an unvalidated instrument is
+  indistinguishable from a broken instrument, and it is the most expensive kind
+  of wrong answer because it looks like a result rather than a failure. Find a
+  case whose correct outcome *requires* the quantity to be non-zero, run it, and
+  check the instrument agrees. That is one cheap run. In this protocol's first
+  live use, a worker instrumented an exception path, measured zero, and reported
+  a hypothesis refuted. The probe wrote to standard output, which the test
+  runner captures and surfaces only for *failing* tests, so on every passing run
+  it reported zero by construction. The true count on a single case was 117. By
+  then the project manager had already recorded the refutation as durable fact.
+
+- **A measurement taken over passing runs says nothing about the failing run.**
+  The failing run is by definition the one where behaviour differed. Reset per
+  run, capture per run, keep the failure. This is independent of the rule above
+  and does not substitute for it: the same worker moved its measurement onto the
+  failing run and still got a fabricated zero, because the instrument was
+  unchanged.
+
+- **Cite the artifact, not the impression.** Evidence is a machine-readable
+  per-case result that survives whatever verbosity the run happened to use. A
+  console tally is not evidence: the same worker captured "1 failed, 3 passed"
+  on a four-case fixture and could not say which case had failed, and had to
+  reproduce an event that had already happened.
+
+- **Say which claim you are making.** "Observed failing, changed, observed
+  passing" and "correct by construction and not observed to fail since" are
+  different claims of different strength. Both are legitimate and the second is
+  often the best available. Blurring them is not legitimate, because a reader
+  who is not told which one you mean will assume the stronger.
+
+The project manager carries the mirror of this obligation. Evidence is not
+authoritative merely because it is numeric, and a durable memory written from an
+unvalidated measurement propagates one worker's broken instrument into every
+later session that reads it. Ask what the instrument was and whether it was
+checked, prefer a retraction to a defence, and correct the durable record the
+moment a measurement is withdrawn.
+
 ### The item body
 
 `body` holds a pointer to the mirrored GitHub issue - not a copy of its
