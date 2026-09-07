@@ -94,7 +94,7 @@ Present the token and the same write succeeds:
 
 ```text
 repocontext_update(key: "repo/lattice/mem/backlog/issue-2101",
-                   fields: { "body": "branch feat/epic/wal-batching/issue-2101, seam wired, tests pending" },
+                   fields: { "body": "branch feat/epic/wal-batching-issue-2101, seam wired, tests pending" },
                    fencingToken: <token from step 1>)
 ```
 

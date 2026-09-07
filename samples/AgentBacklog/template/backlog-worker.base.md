@@ -374,7 +374,7 @@ before it:
 <!-- backlog-worker: claim item=issue-2101 owner=backlog-worker/7f3a region={homeRegion} fence=41 at=2026-09-06T00:12:44Z -->
 Claimed `issue-2101`. Lease expires 2026-09-06T01:12:44Z.
 Base branch `feat/epic/backlog-mechanism`, working branch
-`feat/epic/backlog-mechanism/wal-shard-batching`.
+`feat/epic/backlog-mechanism-wal-shard-batching`.
 ```
 
 Grammar, and it is deliberately rigid:
@@ -477,10 +477,31 @@ tests), review, deliver. Run it as written. What this file adds is only the
 branching and targeting rules:
 
 - Branch from the item's `baseBranch:` tag as
-  `<type>/epic/<epic-slug>/<item-slug>` when the item is inside a grouping, and
+  `<type>/epic/<epic-slug>-<item-slug>` when the item is inside a grouping, and
   open the pull request **back into that same branch**
   (`gh pr create --base <baseBranch>`). Never a bare `epic/<slug>`; the branch
-  guard rejects it.
+  guard rejects it. **The final separator is a hyphen, not a slash, and git
+  forces that** - the epic branch is parked on the bare slug, so
+  `refs/heads/<type>/epic/<epic-slug>` already exists as a file and
+  `refs/heads/<type>/epic/<epic-slug>/<item-slug>` cannot be created beside it.
+  The remote refuses the push with `cannot lock ref`. A CI branch-name guard
+  accepts the nested form, so it will not save you. See
+  [`backlog-protocol.md`](backlog-protocol.md) for the full reasoning.
+- **Your session's own branch is not the item's branch, and may not even be a
+  legal name.** A session harness typically creates the worktree on a generated
+  branch - sometimes carrying a username, sometimes with no `<type>/` prefix at
+  all - and both forms fail the branch guard. Do not rename it, do not push it by
+  name, and do not let it become the item's branch by default. Push with an
+  explicit refspec to the name the item requires, which makes the local name
+  irrelevant:
+
+  ```text
+  git push <remote> HEAD:refs/heads/<type>/epic/<epic-slug>-<item-slug>
+  ```
+
+  When you are resuming, that same refspec is what updates the existing pull
+  request in place. Check your local branch name against the guard **before** you
+  push, not after CI rejects it.
 - A standalone item outside any grouping carries `baseBranch:main` legitimately
   and targets `main` in the ordinary way. An item that is `partOf` an epic and
   carries `baseBranch:main` is a defect (Phase 1), not a licence.
