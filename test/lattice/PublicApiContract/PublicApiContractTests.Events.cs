@@ -103,15 +103,44 @@ public partial class PublicApiContractTests
         {
             await tree.SetAsync("k", Bytes("v"));
 
-            // Allow time for any (suppressed) event to flow.
-            await Task.Delay(500);
+            // Close the negative window with proof rather than a sleep. Re-enabling
+            // publication and waiting for a sentinel key's event establishes that the
+            // subscription is delivering at all, and - because events for a tree are
+            // delivered in publication order - that anything published for the earlier
+            // "k" write would already have landed. Without it a subscription that never
+            // delivered would satisfy the Is.Empty claim vacuously.
+            var sentinel = await PublishSentinelAsync(tree, received);
 
             Assert.That(received.Where(e => e.Kind == LatticeTreeEventKind.Set && e.Key == "k").ToList(), Is.Empty);
+            Assert.That(received.Any(e => e.Key == sentinel), Is.True,
+                "the sentinel proves the feed was live while the suppressed write was made");
         }
         finally
         {
             await subscription.UnsubscribeAsync();
         }
+    }
+
+    /// <summary>
+    /// Writes a uniquely-named sentinel key with publication forced on and waits for
+    /// its event to arrive, so a "no events were published" assertion is falsifiable:
+    /// a subscription that is not delivering fails here rather than passing the
+    /// negative claim vacuously.
+    /// </summary>
+    /// <returns>The sentinel key, so callers can exclude it from their assertions.</returns>
+    private static async Task<string> PublishSentinelAsync(
+        ILattice tree,
+        ConcurrentBag<LatticeTreeEvent> received)
+    {
+        var sentinel = "__sentinel-" + Guid.NewGuid().ToString("N");
+        await tree.SetPublishEventsEnabledAsync(enabled: true);
+        await tree.SetAsync(sentinel, Bytes("sentinel"));
+
+        await PollUntilAsync(
+            () => Task.FromResult(received.Any(e => e.Key == sentinel)),
+            TimeSpan.FromSeconds(30));
+
+        return sentinel;
     }
 
     [Test]

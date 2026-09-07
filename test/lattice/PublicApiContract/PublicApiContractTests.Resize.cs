@@ -1,3 +1,6 @@
+using System.Runtime.CompilerServices;
+using Orleans.Lattice.Testing;
+
 namespace Orleans.Lattice.Tests.BPlusTree.PublicApiContract;
 
 public partial class PublicApiContractTests
@@ -162,18 +165,17 @@ public partial class PublicApiContractTests
         Assert.That(await tree.IsReshardCompleteAsync(), Is.True);
     }
 
-    private static async Task PollUntilAsync(Func<Task<bool>> condition, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (await condition())
-            {
-                return;
-            }
-            await Task.Delay(100);
-        }
-
-        throw new TimeoutException($"Condition not met within {timeout}.");
-    }
+    /// <summary>
+    /// The contract suite's bounded-poll barrier. It routes to the shared
+    /// <see cref="TestPoll"/> so a barrier that never opens fails as a test failure
+    /// naming the condition it was waiting for, rather than as a bare
+    /// <see cref="TimeoutException"/> that names only the timeout - the caller's own
+    /// source text for <paramref name="condition"/> is captured automatically, so
+    /// every existing call site gains the description for free.
+    /// </summary>
+    private static Task PollUntilAsync(
+        Func<Task<bool>> condition,
+        TimeSpan timeout,
+        [CallerArgumentExpression(nameof(condition))] string? because = null) =>
+        TestPoll.UntilAsync(condition, because ?? "the polled condition", timeout, TimeSpan.FromMilliseconds(100));
 }

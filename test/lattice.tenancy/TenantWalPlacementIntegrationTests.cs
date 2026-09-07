@@ -2,6 +2,7 @@ using System.Text;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Testing;
 using static Orleans.Lattice.Tenancy.Tests.TestClocks;
 
 namespace Orleans.Lattice.Tenancy.Tests;
@@ -34,20 +35,28 @@ public sealed class TenantWalPlacementIntegrationTests
     [OneTimeTearDown]
     public Task TearDown() => _fixture.DisposeAsync();
 
+    /// <summary>
+    /// Waits until the provider's highest offset for the partition reaches
+    /// <paramref name="atLeast"/> and returns it, failing at the barrier if it never
+    /// does. The previous shape fell through silently on timeout and returned the
+    /// last probe - which is <c>-1</c> for a log that was never written - so a caller
+    /// that discarded the result simply carried on from a state the barrier had not
+    /// reached, and the real failure surfaced later or not at all.
+    /// </summary>
     private static async Task<long> WaitForHighestAsync(
         InMemoryWalStorageProvider provider, string physicalTreeId, int partition, long atLeast)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (DateTime.UtcNow < deadline)
-        {
-            var highest = await provider.GetHighestOffsetAsync(physicalTreeId, partition, CancellationToken.None);
-            if (highest >= atLeast)
+        var highest = -1L;
+        await TestPoll.UntilAsync(
+            async () =>
             {
-                return highest;
-            }
-            await Task.Delay(50);
-        }
-        return await provider.GetHighestOffsetAsync(physicalTreeId, partition, CancellationToken.None);
+                highest = await provider.GetHighestOffsetAsync(physicalTreeId, partition, CancellationToken.None);
+                return highest >= atLeast;
+            },
+            $"the WAL for '{physicalTreeId}' partition {partition} to reach offset {atLeast}",
+            TimeSpan.FromSeconds(15),
+            TimeSpan.FromMilliseconds(50));
+        return highest;
     }
 
     private static async Task WriteKeysAsync(ISystemLattice tree, string prefix, int count)

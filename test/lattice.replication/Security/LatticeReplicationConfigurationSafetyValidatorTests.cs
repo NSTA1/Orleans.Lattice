@@ -229,101 +229,58 @@ public class LatticeReplicationConfigurationSafetyValidatorTests
     [Test]
     public void StartAsync_throws_when_secret_sourced_from_file_under_app_directory()
     {
-        // The validator's app-directory anchor is AppContext.BaseDirectory; place
-        // the appsettings file alongside the test assembly so the scan trips.
-        var path = Path.Combine(AppContext.BaseDirectory, $"appsettings.test-leaked-{Guid.NewGuid():N}.json");
-        File.WriteAllText(path, """{"LatticeReplication":{"Secret":"leaked"}}""");
-
-        try
-        {
-            var cfg = new ConfigurationBuilder()
-                .SetBasePath(AppContext.BaseDirectory)
-                .AddJsonFile(Path.GetFileName(path), optional: false, reloadOnChange: false)
-                .Build();
-
-            var v = new LatticeReplicationConfigurationSafetyValidator(
-                ProviderWith(cfg),
-                OptionsFor(new LatticeReplicationSecurityOptions()),
-                NullLogger<LatticeReplicationConfigurationSafetyValidator>.Instance);
-
-            Assert.That(
-                async () => await v.StartAsync(CancellationToken.None),
-                Throws.InvalidOperationException);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        AssertScanTripsFor(
+            "appsettings.test-leaked",
+            """{"LatticeReplication":{"Secret":"leaked"}}""");
     }
 
     [Test]
     public void StartAsync_throws_when_nested_secret_sourced_from_file_under_app_directory()
     {
         // The ConfigurationBindingSecretSource shape uses LatticeReplication:Secrets:Secret.
-        var path = Path.Combine(AppContext.BaseDirectory, $"appsettings.test-leaked-nested-{Guid.NewGuid():N}.json");
-        File.WriteAllText(path, """{"LatticeReplication":{"Secrets":{"Secret":"leaked"}}}""");
-
-        try
-        {
-            var cfg = new ConfigurationBuilder()
-                .SetBasePath(AppContext.BaseDirectory)
-                .AddJsonFile(Path.GetFileName(path), optional: false, reloadOnChange: false)
-                .Build();
-
-            var v = new LatticeReplicationConfigurationSafetyValidator(
-                ProviderWith(cfg),
-                OptionsFor(new LatticeReplicationSecurityOptions()),
-                NullLogger<LatticeReplicationConfigurationSafetyValidator>.Instance);
-
-            Assert.That(
-                async () => await v.StartAsync(CancellationToken.None),
-                Throws.InvalidOperationException);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        AssertScanTripsFor(
+            "appsettings.test-leaked-nested",
+            """{"LatticeReplication":{"Secrets":{"Secret":"leaked"}}}""");
     }
 
     [Test]
     public void StartAsync_throws_when_nested_accepted_secrets_sourced_from_file_under_app_directory()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, $"appsettings.test-leaked-accepted-{Guid.NewGuid():N}.json");
-        File.WriteAllText(path, """{"LatticeReplication":{"Secrets":{"AcceptedSecrets":["alpha","beta"]}}}""");
-
-        try
-        {
-            var cfg = new ConfigurationBuilder()
-                .SetBasePath(AppContext.BaseDirectory)
-                .AddJsonFile(Path.GetFileName(path), optional: false, reloadOnChange: false)
-                .Build();
-
-            var v = new LatticeReplicationConfigurationSafetyValidator(
-                ProviderWith(cfg),
-                OptionsFor(new LatticeReplicationSecurityOptions()),
-                NullLogger<LatticeReplicationConfigurationSafetyValidator>.Instance);
-
-            Assert.That(
-                async () => await v.StartAsync(CancellationToken.None),
-                Throws.InvalidOperationException);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        AssertScanTripsFor(
+            "appsettings.test-leaked-accepted",
+            """{"LatticeReplication":{"Secrets":{"AcceptedSecrets":["alpha","beta"]}}}""");
     }
 
     [Test]
     public void StartAsync_throws_when_per_peer_secret_sourced_from_file_under_app_directory()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, $"appsettings.test-leaked-peer-{Guid.NewGuid():N}.json");
-        File.WriteAllText(path, """{"LatticeReplication":{"Secrets":{"PeerSecrets":{"site-b":"leaked"}}}}""");
+        AssertScanTripsFor(
+            "appsettings.test-leaked-peer",
+            """{"LatticeReplication":{"Secrets":{"PeerSecrets":{"site-b":"leaked"}}}}""");
+    }
+
+    /// <summary>
+    /// Writes <paramref name="json"/> to an <c>appsettings</c> file under
+    /// <see cref="AppContext.BaseDirectory"/> - the validator's app-directory anchor -
+    /// binds it, and asserts the safety scan trips.
+    /// </summary>
+    /// <remarks>
+    /// The file is bound by its ABSOLUTE path. A relative <c>AddJsonFile</c> name is
+    /// recorded verbatim as the provider's source path and is later resolved by the
+    /// scan against the process working directory, so a <c>SetBasePath</c> plus
+    /// relative-name binding only trips while the test runner happens to launch in
+    /// the test output folder - exactly the coupling
+    /// <see cref="WriteScannedAppSettingsAndBuild"/> already documents and avoids.
+    /// </remarks>
+    private static void AssertScanTripsFor(string fileNamePrefix, string json)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, $"{fileNamePrefix}-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, json);
 
         try
         {
             var cfg = new ConfigurationBuilder()
-                .SetBasePath(AppContext.BaseDirectory)
-                .AddJsonFile(Path.GetFileName(path), optional: false, reloadOnChange: false)
+                .AddJsonFile(path, optional: false, reloadOnChange: false)
                 .Build();
 
             var v = new LatticeReplicationConfigurationSafetyValidator(
