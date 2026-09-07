@@ -1,20 +1,20 @@
 # Orleans.Lattice.Dashboards
 
-`Orleans.Lattice.Dashboards` is a sibling package that ships pre-built Grafana dashboards and provisioning templates for the `orleans.lattice`, `orleans.lattice.replication`, `orleans.lattice.replication.grpc`, `orleans.lattice.auth`, `orleans.lattice.membership`, `orleans.lattice.backup`, and `orleans.lattice.scaling` meters. Install it when you want operator dashboards bundled with the library version - the core library has no dependency on it.
+`Orleans.Lattice.Dashboards` is a sibling package that ships pre-built Grafana dashboards and provisioning templates for the `orleans.lattice`, `orleans.lattice.replication`, `orleans.lattice.replication.grpc`, `orleans.lattice.auth`, `orleans.lattice.membership`, `orleans.lattice.backup`, `orleans.lattice.scaling`, and `orleans.lattice.tenancy` meters. Install it when you want operator dashboards bundled with the library version - the core library has no dependency on it.
 
 ## What is it?
 
 The package is a thin, dependency-light delivery vehicle for operator dashboards. Each dashboard is an embedded Grafana JSON resource, retrieved by a typed kind through a single public accessor, so the dashboards travel with the exact library version that emits the metrics they chart.
 
-- **Bundled, version-pinned dashboards.** Operator dashboards for the overview, commit path, replication, replication gRPC transport security, atomic writes, materialised views, identity/authorization, backup/restore, and autoscaling-signal surfaces ship as embedded Grafana JSON, each retrieved by a typed kind. They move in lockstep with the library version, so a dashboard never references an instrument the installed library does not emit.
+- **Bundled, version-pinned dashboards.** Operator dashboards for the overview, commit path, replication, replication gRPC transport security, atomic writes, materialised views, identity/authorization, backup/restore, autoscaling-signal, per-tenant observability, and grain-index surfaces ship as embedded Grafana JSON, each retrieved by a typed kind. They move in lockstep with the library version, so a dashboard never references an instrument the installed library does not emit.
 - **No replication dependency.** The package takes a runtime dependency only on `Orleans.Lattice` (the core library). The replication dashboard's queries reference instruments on the `orleans.lattice.replication` meter, but the package does not link against `Orleans.Lattice.Replication`; that meter is only emitted when the replication package is registered on the silo separately. Local-only deployments install the dashboards without pulling in replication and simply omit the replication dashboard.
-- **Drift-guarded coverage.** Every metric name a dashboard references resolves to a live instrument, and every live instrument is referenced by at least one panel - both directions are enforced by a CI test so a rename or a new unpaneled instrument fails the build before it ships stale.
+- **Drift-guarded coverage.** Every metric name a dashboard references resolves to a live instrument, and every instrument the guard can discover is referenced by at least one panel - both directions are enforced by a CI test so a rename or a new unpaneled instrument fails the build before it ships stale. The forward direction reaches only instruments declared on the two static metric classes; see [Architecture](architecture.md#the-bidirectional-drift-guard) for the one gap this leaves and the instruments currently outside it.
 
 ## Core Properties
 
 - **Self-contained.** Dashboards are embedded resources; retrieving one is a synchronous in-process call with no I/O and no external service.
 - **Import-ready.** Each accessor returns a complete Grafana dashboard model (panels, templating, time range) suitable for direct import or file-system provisioning.
-- **Operator-oriented.** The kinds map to focused operator workflows - at-a-glance overview, commit-path latency triage, cross-cluster replication lag, atomic-write saga deep-dive, materialised-view freshness, and identity/authorization enforcement.
+- **Operator-oriented.** The kinds map to focused operator workflows - for example at-a-glance overview, commit-path latency triage, cross-cluster replication lag, atomic-write saga deep-dive, materialised-view freshness, identity/authorization enforcement, per-tenant usage against quota, and grain-index backfill progress.
 
 ## Features
 
@@ -29,6 +29,8 @@ The package is a thin, dependency-light delivery vehicle for operator dashboards
 | `Backup` | `orleans.lattice.backup` | Backup / restore operator view: capture / restore throughput and duration percentiles, per-backup size / artifact / entry distributions, cumulative processed throughput, retention reclaim and prune rates, incremental lag (entries and age behind the base cut), capture / restore failure rates by reason, scheduler skipped-run and overrun counters, the cross-tree-consistent fence selection / drain counters, and the inventory gauges (tracked count, max chain depth, catalog bytes, oldest / newest age, and per-scope last-run status and last-success age). Useful only when the backup package is registered on the silo. |
 | `Scaling` | `orleans.lattice.scaling` | Autoscaling-signal operator view: the two scale-value gauges (the smoothed, scale-in-gated value an autoscaler acts on and the raw, un-smoothed instantaneous demand), the three normalised compute-pressure dimensions (activation / host-resource / WAL-dispatch), the recommended silo replica count, and the storage-axis stats (WAL catalogue keys over the advisory threshold and whether a WAL rebalance is recommended). Useful only when the scaling package is registered on the silo. |
 | `ReplicationGrpc` | `orleans.lattice.replication.grpc` | Replication gRPC transport-security view: the insecure (plaintext) channel construction counter as a cumulative total and a per-second rate, broken out by peer cluster id and transport (`push` / `saga_control` / `snapshot`), so an accidental production plaintext downgrade under `AllowPlaintextEndpoints` is visible rather than silent. Useful only when the gRPC replication transport is registered on the silo. |
+| `Tenancy` | `orleans.lattice.tenancy` | Per-tenant observability operator view: the registered-tenant count (cluster aggregate) and, dimensioned by tenant, the usage series (stored bytes, live keys, resident memory, owned trees), the quota ceilings and burst-headroom percentage, and the durable metered overage series (bytes / keys / memory / trees), so a burst or a sustained overage is attributable to a tenant. A templated `tenant` variable scopes every panel to one tenant (a tenant's own view) or to all tenants (the platform-operator view). Useful only when the tenancy package is registered on the silo. |
+| `GrainIndex` | `orleans.lattice` | Grain-index operator view: each index's backfill lifecycle state and percent complete, its processed-versus-total crawl progress, its live entry count, onboarding throughput split by route (activation versus backfill), projection-latency percentiles, and index-write failure rates by route. A templated `index` variable scopes every panel to one index or to all of them. Sources the shared core meter - the grain-index package publishes no meter of its own - so the series appear under an existing lattice subscription, but only once the grain-index package is registered on the silo. |
 
 ## Quick Start
 
@@ -62,7 +64,11 @@ var authz        = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKin
 var backup       = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Backup);
 var scaling      = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Scaling);
 var replGrpc     = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.ReplicationGrpc);
+var tenancy      = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Tenancy);
+var grainIndex   = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.GrainIndex);
 ```
+
+`LatticeDashboards.All` enumerates every kind in declaration order, so a provisioning loop stays complete as new dashboards are added.
 
 Either import each JSON via Grafana's *Dashboards -> New -> Import* UI, or write the strings to a provisioning directory referenced by `Provisioning/dashboards.yaml`.
 
