@@ -40,4 +40,66 @@ public readonly record struct GSetDelta
     {
         Adds = Array.Empty<byte[]>(),
     };
+
+    /// <summary>
+    /// Compares two deltas by value, with <see cref="Adds"/> compared
+    /// element-by-element and each element byte array compared by content. The
+    /// compiler-generated record-struct equality compares the <see cref="Adds"/>
+    /// collection reference with <see cref="EqualityComparer{T}.Default"/>, so
+    /// two structurally identical deltas built from independently allocated
+    /// collections - and, in particular, a delta and its post-serialization
+    /// self - would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The delta to compare against.</param>
+    public bool Equals(GSetDelta other) => AddsEqual(Adds, other.Adds);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        if (Adds is { } adds)
+        {
+            hash.Add(adds.Count);
+            foreach (var element in adds)
+            {
+                if (element is { } bytes)
+                {
+                    hash.AddBytes(bytes);
+                }
+                else
+                {
+                    hash.Add(0);
+                }
+            }
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool AddsEqual(IReadOnlyList<byte[]>? left, IReadOnlyList<byte[]>? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is null || right is null || left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!BytesEqual(left[i], right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
