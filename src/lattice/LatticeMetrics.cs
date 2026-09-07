@@ -165,6 +165,40 @@ public static class LatticeMetrics
     public const string TagLeaf = "leaf";
 
     /// <summary>
+    /// Tag key for the activation temperature of an activation-time leaf
+    /// materialiser replay on <see cref="LeafActivationReplays"/>: either
+    /// <see cref="ActivationTemperatureCold"/> or
+    /// <see cref="ActivationTemperatureWarm"/>. Cardinality is exactly two, so
+    /// the tag splits each existing per-tree series in half rather than
+    /// multiplying the series count.
+    /// <para>
+    /// Both arms are emitted from the one call site in
+    /// <c>BPlusLeafGrain.OnActivateAsync</c>, under the same condition, which
+    /// is why the cold:warm ratio is a property of a <b>single</b> scrape of
+    /// this counter. Two independent counters would not give that: they can be
+    /// scraped at different instants, reset independently, or one can be
+    /// dropped by a pipeline, and the quotient of two such series is not
+    /// guaranteed to be a ratio of anything.
+    /// </para>
+    /// </summary>
+    public const string TagActivationTemperature = "activation_temperature";
+
+    /// <summary>
+    /// <see cref="TagActivationTemperature"/> = <c>cold</c>: the activation
+    /// neither rehydrated from a leaf snapshot nor resumed a populated entry
+    /// cache, so the replay starts from the <c>-1</c> sentinel and covers the
+    /// whole readable WAL window.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ActivationTemperatureCold = new(TagActivationTemperature, "cold");
+
+    /// <summary>
+    /// <see cref="TagActivationTemperature"/> = <c>warm</c>: the activation
+    /// resumed from an anchor - a snapshot rehydrate or an already-populated
+    /// entry cache - so the replay covers only the tail above that anchor.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ActivationTemperatureWarm = new(TagActivationTemperature, "warm");
+
+    /// <summary>
     /// Tag key for the storage-provider commit phase
     /// (e.g. <c>phase1</c> = per-batch partition transaction,
     /// <c>phase2</c> = manifest partition transaction). Emitted on
@@ -1122,14 +1156,31 @@ public static class LatticeMetrics
     /// Counter of activation-time leaf materialiser replays started, emitted by
     /// <c>BPlusLeafGrain.OnActivateAsync</c> once a per-silo replay permit
     /// (<see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>) is
-    /// acquired. Tagged with <see cref="TagTree"/>. A reactivation storm (issue
+    /// acquired. Tagged with <see cref="TagTree"/> and
+    /// <see cref="TagActivationTemperature"/>. A reactivation storm (issue
     /// #1030) shows as a spike in this counter; pairing it with
     /// <see cref="LeafReplayDuration"/> reveals whether the per-silo concurrency
     /// ceiling is queueing replays under load.
+    /// <para>
+    /// The temperature tag makes the cold:warm activation ratio a direct read
+    /// off a single scrape (issue #2148). It is per-tree because #2104 found
+    /// the replay backlog is <b>not</b> uniform across trees, so a global
+    /// number would hide known structure - that is an argument for
+    /// decomposability, not evidence of any particular per-tree pattern.
+    /// </para>
+    /// <para>
+    /// <b>Scope.</b> The increment sits inside the <c>replayPermit is not null</c>
+    /// branch, so an activation of a leaf with no tree id bound takes no replay
+    /// permit and is counted on <b>neither</b> arm. That excludes both arms
+    /// identically, so it cannot bias the ratio - but it does mean the sum of
+    /// the two arms counts permitted replays, not every activation.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> LeafActivationReplays =
         Meter.CreateCounter<long>("orleans.lattice.leaf.activation_replays", unit: "{replay}",
-            description: "Activation-time leaf materialiser replays started, tagged by tree.");
+            description: "Activation-time leaf materialiser replays started, tagged by tree and by "
+                + "activation_temperature (cold = replayed from the -1 sentinel with no snapshot or "
+                + "cache anchor; warm = resumed above an anchor).");
 
     /// <summary>
     /// Counter of activation-time leaf materialiser replays that ran <b>beyond</b>
