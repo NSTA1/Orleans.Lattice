@@ -65,21 +65,25 @@ var services = new ServiceCollection();
 services.AddExplorerAuth();
 services.AddExplorerEntraAuth(options =>
 {
-    // These are public OIDC parameters. The advertised authority and client id
-    // take precedence over these static values, but a configured Scopes list
-    // overrides the advertised audience (the advertised audience is used only
-    // when Scopes is left empty).
+    // These are public OIDC parameters. What you configure here always wins;
+    // the endpoint's advertised authority, client id and audience are used
+    // only to fill in what you leave unset.
     options.Authority = "https://login.microsoftonline.com/<tenant>";
     options.ClientId = "<public-client-id>";
     options.Scopes.Add("api://<state-api-app-id>/.default");
 });
 ```
 
-The advertised authority and client id take precedence over the static options,
-so when the endpoint advertises them those fields are optional. The audience is
-the exception: a configured `Scopes` list overrides the advertised audience, and
-the advertised audience is resolved (into the resource's `/.default` scope) only
-when `Scopes` is left empty.
+Configured values take precedence over the advertisement, so the advertised
+authority, client id and audience are used only for the fields you leave unset -
+which makes each of these optional against an endpoint that advertises them,
+without your configuration ever being silently displaced. Because the
+advertisement is fetched over an unauthenticated RPC from the endpoint that will
+receive the resulting token, an advertised **authority** is additionally admitted
+only when it is `https` and names a recognised Entra login host, or a host you
+list in `ExplorerEntraOptions.AllowedAuthorityHosts`; anything else fails the
+sign-in with the remedy named, rather than sending you to an identity provider
+the endpoint chose.
 
 ## Token freshness
 

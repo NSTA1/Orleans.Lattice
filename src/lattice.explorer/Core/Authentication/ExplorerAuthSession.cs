@@ -29,6 +29,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
 
     private ExplorerAuthSignIn? _signIn;
     private StoredCredential? _credential;
+    private string? _signInEndpoint;
     private ExplorerAuthSchemeAdvertisement _advertisement = ExplorerAuthSchemeAdvertisement.Empty;
     private bool _initialized;
     private IReauthRequiredSource? _reauthSource;
@@ -123,6 +124,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
             if (_credential is { } credential)
             {
                 _signIn = await ChallengeBasicAsync(credential, cancellationToken).ConfigureAwait(false);
+                _signInEndpoint = _session.Current?.Endpoint;
                 HookReauthSource();
                 await ReconfigureAsync(cancellationToken).ConfigureAwait(false);
                 changed = true;
@@ -206,6 +208,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
             }
 
             _signIn = signIn;
+            _signInEndpoint = _session.Current?.Endpoint;
             HookReauthSource();
             await ReconfigureAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -274,6 +277,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
             await _store.ClearAsync(cancellationToken).ConfigureAwait(false);
             _credential = null;
             _signIn = null;
+            _signInEndpoint = null;
             await ReconfigureAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -349,14 +353,87 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
 
     private void OnConfigurationChanged()
     {
-        // When the endpoint changes the session reconfigures the connection
-        // anonymously; re-apply the live sign-in to the new endpoint.
         if (_signIn is null)
         {
             return;
         }
 
-        _ = ReapplySignInAsync();
+        // A sign-in is minted against one endpoint and is only ever valid there.
+        // The connection reconfigures anonymously on a configuration change, so
+        // re-applying the credential is right for a change that keeps the same
+        // endpoint (transport posture, headers) - and is a credential leak for a
+        // change that repoints the console at a different one, which would hand
+        // this endpoint's Basic password, or a silently-renewed bearer token
+        // minted for its audience, to an operator who never held either. When
+        // the endpoint moves, sign out instead of re-applying.
+        if (IsSameEndpoint(_signInEndpoint, _session.Current?.Endpoint))
+        {
+            _ = ReapplySignInAsync();
+            return;
+        }
+
+        _ = SignOutForEndpointChangeAsync();
+    }
+
+    /// <summary>
+    /// Compares the endpoint a sign-in was minted for against the newly applied
+    /// one. Deliberately conservative: anything that is not recognisably the same
+    /// endpoint is treated as a different one, so an unparseable or absent value
+    /// drops the credential rather than carrying it across.
+    /// </summary>
+    private static bool IsSameEndpoint(string? signInEndpoint, string? current)
+    {
+        if (string.IsNullOrWhiteSpace(signInEndpoint) || string.IsNullOrWhiteSpace(current))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            signInEndpoint.TrimEnd('/'),
+            current.TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Drops the sign-in when the console is repointed at a different endpoint,
+    /// and clears the persisted Basic credential with it - leaving it behind
+    /// would let <see cref="InitializeAsync"/> replay it to the new endpoint on
+    /// the next launch. The connection is left configured anonymously, so the
+    /// operator is re-challenged against the endpoint they moved to.
+    /// </summary>
+    private async Task SignOutForEndpointChangeAsync()
+    {
+        var changed = false;
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_signIn is null || IsSameEndpoint(_signInEndpoint, _session.Current?.Endpoint))
+            {
+                return;
+            }
+
+            DisposeCurrentProvider();
+            await _store.ClearAsync(CancellationToken.None).ConfigureAwait(false);
+            _credential = null;
+            _signIn = null;
+            _signInEndpoint = null;
+            changed = true;
+            await ReconfigureAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Reconfiguration faults are surfaced through the connection status;
+            // dropping the credential must never throw to the event source.
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (changed)
+        {
+            AuthenticationChanged?.Invoke();
+        }
     }
 
     private async Task ReapplySignInAsync()
