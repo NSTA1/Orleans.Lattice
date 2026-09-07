@@ -371,6 +371,30 @@ if (options.WalThrottledAdmissionPace < TimeSpan.Zero)
         $"{nameof(LatticeOptions.WalThrottledAdmissionPace)} must be non-negative "
         + "(the per-append local-path pacing delay the WAL writer applies while the tree is Throttled; zero disables local pacing).");
 }
+if (options.DefaultLockLeaseDuration <= TimeSpan.Zero)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.DefaultLockLeaseDuration)} must be greater than zero "
+        + "(it is the lease a distributed-lock acquire falls back to when the caller names no duration; a non-positive "
+        + "default is granted verbatim as a lease that has already expired at the instant it is issued, so the holder is "
+        + "reclaimed immediately and a second caller can be granted the same lock while the first still believes it holds it).");
+}
+if (options.MaxLockLeaseDuration <= TimeSpan.Zero)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.MaxLockLeaseDuration)} must be greater than zero "
+        + "(it is the ceiling every requested lock lease is capped at; a non-positive ceiling silently disables the cap "
+        + "altogether rather than disabling leasing, so a caller-supplied lease is honoured unbounded and can overflow the "
+        + "absolute expiry tick into the past - which reads as an instantly-expired lease and breaks mutual exclusion).");
+}
+if (options.MaxLockLeaseDuration < options.DefaultLockLeaseDuration)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.MaxLockLeaseDuration)} must be greater than or equal to "
+        + $"{nameof(LatticeOptions.DefaultLockLeaseDuration)} "
+        + "(the ceiling is applied to the fallback lease as well, so a smaller ceiling would silently shorten every "
+        + "default-duration lease below the configured default).");
+}
 return ValidateOptionsResult.Success;
     }
 }

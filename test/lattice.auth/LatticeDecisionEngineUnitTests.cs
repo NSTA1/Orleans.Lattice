@@ -61,6 +61,128 @@ public sealed class LatticeDecisionEngineUnitTests
     }
 
     [Test]
+    public async Task HasAnyGrant_default_deny_with_all_trees_allow_and_whole_tree_deny_returns_false()
+    {
+        // The symmetric case of the default-allow whole-tree-deny probe above, on
+        // the default-deny branch: enforcement gives the specific tree's own
+        // whole-tree deny precedence over an all-trees allow (ResolveTiered tier 2
+        // beats tier 3), so every key of "app" resolves deny - and the existence
+        // probe must not out-reach that.
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Deny,
+            AllTreesGrantsEnabled = true,
+        };
+        var harness = await AuthGateHarness.CreateAsync(
+            options,
+            Rule(LatticeScope.ClusterWide()),
+            Rule(LatticeScope.Tree("app"), LatticeEffect.Deny));
+
+        var decision = await harness.Gate.AuthorizeAsync(
+            new LatticeAccessRequest("app", LatticeOperation.Read, Alice, "k"));
+
+        Assert.That(
+            decision.Allowed,
+            Is.False,
+            "enforcement resolves the specific whole-tree deny over the all-trees allow");
+        Assert.That(
+            harness.Engine.HasAnyGrant(Alice, "app", LatticeOperation.Read),
+            Is.False,
+            "the existence probe must agree with enforcement: every key is denied, so the tree is not visible");
+    }
+
+    [Test]
+    public async Task HasAnyGrant_default_deny_with_all_trees_allow_and_prefix_carve_out_returns_true()
+    {
+        // Regression guard against over-hiding: a prefix allow carve-out under the
+        // whole-tree deny keeps some keys readable, so the tree must stay visible.
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Deny,
+            AllTreesGrantsEnabled = true,
+        };
+        var harness = await AuthGateHarness.CreateAsync(
+            options,
+            Rule(LatticeScope.ClusterWide()),
+            Rule(LatticeScope.Tree("app"), LatticeEffect.Deny),
+            Rule(LatticeScope.Prefix("app", "pub/")));
+
+        Assert.That(
+            harness.Engine.HasAnyGrant(Alice, "app", LatticeOperation.Read),
+            Is.True,
+            "a prefix allow carve-out keeps some keys readable, so the tree stays visible");
+    }
+
+    [Test]
+    public async Task HasAnyGrant_default_deny_with_all_trees_allow_and_no_specific_rule_returns_true()
+    {
+        // Regression guard against over-hiding: a tree reachable only through the
+        // all-trees tier must remain visible.
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Deny,
+            AllTreesGrantsEnabled = true,
+        };
+        var harness = await AuthGateHarness.CreateAsync(options, Rule(LatticeScope.ClusterWide()));
+
+        Assert.That(
+            harness.Engine.HasAnyGrant(Alice, "app", LatticeOperation.Read),
+            Is.True,
+            "a tree reachable only through the all-trees tier stays visible");
+    }
+
+    [Test]
+    public async Task HasAnyGrant_all_trees_deny_hides_tree_despite_specific_allow()
+    {
+        // ResolveTiered tier 1: an all-trees deny wins outright over the specific
+        // tree's own allow, so every key resolves deny. The probe consults only
+        // "any resolved allow" on the specific tree and so reports the tree as
+        // visible - out-reaching enforcement.
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Deny,
+            AllTreesGrantsEnabled = true,
+        };
+        var harness = await AuthGateHarness.CreateAsync(
+            options,
+            Rule(LatticeScope.ClusterWide(), LatticeEffect.Deny),
+            Rule(LatticeScope.Tree("app")));
+
+        var decision = await harness.Gate.AuthorizeAsync(
+            new LatticeAccessRequest("app", LatticeOperation.Read, Alice, "k"));
+
+        Assert.That(decision.Allowed, Is.False, "an all-trees deny wins outright at tier 1");
+        Assert.That(
+            harness.Engine.HasAnyGrant(Alice, "app", LatticeOperation.Read),
+            Is.False,
+            "the existence probe must agree with the tier 1 all-trees deny");
+    }
+
+    [Test]
+    public async Task HasAnyGrant_all_trees_deny_hides_tree_under_default_allow()
+    {
+        // Same tier 1 deny, reached on the default-allow branch where the tree
+        // carries no specific rules at all.
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Allow,
+            AllTreesGrantsEnabled = true,
+        };
+        var harness = await AuthGateHarness.CreateAsync(
+            options,
+            Rule(LatticeScope.ClusterWide(), LatticeEffect.Deny));
+
+        var decision = await harness.Gate.AuthorizeAsync(
+            new LatticeAccessRequest("app", LatticeOperation.Read, Alice, "k"));
+
+        Assert.That(decision.Allowed, Is.False, "an all-trees deny wins outright at tier 1");
+        Assert.That(
+            harness.Engine.HasAnyGrant(Alice, "app", LatticeOperation.Read),
+            Is.False,
+            "the existence probe must agree with the tier 1 all-trees deny");
+    }
+
+    [Test]
     public async Task HasAnyGrant_whole_tree_allow_returns_true()
     {
         var engine = await EngineAsync(
