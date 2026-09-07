@@ -292,8 +292,11 @@ public sealed class RepoContextHostIntegrationTests
             // 503 fails here with a clear cause rather than as a mute timeout.
             // This fixture always binds an embedding provider (the host registers the
             // Onyx client unconditionally), so the keyword-only arm cannot fire; it is
-            // the "no repositories indexed, so there is nothing the plane could fail to
-            // serve" arm that reaches Serving.
+            // the "no repository is registered, so there is nothing the plane could be
+            // asked to serve" arm that makes it ready.
+            //
+            // That arm reports NothingRegistered, NOT Serving: no query ran, so it has
+            // no evidence the plane can serve and must not claim any (issue #2188).
             var retrieval = app.Services.GetRequiredService<RepoContextRetrievalReadinessState>();
             Assert.Multiple(() =>
             {
@@ -303,8 +306,12 @@ public sealed class RepoContextHostIntegrationTests
                     "The host binds an embedding provider unconditionally, so the keyword-only readiness arm is not what makes this configuration ready.");
                 Assert.That(
                     retrieval.Phase,
-                    Is.EqualTo(RepoContextRetrievalReadinessPhase.Serving),
-                    "An indexed-nothing host reaches retrieval readiness through the Serving arm; Building here would mean the endpoint never returns 200.");
+                    Is.EqualTo(RepoContextRetrievalReadinessPhase.NothingRegistered),
+                    "A host with no repository registered reaches readiness through the nothing-registered arm; Building here would mean the endpoint never returns 200, and Serving would claim a capability no query demonstrated.");
+                Assert.That(
+                    retrieval.IsReady,
+                    Is.True,
+                    "Nothing-registered is a ready phase: a fresh box must not be wedged before its first repository is onboarded.");
                 Assert.That(
                     retrieval.TimeToReady,
                     Is.Not.Null,

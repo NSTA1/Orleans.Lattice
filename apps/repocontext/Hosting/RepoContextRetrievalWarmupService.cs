@@ -114,8 +114,9 @@ public sealed class RepoContextRetrievalWarmupService : IHostedService
             if (ready)
             {
                 _logger.LogInformation(
-                    "RepoContext retrieval warmup complete: the vector plane served a semantic query after {Elapsed}.",
-                    _readiness.TimeToReady);
+                    "RepoContext retrieval warmup complete after {Elapsed}: the retrieval plane is ready in phase {Phase}.",
+                    _readiness.TimeToReady,
+                    _readiness.Phase);
                 return;
             }
 

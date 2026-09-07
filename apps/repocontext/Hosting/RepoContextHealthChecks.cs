@@ -69,7 +69,11 @@ public sealed class RepoContextReadinessHealthCheck(RepoContextReadinessState st
 /// <para>
 /// <b>It never deadlocks.</b> A host with no embedding provider bound reports
 /// <see cref="RepoContextRetrievalReadinessPhase.KeywordOnly"/>, which is healthy:
-/// keyword recall is that deployment's intended steady state, not a degradation.
+/// keyword recall is that deployment's intended steady state, not a degradation. A
+/// host that has onboarded no repository yet reports
+/// <see cref="RepoContextRetrievalReadinessPhase.NothingRegistered"/>, which is also
+/// healthy: there is nothing indexed that the vector plane could fail to serve, and
+/// holding traffic back would stop the very calls that onboard the first repository.
 /// </para>
 /// <para>
 /// <b>It never flaps.</b> The check is a pure reader of
@@ -92,6 +96,10 @@ public sealed class RepoContextRetrievalReadinessHealthCheck(RepoContextRetrieva
         HealthCheckResult.Healthy(
             "Keyword-only: no embedding provider is bound, so there is no vector plane to wait for."));
 
+    private static readonly Task<HealthCheckResult> NothingRegistered = Task.FromResult(
+        HealthCheckResult.Healthy(
+            "Nothing indexed: no repository is onboarded, so the vector plane holds nothing it could fail to serve."));
+
     private static readonly Task<HealthCheckResult> Building = Task.FromResult(
         HealthCheckResult.Unhealthy(
             "Not ready: the vector plane cannot serve semantic retrieval yet (still building, or unavailable)."));
@@ -107,6 +115,7 @@ public sealed class RepoContextRetrievalReadinessHealthCheck(RepoContextRetrieva
         {
             RepoContextRetrievalReadinessPhase.Serving => Serving,
             RepoContextRetrievalReadinessPhase.KeywordOnly => KeywordOnly,
+            RepoContextRetrievalReadinessPhase.NothingRegistered => NothingRegistered,
             _ => Building,
         };
 }

@@ -83,7 +83,13 @@ internal sealed class RepoContextRetrievalWarmup : IRepoContextRetrievalWarmup
                 // largest in the store, and paying that scan at startup is what timed
                 // out and failed the warmup on a real deployment (issue #1819). See
                 // the ids-only comment above.
-                _readiness.MarkServing();
+                //
+                // It reports "nothing to serve", NOT "the plane served": no query ran,
+                // so MarkServing() would assert a capability nothing demonstrated, and
+                // that assertion is load-bearing elsewhere (it latches the phase out of
+                // Building for the life of the process, tags time-to-ready `serving`,
+                // and earns the fault hold-down grace). See issue #2188.
+                _readiness.MarkNothingRegistered();
                 _logger.LogInformation(
                     "Repo-context retrieval warmup: no repositories are registered, so the retrieval plane is ready with nothing to serve.");
                 return true;

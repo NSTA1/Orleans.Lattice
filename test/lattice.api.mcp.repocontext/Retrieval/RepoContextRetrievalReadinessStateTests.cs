@@ -351,6 +351,126 @@ public sealed class RepoContextRetrievalReadinessStateTests
     }
 
     [Test]
+    public void Marks_a_host_with_nothing_registered_ready_without_claiming_it_served()
+    {
+        // The startup goal: a fresh box must not be wedged before its first repository
+        // is onboarded. The distinct phase is what keeps that from also asserting a
+        // capability nothing demonstrated (issue #2188).
+        using var state = Create(out var clock);
+
+        clock.Advance(TimeSpan.FromSeconds(7));
+        state.MarkNothingRegistered();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.Phase, Is.EqualTo(RepoContextRetrievalReadinessPhase.NothingRegistered));
+            Assert.That(state.IsReady, Is.True);
+            Assert.That(state.TimeToReady, Is.EqualTo(TimeSpan.FromSeconds(7)));
+        });
+    }
+
+    [Test]
+    public void Publishes_the_time_to_retrieval_ready_histogram_for_a_host_with_nothing_registered()
+    {
+        var clock = new SettableTimeProvider();
+        string? phaseTag = null;
+
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == RepoContextUsageRecorder.MeterName
+                && instrument.Name == RepoContextRetrievalReadinessState.ReadySecondsInstrumentName)
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<double>((_, _, tags, _) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == RepoContextRetrievalReadinessState.PhaseTagKey)
+                {
+                    phaseTag = tag.Value as string;
+                }
+            }
+        });
+        listener.Start();
+
+        using var state = new RepoContextRetrievalReadinessState(clock, HoldDown);
+        state.MarkNothingRegistered();
+
+        Assert.That(phaseTag, Is.EqualTo(RepoContextRetrievalReadinessState.PhaseNothingRegisteredTag));
+    }
+
+    [Test]
+    public void A_host_with_nothing_registered_can_still_become_keyword_only()
+    {
+        // Unlike Serving, NothingRegistered asserts no proof, so it must never lock a host
+        // out of the phase that actually describes it.
+        using var state = Create(out _);
+
+        state.MarkNothingRegistered();
+        state.MarkKeywordOnly();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.Phase, Is.EqualTo(RepoContextRetrievalReadinessPhase.KeywordOnly));
+            Assert.That(state.IsReady, Is.True);
+        });
+    }
+
+    [Test]
+    public void A_host_with_nothing_registered_is_promoted_once_the_plane_serves()
+    {
+        using var state = Create(out _);
+
+        state.MarkNothingRegistered();
+        state.MarkServing();
+
+        Assert.That(state.Phase, Is.EqualTo(RepoContextRetrievalReadinessPhase.Serving));
+    }
+
+    [Test]
+    public void A_fault_falsifies_the_nothing_registered_premise_and_revokes_readiness_at_once()
+    {
+        // A real query reporting the plane unavailable proves something IS indexed and
+        // cannot be served. The hold-down grace is earned by serving, so a host that
+        // only ever had nothing to serve does not get it.
+        using var state = Create(out _);
+
+        state.MarkNothingRegistered();
+        state.MarkUnavailable(RepoContextRetrievalPath.KeywordVectorPlaneUnavailable);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.Phase, Is.EqualTo(RepoContextRetrievalReadinessPhase.Building));
+            Assert.That(state.IsReady, Is.False);
+        });
+    }
+
+    [Test]
+    public void Marking_nothing_registered_never_demotes_a_proven_plane()
+    {
+        using var state = Create(out _);
+
+        state.MarkServing();
+        state.MarkNothingRegistered();
+
+        Assert.That(state.Phase, Is.EqualTo(RepoContextRetrievalReadinessPhase.Serving));
+    }
+
+    [Test]
+    public void Marking_nothing_registered_never_demotes_a_keyword_only_host()
+    {
+        using var state = Create(out _);
+
+        state.MarkKeywordOnly();
+        state.MarkNothingRegistered();
+
+        Assert.That(state.Phase, Is.EqualTo(RepoContextRetrievalReadinessPhase.KeywordOnly));
+    }
+
+    [Test]
     public void Meters_one_fault_episode_with_its_cause()
     {
         var clock = new SettableTimeProvider();
