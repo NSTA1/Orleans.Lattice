@@ -912,7 +912,7 @@ Reference for future cycles. Knobs are listed in the order an investigator typic
 | `BENCH_PIPELINE_PHASE2` | 1 (on) | Overlap phase 2 of batch N with phase 0+1 of batch N+1 | Leave on for throughput; switch off only as a diagnostic A/B. |
 | `WalAppendDispatchTimeout` (lattice option) | 30s | Writer dispatch deadline (G-023) | Library-level cap; not a bench knob but firing of `wal.append_dispatch.timeouts` signals the writer thinks the shard is unresponsive. |
 | `WalFlushPreflightTimeout` (lattice option) | 5s | Shard-side preflight deadline (G-023) | Same. |
-| `ShardForwardTimeout` (lattice option) | 2s | Outbound shard-forward deadline (G-021) | Bounds parked forwards (not Orleans-rejected forwards). |
+| `ShardForwardTimeout` (lattice option) | 15s | Outbound shard-forward deadline (G-021) | Bounds parked forwards (not Orleans-rejected forwards). |
 
 Failure-mode -> knob mapping:
 
