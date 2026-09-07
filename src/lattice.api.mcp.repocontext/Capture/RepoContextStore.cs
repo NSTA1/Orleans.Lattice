@@ -990,11 +990,13 @@ internal sealed partial class RepoContextStore
     }
 
     /// <summary>
-    /// Removes every record for a repository: a resilient range-delete drain
-    /// tombstones each context tree's <c>repo/{repoId}/</c> subtree in bounded
-    /// steps, reopening a fresh cursor across a transient enumerator loss so the
-    /// whole subtree is drained rather than aborting part-way, then the bare
-    /// <c>repo/{repoId}</c> root marker is deleted from the structural tree.
+    /// Removes every record for a repository: the cancel/drain/clear preamble
+    /// is shared with <see cref="ResetIndexAsync"/> via
+    /// <see cref="TearDownIndexingControlAsync"/>, then a resilient range-delete
+    /// drain tombstones each context tree's <c>repo/{repoId}/</c> subtree in
+    /// bounded steps, reopening a fresh cursor across a transient enumerator loss
+    /// so the whole subtree is drained rather than aborting part-way, then the
+    /// bare <c>repo/{repoId}</c> root marker is deleted from the structural tree.
     /// Removing an absent repository is a no-op that reports zero deletions.
     /// </summary>
     /// <param name="repoId">The repository whose records to remove. Must be non-empty.</param>
@@ -1005,25 +1007,7 @@ internal sealed partial class RepoContextStore
     {
         RequireNonEmpty(repoId, "repoId");
 
-        // Stop any in-flight indexing run and drain it to a full halt BEFORE
-        // deleting a single record. CancelAndWaitAsync cancels the run and awaits
-        // its termination, so no concurrent structural write from the indexer can
-        // race the range-delete below - a race that otherwise surfaces as an
-        // Orleans state version conflict on a leaf shared by both writers. The job
-        // grain then unregisters its resume reminder and clears its durable state,
-        // so a removed repository leaves no reminder firing forever and no job
-        // state for a later start to resume. Doing this first (rather than last)
-        // also means an error in the delete pass can no longer skip the cleanup.
-        await _indexRunner.CancelAndWaitAsync(repoId).ConfigureAwait(false);
-        await _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId)
-            .CancelAndClearAsync()
-            .ConfigureAwait(false);
-
-        // Tear down the repository's always-on self-index scan so a removed
-        // repository leaves no keep-alive reminder firing and no checkpoint behind.
-        await _grainFactory.GetGrain<IRepoContextSelfIndexGrain>(repoId)
-            .StopAsync()
-            .ConfigureAwait(false);
+        await TearDownIndexingControlAsync(repoId).ConfigureAwait(false);
 
         var scanPrefix = RepoContextKeys.RepoScanPrefix(repoId);
         var end = RepoContextPortability.PrefixUpperBound(scanPrefix)
@@ -1056,6 +1040,101 @@ internal sealed partial class RepoContextStore
         }
 
         return new RepoContextRepoRemovalResult { RepoId = repoId, EntriesDeleted = checked((int)deleted) };
+    }
+
+    /// <summary>
+    /// Drops a repository's code index and its derived planes but preserves its
+    /// durable agent-memory records: the cancel/drain/clear preamble is shared
+    /// with <see cref="RemoveRepoAsync"/>, then a resilient range-delete drain
+    /// tombstones each code-index tree's <c>repo/{repoId}/</c> subtree in bounded
+    /// steps, and the bare <c>repo/{repoId}</c> root marker is deleted from the
+    /// structural tree. The <see cref="RepoContextTrees.Memory"/> tree is not
+    /// touched, so every memory entry survives with its fields, tags, links, and
+    /// remaining time-to-live intact. Resetting the index for an absent
+    /// repository is a no-op that reports zero deletions. The set of trees to
+    /// sweep is the local constant <see cref="RepoContextTrees.CodeIndexTrees"/>;
+    /// see that member's remarks for why the vector payload tree is included
+    /// here even though the auto-healer's allow-list excludes it, and why the
+    /// vector-membership markers are dropped together with the payloads.
+    /// </summary>
+    /// <param name="repoId">The repository whose code index to reset. Must be non-empty.</param>
+    /// <param name="cancellationToken">Cancels the reset between steps.</param>
+    /// <returns>The repository id and the number of code-index entries tombstoned.</returns>
+    /// <exception cref="McpException">The repository id is empty.</exception>
+    public async Task<RepoContextIndexResetResult> ResetIndexAsync(string repoId, CancellationToken cancellationToken)
+    {
+        RequireNonEmpty(repoId, "repoId");
+
+        await TearDownIndexingControlAsync(repoId).ConfigureAwait(false);
+
+        var scanPrefix = RepoContextKeys.RepoScanPrefix(repoId);
+        var end = RepoContextPortability.PrefixUpperBound(scanPrefix)
+            ?? throw new McpException("The repository id produced an unbounded delete range.");
+
+        long deleted = 0;
+        foreach (var treeName in RepoContextTrees.CodeIndexTrees)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // Belt-and-braces: this iterates a local constant list, but the
+            // fail-closed classification check guarantees the sweep can never
+            // touch a tree that is not explicitly classified as a code-index
+            // tree, even if the list is mis-edited to include Memory or a
+            // future store-of-record tree name.
+            if (!RepoContextTrees.IsCodeIndexTree(treeName))
+            {
+                throw new McpException(
+                    "A code-only reset refused to sweep an unclassified tree: '" + treeName + "'.");
+            }
+
+            deleted += await Tree(treeName)
+                .DeleteRangeAsync(scanPrefix, end, DeleteStepSize, maxAttempts: null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // The root marker sits at repo/{repoId} with no trailing separator, so it
+        // is outside the subtree range deleted above and is removed explicitly.
+        // It is only ever written to the structural tree, which is a code-index
+        // tree, so it is dropped here alongside the rest of the index. The
+        // repository stays queryable through the memory records, and the next
+        // onboarding rewrites the marker as part of the fresh ingest.
+        var structural = Tree(RepoContextTrees.Structural);
+        if (await structural.DeleteAsync(RepoContextKeys.Repo(repoId), cancellationToken).ConfigureAwait(false))
+        {
+            deleted++;
+        }
+
+        return new RepoContextIndexResetResult { RepoId = repoId, EntriesDeleted = checked((int)deleted) };
+    }
+
+    /// <summary>
+    /// Cancels any in-flight indexing run for a repository, clears the job
+    /// grain's durable state and its resume reminder, and stops the always-on
+    /// self-index scan. Shared by <see cref="RemoveRepoAsync"/> and
+    /// <see cref="ResetIndexAsync"/> so both take the same control-plane
+    /// teardown - a second copy would drift from the load-bearing comment
+    /// below.
+    /// </summary>
+    private async Task TearDownIndexingControlAsync(string repoId)
+    {
+        // Stop any in-flight indexing run and drain it to a full halt BEFORE
+        // deleting a single record. CancelAndWaitAsync cancels the run and awaits
+        // its termination, so no concurrent structural write from the indexer can
+        // race the range-delete below - a race that otherwise surfaces as an
+        // Orleans state version conflict on a leaf shared by both writers. The job
+        // grain then unregisters its resume reminder and clears its durable state,
+        // so a removed repository leaves no reminder firing forever and no job
+        // state for a later start to resume. Doing this first (rather than last)
+        // also means an error in the delete pass can no longer skip the cleanup.
+        await _indexRunner.CancelAndWaitAsync(repoId).ConfigureAwait(false);
+        await _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId)
+            .CancelAndClearAsync()
+            .ConfigureAwait(false);
+
+        // Tear down the repository's always-on self-index scan so a removed
+        // repository leaves no keep-alive reminder firing and no checkpoint behind.
+        await _grainFactory.GetGrain<IRepoContextSelfIndexGrain>(repoId)
+            .StopAsync()
+            .ConfigureAwait(false);
     }
 
     private async Task<RepoContextRepoSummary> BuildRepoSummaryAsync(

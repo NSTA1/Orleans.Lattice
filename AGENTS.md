@@ -47,8 +47,10 @@ intend to change, and capture at each durable finding - and closes the loop with
 a self-check for the symptoms of under-use. It also fixes the order to use the
 memory tools in. When several
 sessions work one epic or workstream, that memory is also their coordination bus:
-one topic per workstream, `author` set, one-week TTL on handoffs, durable findings
-promoted to `gotchas` / `conventions` / `decisions` when it closes.
+one topic per workstream, `author` set, no TTL on handoffs (retire them
+deliberately with `forget`; silent expiry starves the sessions that come after),
+durable findings promoted to `gotchas` / `conventions` / `decisions` when it
+closes.
 
 ## Repository layout
 

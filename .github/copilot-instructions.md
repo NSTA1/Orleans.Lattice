@@ -37,8 +37,9 @@ before reading source you intend to change, and capture at each durable finding 
 plus a self-check for the symptoms of under-use. Follow them; a session that files
 memories it never reads back, or that never calls `context`, is using a fraction
 of the surface. When several sessions work one epic or workstream, memory is also
-their **coordination bus**: one topic per workstream, `author` set, and a one-week
-TTL (`ttlSeconds: 604800`) on the handoffs.
+their **coordination bus**: one topic per workstream, `author` set, and no TTL on
+the handoffs - a coordination entry is retired deliberately with `forget` when its
+workstream closes, never left to lapse silently.
 
 Treat an
 explicit user instruction to *remember*, *note*, *keep in mind*, or *don't
@@ -190,16 +191,38 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   further `/` separators (for example `feat/wal-shard-batching`). Anything else -
   a bare description with no prefix, an upper-case segment, or a name containing
   the author's GitHub login - fails CI.
-- **An epic shares one long-lived integration branch, named by nesting rather
-  than by a new prefix.** When an epic fans out into several sub-issues, the
-  epic gets one branch `<type>/epic/<epic-slug>`, each sub-issue branches off it
-  as `<type>/epic/<epic-slug>/<item-slug>`, sub-issue pull requests target the
-  epic branch, and the epic reaches `main` as a single fully-gated pull request
-  once its integration item passes. Nesting is deliberate: the guard's regex
-  already permits further `/` segments, so both shapes pass the branch-name
-  check unchanged, no `epic` prefix is added to the list above, and the epic's
-  own type stays visible (a documentation epic is `docs/epic/<epic-slug>`). A
-  bare `epic/<epic-slug>` is **not** the convention and fails CI.
+- **An epic shares one long-lived integration branch, grouped under an `epic`
+  segment rather than by a new prefix.** When an epic fans out into several
+  sub-issues, the epic gets one branch `<type>/epic/<epic-slug>`, each sub-issue
+  branches off it as `<type>/epic/<epic-slug>-<item-slug>`, sub-issue pull
+  requests target the epic branch, and the epic reaches `main` as a single
+  fully-gated pull request once its integration item passes. The grouping is
+  deliberate: the guard's regex already permits further `/` segments, so both
+  shapes pass the branch-name check unchanged, no `epic` prefix is added to the
+  list above, and the epic's own type stays visible (a documentation epic is
+  `docs/epic/<epic-slug>`). A bare `epic/<epic-slug>` is **not** the convention
+  and fails CI.
+  - **The final separator is a hyphen, not a slash, and git forces that - it is
+    not a style choice.** An earlier revision of this file prescribed nesting
+    sub-issues as `<type>/epic/<epic-slug>/<item-slug>`. That form is
+    **unimplementable** whenever the epic branch is parked on the bare slug,
+    which the rule above also mandates: git stores a branch as a file at
+    `refs/heads/<name>`, so `refs/heads/X` and `refs/heads/X/anything` cannot
+    coexist. The conflict is **symmetric** - whichever of the two is created
+    first, the other is refused:
+
+    ```text
+    cannot lock ref 'refs/heads/fix/epic/my-epic/my-item':
+    'refs/heads/fix/epic/my-epic' exists
+    ```
+
+    This is a directory/file ref conflict, not a policy or permissions failure,
+    and no naming choice on the sub-issue's side avoids it. Note how the wrong
+    rule survived: it was justified against the **CI branch-name regex**, which
+    does permit further `/` segments, and never against git itself. Passing the
+    guard was mistaken for being creatable. Reading a ref name does not tell you
+    git will accept it, so check a branch-shape rule against `git branch`, not
+    only against the pattern that validates it.
   - **CI runs on epic-targeted and release-line pull requests.**
     `.github/workflows/ci.yml` triggers on
     `pull_request: branches: [main, '*/epic/**', 'release/**']`, and the

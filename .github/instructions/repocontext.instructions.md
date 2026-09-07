@@ -550,8 +550,9 @@ removed - not a live figure you must keep above zero.
   working the same task right now, or provisional state you expect to supersede
   shortly. Never TTL something whose loss would be a problem: expiry is silent
   and unlogged, so correctness-critical memory must be retired deliberately with
-  `forget`, not left to time out. **Cross-session coordination handoffs are the
-  standard TTL case, and their default is one week** (`ttlSeconds: 604800`) - see
+  `forget`, not left to time out. **Cross-session coordination entries are not a
+  TTL case** - they are retired deliberately when their workstream closes, not
+  left to lapse under it; see
   [Coordination](#coordination---memory-as-a-cross-session-bus).
 
 ### Keep the topic vocabulary small and stable
@@ -622,12 +623,21 @@ are not addressable by a session that was not there; a memory entry is both.
 - **Always set `author`** to the session or agent identity (for example
   `feature-dev-t13`, `epic-coordinator`). On a shared topic, provenance is what
   makes an entry actionable.
-- **Coordination entries are time-boxed: give them a TTL, one week by default**
-  (`ttlSeconds: 604800`). Their value expires with the workstream, and a stale
-  handoff ("T12 integrated at 2dbeecba") is worse than none once the epic has
-  shipped. Extend it deliberately for a longer-running epic (`update` the entry,
-  or re-`remember` with a larger `ttlSeconds`); shorten it for a same-day
-  handoff.
+- **Do not put a TTL on a coordination entry.** It is tempting - a handoff
+  ("T12 integrated at 2dbeecba") really does lose its value once the epic ships -
+  but the cost is asymmetric and lands on the wrong session. **Expiry is silent
+  and unlogged.** A lapsed handoff does not announce itself; it presents as an
+  absence, indistinguishable from work that was never done, to a session with no
+  way to know an entry was ever there. A stale handoff merely misleads a reader
+  who can see it and check it; a vanished one starves a reader who cannot.
+
+  This is the same reasoning that already forbids a TTL on a backlog item, and it
+  generalises for the same reason: **silent, unlogged loss is a property of TTL
+  expiry itself, not of the entry's genre.** "Ledger entry, not a handoff" sorts
+  entries by what they look like; the harm sorts them by how their loss is
+  observed, and only the second predicts anything. Retire a coordination entry
+  the way you retire a backlog item - deliberately, with `forget`, as an act
+  somebody performed - so that its absence has an author and a moment.
 - **Promote anything durable; do not let it lapse.** If something posted to the
   bus matters beyond the workstream - a real gotcha, a convention, a decision
   with lasting rationale - re-`remember` it under the durable topic
@@ -727,10 +737,14 @@ pruning an `anchoredTo` edge silently disables staleness detection on an item.
 
 Expiry is silent and unlogged, so a lapsed item that other items declare
 `blockedBy` starves its dependents invisibly, with no event anywhere to explain
-it. Retire an item deliberately with `forget`. This is a hard exception to the
-"coordination state is time-boxed" rule in
-[Coordination](#coordination---memory-as-a-cross-session-bus): a backlog item is
-a ledger entry, not a handoff.
+it. Retire an item deliberately with `forget`.
+
+This is no longer an *exception* to the coordination rule - it is the same rule.
+[Coordination](#coordination---memory-as-a-cross-session-bus) now forbids a TTL
+on coordination entries generally, on exactly this reasoning. It is restated here
+because a backlog item is the case where the harm is most concrete: a lapsed item
+that other items declare `blockedBy` starves its dependents with no event
+anywhere to explain it.
 
 ## Write-tool safety
 
@@ -739,12 +753,21 @@ a ledger entry, not a handoff.
   in. Never call one speculatively.
 - Do not write memory without a clear durable reason, and never `remove_repo`
   the repo you are working in.
-- **`remove_repo` requires explicit user consent.** It drops a repository's
+- **`remove_repo` requires explicit user consent, and is not the tool for repairing an index.** It drops a repository's
   entire indexed context (structural nodes, memory, and vectors), so never call
   it on your own initiative, as a cleanup step, or to "reset" an index. Invoke it
   only when the user has explicitly asked for that specific repository to be
   removed; if a task seems to need it but the user has not asked, stop and ask
-  first rather than assuming consent.
+  first rather than assuming consent. When the goal is to repair a wedged, stale,
+  or corrupt code index for a repository whose accumulated memory (decisions,
+  gotchas, conventions) is worth keeping, `reset_index` is the tool - it drops
+  the code index and every derived plane but preserves the memory tree, so the
+  repository stays queryable through its notes and a follow-up `add_repo`
+  rebuilds the code index from the working files. `reset_index` is a
+  lighter-consent operation (no memory is destroyed) but is still destructive
+  and fail-closed like every other write tool, so do not call it speculatively -
+  reach for it when the index is actually degraded and the memory is worth
+  preserving.
 
 ## Freshness and re-ingest
 

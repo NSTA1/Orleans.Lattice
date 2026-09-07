@@ -224,8 +224,9 @@ specifically:
   without its conditions is not reusable - record both.
 - **A multi-session perf program is a coordinated workstream**: use one topic
   named after the program (for example `perf-wal-partitioning`) as its
-  coordination bus, with `ttlSeconds: 604800` on the handoffs, and promote
-  anything durable into `decisions` when the program closes.
+  coordination bus, with no TTL on the handoffs, and promote anything durable into
+  `decisions` when the program closes, retiring the rest deliberately with
+  `forget`.
 
 ## Hand-offs
 

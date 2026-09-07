@@ -79,9 +79,10 @@ disagree with the master file, the master file wins.
   calls `context` on a task that required reading source. The master file carries
   the full under-use self-check.
 - **Coordinating with other sessions?** Memory is the bus: one topic per epic or
-  workstream, `author` set to the session identity, and a **one-week TTL**
-  (`ttlSeconds: 604800`) on handoffs - promote anything durable to
-  `gotchas` / `conventions` / `decisions` (no TTL) when the workstream closes.
+  workstream, `author` set to the session identity, and **no TTL** on handoffs -
+  expiry is silent, so retire them deliberately with `forget` when the workstream
+  closes, promoting anything durable to `gotchas` / `conventions` / `decisions`
+  first.
 - **Working the backlog?** Work items are memory entries under the `backlog`
   topic, mirrored one-to-one onto GitHub issues (the issue number *is* the
   item id). Contended state lives in **edges**, not scalar fields, because
@@ -106,8 +107,11 @@ disagree with the master file, the master file wins.
   (partially embedded) index can be a worse locator than `grep` - prefer
   distinctive terms, and do not force it when your terms are too generic.
 - **Writes are destructive and fail-closed.** Never call `remember` / `update` /
-  `forget` / `add_repo` / `remove_repo` speculatively, and never `remove_repo`
-  the `lattice` repo. `remove_repo` in particular requires **explicit user
-  consent** - it drops a repository's entire indexed context, so only run it when
-  the user has explicitly asked for that repository to be removed; otherwise ask
-  first.
+  `forget` / `add_repo` / `remove_repo` / `reset_index` speculatively, and never
+  `remove_repo` the `lattice` repo. `remove_repo` in particular requires
+  **explicit user consent** - it drops a repository's entire indexed context
+  including its durable memory, so only run it when the user has explicitly
+  asked for that repository to be removed; otherwise ask first. When the goal
+  is to repair a wedged or stale index for a repository whose memory is worth
+  keeping, reach for `reset_index` instead - it drops the code index and its
+  vectors but preserves the memory tree.
