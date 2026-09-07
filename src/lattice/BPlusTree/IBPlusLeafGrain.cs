@@ -317,12 +317,70 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// a reclaim re-driven after a crash converges rather than walking the
     /// bound back over a range this leaf has since been given. It is the
     /// counterpart of the donor's bound narrowing in
-    /// <see cref="Grains.BPlusLeafGrain"/>'s split completion, and it must run
-    /// before the successor leaves the routing table so that no key is
-    /// momentarily owned by nobody.
+    /// <see cref="Grains.BPlusLeafGrain"/>'s split completion.
+    /// </para>
+    /// <para>
+    /// It runs AFTER the successor leaves the routing table, not before. The
+    /// two orderings trade different risks and reclaim takes this one
+    /// deliberately: widening first would have two leaves declaring the same
+    /// span at once, and the WAL materialiser filters by exactly that span, so
+    /// one record would materialise into both. Retiring routing first instead
+    /// leaves the span owned by nobody for the length of the fold, which loses
+    /// nothing as long as it is closed - so a caller that retires routing and
+    /// then fails to widen must compensate before it returns rather than
+    /// leaving the gap for a later pass, and
+    /// <see cref="IShardRootGrain.ReclaimEmptyLeavesAsync"/> does exactly that.
     /// </para>
     /// </summary>
     Task AbsorbSuccessorRangeAsync(string? highKeyExclusive);
+
+    /// <summary>
+    /// Latches this leaf as retired, but only if it is still empty at the
+    /// moment of the call, and returns whether it did.
+    /// <para>
+    /// This is the decision point of empty-leaf chain reclaim, and it is
+    /// conditional because the decision to fold a leaf away is taken on the
+    /// evidence of a <see cref="GetReclaimProbeAsync"/> several grain calls
+    /// earlier. The leaf mutation surface is <c>[AlwaysInterleave]</c>, so a
+    /// write can be routed, logged, applied and acknowledged inside that
+    /// window; folding unconditionally would erase it, and because the key
+    /// then routes to a predecessor whose projection checkpoint is already
+    /// past that offset, it would never re-materialise. Re-checking here, and
+    /// refusing every mutation from here on, is what makes the fold safe.
+    /// </para>
+    /// <para>
+    /// It latches rather than clears so that the caller can take the decision
+    /// BEFORE it makes any destructive change, not after. Once this returns
+    /// <see langword="true"/> the leaf's contents can no longer change, so the
+    /// caller may unlink it and hand its range on knowing the state it
+    /// measured is the state it will destroy. Clearing is a separate, later
+    /// step (<see cref="ClearGrainStateAsync"/>), by which point the leaf is
+    /// unreachable by routing and by the chain alike.
+    /// </para>
+    /// <para>
+    /// Returns <see langword="false"/> when the leaf has acquired rows or
+    /// reclaim-blocking state, or when a mutation raced the decision. The
+    /// caller abandons the fold and leaves the leaf routed and intact, which
+    /// is an ordinary outcome rather than a failure.
+    /// </para>
+    /// <para>
+    /// A latched leaf refuses every mutation, so a caller that latches and
+    /// then cannot complete the fold MUST call
+    /// <see cref="AbandonRetirementAsync"/> to reopen it. The pairing is what
+    /// keeps a leaf from being left permanently unwritable by an interrupted
+    /// fold, and it is why the latch is deliberately in memory only: an
+    /// activation that dies mid-fold reopens the leaf by reactivating it,
+    /// where a persisted flag would strand it forever.
+    /// </para>
+    /// </summary>
+    Task<bool> TryBeginRetirementAsync();
+
+    /// <summary>
+    /// Reopens a leaf that <see cref="TryBeginRetirementAsync"/> latched but
+    /// whose fold could not be completed, so it accepts writes again and the
+    /// next reclaim pass can retry it from a clean state.
+    /// </summary>
+    Task AbandonRetirementAsync();
 
     /// <summary>
     /// Associates this leaf with a tree, enabling named options resolution.

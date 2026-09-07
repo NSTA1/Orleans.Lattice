@@ -23,6 +23,72 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class BPlusLeafGrain
 {
+    /// <summary>
+    /// Non-zero once this leaf has been retired from the tree. From that
+    /// point a mutation is refused rather than applied, because the leaf is
+    /// already out of the routing table and the range it used to own now
+    /// belongs to its predecessor, so a write still arriving here is
+    /// misdirected and must be re-routed rather than silently applied to a
+    /// leaf that is about to be cleared.
+    /// </summary>
+    private int _reclaimRetired;
+
+    /// <summary>
+    /// Mutations admitted through <see cref="EnterMutationScope"/> that have
+    /// not yet completed. A retire decision refuses to latch while this is
+    /// non-zero: such a mutation was admitted while the leaf was still routed,
+    /// so it is a legitimate write whose rows may not have reached the
+    /// projection yet, and the emptiness check below would not see them.
+    /// </summary>
+    private int _mutationsInFlight;
+
+    /// <summary>
+    /// Admits a mutation, or refuses it when this leaf has already been
+    /// retired from the tree.
+    /// <para>
+    /// This is the interlock that makes empty-leaf reclaim safe against a
+    /// concurrent write. Reclaim decides on the evidence of a probe and then
+    /// acts across several further grain calls; the leaf mutation surface is
+    /// <c>[AlwaysInterleave]</c> and the commit path takes no gate, so without
+    /// an interlock a write can be routed, WAL-appended, applied and
+    /// acknowledged inside that window and then erased by the clear. That is a
+    /// silent loss of an acknowledged write, and an unrecoverable one: after
+    /// the fold the key routes to the predecessor, whose projection checkpoint
+    /// is already past the offset the lost write occupies, so no replay ever
+    /// re-materialises it.
+    /// </para>
+    /// <para>
+    /// The counter is what closes the window, and the order of the two
+    /// statements below is the whole argument. A mutation publishes itself
+    /// first and reads the latch second; a retire writes the latch first and
+    /// reads the counter second. Whichever of the two runs first, the other
+    /// sees it - so a mutation is either refused by the latch or observed by
+    /// the count, and cannot be both admitted and unseen.
+    /// </para>
+    /// </summary>
+    private MutationScope EnterMutationScope()
+    {
+        _mutationsInFlight++;
+
+        if (_reclaimRetired != 0)
+        {
+            _mutationsInFlight--;
+            throw new LeafRetiredException(context.GrainId.ToString());
+        }
+
+        return new MutationScope(this);
+    }
+
+    /// <summary>
+    /// Decrements the leaf's in-flight mutation count on
+    /// <see cref="IDisposable.Dispose"/>, so the count falls on every exit
+    /// path of the mutation body including an exceptional one.
+    /// </summary>
+    private readonly struct MutationScope(BPlusLeafGrain grain) : IDisposable
+    {
+        public void Dispose() => grain._mutationsInFlight--;
+    }
+
     /// <inheritdoc />
     public async Task<LeafReclaimProbe> GetReclaimProbeAsync()
     {
@@ -43,6 +109,66 @@ internal sealed partial class BPlusLeafGrain
             HighKeyExclusive = state.State.HighKeyExclusive,
             HasBlockingState = HasReclaimBlockingState(),
         };
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryBeginRetirementAsync()
+    {
+        // Latch FIRST, before any await. Everything that makes this decision
+        // sound depends on the leaf being frozen while it is taken, and the
+        // latch is the only thing that freezes it.
+        //
+        // Probing before latching does not work, and the reason is worth
+        // stating because it reads as though it would. CountAsync is awaited,
+        // so a mutation can be admitted, apply its rows and complete entirely
+        // within that await - after the count observed zero and before the
+        // latch is set. It is then invisible to both checks: the count ran too
+        // early to see its rows, and the in-flight counter runs too late to
+        // see the mutation, which has already decremented it. The window is
+        // narrow but it is exactly the acknowledged-then-erased loss this gate
+        // exists to prevent, so the order has to close it by construction
+        // rather than shorten it.
+        _reclaimRetired = 1;
+
+        var retire = false;
+        try
+        {
+            // A mutation admitted BEFORE the latch is not refused by it, and
+            // its rows may not have reached the projection yet, so the count
+            // below could still miss them. Refuse rather than reason about it.
+            // Reading the counter here, after the latch and before any await,
+            // is the other half of the handshake in EnterMutationScope: that
+            // publishes itself first and reads the latch second, this writes
+            // the latch first and reads the counter second, so neither can
+            // miss the other.
+            if (_mutationsInFlight != 0) return false;
+
+            // From here no mutation is in flight and none can be admitted, so
+            // the leaf's contents cannot change and the judgement below is
+            // taken against state that is frozen for the rest of the fold.
+            // This re-runs what the probe ran, but against the state as it is
+            // NOW rather than as it was several grain calls ago.
+            if (HasReclaimBlockingState()) return false;
+            if (await CountAsync(null, null) != 0) return false;
+
+            retire = true;
+            return true;
+        }
+        finally
+        {
+            // Unlatch on every path that did not commit to retiring,
+            // including an exceptional one. A latched leaf that is still
+            // routed refuses writes that will re-route straight back to it, so
+            // failing to unlatch trades a data-loss risk for a livelock.
+            if (!retire) _reclaimRetired = 0;
+        }
+    }
+
+    /// <inheritdoc />
+    public Task AbandonRetirementAsync()
+    {
+        _reclaimRetired = 0;
+        return Task.CompletedTask;
     }
 
     /// <summary>

@@ -118,7 +118,7 @@ Splitting is the only direction the tree had for a long time. A leaf was allocat
 - It **moves no data.** The only leaf it ever touches is one with zero live rows, so there is no migration window in which a row exists in two places or in neither.
 - The **head leaf is never folded.** It owns everything below the tree's first separator and has no predecessor to inherit that range, so a fully emptied tree still retains exactly one leaf to route to.
 - A leaf is skipped when it carries state that must outlive its rows: an in-progress split, a sticky moved-away seal, a prepared cross-shard saga bucket, or a destination-side shadow marker.
-- Each pass is **bounded** by a caller-supplied leaf count and an internal walk ceiling, so it cannot hold an activation turn open on a degenerate chain, and it is re-driven rather than run to completion.
+- Each pass is **bounded** by a caller-supplied leaf count and an internal walk ceiling, so it cannot hold an activation turn open on a degenerate chain, and it is re-driven rather than run to completion. A pass that stops on its budget records where it stopped and the next pass resumes from there, so a long chain is drained across passes instead of being re-walked from the head each time.
 
 ### Fold ordering
 
@@ -142,8 +142,14 @@ sequenceDiagram
     Note over Parent: no new write can reach L
     end
 
+    rect rgb(255, 240, 245)
+    Note over Root,Leaf: 2 - latch L closed, or abandon
+    Root->>Leaf: TryBeginRetirementAsync()
+    Note over Leaf: re-checks rows and in-flight mutations,<br/>then refuses every later write
+    end
+
     rect rgb(240, 255, 240)
-    Note over Root,Prev: 2 - unlink and widen in ONE persist
+    Note over Root,Prev: 3 - unlink and widen in ONE persist
     Root->>Prev: TryUnlinkSuccessorAsync(expectedNext: L, newNext: N, absorbHigh: L.High)
     Note over Prev: compare-and-swap - declines if a split moved P underneath
     end
@@ -153,14 +159,27 @@ sequenceDiagram
 ```
 
 1. **Retire routing first.** Removing the separator from the parent means no new write can reach `L`. Widening `P` first would instead let a write route to `L` while `P` also claimed the range - a permanent duplicate that never self-heals, because `L` is no longer empty and so is never reclaimed again.
-2. **Unlink and widen together.** `P` takes over both the chain link and the vacated range in a single persist. Split into two writes there is a window in which `P` routes a range its own replay filter rejects, so a write landing in that window survives in cache and vanishes on the next rebuild.
-3. **Clear last.** `L` is unreachable by routing and by the chain before any state is destroyed.
+2. **Latch `L` closed before anything destructive.** The probe in the first line of the diagram is several round trips old by now, and the leaf mutation surface interleaves, so a write could have been routed, logged and **acknowledged** in between. `TryBeginRetirementAsync` re-checks the row count and the in-flight mutation count and then latches the leaf so that every later write is refused. Retiring is decided here, before the fold is destructive, rather than at the clear: a leaf that is discovered non-empty only after being unlinked is unreachable, which loses the same rows by another route. The latch lives in the activation, not in persisted state, so an activation that dies mid-fold reopens the leaf rather than sealing it permanently.
+3. **Unlink and widen together.** `P` takes over both the chain link and the vacated range in a single persist. Split into two writes there is a window in which `P` routes a range its own replay filter rejects, so a write landing in that window survives in cache and vanishes on the next rebuild.
+4. **Clear last.** `L` is unreachable by routing and by the chain, and provably still empty, before any state is destroyed.
 
-Between steps 1 and 2 the tree is in a **self-healing** intermediate state: the range routes to `P` but `P` still declares the narrower span. Each pass repairs any such gap it finds before considering the next candidate, so a fold interrupted by a crash is finished by the next pass rather than left half-done. Every step is idempotent and the range widen is monotonic, so re-driving converges.
+A fold that gives up at step 2 or step 3 **undoes step 1** before returning: it reopens the leaf and reinstates the separator it removed. Leaving routing retired would hand the span to nobody - a write would route to a neighbour whose replay filter rejects the key, so it would live in that neighbour's cache and vanish on the next rebuild. The gap is invisible to the chain-based repair below, because the chain still tiles the keyspace perfectly; only routing has the hole. Compensation restores the separator rather than widening a neighbour onto the span, because `L` is still chained and still declares that span, and two leaves declaring one span would both materialise its records.
+
+Between steps 1 and 3 the tree is in a **self-healing** intermediate state: the range routes to `P` but `P` still declares the narrower span. A fold interrupted by a crash - the one case where compensation cannot run - is finished by the next pass rather than left half-done, and it is worth being precise about how, because it is not the range-gap repair below. The chain still tiles the keyspace perfectly in that state, so there is no gap for that repair to find; the hole is only in routing. Instead the next pass resolves routing on the leaf's own low bound, sees it land on some other leaf, and recognises that as the fingerprint of a fold that retired routing and stopped. It then completes that fold rather than starting a new one. Every step is idempotent and the range widen is monotonic, so re-driving converges.
+
+A crash after step 3 but before step 4 leaves the leaf unrouted, unlinked and empty: unreachable, but harmless, since the predecessor already owns its range and it holds nothing. It is a leaked state row rather than a correctness problem.
 
 ### Why the unlink is a compare-and-swap
 
 Reclaim is a multi-grain sequence while the split gate is per-grain, so reclaim and split are **not** serialised with respect to each other. A split of `P` can land between the shard root reading `P`'s sibling pointer and writing it. That split inserts a new leaf `S` between `P` and `L`, and moves live rows into it. An unconditional write of the pointer the reclaim had planned would set `P.NextSibling` past `S` entirely, unlinking a leaf that holds rows which were live throughout - silent data loss caused by the reclaim path, in the growth direction.
 
-`TryUnlinkSuccessorAsync` therefore verifies that `P` still points at the leaf being folded before writing anything, and declines otherwise. A declined fold leaves `L` unrouted, still chained, still empty and claimed by nobody, which the next pass completes once the topology has settled. Declining is safe where corrupting is not, and reclaim is background work that will be re-driven anyway.
+`TryUnlinkSuccessorAsync` therefore verifies that `P` still points at the leaf being folded before writing anything, and declines otherwise. A declined fold reopens `L` and reinstates its separator, so the leaf is routed, chained and writable again exactly as it was before the pass touched it, and the next pass retries it once the topology has settled. Declining is safe where corrupting is not, and reclaim is background work that will be re-driven anyway.
+
+### How fast a shard actually heals
+
+Reclaim is bounded twice over, and the two bounds compose into a healing rate rather than a repair that completes. Each pass folds at most `CompactionLeafBatchSize` leaves (64 by default) and walks a bounded number of leaves to find them, and the pass is driven by the compaction reminder, which fires every `TombstoneGracePeriod` (one hour by default). A shard therefore sheds on the order of 64 leaves an hour, so a range that grew to several thousand leaves and was then emptied takes **days** to give that space back, not minutes.
+
+That is the intended trade - a pass holds the shard root's activation turn while it runs, so a pass large enough to drain a degenerate chain in one go would block every read and write on that shard for as long as it took. It does mean the cost recovery described at the top of this section is asymptotic: scan cost falls steadily once a range empties, but a host that has just deleted a very large range should not expect the leaf count to drop promptly. Nothing else drives reclaim by default, because `MinTombstoneRatioForCompaction` is `0.0` and `MaxLeafEntriesBeforeForcedCompaction` is `0` in a default-configured host, leaving the periodic reminder as the only trigger. Raise `CompactionLeafBatchSize` to trade turn latency for a faster recovery.
+
+The resume position lives in the shard root's activation rather than in its persisted state, so it is lost when the activation recycles and the next pass restarts from the leftmost leaf. This is correctness-neutral - the cursor only decides where a pass begins, never what it is willing to fold - and it is self-limiting in the ordinary case, because a folded leaf leaves the chain and so is not re-walked. It has one known bound: on a shard whose first `MaxLeafReclaimWalk` leaves hold live rows, a pass that always restarts from the leftmost leaf never reaches the candidates beyond them, so a very large sparse shard that recycles its activation faster than it drains will not heal. A persisted cursor would fix it at the cost of a shard-root state change; that trade has not been taken.
 

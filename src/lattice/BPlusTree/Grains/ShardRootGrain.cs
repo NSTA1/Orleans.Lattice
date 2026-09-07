@@ -426,7 +426,7 @@ internal sealed partial class ShardRootGrain(
                 await forwardTask;
                 return;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException or LeafRetiredException && attempt < MaxRetries)
             {
                 // The failed grain will be deactivated by Orleans. On retry, a fresh
                 // activation loads clean state and the recovery guards resume any
@@ -463,7 +463,7 @@ internal sealed partial class ShardRootGrain(
                 await forwardTask;
                 return;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException or LeafRetiredException && attempt < MaxRetries)
             {
             }
         }
@@ -506,7 +506,7 @@ internal sealed partial class ShardRootGrain(
                 await forwardTask;
                 return null;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException or LeafRetiredException && attempt < MaxRetries)
             {
                 // The failed grain will be deactivated by Orleans. On retry, a fresh
                 // activation loads clean state and the recovery guards resume any
@@ -554,7 +554,7 @@ internal sealed partial class ShardRootGrain(
                 await TrackShadowForward((key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return true;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException or LeafRetiredException && attempt < MaxRetries)
             {
             }
         }
@@ -587,7 +587,7 @@ internal sealed partial class ShardRootGrain(
 
                 return result.Version;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException or LeafRetiredException && attempt < MaxRetries)
             {
             }
         }
@@ -1040,7 +1040,7 @@ internal sealed partial class ShardRootGrain(
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException or LeafRetiredException && attempt < MaxRetries)
             {
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
@@ -1271,7 +1271,7 @@ internal sealed partial class ShardRootGrain(
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException or LeafRetiredException && attempt < MaxRetries)
             {
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
@@ -1380,7 +1380,7 @@ internal sealed partial class ShardRootGrain(
                 await forwardTask;
                 return result;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException or LeafRetiredException && attempt < MaxRetries)
             {
                 // Retry - same rationale as SetAsync.
             }
@@ -2366,7 +2366,7 @@ internal sealed partial class ShardRootGrain(
             {
                 return await TraverseToLeafAsync(key);
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException or LeafRetiredException && attempt < MaxRetries)
             {
             }
         }
@@ -2400,7 +2400,7 @@ internal sealed partial class ShardRootGrain(
 
                 return;
             }
-            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException or LeafRetiredException && attempt < MaxRetries)
             {
             }
         }

@@ -247,6 +247,7 @@ internal static class TypeAliases
 
     // Single-round-trip reclaim decision inputs for one leaf (empty-leaf chain reclaim)
     internal const string LeafReclaimProbe = "ol.lrb";
+    internal const string LeafRetired = "ol.lrt";
 
     // Conditional bulk write (guard predicate against existing value)
     internal const string ConditionalSetManyResult = "ol.csm";
