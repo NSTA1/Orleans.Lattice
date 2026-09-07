@@ -8,7 +8,20 @@ name: Explorer CI
 # unrelated PRs, and it is not a required status check.
 on:
   pull_request:
-    branches: [main]
+    # `main` is the release target. The second pattern covers the release lines
+    # (`release/<X.Y>`). A patch wave is assembled by cherry-picking onto one of
+    # these, and without this pattern such a pull request ran NO checks at all -
+    # the least safe place to have no validation, because a patch ships straight
+    # to NuGet without ever having been built on trunk.
+    #
+    # A release line deliberately carries no branch protection: CI *running* is
+    # what gives the pull request feedback, whereas a required check is what
+    # would serialise the wave. The two are not the same thing.
+    #
+    # This filter is per-branch. GitHub resolves a workflow's triggers from the
+    # line's own copy of this file, so adding the pattern on `main` does nothing
+    # for a line cut before it landed; each such line has to be backfilled.
+    branches: [main, 'release/**']
     paths:
       - 'src/lattice.explorer/**'
       - 'test/lattice.explorer/**'
