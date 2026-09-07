@@ -9,7 +9,7 @@ and fill in your own values. Nothing else in the template needs editing.
 | `{repoId}` | `my-repo` |
 | `{owner}/{repo}` | `my-org/my-repo` |
 | `{ghAccount}` | `my-github-account` |
-| `{homeRegion}` | `uksouth` |
+| `{homeRegion}` | `local` (derive it - see below; do not copy this) |
 | `{conventionsDoc}` | [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md) |
 | `{implementationAgent}` | `feature-dev`, or omit if you have no implementation agent |
 
@@ -26,10 +26,23 @@ and fill in your own values. Nothing else in the template needs editing.
 - **`{ghAccount}`** is the account every `gh` call authenticates as. Set it
   explicitly rather than relying on an ambient token, which is often not the
   identity you intend.
-- **`{homeRegion}`** is the region claims are taken in. Claims are region-scoped
-  by enforcement, not by convention: a claim taken in one region refuses a write
-  from another. A single-region deployment still needs a value, and every item's
-  `homeRegion:` tag must match it.
+- **`{homeRegion}`** is the region claims are taken in. **Derive it from your
+  own cluster; do not copy a value from this table.** Call
+  `lattice_list_regions` to see the regions the server routes to, and
+  `repocontext_claim_status` on any claimed item to see the region a claim
+  actually records - that recorded value is what the tag must match. On a
+  single-region deployment these commonly differ in a way that catches people
+  out: the only routable id is `current`, while claims record `local`.
+
+  Region scoping is **a property of your deployment, not of this tag**. The
+  intent is that a claim taken in one region refuses a write from another, and
+  that does hold where the cluster genuinely spans regions. Where it does not,
+  a geographic value such as `uksouth` is **not enforced at all** - it is not a
+  region the cluster routes, every worker's region check passes vacuously, and
+  a claim from anywhere succeeds. That failure is worse than a no-op, because
+  the protocol documents the guarantee as enforced and workers rely on it.
+  Treat a value your cluster does not route as a **defect in the binding** and
+  fix it here.
 
 ## Why bindings rather than editing the template
 

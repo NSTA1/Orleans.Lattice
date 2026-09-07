@@ -29,7 +29,7 @@ are:
 | `{repoId}` | The `repocontext` repository id, as reported by `repocontext_list_repos`. Not your working directory, and not a worktree name. | `my-repo` |
 | `{owner}/{repo}` | The GitHub repository that mirrors items as issues. | `my-org/my-repo` |
 | `{ghAccount}` | The GitHub account every `gh` call authenticates as. | `my-github-account` |
-| `{homeRegion}` | The region claims are taken in. Claims are region-scoped, so this is load-bearing rather than informational. | `uksouth` |
+| `{homeRegion}` | The region claims are taken in. **Derive it from the cluster, never from a geography.** `lattice_list_regions` gives the routable ids; `repocontext_claim_status` on any claimed item gives the region a claim actually records, and that is the value the tag must match. Whether it is load-bearing or merely informational is a property of the deployment, not of the tag - see the tag table below. | `local` |
 | `{conventionsDoc}` | The repository's contribution conventions: branch naming, commit rules, labels. | `.github/copilot-instructions.md` |
 | `{implementationAgent}` | The agent a worker delegates feature implementation to, if the repository has one. | `feature-dev` |
 

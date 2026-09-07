@@ -28,13 +28,25 @@ base is wrong, this agent is wrong, and the defect surfaces here first.
 | `{repoId}` | `lattice` |
 | `{owner}/{repo}` | `NSTA1/Orleans.Lattice` |
 | `{ghAccount}` | `NSTA1` |
-| `{homeRegion}` | `uksouth` |
+| `{homeRegion}` | `local` |
 | `{conventionsDoc}` | [`.github/copilot-instructions.md`](../copilot-instructions.md) |
 | `{implementationAgent}` | [`feature-dev`](feature-dev.agent.md) |
 
 If you cannot resolve a binding, **stop and report**. Do not guess a repository,
 an account, or a region: a `gh` call under the wrong identity and a claim taken
 in the wrong region both fail in ways that are expensive to unpick.
+
+`{homeRegion}` is `local` because that is the region this cluster actually
+records on a claim, observable with `repocontext_claim_status` on any claimed
+item. It is not a geographic name. `lattice_list_regions` reports exactly one
+region here, whose routable id is `current`; there is no `uksouth`, and passing
+one is rejected outright with `Unknown region`. **Do not substitute a
+geographic value.** A `homeRegion:` the cluster does not route is not enforced
+at all, so every worker's region check silently passes and the protocol's
+region-scoping guarantee becomes an unenforced assumption that is still
+documented as enforced - which is worse than having none, because it is relied
+upon. If this repository ever becomes genuinely multi-region, re-derive this
+value from `lattice_list_regions` rather than assuming it.
 
 ## Repository-specific rules
 
