@@ -651,6 +651,28 @@ whereas a genuinely dead holder never does, and the item is released to others
 only after that window closes. The cost is bounded latency on genuine failures;
 the benefit is that the common case stops being a race.
 
+**One full lease is the wrong quarantine while the clamp stands, and elapsed time
+is the wrong evidence.** The working default above assumes the lease
+approximates the work. It does not: the cluster clamps to 300 seconds against
+turns that routinely run for hours, so a live worker's claim spends almost all of
+its life presenting as lapsed. This was observed on the first real run - a
+productive worker sat at fence 12, mid-implementation, while `claim_status`
+reported `isHeld: false` and the item showed no unmet blockers. To any agent
+computing a ready set it was indistinguishable from abandoned work, and the lock
+would have granted it on request. A quarantine measured in lease multiples is
+therefore no protection at all here, because the window it names has already
+elapsed in the ordinary case.
+
+Until the clamp is raised, quarantine on **evidence of work, not elapsed time**.
+An item whose previous claimant shows a branch pushed, an issue comment, or a
+fencing token that has moved within the last hour is a **live holder**, whatever
+the lease says, and must not be taken over. Only the sustained absence of all
+three licenses a takeover. This inverts the default deliberately, because the two
+errors are not symmetric: waiting on genuinely dead work costs bounded latency,
+whereas taking over live work destroys an entire session's unpushed output at the
+moment it finally tries to write, and destroys it silently, since the evicted
+worker learns of the eviction only when its next fenced write is refused.
+
 **Taking over is an explicit, evidenced act.** A worker claiming an item whose
 previous claim lapsed must:
 

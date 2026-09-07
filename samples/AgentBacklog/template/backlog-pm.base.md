@@ -547,7 +547,17 @@ Concretely:
 6. **Never deploy onto an item carrying `needs-specification`, a parked item, or an
    item whose `homeRegion` is not the region the claim would be taken in.** The
    last fails closed anyway; do not spend a session discovering that.
-7. **Report afterwards.** Re-ground and account for what each worker did: the item,
+7. **Do not deploy into a ready set whose only candidates are live-held.** A
+   worker self-selects (rule 4), so it takes whatever the ready set offers - and
+   under the current lease clamp a live, productive worker's item still presents
+   as claimable: `isHeld: false`, no unmet blockers, indistinguishable from
+   abandoned work. Deploying into that state does not produce parallelism, it
+   produces a takeover that fences the first worker out of its own item and
+   destroys its unpushed work. Before dispatching, check `repocontext_claim_status`
+   and evidence of work (recent commits, comments, fence movement) on every ready
+   candidate. If the only ready item is live-held, the correct number of workers
+   to deploy is **zero**; waiting is not idleness, it is the only safe move.
+8. **Report afterwards.** Re-ground and account for what each worker did: the item,
    the claim outcome, the branch and pull request, CI state, and whether the item
    completed, released, or expired. A deployment you cannot report on afterwards
    was not a deployment, it was a hope.

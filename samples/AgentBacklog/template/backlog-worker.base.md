@@ -348,6 +348,19 @@ Rules, all of which follow from how the surface actually behaves:
   another worker got there first: go back to Phase 2 and take the next candidate.
   `reason: "missing"` means there is no such record, which is a **defect** in the
   backlog - report it rather than creating the record yourself.
+- **A lapse is not an invitation. Check for a live holder before taking over.**
+  `granted: false, reason: "contended"` only ever fires against a lease that is
+  still *live*. Against a lapsed one the lock grants immediately and issues you a
+  strictly higher token, which fences out the previous holder's next write - and
+  because the deployed clamp is far shorter than a real work turn, a busy and
+  entirely healthy worker normally presents as lapsed. So "the lock let me have
+  it" is not evidence that the item was free. Before claiming any item whose
+  record shows a prior claimant, read `repocontext_claim_status` and treat a
+  recent claimant as a live holder unless you have positive evidence of
+  abandonment: no new commits on its branch, no new issue comments, and no fence
+  movement across the quarantine window. Absence of a live *lease* is not such
+  evidence; absence of *work* is. See "Detecting and picking up a dropped lease"
+  in the protocol.
 - **Honour the returned lease, not the one you asked for.** The lock clamps.
   Track `leaseExpiresAtUtc` and `leaseSeconds` from the result.
 - **Keep the `fencingToken` for the whole run** and present it on every
@@ -710,8 +723,11 @@ you completed, released, refused or exited empty:
   ready set and claims for itself, always.
 - **Does not queue behind a live claim.** It fails fast and takes the next ready
   item.
-- **Does not gate a decision to proceed on `repocontext_claim_status`**, which is
-  advisory by construction.
+- **Does not gate a decision to *proceed* on `repocontext_claim_status`**, which
+  is advisory by construction. The permission is asymmetric, because an advisory
+  read can be optimistic: it may only ever be used to **hold back**, never to
+  press ahead. Using it to justify skipping or shortening a claim is forbidden;
+  using it to refuse a takeover you would otherwise have made is required.
 - **Does not write to an item without its fencing token**, and does not write
   after releasing.
 - **Does not run its own stale-claim reaper**, or otherwise race the lock.
