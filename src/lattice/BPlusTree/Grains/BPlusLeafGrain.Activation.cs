@@ -280,6 +280,39 @@ internal sealed partial class BPlusLeafGrain
             replayPermit?.Release();
         }
 
+        // Step 1.4 - publish this activation's same-silo revision cookie
+        // now that the in-memory projection has been rebuilt (issue #2151).
+        //
+        // The cookie is the mechanism LeafCacheGrain.RefreshAsync uses to
+        // decide whether its snapshot is stale, and it is bumped from every
+        // state-advancing FOREGROUND site on the leaf. The snapshot
+        // rehydrate and WAL replay above are not foreground sites: neither
+        // ILeafProjection.Apply nor TryRehydrateFromSnapshotAsync bumps, so
+        // before this call a leaf that came back from a projection rebuild
+        // (which deactivates, so the next activation replays) had NO
+        // registry entry at all. The cache's guard requires an entry to
+        // take the revision branch, so a cache still holding a cookie from
+        // the previous activation fell through to the TTL gate instead and
+        // kept serving its existing snapshot until the TTL elapsed. The
+        // removal-on-deactivate comment claims that fall-through reaches
+        // "the cross-grain refresh path"; without this publish it reaches a
+        // gate that can return early.
+        //
+        // Publishing unconditionally - rather than only when the replay
+        // advanced - keeps the rule simple and the entry's presence tied to
+        // the activation rather than to what the WAL happened to contain: a
+        // cache cannot tell the two apart, and a leaf whose replay applied
+        // nothing may still hold state a cache has drifted from. The cost is
+        // one registry entry per live leaf, which is the bound the
+        // removal-on-deactivate already maintains.
+        //
+        // This is only safe because activations are seeded from disjoint
+        // cookie ranges (see BumpLocalRevision). Publishing here while
+        // activations still restarted from zero would ARM the ABA
+        // collision, by making the entry present with a value a previous
+        // activation had already published.
+        BumpLocalRevision();
+
         // Step 1.5 - if the fall-off-log detector raised the
         // SnapshotPending advisory while classifying the replay path,
         // proactively capture the leaf's projection into the dedicated

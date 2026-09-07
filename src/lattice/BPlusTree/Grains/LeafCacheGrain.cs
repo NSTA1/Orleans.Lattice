@@ -652,11 +652,19 @@ internal sealed class LeafCacheGrain(
         }
 
         // Stamp the pre-fetch cookie so subsequent same-silo reads can
-        // short-circuit when no further state has accumulated. If the
-        // cookie was absent (cross-silo primary), preFetchRevision is
-        // 0 and the fast-path guard `_lastSeenPrimaryRevision > 0`
-        // keeps us on the cross-grain refresh path - same behaviour as
-        // before this fix.
+        // short-circuit when no further state has accumulated.
+        //
+        // preFetchRevision is 0 when the registry held no entry for the
+        // primary at the moment we looked. That has TWO causes, not one:
+        // the primary is activated on another silo (permanent for a
+        // cross-silo cache), or it was not activated anywhere just then
+        // (transient - the next activation publishes a cookie during
+        // OnActivateAsync). Recording 0 in either case keeps the fast-path
+        // guard `_lastSeenPrimaryRevision > 0` false, so this cache stays
+        // on the TTL gate until its next refresh restamps a real cookie.
+        // That is bounded: the assignment below is unconditional on the
+        // refresh path and _lastRefreshTicks is restamped, so the cache
+        // self-heals after one TTL rather than being pinned indefinitely.
         _lastSeenPrimaryRevision = preFetchRevision;
 
         _pendingKeys.Clear();
