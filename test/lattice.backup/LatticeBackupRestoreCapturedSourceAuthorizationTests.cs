@@ -103,7 +103,7 @@ public sealed class LatticeBackupRestoreCapturedSourceAuthorizationTests
             Throws.TypeOf<LatticeAuthorizationDeniedException>());
 
         // The captured source actually reached the gate, and nothing was written.
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(gate.Requested, Does.Contain((Source, LatticeOperation.Backup)));
             Assert.That(await _fixture.GrainFactory.GetGrain<ILattice>(Target).GetAsync("k1"), Is.Null);
@@ -198,7 +198,7 @@ public sealed class LatticeBackupRestoreCapturedSourceAuthorizationTests
                 new LatticeRestoreRequest(tip.Id, Target)),
             Throws.TypeOf<LatticeAuthorizationDeniedException>());
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(gate.Requested, Does.Contain((Source, LatticeOperation.Backup)));
             Assert.That(await _fixture.GrainFactory.GetGrain<ILattice>(Target).GetAsync("k1"), Is.Null);

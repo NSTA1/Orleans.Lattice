@@ -61,7 +61,12 @@ public sealed partial class MultiSiloStateApiIntegrationTests
 
         // Wait for the initial full snapshot, then drive a mutation through the
         // cluster client and assert the non-originating silo's feed reflects it.
-        await WaitUntilAsync(() => { lock (snapshots) { return snapshots.Count >= 1; } }, cts.Token);
+        // The initial-snapshot barrier is asserted in its own right so a feed that
+        // never started is reported here rather than surfacing indistinguishably as
+        // "the mutation was not reflected" further down.
+        var started = await WaitUntilAsync(() => { lock (snapshots) { return snapshots.Count >= 1; } }, cts.Token);
+        Assert.That(started, Is.True,
+            "the subscription must deliver its initial full snapshot before a mutation can be attributed to the feed");
 
         for (var i = 20; i < 40; i++)
         {

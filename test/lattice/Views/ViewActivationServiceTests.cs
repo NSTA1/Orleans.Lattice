@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.Tests.Views;
@@ -308,9 +309,14 @@ public sealed class ViewActivationServiceTests
     [Test]
     public async Task ExecuteAsync_stops_promptly_while_a_view_is_still_failing_to_activate()
     {
+        var attempts = 0;
         var maintainer = Substitute.For<IViewMaintainerGrain>();
         maintainer.EnsureActiveAsync(Arg.Any<CancellationToken>())
-            .Throws(new InvalidOperationException("never ready"));
+            .Returns<Task>(_ =>
+            {
+                Interlocked.Increment(ref attempts);
+                throw new InvalidOperationException("never ready");
+            });
 
         var harness = CreateHarness(
             startup: [Startup("stuck")],
@@ -319,9 +325,15 @@ public sealed class ViewActivationServiceTests
         await harness.Service.StartAsync(CancellationToken.None);
         var execute = harness.Service.ExecuteTask!;
 
-        // Let at least one failing pass run so the loop is parked in its backoff delay.
-        await Task.Delay(150);
-        Assert.That(execute.IsCompleted, Is.False);
+        // Prove a failing pass actually ran - so the loop is parked in its backoff
+        // delay - rather than sleeping and hoping. A fixed sleep leaves the
+        // "still running" claim below satisfied by a loop that had not yet started.
+        await TestPoll.UntilAsync(
+            () => Volatile.Read(ref attempts) >= 1,
+            "at least one activation pass must have failed before the loop can be parked in its backoff delay",
+            TimeSpan.FromSeconds(10));
+        Assert.That(execute.IsCompleted, Is.False,
+            "a view that keeps failing to activate must keep the loop running rather than ending it");
 
         await harness.DisposeAsync();
 

@@ -72,8 +72,18 @@ public class EntraGraphTokenProviderTests
             .Select(_ => provider.GetAccessTokenAsync().AsTask())
             .ToArray();
 
-        // Let every caller reach the single-flight gate before releasing.
-        await Task.Delay(100);
+        // Every caller must be parked before the gate opens. The one that won the
+        // provider's single-flight semaphore is blocked inside the acquirer, and the
+        // other fifteen are blocked on the semaphore, so none of the sixteen tasks
+        // has completed. Asserting that - rather than sleeping - makes the shared
+        // acquisition the test names provably the path being exercised: releasing
+        // early would serve the late callers from the cache and CallCount would still
+        // be 1 without any concurrency ever happening.
+        Assert.That(acquirer.CallCount, Is.EqualTo(1),
+            "exactly one caller must have entered the acquirer before the gate is released");
+        Assert.That(calls.Any(t => t.IsCompleted), Is.False,
+            "every concurrent cold caller must still be waiting when the gate is released");
+
         acquirer.Release();
         var tokens = await Task.WhenAll(calls);
 

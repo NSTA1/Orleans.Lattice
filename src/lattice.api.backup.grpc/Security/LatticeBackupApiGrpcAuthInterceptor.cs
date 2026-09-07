@@ -88,6 +88,49 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
         await continuation(request, responseStream, context).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public override async Task<TResponse> ClientStreamingServerHandler<TRequest, TResponse>(
+        IAsyncStreamReader<TRequest> requestStream,
+        ServerCallContext context,
+        ClientStreamingServerMethod<TRequest, TResponse> continuation)
+    {
+        ArgumentNullException.ThrowIfNull(requestStream);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(continuation);
+
+        if (!IsLatticeBackupApiMethod(context.Method))
+        {
+            return await continuation(requestStream, context).ConfigureAwait(false);
+        }
+
+        // A streaming call has no single request message to describe, so the call
+        // is identified by its method name alone. The authorization decision is
+        // made before the first client message is read.
+        await EnforceAuthAsync<TRequest>(default!, context).ConfigureAwait(false);
+        return await continuation(requestStream, context).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task DuplexStreamingServerHandler<TRequest, TResponse>(
+        IAsyncStreamReader<TRequest> requestStream,
+        IServerStreamWriter<TResponse> responseStream,
+        ServerCallContext context,
+        DuplexStreamingServerMethod<TRequest, TResponse> continuation)
+    {
+        ArgumentNullException.ThrowIfNull(requestStream);
+        ArgumentNullException.ThrowIfNull(responseStream);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(continuation);
+
+        if (!IsLatticeBackupApiMethod(context.Method))
+        {
+            await continuation(requestStream, responseStream, context).ConfigureAwait(false);
+            return;
+        }
+
+        await EnforceAuthAsync<TRequest>(default!, context).ConfigureAwait(false);
+        await continuation(requestStream, responseStream, context).ConfigureAwait(false);
+    }
     private async Task EnforceAuthAsync<TRequest>(TRequest request, ServerCallContext context)
     {
         if (!_options.CurrentValue.RequireAuthorization)

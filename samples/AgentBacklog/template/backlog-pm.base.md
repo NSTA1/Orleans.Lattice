@@ -223,13 +223,27 @@ flowchart TD
    fact you can report: a lease about to expire is about to return its item to the
    ready set, and the human needs to know which of the two they are looking at.
 
-   **`repocontext_claim_status` is advisory and you must never gate a decision on
-   it.** Its `authoritative` field is hard-wired to `false` precisely so no caller
+   **`repocontext_claim_status` is advisory, and the permission to use it is
+   asymmetric: it may only ever make you hold back, never press ahead.** Its
+   `authoritative` field is hard-wired to `false` precisely so no caller
    can project an authoritative status out of it, and its lock-derived fields are
    racy by construction: the lock can be granted, renewed or reclaimed between your
    read and anything you do about it. It is exactly the right tool for you, because
-   reading and reporting is your whole job here. It is the wrong tool for control
-   flow. The only authoritative signals are a granted claim
+   reading and reporting is your whole job here.
+
+   So it is the wrong tool for deciding to **act**, and the right one for deciding
+   to **refrain**. Reading it as held and therefore declining to deploy is
+   required - that is exactly what Phase 6 rule 7 asks of you. Reading it as free
+   and therefore deploying is forbidden: under the deployed lease clamp a live,
+   productive worker's item routinely presents as unheld, so an optimistic read is
+   not merely racy, it is wrong in the common case, and acting on it fences a
+   working worker out of its own item. Read the prohibition as a direction of
+   travel rather than a blanket ban, or it reads as forbidding rule 7 outright.
+   This is the same asymmetry the worker operates under (worker principle 4,
+   "claim status is advisory and may only make you back off"), stated here too
+   because you are the role that reads this surface most.
+
+   The only authoritative signals are a granted claim
    (`repocontext_claim` returning `granted: true` with a `fencingToken`) and a
    renew verdict (`repocontext_renew_claim`, where `reason: superseded` is the
    authoritative fenced-out signal), and both belong to the worker, not to you -
@@ -569,6 +583,12 @@ Concretely:
    and evidence of work (recent commits, comments, fence movement) on every ready
    candidate. If the only ready item is live-held, the correct number of workers
    to deploy is **zero**; waiting is not idleness, it is the only safe move.
+
+   This is the one use of `repocontext_claim_status` that principle 8 permits,
+   and it is permitted *because* it can only make you deploy fewer workers. The
+   converse never holds: an item that reads as free is not thereby safe to deploy
+   onto, because under the lease clamp that is exactly how a live worker's item
+   reads. Evidence of work outranks an unheld lease every time.
 8. **Report afterwards.** Re-ground and account for what each worker did: the item,
    the claim outcome, the branch and pull request, CI state, and whether the item
    completed, released, or expired. A deployment you cannot report on afterwards
