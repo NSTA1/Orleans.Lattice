@@ -245,6 +245,10 @@ internal static class TypeAliases
     // Leaf owned-key-range bounds (used to terminate paged range-scan sibling walks)
     internal const string LeafKeyRange = "ol.lkr";
 
+    // Single-round-trip reclaim decision inputs for one leaf (empty-leaf chain reclaim)
+    internal const string LeafReclaimProbe = "ol.lrb";
+    internal const string LeafRetired = "ol.lrt";
+
     // Conditional bulk write (guard predicate against existing value)
     internal const string ConditionalSetManyResult = "ol.csm";
 

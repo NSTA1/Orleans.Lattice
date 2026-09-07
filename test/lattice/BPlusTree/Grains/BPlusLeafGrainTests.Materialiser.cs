@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
@@ -33,7 +34,9 @@ public partial class BPlusLeafGrainTests
         Action<SortedDictionary<string, LwwValue<byte[]>>>? seedEntries = null,
         ILatticeFallOffLogDetector? detector = null,
         ILeafCursorReporter? reporter = null,
-        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork)
+        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
+        int? maxLeafReplayEntries = null,
+        ILoggerProvider? loggerProvider = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
 
@@ -42,6 +45,13 @@ public partial class BPlusLeafGrainTests
         if (detector is not null)
             sc.AddSingleton(detector);
         sc.AddSingleton(reporter);
+        if (loggerProvider is not null)
+        {
+            sc.AddLogging(builder => builder
+                .SetMinimumLevel(LogLevel.Trace)
+                .AddProvider(loggerProvider));
+        }
+
         var services = sc.BuildServiceProvider();
 
         var context = Substitute.For<IGrainContext>();
@@ -76,6 +86,13 @@ public partial class BPlusLeafGrainTests
             WalPartitions = 1,
             MaxDurableUnresolvedReplayWork = maxDurableUnresolvedReplayWork,
         };
+
+        // Optional so the default (10,000) stays in force for every test that does
+        // not care. Since #2149 the over-budget warning is gated on the leaf's own
+        // applied-entry count, so a fixture that wants to drive that line has to be
+        // able to lower the budget rather than inflate the WAL.
+        if (maxLeafReplayEntries is { } leafReplayBudget)
+            baseOptions.MaxLeafReplayEntries = leafReplayBudget;
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
             maxLeafKeys: 128,

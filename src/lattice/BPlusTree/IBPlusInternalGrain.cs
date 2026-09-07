@@ -148,6 +148,39 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     Task ClearGrainStateAsync();
 
     /// <summary>
+    /// Removes <paramref name="childId"/> from this node's child list,
+    /// redirecting the range it covered to the child immediately to its left,
+    /// and returns whether the removal was applied.
+    /// <para>
+    /// This is the topology half of empty-leaf chain reclaim: unlinking a leaf
+    /// from its siblings without also removing its separator here would leave
+    /// a leaf that routing still reaches but no scan can walk to, so a write
+    /// to the reclaimed range would land where no reader looks.
+    /// <para>
+    /// This runs BEFORE the left neighbour's bound is widened onto the
+    /// departing range, not after. Widening first would have two leaves
+    /// declaring the same span at once and the WAL materialiser filters by
+    /// exactly that span, so a single record would materialise into both.
+    /// Retiring routing first instead leaves the departing span owned by
+    /// nobody until the widen lands, so the caller must close that window
+    /// before it returns - by widening, or, if the widen is declined or
+    /// throws, by widening whichever leaf now routes the span - rather than
+    /// deferring it to a later pass.
+    /// </para>
+    /// <para>
+    /// Returns <see langword="false"/> rather than throwing when the removal
+    /// is declined: the child is not present (already removed, or never ours),
+    /// it is the leftmost null-separator catch-all whose range has no
+    /// predecessor to inherit it, or a split of this node is mid-flight and
+    /// would revert the removal during recovery. Reclaim is a background pass
+    /// with nothing time-critical about it, so a declined removal is an
+    /// ordinary outcome for the next pass to retry, not a failure.
+    /// </para>
+    /// </summary>
+    Task<bool> RemoveChildAsync(GrainId childId);
+
+
+    /// <summary>
     /// Stores a grain reference to the parent internal node so this node
     /// can propagate its <see cref="ChildDigestSnapshot"/> upward when its
     /// own subtree fold changes. Called once by the shard root after

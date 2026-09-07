@@ -641,6 +641,7 @@ internal sealed partial class BPlusLeafGrain(
     private async Task<SplitResult?> SetCoreAsync(string key, byte[] value, long expiresAtTicks)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {
@@ -854,6 +855,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(entries);
         if (entries.Count == 0)
         {
@@ -928,6 +930,7 @@ internal sealed partial class BPlusLeafGrain(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(entries);
         if (entries.Count == 0)
         {
@@ -1377,6 +1380,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<bool> DeleteAsync(string key)
     {
         EnsureInternalOrigin(LatticeOperation.Delete);
+        using var _mutationScope = EnterMutationScope();
         var isPrepared = LatticePreparedContext.Current;
 
         // For non-prepared deletes, the absent / tombstoned short-circuit
@@ -1494,6 +1498,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
+        using var _mutationScope = EnterMutationScope();
         // Collect matching keys. Entries is a SortedDictionary so we can
         // break early once we pass endExclusive - but we must still report
         // whether we observed a key >= endExclusive so the shard
@@ -2440,6 +2445,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
 #if LATTICE_DIAG
         // DIAG leaf-cross-leaf-merge: fires when a sibling leaf or
         // a split-source leaf hands a batch of LWW values into this
@@ -2852,6 +2858,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {

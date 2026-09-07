@@ -236,7 +236,8 @@ public partial class BPlusLeafGrainTests
         await ((IGrainBase)first).OnDeactivateAsync(
             new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"),
             CancellationToken.None);
-        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False);
+        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False,
+            "deactivation must remove the entry so the registry stays bounded by the live-leaf set");
 
         // Second activation of the same GrainId, driven through the same
         // number of writes as the first so that a per-activation counter

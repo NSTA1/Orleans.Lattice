@@ -268,6 +268,121 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task SetPrevSiblingAsync(GrainId? siblingId);
 
     /// <summary>
+    /// Returns, in one round trip, everything the shard root needs to decide
+    /// whether this leaf may be folded out of the leaf chain: its live row
+    /// count, its chain linkage, its owned key range, and whether it carries
+    /// state that forbids reclaim however empty it looks.
+    /// <para>
+    /// A reclaim pass walks the whole chain, so gathering these as separate
+    /// accessor calls would multiply the walk by the number of accessors.
+    /// </para>
+    /// </summary>
+    Task<LeafReclaimProbe> GetReclaimProbeAsync();
+
+    /// <summary>
+    /// Atomically points this leaf past <paramref name="expectedNext"/> and
+    /// widens its owned range to cover what that successor gave up, and
+    /// returns whether it did.
+    /// <para>
+    /// The compare half is what makes empty-leaf reclaim safe against a
+    /// concurrent split. Reclaim is a multi-grain sequence while the split
+    /// gate is per-grain, so a split of this leaf can land between a caller
+    /// reading the sibling pointer and writing it; that split inserts a new
+    /// leaf between this one and the successor being removed, and a blind
+    /// write would point past it, orphaning a leaf holding the rows the split
+    /// had just moved into it. When <see cref="GetNextSiblingAsync"/> would no
+    /// longer return <paramref name="expectedNext"/>, this declines and
+    /// changes nothing.
+    /// </para>
+    /// <para>
+    /// The unlink and the widen share one persist deliberately. Performed as
+    /// two writes there is a window in which this leaf has taken over routing
+    /// for the vacated range while still declaring the narrower span the WAL
+    /// materialiser filters by, so a write landing in that window survives in
+    /// cache and vanishes on the next projection rebuild. The widen is
+    /// monotonic, so a re-driven reclaim converges.
+    /// </para>
+    /// </summary>
+    Task<bool> TryUnlinkSuccessorAsync(
+        GrainId expectedNext,
+        GrainId? newNext,
+        string? absorbHighKeyExclusive);
+
+    /// <summary>
+    /// Extends this leaf's exclusive high bound to cover the range vacated by
+    /// a successor that is being reclaimed from the chain, passing
+    /// <see langword="null"/> when that successor was the chain tail.
+    /// <para>
+    /// The operation widens only and never narrows, which makes it idempotent:
+    /// a reclaim re-driven after a crash converges rather than walking the
+    /// bound back over a range this leaf has since been given. It is the
+    /// counterpart of the donor's bound narrowing in
+    /// <see cref="Grains.BPlusLeafGrain"/>'s split completion.
+    /// </para>
+    /// <para>
+    /// It runs AFTER the successor leaves the routing table, not before. The
+    /// two orderings trade different risks and reclaim takes this one
+    /// deliberately: widening first would have two leaves declaring the same
+    /// span at once, and the WAL materialiser filters by exactly that span, so
+    /// one record would materialise into both. Retiring routing first instead
+    /// leaves the span owned by nobody for the length of the fold, which loses
+    /// nothing as long as it is closed - so a caller that retires routing and
+    /// then fails to widen must compensate before it returns rather than
+    /// leaving the gap for a later pass, and
+    /// <see cref="IShardRootGrain.ReclaimEmptyLeavesAsync"/> does exactly that.
+    /// </para>
+    /// </summary>
+    Task AbsorbSuccessorRangeAsync(string? highKeyExclusive);
+
+    /// <summary>
+    /// Latches this leaf as retired, but only if it is still empty at the
+    /// moment of the call, and returns whether it did.
+    /// <para>
+    /// This is the decision point of empty-leaf chain reclaim, and it is
+    /// conditional because the decision to fold a leaf away is taken on the
+    /// evidence of a <see cref="GetReclaimProbeAsync"/> several grain calls
+    /// earlier. The leaf mutation surface is <c>[AlwaysInterleave]</c>, so a
+    /// write can be routed, logged, applied and acknowledged inside that
+    /// window; folding unconditionally would erase it, and because the key
+    /// then routes to a predecessor whose projection checkpoint is already
+    /// past that offset, it would never re-materialise. Re-checking here, and
+    /// refusing every mutation from here on, is what makes the fold safe.
+    /// </para>
+    /// <para>
+    /// It latches rather than clears so that the caller can take the decision
+    /// BEFORE it makes any destructive change, not after. Once this returns
+    /// <see langword="true"/> the leaf's contents can no longer change, so the
+    /// caller may unlink it and hand its range on knowing the state it
+    /// measured is the state it will destroy. Clearing is a separate, later
+    /// step (<see cref="ClearGrainStateAsync"/>), by which point the leaf is
+    /// unreachable by routing and by the chain alike.
+    /// </para>
+    /// <para>
+    /// Returns <see langword="false"/> when the leaf has acquired rows or
+    /// reclaim-blocking state, or when a mutation raced the decision. The
+    /// caller abandons the fold and leaves the leaf routed and intact, which
+    /// is an ordinary outcome rather than a failure.
+    /// </para>
+    /// <para>
+    /// A latched leaf refuses every mutation, so a caller that latches and
+    /// then cannot complete the fold MUST call
+    /// <see cref="AbandonRetirementAsync"/> to reopen it. The pairing is what
+    /// keeps a leaf from being left permanently unwritable by an interrupted
+    /// fold, and it is why the latch is deliberately in memory only: an
+    /// activation that dies mid-fold reopens the leaf by reactivating it,
+    /// where a persisted flag would strand it forever.
+    /// </para>
+    /// </summary>
+    Task<bool> TryBeginRetirementAsync();
+
+    /// <summary>
+    /// Reopens a leaf that <see cref="TryBeginRetirementAsync"/> latched but
+    /// whose fold could not be completed, so it accepts writes again and the
+    /// next reclaim pass can retry it from a clean state.
+    /// </summary>
+    Task AbandonRetirementAsync();
+
+    /// <summary>
     /// Associates this leaf with a tree, enabling named options resolution.
     /// Called once by the shard root after creating the grain. Idempotent.
     /// </summary>
