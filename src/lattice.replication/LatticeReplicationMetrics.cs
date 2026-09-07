@@ -1942,6 +1942,16 @@ public static class LatticeReplicationMetrics
     public const string SagaReasonBuildFailed = "build-failed";
 
     /// <summary>
+    /// <see cref="TagReason"/> value on the participant vote / commit / abort
+    /// counters: the saga named a target tree this cluster does not replicate, so
+    /// the participant refused it without building, swapping, or reverting
+    /// anything. The target tree arrives on the inbound saga control channel,
+    /// which authorizes the origin cluster and not the tree, so this counter
+    /// rising is the signal that a peer asked for a tree outside its enrollment.
+    /// </summary>
+    public const string SagaReasonNotReplicated = "not-replicated";
+
+    /// <summary>
     /// <see cref="TagReason"/> value on the participant commit / abort counters:
     /// the saga restored a single tree (the ordinary single-tree restore path).
     /// </summary>

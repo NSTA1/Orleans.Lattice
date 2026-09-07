@@ -3,8 +3,9 @@ namespace Orleans.Lattice.Explorer.Entra;
 /// <summary>
 /// Configuration for the Entra ID interactive login provider. The values may be
 /// supplied statically here or discovered at connect time from the State API's
-/// auth-scheme advertisement (the advertised parameters take precedence). All of
-/// these are public OIDC parameters; no secret is ever configured on the client.
+/// auth-scheme advertisement; what is configured here takes precedence, and the
+/// advertisement is consulted only for what is left unset. All of these are
+/// public OIDC parameters; no secret is ever configured on the client.
 /// </summary>
 public sealed class ExplorerEntraOptions
 {
@@ -27,6 +28,17 @@ public sealed class ExplorerEntraOptions
     /// scope is required to acquire a token.
     /// </summary>
     public IList<string> Scopes { get; } = new List<string>();
+
+    /// <summary>
+    /// The hosts an <em>advertised</em> OIDC authority may name. It is consulted
+    /// only when no <see cref="Authority"/> or <see cref="TenantId"/> is
+    /// configured, so the endpoint's advertisement is the sole source of the
+    /// authority. When left empty the well-known Microsoft Entra login hosts are
+    /// accepted; add a host here to accept an authority outside that set. An
+    /// advertised authority that is not <c>https</c>, or whose host is not
+    /// admitted, is refused rather than used.
+    /// </summary>
+    public IList<string> AllowedAuthorityHosts { get; } = new List<string>();
 
     /// <summary>
     /// When <see langword="true"/>, sign-in uses the device-code flow (for
