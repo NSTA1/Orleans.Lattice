@@ -282,68 +282,6 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// Retires this activation's same-silo revision cookie on deactivation,
-    /// raising <see cref="RevisionSeedFloor"/> past the activation's final
-    /// value first so that no later activation of any leaf can republish a
-    /// value a <see cref="LeafCacheGrain"/> may still hold as its
-    /// last-observed cookie. Removing the entry keeps the registry bounded by
-    /// the live-leaf set rather than the lifetime-leaf set; raising the floor
-    /// is what makes that removal safe rather than merely cheap.
-    /// </summary>
-    private void RetireLocalRevision()
-    {
-        _localRevisionBox = null;
-
-        // Raise the floor BEFORE removing the entry, not after. The removal
-        // is what makes a concurrent re-activation's GetOrAdd create a fresh
-        // box seeded from the floor, so removing first opens a window in
-        // which that seed can be drawn from a floor that has not yet been
-        // raised past this activation's high-water - which is precisely the
-        // cross-activation collision the floor exists to prevent. Raising
-        // first closes it: a racing GetOrAdd either finds the old box (and
-        // continues its count upward, monotone for that reason) or creates a
-        // new one from an already-raised floor.
-        if (!LeafRevisionRegistry.TryGetValue(context.GrainId, out var box))
-        {
-            return;
-        }
-
-        RaiseSeedFloorTo(Interlocked.Read(ref box.Value));
-
-        if (LeafRevisionRegistry.TryRemove(context.GrainId, out var removed))
-        {
-            // Re-raise against the value observed at removal. Between the
-            // read above and the removal the box is still reachable, so a
-            // late bump could have advanced it; raising again is idempotent
-            // when nothing moved and closes that residue when it did.
-            RaiseSeedFloorTo(Interlocked.Read(ref removed.Value));
-        }
-    }
-
-    /// <summary>
-    /// Monotonically raises <see cref="RevisionSeedFloor"/> to at least
-    /// <paramref name="value"/>. Never lowers it, and is safe against
-    /// concurrent raisers: each iteration re-reads the value the failed
-    /// compare-and-exchange observed, so the loop makes progress rather than
-    /// spinning on a stale expectation.
-    /// </summary>
-    private static void RaiseSeedFloorTo(long value)
-    {
-        var floor = Interlocked.Read(ref RevisionSeedFloor);
-
-        while (floor < value)
-        {
-            var observed = Interlocked.CompareExchange(ref RevisionSeedFloor, value, floor);
-            if (observed == floor)
-            {
-                break;
-            }
-
-            floor = observed;
-        }
-    }
-
-    /// <summary>
     /// Publishes <paramref name="newClock"/> as <c>state.State.Version[ReplicaId]</c>
     /// when it strictly dominates the currently published value. Call sites pass
     /// the actual high-water timestamp produced by the just-completed mutation:
