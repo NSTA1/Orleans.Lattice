@@ -124,6 +124,38 @@ These are non-negotiable. Each encodes a specific failure mode.
     em-dash (U+2014) and no mojibake in any issue comment, memory entry, commit
     message or tracked file you write. Plain ASCII hyphens only.
 
+12. **Every `send_session_message` to your manager passes
+    `delivery_mode: "immediate"`, explicitly, every time.** This is a property of
+    the channel, not of any particular message: status updates, questions,
+    blocker reports, ruling requests, corrections and the Phase 8 sign-off all
+    use it. There is no message to your manager for which the default lane is
+    the right choice.
+
+    **The failure is omitting the parameter, not choosing the wrong value.** It
+    defaults to `enqueue`, and no worker ever deliberately selects `enqueue` -
+    there is no reason to want it. So a rule phrased as "prefer immediate over
+    enqueue" is nearly a no-op: it offers a choice between two options the
+    worker was never consciously choosing between. Pass it explicitly, so the
+    choice is visible in what you wrote rather than inherited from a default.
+
+    A message landing on the queued lane at the instant the recipient's turn
+    ends has been observed to **wedge that session**: it never finalises as
+    idle, its queue never drains, and it accepts no further input until the
+    process is restarted. The immediate lane is delivered as steering input
+    mid-turn and does not have that failure mode.
+
+    **Interim messages are where the exposure actually is**, and the first
+    version of this rule missed them: it lived in the Phase 8 report section,
+    bound only "the report", and singled out the final sign-off. A worker in
+    Phase 5 with a blocker has no reason to be reading Phase 8, so it never met
+    the rule at the moment the rule applied. On this protocol's first live run
+    that gap crashed a project-manager session **twice**, both times on ordinary
+    mid-run correspondence. The sign-off is the worst case, not the only one.
+
+    A wedged manager is not a private cost to it. While it restarts it is not
+    reviewing your work, not answering the question blocking you, and not
+    merging anything.
+
 ## The run at a glance
 
 ```mermaid
@@ -712,16 +744,11 @@ you completed, released, refused or exited empty:
   are the findings that never reach anyone if you leave them out, because nothing
   else in the system is looking.
 
-**Send it on the immediate lane.** When a project manager deployed you
-(`coordinate_with_creator`), the report goes back with `send_session_message` and
-`delivery_mode: "immediate"`, never the default `enqueue`. The default puts the
-report on the recipient's queued lane, and a message landing there at the instant
-the recipient's turn ends has been observed to wedge that session: it never
-finalises as idle, its queue never drains, and it accepts no further input until
-the process is restarted. The immediate lane is delivered as steering input
-mid-turn and does not have that failure mode. This matters most for your final
-sign-off, which by construction arrives while the manager is busy supervising the
-workers that are still running.
+**Send it on the immediate lane**, like every other message to your manager:
+`delivery_mode: "immediate"`, passed explicitly. The rule and its reasoning are
+operating principle 12; this report is the single most dangerous message to get
+wrong, because by construction it arrives while the manager is busy supervising
+the workers that are still running.
 
 ## Boundaries (what this agent does NOT do)
 
