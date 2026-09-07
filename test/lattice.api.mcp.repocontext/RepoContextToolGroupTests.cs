@@ -178,4 +178,105 @@ public sealed class RepoContextToolGroupTests
             }
         });
     }
+
+    // The tests below cover the per-tool operation minimum that keeps this group's
+    // mutating tools out of a read-only caller's advertised surface. The group's
+    // coarse capability mask spans the whole data plane and a group is admitted
+    // when any single Allow rule intersects it, so a caller holding only
+    // LatticeOperation.Read is legitimately admitted to the group - it has read
+    // tools to use - but must not be offered the tools that write to, delete from,
+    // or drive an ingest into the store.
+
+    private static readonly string[] MutatingToolNames =
+        [
+            "repocontext_remember", "repocontext_update", "repocontext_forget",
+            "repocontext_add_repo", "repocontext_remove_repo", "repocontext_bootstrap",
+        ];
+
+    private static readonly string[] NonMutatingToolNames =
+        [
+            "repocontext_health", "repocontext_recall", "repocontext_scan",
+            "repocontext_search", "repocontext_context", "repocontext_outline",
+            "repocontext_related", "repocontext_list_repos",
+        ];
+
+    [Test]
+    public void RequiredOperationsFor_a_mutating_tool_is_not_satisfied_by_a_read_grant()
+    {
+        var group = new RepoContextToolGroup(enableWrites: true, workspaceMode: true);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var name in MutatingToolNames)
+            {
+                var required = group.RequiredOperationsFor(name);
+                Assert.That(
+                    required & LatticeOperation.Read,
+                    Is.EqualTo(LatticeOperation.None),
+                    $"'{name}' must not be reachable on a bare read grant.");
+                Assert.That(
+                    required & LatticeOperation.RangeRead,
+                    Is.EqualTo(LatticeOperation.None),
+                    $"'{name}' must not be reachable on a bare range-read grant.");
+                Assert.That(
+                    required & LatticeOperation.Write,
+                    Is.Not.EqualTo(LatticeOperation.None),
+                    $"'{name}' must be reachable on a write grant.");
+            }
+        });
+    }
+
+    [Test]
+    public void RequiredOperationsFor_a_read_tool_returns_the_group_mask()
+    {
+        var group = new RepoContextToolGroup(enableWrites: true, workspaceMode: true);
+        var groupMask = LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.RepoContext);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var name in NonMutatingToolNames)
+            {
+                Assert.That(
+                    group.RequiredOperationsFor(name),
+                    Is.EqualTo(groupMask),
+                    $"'{name}' should keep the group's coarse mask.");
+                Assert.That(
+                    group.RequiredOperationsFor(name) & LatticeOperation.Read,
+                    Is.Not.EqualTo(LatticeOperation.None),
+                    $"'{name}' must stay reachable on a read grant.");
+            }
+        });
+    }
+
+    /// <summary>
+    /// The refinement is name-based, so an unrecognised name must fall back to the
+    /// group mask rather than being withheld: a future read tool added to the group
+    /// stays advertised without needing to be listed here.
+    /// </summary>
+    [Test]
+    public void RequiredOperationsFor_an_unknown_tool_name_returns_the_group_mask()
+    {
+        var group = new RepoContextToolGroup();
+
+        Assert.That(
+            group.RequiredOperationsFor("repocontext_some_future_read_tool"),
+            Is.EqualTo(LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.RepoContext)));
+    }
+
+    /// <summary>
+    /// Every mutating name the refinement lists must actually be a tool the group
+    /// can contribute, otherwise the list has drifted from the surface it guards
+    /// and a renamed tool would silently lose its protection.
+    /// </summary>
+    [Test]
+    public void Every_listed_mutating_name_is_a_real_tool_of_this_group()
+    {
+        var singleRepo = new RepoContextToolGroup(enableWrites: true)
+            .Tools.Select(t => t.ProtocolTool.Name);
+        var workspace = new RepoContextToolGroup(enableWrites: true, workspaceMode: true, workspaceGuarded: true)
+            .Tools.Select(t => t.ProtocolTool.Name);
+        var contributable = singleRepo.Concat(workspace).ToHashSet(StringComparer.Ordinal);
+
+        Assert.That(MutatingToolNames, Is.SubsetOf(contributable));
+    }
 }

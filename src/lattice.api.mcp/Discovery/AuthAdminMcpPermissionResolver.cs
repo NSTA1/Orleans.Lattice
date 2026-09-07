@@ -145,6 +145,17 @@ internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionR
             }
         }
 
+        // Carry the caller's own Allow-granted operations so the discovery core can
+        // apply a per-tool minimum inside a group it already admitted. Denies stay
+        // the call-time gate's job, exactly as GroupIsGranted documents.
+        for (var i = 0; i < rules.Count; i++)
+        {
+            if (rules[i].Effect == LatticeEffect.Allow)
+            {
+                access = access.WithOperations(rules[i].Operations);
+            }
+        }
+
         return access;
     }
 

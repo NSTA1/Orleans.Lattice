@@ -60,6 +60,7 @@ public interface ILatticeCoordinatedRestoreEngine
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException"><paramref name="request"/> is not a shadow-cutover request.</exception>
     /// <exception cref="LatticeRestoreValidationException">The backup fails pre-apply validation.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope, or - on a cross-tree retarget - to back up the manifest's captured source scope.</exception>
     Task<LatticeRestoreResult> BuildShadowAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);
