@@ -223,7 +223,17 @@ internal sealed partial class LatticeGrain
         // come from a single producer's ship phase and will land on a
         // small number of shards, so we lazily promote from a single-shard
         // dictionary to a per-shard map only when a second shard appears.
-        Dictionary<int, Dictionary<string, LwwValue<byte[]>>>? byShard = null;
+        //
+        // The promoted map is keyed by a PHYSICAL shard index - a tiny dense
+        // non-negative domain - so it uses the shared dense slot map rather
+        // than hashing that index once per item, and each promoted bucket is
+        // given the shard-fair fraction of the batch instead of growing from
+        // empty through the whole 3/7/17/37/71... rehash chain. Both are the
+        // same recipe every sibling fan-out on this grain already uses.
+        var physicalShards = shardMap.GetPhysicalShardIndices();
+        var bucketCapacity = ShardFanout.BucketCapacity(items.Count, physicalShards.Count);
+
+        ShardSlots<Dictionary<string, LwwValue<byte[]>>>? byShard = null;
         var firstShard = -1;
         Dictionary<string, LwwValue<byte[]>>? firstBatch = null;
 
@@ -252,15 +262,17 @@ internal sealed partial class LatticeGrain
                 continue;
             }
 
-            byShard ??= new Dictionary<int, Dictionary<string, LwwValue<byte[]>>>
+            if (byShard is null)
             {
-                [firstShard] = firstBatch,
-            };
+                byShard = new ShardSlots<Dictionary<string, LwwValue<byte[]>>>(physicalShards);
+                byShard.Set(firstShard, firstBatch);
+            }
 
-            if (!byShard.TryGetValue(shardIndex, out var batch))
+            var batch = byShard.Get(shardIndex);
+            if (batch is null)
             {
-                batch = new Dictionary<string, LwwValue<byte[]>>();
-                byShard[shardIndex] = batch;
+                batch = new Dictionary<string, LwwValue<byte[]>>(capacity: bucketCapacity);
+                byShard.Set(shardIndex, batch);
             }
 
             batch[item.Key] = lww;

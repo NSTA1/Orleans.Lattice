@@ -488,6 +488,7 @@ internal sealed class TreeMergeGrain(
         // Walk the source leaf chain, flushing each leaf's delta through the
         // target shard map before loading the next leaf.
         var emptyVector = new VersionVector();
+        var targetPhysicalShards = targetShardMap.GetPhysicalShardIndices();
         var walk = await BoundedLeafWalk.StartAsync(
             grainFactory,
             sourceShard,
@@ -501,15 +502,24 @@ internal sealed class TreeMergeGrain(
 
             if (delta.Entries.Count > 0)
             {
-                // Group this leaf's entries by target physical shard.
-                var targetBuckets = new Dictionary<int, Dictionary<string, LwwValue<byte[]>>>();
+                // Group this leaf's entries by target physical shard. The
+                // grouping key is a physical shard index - a tiny dense
+                // non-negative domain - so the shared dense slot map indexes
+                // buckets by it directly instead of hashing it once per entry
+                // and probing twice on every first touch, and each bucket gets
+                // the shard-fair fraction of the leaf's delta rather than
+                // growing from empty through the whole rehash chain.
+                var bucketCapacity = ShardFanout.BucketCapacity(
+                    delta.Entries.Count, targetPhysicalShards.Count);
+                var targetBuckets = new ShardSlots<Dictionary<string, LwwValue<byte[]>>>(targetPhysicalShards);
                 foreach (var (key, lww) in delta.Entries)
                 {
                     var targetIdx = targetShardMap.Resolve(key);
-                    if (!targetBuckets.TryGetValue(targetIdx, out var bucket))
+                    var bucket = targetBuckets.Get(targetIdx);
+                    if (bucket is null)
                     {
-                        bucket = [];
-                        targetBuckets[targetIdx] = bucket;
+                        bucket = new Dictionary<string, LwwValue<byte[]>>(capacity: bucketCapacity);
+                        targetBuckets.Set(targetIdx, bucket);
                     }
                     bucket[key] = lww;
                 }
