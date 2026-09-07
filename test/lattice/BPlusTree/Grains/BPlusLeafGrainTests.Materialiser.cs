@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
@@ -32,7 +33,8 @@ public partial class BPlusLeafGrainTests
         Action<LeafNodeState>? seedState = null,
         Action<SortedDictionary<string, LwwValue<byte[]>>>? seedEntries = null,
         ILatticeFallOffLogDetector? detector = null,
-        ILeafCursorReporter? reporter = null)
+        ILeafCursorReporter? reporter = null,
+        ILoggerProvider? loggerProvider = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
 
@@ -41,6 +43,13 @@ public partial class BPlusLeafGrainTests
         if (detector is not null)
             sc.AddSingleton(detector);
         sc.AddSingleton(reporter);
+        if (loggerProvider is not null)
+        {
+            sc.AddLogging(builder => builder
+                .SetMinimumLevel(LogLevel.Trace)
+                .AddProvider(loggerProvider));
+        }
+
         var services = sc.BuildServiceProvider();
 
         var context = Substitute.For<IGrainContext>();
