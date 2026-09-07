@@ -123,7 +123,10 @@ public class PnCounterProvenanceDecoderTests
         var counter = new PnCounter();
         counter.Increment("r1", 1);
 
-        Assert.That(Decoder.DecodeState(counter).All(e => e.WallClock is null), Is.True);
+        var events = Decoder.DecodeState(counter);
+
+        Assert.That(events, Is.Not.Empty, "the 'always null' claim is only meaningful over a non-empty decode");
+        Assert.That(events.All(e => e.WallClock is null), Is.True);
     }
 
     [Test]

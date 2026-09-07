@@ -262,6 +262,7 @@ public class OrSetProvenanceDecoderTests
 
         var events = Decoder.DecodeState(set);
 
+        Assert.That(events, Is.Not.Empty, "the 'always null' claim is only meaningful over a non-empty decode");
         Assert.That(events.All(e => e.WallClock is null), Is.True);
     }
 

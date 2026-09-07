@@ -163,7 +163,10 @@ public class OrMapProvenanceDecoderTests
         var map = new OrMap<string, OrFlag>();
         map.Set("k", "r1", new OrFlag());
 
-        Assert.That(Decoder.DecodeState(map).All(e => e.WallClock is null), Is.True);
+        var events = Decoder.DecodeState(map);
+
+        Assert.That(events, Is.Not.Empty, "the 'always null' claim is only meaningful over a non-empty decode");
+        Assert.That(events.All(e => e.WallClock is null), Is.True);
     }
 
     // ---- current-value (live keys only) path ----

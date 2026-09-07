@@ -259,6 +259,8 @@ public sealed class WalPlacementMoveIntegrationTests
             Assert.That(receipt.Outcome, Is.EqualTo(WalMoveOutcome.AlreadyAtTarget));
             Assert.That(receipt.PreviousPlacementVersion, Is.EqualTo(0));
             Assert.That(receipt.NewPlacementVersion, Is.EqualTo(0));
+            Assert.That(receipt.Moves, Has.Length.EqualTo(2),
+                "both requested shards must be reported, or the per-move assertion below holds vacuously");
             Assert.That(receipt.Moves.All(m => m.Outcome == WalMoveOutcome.AlreadyAtTarget), Is.True);
         });
 

@@ -328,6 +328,8 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
 
+        Assert.That(plan.Capabilities.Groups, Is.Not.Empty,
+            "a plan with no groups would satisfy the per-group assertion below vacuously");
         Assert.That(plan.Capabilities.Groups.All(g => g.Endpoint is null), Is.True);
     }
 

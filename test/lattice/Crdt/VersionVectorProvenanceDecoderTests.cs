@@ -75,6 +75,7 @@ public class VersionVectorProvenanceDecoderTests
 
         var events = Decoder.DecodeState(vector);
 
+        Assert.That(events, Is.Not.Empty, "'emits only added events' is only meaningful over a non-empty decode");
         Assert.That(events.All(e => e.Kind == CrdtMemberChangeKind.Added), Is.True);
     }
 

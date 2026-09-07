@@ -161,7 +161,10 @@ public class RwSetProvenanceDecoderTests
         var set = new RwSet();
         set.Add(E("x"), "r1", 1);
 
-        Assert.That(Decoder.DecodeState(set).All(e => e.WallClock is null), Is.True);
+        var events = Decoder.DecodeState(set);
+
+        Assert.That(events, Is.Not.Empty, "the 'always null' claim is only meaningful over a non-empty decode");
+        Assert.That(events.All(e => e.WallClock is null), Is.True);
     }
 
     [Test]

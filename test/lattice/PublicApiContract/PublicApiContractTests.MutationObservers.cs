@@ -311,6 +311,22 @@ public partial class PublicApiContractTests
 
     // ── Helper: drain observer queue for a specific tree ────────────────
 
+    /// <summary>
+    /// Drains observer events for <paramref name="treeId"/> until at least
+    /// <paramref name="expectedMin"/> of them have been seen, and fails the test
+    /// if that never happens inside the timeout.
+    /// <para>
+    /// The failure is what gives the callers their teeth. This barrier used to
+    /// return whatever it had collected when the deadline elapsed, which silently
+    /// handed back an under-filled (often empty) list. Every caller that then
+    /// asserted with <c>All(...)</c> or <c>Is.All.EqualTo(...)</c> passed
+    /// vacuously, because those hold trivially over an empty sequence - so a tree
+    /// that emitted no observer events at all satisfied a test named for the
+    /// events it must emit. Callers that use <c>First(...)</c> were falsifiable
+    /// but failed with an opaque <see cref="InvalidOperationException"/> that
+    /// named neither the tree nor the shortfall.
+    /// </para>
+    /// </summary>
     private static async Task<List<LatticeMutation>> CaptureMutationsForTreeAsync(
         string treeId, int expectedMin, MutationKind? kind = null, TimeSpan? timeout = null)
     {
@@ -341,6 +357,10 @@ public partial class PublicApiContractTests
             await Task.Delay(50);
         }
 
+        Assert.Fail(
+            $"Timed out after {t.TotalSeconds:0.##}s waiting for at least {expectedMin} " +
+            $"{(kind is null ? "observer event(s)" : $"{kind} observer event(s)")} on tree '{treeId}'; " +
+            $"only {collected.Count} arrived.");
         return collected;
     }
 }

@@ -287,7 +287,7 @@ public sealed class RepoContextStoreIndexResetTests
 
         await store.ResetIndexAsync("acme", Ct);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await Tree(harness, RepoContextTrees.VectorMembership).GetAsync(memkeyMarker, Ct),
                 Is.Null,
