@@ -1057,7 +1057,12 @@ internal sealed class LatticeBackupRestoreService(
                 hasher.AppendData(chunk.Span);
             }
 
-            if (!seenAny)
+            // A descriptor with ChunkCount == 0 is a legitimately empty artifact
+            // (an empty increment or empty full backup) that streamed no chunks;
+            // its bytes hash to SHA-256("") and are validated by the digest check
+            // below. Only a descriptor that claims chunks yet streams none is a
+            // genuine integrity failure.
+            if (!seenAny && descriptor.ChunkCount > 0)
             {
                 throw new LatticeRestoreValidationException(
                     $"Backup '{manifest.Id}' references artifact '{descriptor.ArtifactId}', which is absent from the sink.");

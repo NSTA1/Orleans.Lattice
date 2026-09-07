@@ -13,7 +13,17 @@ on:
     # what gives a sub-PR feedback, whereas a `strict` required check is what
     # serialises pull requests. See the epic-branch rules in
     # .github/copilot-instructions.md before changing either half.
-    branches: [main, '*/epic/**']
+    #
+    # The third pattern covers the release lines (`release/<X.Y>`). A patch
+    # wave is assembled by cherry-picking onto one of these, and without this
+    # pattern such a pull request ran NO checks at all: the only workflow that
+    # fired was `Docs`, whose link gate says nothing about whether the code
+    # builds or the tests pass. That is the least safe place to have no
+    # validation, because a patch ships straight to NuGet without ever being
+    # built on trunk. Like epic branches, release lines carry no branch
+    # protection, so this check is advisory there - it reports, and the person
+    # cutting the release merges only when it is green.
+    branches: [main, '*/epic/**', 'release/**']
 
 # Least-privilege: this workflow only reads source code.
 permissions:
