@@ -79,6 +79,21 @@ public sealed class RestoreClusterFixture
             SiloServices.GetRequiredService<ILatticeBackupTenantScope>(),
             SiloServices.GetRequiredService<ILoggerFactory>().CreateLogger<LatticeBackupRestoreService>());
 
+    /// <summary>
+    /// Builds a cold-restore service over the supplied restore engine, wired to the
+    /// fixture's live sink, catalog rebuild and initializer, so the catalog-free
+    /// disaster path can be driven with a gated restore engine.
+    /// </summary>
+    internal ILatticeBackupColdRestoreService CreateColdRestoreServiceWith(
+        ILatticeBackupRestoreService restore) =>
+        new LatticeBackupColdRestoreService(
+            Sink,
+            restore,
+            SiloServices.GetRequiredService<ILatticeBackupCatalogRebuildService>(),
+            SiloServices.GetRequiredService<BackupInitializer>(),
+            SiloServices.GetRequiredService<ILoggerFactory>()
+                .CreateLogger<LatticeBackupColdRestoreService>());
+
     /// <summary>Stops and disposes the cluster.</summary>
     public async Task DisposeAsync()
     {
