@@ -600,6 +600,7 @@ stateDiagram-v2
   Claimed --> Ready: lease expires, or the worker releases
   Claimed --> Complete: PR merged into the base branch, or equivalent durable act
   Claimed --> Parked: attempts exceed the poison threshold
+  Claimed --> Parked: the holder parks it deliberately
   Parked --> Ready: a human respecifies and re-admits
   Complete --> [*]
 ```
@@ -607,6 +608,47 @@ stateDiagram-v2
 `Claimed --> Ready` on lease expiry is the normal path, not an exception. Stale
 claims are the common case, so a claim is always lease-bounded and reclaimed on
 expiry rather than held by a flag that a killed session leaves set forever.
+
+### Parking an item - both sides, and not only on exhaustion
+
+**Parking is encoded on both sides, and the tag is the half that has effect.**
+The ready set drops parked items at step 2 by reading the `state:parked` **tag
+on the item record**; the `stale` **label on the mirrored issue** is what makes
+the park visible to a human. A park that writes only the label is not a park:
+the item survives every step of the ready set and is claimable again on the next
+tick, so the guard silently does nothing. Write both, and write them under the
+fencing token of the claim you hold, in the order tag then label - if the run
+dies between them the item is already out of the ready set and the sweep can
+finish the visible half.
+
+**The poison threshold is three, and it is a floor on parking, not the only
+route to it.** An item whose claim-marker count has reached three is parked by
+whichever worker takes it there. But a holder that establishes, at any attempt
+number, that the item cannot proceed as specified **parks it deliberately** and
+does not wait to burn the remaining attempts. The two cases that matter:
+
+- The work is blocked on a decision, a defect, or a dependency that is not
+  itself an item, so no `blockedBy` edge can express it.
+- The specification is wrong, not merely hard - the item as written cannot be
+  satisfied.
+
+Releasing instead is the failure mode this exists to prevent. `result=released`
+leaves the item live and immediately re-claimable, so the next worker draws it,
+re-derives the same finding, and releases in turn; the fleet spends a session per
+tick relearning one conclusion. A deliberate park costs one attempt and states
+the conclusion once.
+
+**Say why, in both places a later reader will look.** The `resumeNote` carries
+the finding for the next holder, and the `outcome ... result=parked` comment
+carries it for the human who must decide. A park with no stated reason is
+indistinguishable from a crash and will be unparked without the finding being
+addressed.
+
+**Parking is safe to get wrong in one direction only.** It can only ever remove
+an item from the ready set, and `Parked --> Ready` requires a human, so an
+over-eager park costs a human glance while an omitted one costs an unbounded
+loop. Park when in doubt. Parking is a **finding**, not a failed attempt, and a
+worker that parks correctly on its first attempt has done its job.
 
 ### The lease is shorter than the work - renew before, never after
 
@@ -812,7 +854,7 @@ memory. It is deliberately narrow.
 
 An agent-writable backlog otherwise grows without bound and lets the fleet pick
 its own homework. The gate is **both** halves of that choice, because each
-closes a different hole, and it is enforced at step 4 of the ready-set
+closes a different hole, and it is enforced at step 5 of the ready-set
 computation:
 
 1. **Visibility is mandatory and structural.** Every item is mirrored to a
@@ -848,8 +890,12 @@ ladder rather than inventing a parallel state machine, and it keeps admission on
 the GitHub side where a human can exercise it without an agent in the loop -
 consistent with GitHub owning oversight.
 
-Poison items ride the same ladder: after N failed attempts an item is parked
-(labelled `stale`) rather than burning a whole session per scheduled tick.
+Parked items ride the same ladder: an item at the poison threshold of three
+attempts, or one a holder parked deliberately, carries `stale` on the issue
+alongside the `state:parked` tag that the ready set actually reads, rather than
+burning a whole session per scheduled tick. See "Parking an item" for why both
+halves are written and why exhaustion is not the only route. Unparking is a
+human act, exactly as admission is.
 
 ## Worked example
 
