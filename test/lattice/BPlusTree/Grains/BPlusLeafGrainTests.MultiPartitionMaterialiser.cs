@@ -46,7 +46,8 @@ public partial class BPlusLeafGrainTests
             IReadOnlyDictionary<int, FallOffLogDecision>? decisionOverrides = null,
             long persistedCheckpoint = 0,
             long[]? persistedCheckpointsByPartition = null,
-            Action<LeafNodeState>? seedState = null)
+            Action<LeafNodeState>? seedState = null,
+            int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork)
     {
         // Per-partition coordinator stubs - keyed by the partition
         // number parsed off the {treeId}/{partition} grain key.
@@ -110,6 +111,7 @@ public partial class BPlusLeafGrainTests
         {
             MaterialiserCheckpointInterval = TimeSpan.Zero,
             WalPartitions = walPartitions,
+            MaxDurableUnresolvedReplayWork = maxDurableUnresolvedReplayWork,
         };
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
@@ -162,7 +164,11 @@ public partial class BPlusLeafGrainTests
                 }),
                 _ => throw new InvalidOperationException(),
             },
-            persistedCheckpoint: -1);
+            persistedCheckpoint: -1,
+            // Guards the NO-RECORD path (issue #2165): per-partition clamp
+            // independence is what stops partition 1's unresolved prepare
+            // over-clamping partition 0 when no durable record exists.
+            maxDurableUnresolvedReplayWork: 0);
 
         try
         {

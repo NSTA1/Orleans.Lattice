@@ -1376,6 +1376,12 @@ public class LatticeOptions
     /// slow but never unsafe - it is the behaviour that shipped for every
     /// release before this one.
     /// </para>
+    /// <para>
+    /// Setting this to zero disables the mechanism, restoring the pre-#2165
+    /// behaviour in which the clamp is the only thing keeping unresolved work
+    /// alive across a teardown. That path still ships - it is what runs once
+    /// the bound is reached - so it is guarded independently.
+    /// </para>
     /// </summary>
     public int MaxDurableUnresolvedReplayWork { get; set; } = DefaultMaxDurableUnresolvedReplayWork;
 

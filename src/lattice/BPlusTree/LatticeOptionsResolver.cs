@@ -699,6 +699,7 @@ internal sealed class LatticeOptionsResolver(
             LeafProjectionRetention = baseOptions.LeafProjectionRetention,
             ProjectionRebuildPolicy = baseOptions.ProjectionRebuildPolicy,
             MaxLeafReplayEntries = baseOptions.MaxLeafReplayEntries,
+            MaxDurableUnresolvedReplayWork = baseOptions.MaxDurableUnresolvedReplayWork,
             LeafSnapshotMargin = baseOptions.LeafSnapshotMargin,
             LeafSnapshotReClassifyEveryNCheckpoints = baseOptions.LeafSnapshotReClassifyEveryNCheckpoints,
             LeafSnapshotBinaryEncodingEnabled = baseOptions.LeafSnapshotBinaryEncodingEnabled,
