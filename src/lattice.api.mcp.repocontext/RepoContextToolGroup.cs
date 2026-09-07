@@ -126,6 +126,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 }
 
                 tools.Add(BuildRemoveRepoTool());
+                tools.Add(BuildResetIndexTool());
             }
             else
             {
@@ -172,6 +173,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
         "repocontext_release_claim",
         "repocontext_add_repo",
         "repocontext_remove_repo",
+        "repocontext_reset_index",
         "repocontext_bootstrap",
     };
 
@@ -548,6 +550,31 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "client disconnect or a host restart, so poll 'repocontext_index_status' with the "
                     + "repository id to follow it to completion. Fails closed: offered only to a caller who "
                     + "cleared the authorization gate and for whom the host opted writes in. Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildResetIndexTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ResetIndexAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_reset_index",
+                Title = "Reset a repository's code index and preserve its agent memory",
+                Description =
+                    "Drops a repository's code index and its derived planes - the structural, symbol, content, "
+                    + "cross-reference, session, and every vector tree, plus the repository root marker - and "
+                    + "leaves the durable agent-memory records for that repository intact. Use it to repair a "
+                    + "wedged, stale, or corrupt code index without discarding notes, decisions, and gotchas: "
+                    + "the repository stays registered, so a subsequent 'repocontext_add_repo' rebuilds the "
+                    + "index and its vectors from the working files, and the surviving memory records are "
+                    + "re-embedded on the next indexing pass. The working tree on disk is never touched. "
+                    + "Resetting an unknown repository is a no-op that reports zero deletions. This is a "
+                    + "lighter-consent operation than 'repocontext_remove_repo': it does not destroy "
+                    + "store-of-record memory, and 'repocontext_remove_repo' remains the verb for that. Fails "
+                    + "closed: offered only to a caller who cleared the authorization gate and for whom the "
+                    + "host opted writes in. Destructive.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
