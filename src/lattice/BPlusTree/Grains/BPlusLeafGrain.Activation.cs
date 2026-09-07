@@ -695,12 +695,19 @@ internal sealed partial class BPlusLeafGrain
                 switch (decision)
                 {
                     case FallOffLogDecision.TailReplay:
-                        // In budget, so this leaf partition's run of the
-                        // over-budget condition (if any) has ended. Retire its
-                        // throttle stamp so a later regression is reported at
-                        // the base interval instead of inheriting up to an hour
-                        // of accumulated backoff (#2100).
-                        RetireOverBudgetLogStamp(treeId, ReplicaId, partition);
+                        // NOTHING IS RETIRED HERE. Retirement is the other arm
+                        // of the same decision that commits a report, and that
+                        // decision is made on this leaf's applied-entry count
+                        // in ReplayPartitionAsync (issue #2149). Retiring on
+                        // the detector's verdict instead means retiring on the
+                        // partition-wide gap, and the two quantities disagree
+                        // over exactly one window - gap > budget while
+                        // applied <= budget - in which the leaf is in budget,
+                        // emits nothing, and yet keeps a stamp carrying up to
+                        // an hour of accumulated backoff (#2100). Its next
+                        // genuine fault then reports late. Splitting commit
+                        // and retire across two quantities is what opened that
+                        // window; they are kept on one quantity below.
                         break;
                     case FallOffLogDecision.SnapshotPending:
                         _activationSnapshotPending = true;
@@ -2314,7 +2321,14 @@ internal sealed partial class BPlusLeafGrain
         // the newest entries for the materialiser or the next replay.
         var head = probedHead ?? await coordinator.GetHeadOffsetAsync(cancellationToken);
         if (head <= checkpoint)
+        {
+            // Nothing to replay, so this leaf applied zero entries: the
+            // cleanest possible in-budget activation. It ends the run for the
+            // same reason, and on the same quantity, as the completion path
+            // below - zero is in budget for any positive budget.
+            RetireOverBudgetLogStamp(treeId, ReplicaId, partition);
             return (false, checkpoint);
+        }
 
         // The partition-wide extent this replay scans. It is NOT this leaf's
         // work (issue #2149) - every sibling leaf pinned to this WAL partition
@@ -2720,6 +2734,17 @@ internal sealed partial class BPlusLeafGrain
         // terminal's offset until it drains. Returning the per-partition
         // maxApplied here gives the caller the data it needs to do the
         // post-pass-2 advance with full knowledge of every partition's outcome.
+        // The retire arm, on the same quantity as the commit arm above and as
+        // its exact complement. A leaf whose own applied-entry count came in
+        // within budget has ended its run of the condition, so its throttle
+        // stamp is retired and a later regression reports at the base interval
+        // rather than inheriting accumulated backoff (#2100). This is
+        // deliberately NOT gated on the detector's verdict: that is the
+        // partition-wide gap, and retiring on it leaves the window
+        // gap > budget && applied <= budget permanently un-retired.
+        if (!overBudgetWarned && maxLeafReplayEntries > 0 && appliedEntries <= maxLeafReplayEntries)
+            RetireOverBudgetLogStamp(treeId, ReplicaId, partition);
+
         return (Advanced: maxApplied > checkpoint, MaxApplied: maxApplied);
     }
 

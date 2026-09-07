@@ -312,4 +312,84 @@ public partial class BPlusLeafGrainTests
             + "benign warnings in one 6.26 hour window. Lines actually captured: "
             + string.Join(" | ", capture.Warnings));
     }
+
+    /// <summary>
+    /// The retire arm, asserted through a real activation rather than by calling the
+    /// primitive.
+    /// <para>
+    /// <b>The window this closes.</b> Retirement used to be driven by the DETECTOR's
+    /// verdict, which is expressed in partition-wide gap offsets, while the report is
+    /// committed on this leaf's own applied-entry count. Those two quantities disagree
+    /// over exactly one window - <c>gap &gt; budget</c> while <c>applied &lt;= budget</c> -
+    /// and in that window the leaf is in budget, emits nothing, and yet keeps a stamp
+    /// carrying up to an hour of accumulated backoff. The next genuine fault on that
+    /// leaf then reports late, which is precisely when the report matters. The direction
+    /// of the defect is UNDER-logging, so it presents as quiet.
+    /// </para>
+    /// <para>
+    /// <b>Why this is not already covered.</b>
+    /// <see cref="BPlusLeafGrainOverBudgetLogStateLifecycleTests.An_in_budget_activation_retires_the_backoff_so_a_regression_reports_promptly"/>
+    /// asserts the same property but reaches it by calling
+    /// <c>RetireOverBudgetLogStamp</c> directly, so it proves the primitive works and
+    /// assumes the call site reaches it - its own comment says "which is what the call
+    /// site reports by retiring the stamp". It therefore stays green whether the call
+    /// site retires on the right quantity, the wrong quantity, or not at all. This test
+    /// never names the primitive; it drives an activation and observes the stamp.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task An_in_budget_activation_retires_the_backoff_even_when_the_partition_gap_is_over_budget()
+    {
+        var tree = $"emission-retire-{Guid.NewGuid():N}";
+        var leaf = "leaf/" + MaterialiserReplicaId;
+        var interval = OverBudgetTicks(BPlusLeafGrain.OverBudgetLogInterval);
+        var margin = OverBudgetTicks(TimeSpan.FromSeconds(1));
+
+        // Prime the throttle into a doubled interval by reporting twice.
+        var t0 = Stopwatch.GetTimestamp();
+        BPlusLeafGrain.ClassifyOverBudgetReplayLog(tree, leaf, 0, t0);
+        var t1 = t0 + interval + margin;
+        BPlusLeafGrain.ClassifyOverBudgetReplayLog(tree, leaf, 0, t1);
+
+        var t2 = t1 + interval + margin;
+        Assert.That(
+            BPlusLeafGrain.ClassifyOverBudgetReplayLog(tree, leaf, 0, t2).LogDetail,
+            Is.False,
+            "Precondition: having reported twice the interval has doubled, so one further "
+            + "interval is not yet enough. If this is already true the test cannot "
+            + "distinguish a retired stamp from a due one and proves nothing.");
+
+        // The activation that lands in the disputed window: the partition's gap (100)
+        // is far past the budget of five, so the detector classifies it over budget,
+        // but this leaf applies only two entries and is therefore in budget itself.
+        var capture = new OverBudgetCapturingLoggerProvider();
+        var e1 = new CommitLogSliceEntry(1, BuildCommittedSet("k0", Encoding.UTF8.GetBytes("v0")));
+        var e2 = new CommitLogSliceEntry(2, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1")));
+        var coord = BuildCoordinator(head: 100, e1, e2);
+        var (grain, _, _, _) = CreateGrainWithMaterialiser(
+            coord,
+            treeId: tree,
+            persistedCheckpoint: 0,
+            detector: OverBudgetDetector(),
+            maxLeafReplayEntries: 5,
+            loggerProvider: capture);
+
+        await ActivateAsync(grain);
+
+        Assert.That(
+            capture.Warnings.Any(w => w.Contains("replaying beyond the configured budget", StringComparison.Ordinal)),
+            Is.False,
+            "Guard on the fixture, not the behaviour under test: this activation must be "
+            + "in budget, or it would commit a report and retirement would not be the "
+            + "thing being measured.");
+
+        Assert.That(
+            BPlusLeafGrain.ClassifyOverBudgetReplayLog(tree, leaf, 0, t2).LogDetail,
+            Is.True,
+            "An activation whose OWN work is in budget ends the run, so the next occurrence "
+            + "must start again at the base interval. Retiring on the detector's verdict "
+            + "instead of on the applied-entry count leaves this leaf holding an hour of "
+            + "inherited backoff it never earned, and the failure is silent: the symptom is "
+            + "a fault line that arrives late, or not at all, rather than one that is wrong.");
+    }
 }
