@@ -997,4 +997,162 @@ public partial class BPlusLeafGrainTests
         Assert.That(large, Is.LessThan(small * 3),
             $"replay allocation must stay linear in the record count (256 -> {small} bytes, 512 -> {large} bytes)");
     }
+
+    [Test]
+    public async Task Successive_interrupted_replays_converge_when_the_saga_partition_never_wins_the_drain_slot()
+    {
+        // DISCRIMINATOR for issue #2165 - the residual #2089's fix documents
+        // but does not remove.
+        //
+        // #2089 moved the single drain-eligible pass-1 slot to the partition
+        // with the LARGEST backlog. That converges only while exactly one
+        // partition is backlogged. Here TWO are, and the saga sits on the
+        // SMALLER one, so the slot goes to the other partition and the saga
+        // partition is non-drain-eligible on every single activation.
+        //
+        // Every activation then recomputes the identical pin:
+        //   offset 2 is an unresolved prepare  -> ceiling <= 1
+        //   offset 3 is its deferred terminal  -> ceiling <= 2
+        // so the ceiling lands on 1, equals the checkpoint already persisted
+        // by the first attempt, and TryFlushRecoveredCeilingAsync returns
+        // without flushing. Pass 2 - the only thing that lifts either clamp -
+        // is never reached because the activation is torn down inside pass 1.
+        //
+        // That is the production shape measured on the deployed repocontext
+        // image: leaf bplusleaf/6262caad..., partition 2 of 8, 69 activations
+        // over 6h51m52s at ONE distinct checkpoint value, delta ZERO.
+        var txId = Guid.NewGuid();
+        var state = NewFlushCeilingState();
+
+        // Both partitions must hold a REAL checkpoint. BuildPassOneSweepOrder
+        // sorts a partition whose backlog is not comparable (the -1 "nothing
+        // applied" sentinel) strictly FIRST, so leaving partition 1 at the
+        // sentinel would hand partition 0 the last slot - and with it the
+        // drain eligibility this test exists to deny it. Production always has
+        // a real checkpoint on every partition, so seeding both is the
+        // faithful shape, not a convenience.
+        state.State.ProjectionCheckpointOffsetsByPartition = [0L, 0L];
+
+        var observed = await RunInterruptedReplaysAsync(
+            state,
+            cts =>
+            [
+                // Partition 0: the saga backlog. Smaller (12) than partition 1
+                // (20), so the backlog-ASCENDING sweep absorbs it FIRST and it
+                // is never the drain-eligible last partition. The teardown
+                // below lands inside partition 0's own scan, so partition 1 is
+                // never swept at all and its backlog never shrinks - which is
+                // what keeps the ordering stable across every attempt.
+                BuildObservableCoordinator(
+                    head: 12,
+                    sliceSize: 2,
+                    tail: state.State.ProjectionCheckpointOffset,
+                    onRead: read =>
+                    {
+                        // Tear the activation down as the second slice is
+                        // served, so pass 1 never finishes and pass 2 - which
+                        // would drain the terminal and lift both clamps - never
+                        // runs. This is the 30 s RuntimeRequested teardown.
+                        if (read == 2)
+                            cts.Cancel();
+                    },
+                    WindowWithASelfContainedSaga(txId)),
+                // Partition 1: a larger, saga-free backlog, so it wins the
+                // drain slot on every sweep and partition 0 never does.
+                BuildObservableCoordinator(
+                    head: 20,
+                    sliceSize: 2,
+                    tail: 0,
+                    onRead: null,
+                    [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
+            ],
+            attempts: 12);
+
+        Assert.That(observed, Is.Ordered.Ascending.And.Unique,
+            "Each interrupted activation must advance the saga partition's persisted checkpoint "
+            + "strictly. A repeated value is the #2165 livelock: the partition re-reads the "
+            + "identical range forever because the unresolved prepare and its undrained deferred "
+            + "terminal pin the ceiling at the checkpoint that is already persisted. Observed: "
+            + string.Join(", ", observed));
+        Assert.That(observed[^1], Is.EqualTo(12L),
+            "Successive interrupted activations must converge on the head of the window.");
+    }
+
+    [Test]
+    public async Task Unresolved_replay_work_is_recorded_durably_and_reconstructs_the_saga_outcome()
+    {
+        // GUARD on the mechanism the convergence above relies on: the ceiling
+        // may only pass an unresolved prepare or an undrained deferred
+        // terminal because that work is durably recorded in the leaf's own
+        // state, so the resumed replay reconstructs it instead of re-reading
+        // it. Assert both halves - that the record exists while the work is
+        // outstanding, and that the saga's prepared write still lands.
+        var txId = Guid.NewGuid();
+        var state = NewFlushCeilingState();
+
+        // Attempt 1: absorb the prepare (offset 2) and the terminal (offset 3)
+        // on a non-drain-eligible partition, then tear down.
+        using (var cts = new CancellationTokenSource())
+        {
+            var store = new InMemorySnapshotStore();
+            var grain = BuildFlushCeilingLeaf(
+                state,
+                [
+                    BuildObservableCoordinator(
+                        head: 12, sliceSize: 4, tail: 0,
+                        onRead: read => { if (read == 2) cts.Cancel(); },
+                        WindowWithASelfContainedSaga(txId)),
+                    BuildObservableCoordinator(
+                        head: 20, sliceSize: 2, tail: 0, onRead: null,
+                        [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
+                ],
+                store.Stub,
+                reclassifyEveryN: 1);
+
+            try
+            {
+                await ((IGrainBase)grain).OnActivateAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected: the activation is torn down inside pass 1.
+            }
+        }
+
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.GreaterThan(1L),
+            "The ceiling must pass the unresolved prepare at offset 2 and the deferred terminal "
+            + "at offset 3 once both are durably recorded.");
+        Assert.That(state.State.UnresolvedReplayWork, Is.Not.Null.And.Not.Empty,
+            "Work the ceiling was allowed to pass must be durably recorded, or the advance has "
+            + "licensed a checkpoint past an offset nothing can reconstruct.");
+
+        // Attempt 2: run to completion. The recorded prepare and terminal are
+        // reconstructed from state (they are BELOW the checkpoint, so the WAL
+        // is never re-read for them) and the saga's write must still commit.
+        var finalStore = new InMemorySnapshotStore();
+        var resumed = BuildFlushCeilingLeaf(
+            state,
+            [
+                BuildObservableCoordinator(
+                    head: 12, sliceSize: 4,
+                    tail: state.State.ProjectionCheckpointOffset,
+                    onRead: null,
+                    WindowWithASelfContainedSaga(txId)),
+                BuildObservableCoordinator(
+                    head: 20, sliceSize: 20, tail: 0, onRead: null,
+                    [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
+            ],
+            finalStore.Stub,
+            reclassifyEveryN: 1);
+
+        await ((IGrainBase)resumed).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(await resumed.GetAsync("g02"), Is.Not.Null,
+            "The saga's prepared write must still be committed by the reconstructed terminal - "
+            + "advancing the checkpoint past it must not silently drop it.");
+        Assert.That(resumed.PendingTransactionCount, Is.Zero,
+            "The reconstructed terminal must resolve the reconstructed prepare.");
+        Assert.That(state.State.UnresolvedReplayWork, Is.Null.Or.Empty,
+            "Resolved work must be struck off the durable record rather than accumulating.");
+    }
 }

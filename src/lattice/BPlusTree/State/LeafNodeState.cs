@@ -261,4 +261,32 @@ internal sealed class LeafNodeState
     /// from a skewed wall clock. Zero on first activation; seeded lazily.
     /// </summary>
     [Id(20)] public long DigestPublishSequence { get; set; }
+
+    /// <summary>
+    /// Replay work this leaf's flush ceiling has already advanced past, kept
+    /// durably so a resumed replay reconstructs it instead of re-reading it
+    /// from the WAL (issue #2165).
+    /// <para>
+    /// Holds every unresolved saga prepare and every undrained deferred
+    /// terminal that sits at or below a persisted checkpoint. Both used to
+    /// clamp the ceiling to <c>(offset - 1)</c> for the whole of an
+    /// activation, which livelocked any partition that is not the one pass 1
+    /// absorbs last: the activation banked nothing, was torn down, and the
+    /// next one recomputed the identical pin. Recording the work here is what
+    /// makes the advance safe - the entries live in this same state row, so
+    /// they are persisted by the very <c>WriteStateAsync</c> that persists the
+    /// checkpoint they license, and can never be lost while the checkpoint
+    /// that depends on them survives.
+    /// </para>
+    /// <para>
+    /// <see langword="null"/> or empty in the steady state: entries are struck
+    /// off the moment their work resolves (a terminal drains, a saga commits or
+    /// aborts), so the list tracks outstanding sagas and undrained terminals,
+    /// never the replayed record count. Growth is bounded by
+    /// <c>LatticeOptions.MaxDurableUnresolvedReplayWork</c>; past that bound
+    /// the ceiling falls back to the pre-#2165 clamping behaviour rather than
+    /// letting the state row grow without limit.
+    /// </para>
+    /// </summary>
+    [Id(21)] public List<UnresolvedReplayWorkEntry>? UnresolvedReplayWork { get; set; }
 }

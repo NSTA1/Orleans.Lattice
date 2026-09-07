@@ -1059,6 +1059,17 @@ internal sealed partial class BPlusLeafGrain
         {
             if (p != partition)
                 continue;
+
+            // Issue #2165. A prepare whose mutation is durably recorded no
+            // longer requires a re-read to rebuild _pendingTx, so it must not
+            // clamp the checkpoint. Skipping it here covers BOTH clamp sites -
+            // the pass-1 ceiling in TryFlushRecoveredCeilingAsync and the
+            // independent clamp inside SetCheckpointOffsetAsync - so the two
+            // cannot disagree about which prepares are covered and the fix
+            // cannot be silently undone by the second one.
+            if (IsUnresolvedReplayWorkRecorded(p, offset))
+                continue;
+
             seen = true;
             if (offset < min)
                 min = offset;
@@ -1077,6 +1088,14 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private void RemovePendingTxOffsetsForTransaction(Guid transactionId)
     {
+        // Issue #2165. The saga's durable replay records are released at the
+        // same moment its in-memory clamp is, and unconditionally: the records
+        // outlive the activation that wrote them, so a terminal replaying in a
+        // LATER activation finds no _pendingTxOffsets entry to remove yet must
+        // still clear the ledger. Returning early on an empty offset map would
+        // strand the record forever and leak the leaf's state row.
+        ResolveUnresolvedReplayWorkForTransaction(transactionId);
+
         if (_pendingTxOffsets is null || _pendingTxOffsets.Count == 0)
             return;
         List<(Guid, int)>? toRemove = null;

@@ -505,6 +505,16 @@ internal sealed partial class BPlusLeafGrain
         var sweep = await BuildPassOneSweepOrderAsync(
             treeId, partitionCount, checkpointOverride, cancellationToken);
 
+        // Issue #2165. Reconstruct the deferred work a previous activation
+        // recorded durably, BEFORE pass 1 reads anything. This is what makes
+        // the checkpoint advance that recorded it safe: the prepares go back
+        // into _pendingTx and the terminals into the pass-2 list without the
+        // WAL below the checkpoint being re-read. Records at offsets this
+        // replay will re-read anyway are dropped rather than restored, so
+        // nothing is applied twice.
+        RestoreUnresolvedReplayWork(
+            projection, partitionCount, checkpointOverride, deferredTerminals);
+
         foreach (var (partition, probedHead) in sweep)
         {
             // Per-partition checkpoint: a leaf whose persisted state
@@ -728,7 +738,7 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, probedHead, cancellationToken);
+            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, cancellationToken);
             partitionsAbsorbed++;
             if (advanced)
                 anyAdvanced = true;
@@ -766,6 +776,7 @@ internal sealed partial class BPlusLeafGrain
             }
 
             deferredOffsets.Resolve(terminal.Partition, terminal.Offset);
+            ResolveUnresolvedReplayWork(terminal.Partition, terminal.Offset);
             if (await TryFlushRecoveredCeilingAsync(
                 terminal.Partition,
                 perPartitionMaxApplied[terminal.Partition],
@@ -1514,6 +1525,7 @@ internal sealed partial class BPlusLeafGrain
         bool drainDeferredInline,
         ShardMap? replayShardMap,
         int maxRecordsPerTurn,
+        int maxDurableUnresolvedWork,
         long? probedHead,
         CancellationToken cancellationToken)
     {
@@ -1634,7 +1646,20 @@ internal sealed partial class BPlusLeafGrain
                         && !drainDeferredInline)
                     {
                         deferredTerminals.Add(new DeferredTerminal(partition, entry.Offset, entry.Mutation));
-                        deferredOffsets.Add(partition, entry.Offset);
+
+                        // Issue #2165. Recording the deferred mutation durably
+                        // is what lets the ceiling advance past it: a resumed
+                        // activation reconstructs it from state instead of
+                        // re-reading it, so this partition banks progress even
+                        // though it is not the one pass 1 absorbs last. Only
+                        // when the ledger is full does the offset go back on
+                        // the in-memory clamp, which is the pre-#2165
+                        // behaviour.
+                        if (!TryRecordUnresolvedReplayWork(
+                                partition, entry.Offset, entry.Mutation, maxDurableUnresolvedWork))
+                        {
+                            deferredOffsets.Add(partition, entry.Offset);
+                        }
                     }
                     else
                     {
@@ -1644,6 +1669,19 @@ internal sealed partial class BPlusLeafGrain
                         using (LatticeApplyOffsetContext.BeginScope(partition, entry.Offset))
                         {
                             projection.Apply(entry.Mutation);
+                        }
+
+                        // An applied-but-unresolved saga prepare pins the
+                        // ceiling for the same reason a deferred terminal does:
+                        // it lives only in the activation-scoped _pendingTx
+                        // bucket, which no snapshot captures. Recording it
+                        // durably lifts that clamp too - see
+                        // MinUnresolvedPrepareOffsetForPartition, which skips
+                        // every recorded offset.
+                        if (entry.Mutation.IsPrepared)
+                        {
+                            TryRecordUnresolvedReplayWork(
+                                partition, entry.Offset, entry.Mutation, maxDurableUnresolvedWork);
                         }
                     }
                 }

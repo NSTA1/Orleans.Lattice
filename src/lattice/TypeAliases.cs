@@ -627,4 +627,11 @@ internal static class TypeAliases
 
     /// <summary>Alias for the durable runtime-view registry's persisted state.</summary>
     internal const string ViewRegistryState = "ol.vrs";
+
+    /// <summary>
+    /// Alias for one durably recorded piece of unresolved leaf replay work
+    /// (an unresolved saga prepare or an undrained deferred terminal) that the
+    /// incremental flush ceiling has advanced past. See issue #2165.
+    /// </summary>
+    internal const string UnresolvedReplayWorkEntry = "ol.urw";
 }
