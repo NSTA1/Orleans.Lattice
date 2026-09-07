@@ -272,8 +272,9 @@ semantics and apply on the shard axis regardless.
 
 ## Autonomic detection
 
-The per-tree `HotShardMonitorGrain` is started lazily on the first write and
-re-anchored by a keepalive reminder. On each tick (default every 30 s) it:
+The per-tree `HotShardMonitorGrain` is started when the tree's `LatticeGrain`
+activates, re-attempted on every write (so an arming that lost the race with
+reminder-service startup recovers), and re-anchored by a keepalive reminder. On each tick (default every 30 s) it:
 
 1. Polls every physical shard's `GetHotnessAsync()` in parallel.
 2. Computes ops/sec = `(reads + writes) / window.TotalSeconds`.
