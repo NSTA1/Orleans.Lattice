@@ -683,14 +683,30 @@ release last.**
    for a reader who was not there: the next holder will re-decide from it, and a
    note that only makes sense with your conversation in hand is worse than none.
    Do **not** write `state:complete`; the item stays live for the next holder.
-2. Post the `outcome ... result=released` comment.
-3. If this attempt takes the issue's claim-marker count to the poison threshold,
-   **park the item**: apply the existing `stale` label and say in the comment what
-   failed on each attempt, with `result=parked`. Parking is idempotent, so the
-   project manager's periodic sweep remains the backstop for a worker that died
-   before it could park. Unparking is a **human** act; you never remove `stale`
-   and you never remove `needs-specification`.
-4. `repocontext_release_claim(key, fencingToken)`.
+2. Post the `outcome` comment. It carries `result=released` when the item stays
+   live for the next holder, and `result=parked` when you are parking it under
+   step 3 - one comment either way, never both.
+3. **Park the item** if either trigger fires. The first is exhaustion: this
+   attempt takes the issue's claim-marker count to the poison threshold. The
+   second is a finding, at any attempt number - you have established that the
+   item cannot proceed as specified, because it is blocked on something no
+   `blockedBy` edge can express (a decision, a defect, a non-item dependency) or
+   because the specification itself is unsatisfiable. Do not release and leave it
+   live in that case: the next worker draws it, re-derives your finding, and
+   releases in turn, one session per tick, for ever. Parking on the first attempt
+   is correct when the finding is real, and it is a **finding, not a failed
+   attempt**.
+4. To park, write **both halves, tag first**: `repocontext_update` the item with
+   the `state:parked` tag under your fencing token, then apply the existing
+   `stale` label to the issue and post the comment with `result=parked` saying
+   what failed on each attempt, or what you established. The tag is the half with
+   effect - the ready set drops parked items by reading it, and a park that
+   writes only the label leaves the item claimable on the next tick. Tag first so
+   that a run dying between the two still leaves the item out of the ready set.
+   Parking is idempotent, so the project manager's periodic sweep remains the
+   backstop for a worker that died before it could park. Unparking is a **human**
+   act; you never remove `stale` and you never remove `needs-specification`.
+5. `repocontext_release_claim(key, fencingToken)`.
 
 **On being superseded:** write nothing, release nothing, comment nothing, and
 report (principle 3). Your claim marker already stands as the attempt.
