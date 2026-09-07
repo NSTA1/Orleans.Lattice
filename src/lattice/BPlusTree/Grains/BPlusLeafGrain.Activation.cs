@@ -577,6 +577,12 @@ internal sealed partial class BPlusLeafGrain
                 switch (decision)
                 {
                     case FallOffLogDecision.TailReplay:
+                        // In budget, so this leaf partition's run of the
+                        // over-budget condition (if any) has ended. Retire its
+                        // throttle stamp so a later regression is reported at
+                        // the base interval instead of inheriting up to an hour
+                        // of accumulated backoff (#2100).
+                        RetireOverBudgetLogStamp(treeId, ReplicaId, partition);
                         break;
                     case FallOffLogDecision.SnapshotPending:
                         _activationSnapshotPending = true;
@@ -901,15 +907,85 @@ internal sealed partial class BPlusLeafGrain
     private const int OverBudgetTreeWindowCapacity = 256;
 
     /// <summary>
+    /// How long a tree's window may be retained while it still owes a summary
+    /// line before <see cref="PruneOverBudgetTreeWindows"/> drops it anyway.
+    /// Without this bound a quiet tree's unreported tally pins its entry
+    /// permanently, so the sweep frees nothing and the map grows with every
+    /// distinct tree id the process ever sees.
+    /// </summary>
+    private static readonly TimeSpan OverBudgetTreeWindowRetention = OverBudgetLogIntervalCeiling;
+
+    /// <summary>
+    /// When <see cref="PruneOverBudgetLogStamps"/> last ran from the capacity
+    /// trigger, or zero if it never has.
+    /// </summary>
+    private static long _overBudgetLogStampsSweptAtTicks;
+
+    /// <summary>
+    /// When <see cref="PruneOverBudgetTreeWindows"/> last ran from the capacity
+    /// trigger, or zero if it never has.
+    /// </summary>
+    private static long _overBudgetTreeWindowsSweptAtTicks;
+
+    /// <summary>
+    /// Rate-limits a capacity sweep to at most once per
+    /// <see cref="OverBudgetLogInterval"/>, and to one caller at a time.
+    /// <para>
+    /// A sweep is O(n) over its map, and the capacity trigger fires on every
+    /// occurrence that misses while the map is at capacity - so without this
+    /// guard a map that is legitimately full turns every novel key into a full
+    /// scan. That is the same shape of defect as the log volume this whole gate
+    /// exists to bound: work proportional to the size of the deployment on the
+    /// path that is supposed to be bounding it.
+    /// </para>
+    /// </summary>
+    /// <param name="lastSweptAtTicks">The sweep's own last-run timestamp field.</param>
+    /// <param name="now">The timestamp the calling check is evaluated at.</param>
+    /// <returns><see langword="true"/> when this caller should run the sweep.</returns>
+    private static bool TryEnterCapacitySweep(ref long lastSweptAtTicks, long now)
+    {
+        var last = Interlocked.Read(ref lastSweptAtTicks);
+        if (last != 0 && Stopwatch.GetElapsedTime(last, now) < OverBudgetLogInterval)
+        {
+            return false;
+        }
+
+        // Losing the swap means another caller is sweeping right now, which is
+        // as good as having swept: the sweep is opportunistic housekeeping, not
+        // an admission gate.
+        return Interlocked.CompareExchange(ref lastSweptAtTicks, now, last) == last;
+    }
+
+    /// <summary>
     /// Soft cap on <see cref="OverBudgetLogStamps"/>. Reaching it triggers an
-    /// opportunistic sweep of entries whose own backed-off interval has already
-    /// elapsed, which is free to drop: such a stamp suppresses nothing, so
-    /// removing it cannot change what is logged. The cap is a bound on retained
-    /// keys, not a hard admission limit - a burst of more than this many
-    /// distinct leaf partitions inside one interval is allowed to exceed it
-    /// rather than silently losing suppression for the overflow.
+    /// opportunistic sweep that <b>retires</b> entries whose own backed-off
+    /// interval has already elapsed and drops entries that have been retired
+    /// for longer than <see cref="OverBudgetLogStampRetention"/>. The cap is a
+    /// bound on retained keys, not a hard admission limit - a burst of more
+    /// than this many distinct leaf partitions inside one interval is allowed
+    /// to exceed it rather than silently losing suppression for the overflow.
     /// </summary>
     private const int OverBudgetLogStampCapacity = 4096;
+
+    /// <summary>
+    /// How long a retired stamp (see <see cref="OverBudgetLogStamp"/>) is kept
+    /// after the key's last line, purely to deny that key the novelty exemption
+    /// in <see cref="ClassifyOverBudgetReplayLog(string, string, int, long)"/>.
+    /// <para>
+    /// This is what makes novelty a durable property rather than an artefact of
+    /// the sweep. Before it, <c>firstEver</c> meant only "no stamp exists", and
+    /// <see cref="PruneOverBudgetLogStamps"/> deletes stamps for capacity - so
+    /// at the scale this bound exists for, where the map sits at capacity and
+    /// churns, an evicted key re-entered cap-exempt on its next occurrence and
+    /// a one-time novel burst became a recurring one whose volume again scaled
+    /// with the size of the tree. Retiring rather than deleting keeps the key's
+    /// identity for a bounded window, so only a key that has genuinely been
+    /// silent for the whole retention is treated as novel again - which is also
+    /// the correct reading: a fresh run of the condition after that long a gap
+    /// is a new report, not a repeat.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan OverBudgetLogStampRetention = OverBudgetLogIntervalCeiling;
 
     /// <summary>
     /// Last-logged timestamps for the over-budget replay warning, keyed by tree,
@@ -943,14 +1019,26 @@ internal sealed partial class BPlusLeafGrain
     /// decaying one, so a condition that persists for hours costs
     /// logarithmically many lines rather than linearly many.
     /// </para>
+    /// <para>
+    /// A count of zero means the stamp is <b>retired</b>: the key has reported
+    /// before but is no longer suppressing anything, either because its own
+    /// interval aged out under <see cref="PruneOverBudgetLogStamps"/> or
+    /// because the leaf activated within budget again
+    /// (<see cref="RetireOverBudgetLogStamp"/>). A retired stamp is due
+    /// immediately, so backoff decays rather than being carried into a new run
+    /// of the condition, and it still denies the key the novelty exemption
+    /// until it is dropped after <see cref="OverBudgetLogStampRetention"/>.
+    /// </para>
     /// </summary>
     /// <param name="LoggedAtTicks">
     /// The <see cref="Stopwatch.GetTimestamp"/> reading at which this key last
     /// emitted a line.
     /// </param>
     /// <param name="ConsecutiveLogs">
-    /// How many lines this key has emitted so far, counting from its
-    /// first-ever one. Always at least 1 for a stamp that exists.
+    /// How many lines this key has emitted in the current run of the condition,
+    /// counting from its first-ever one, or zero when the stamp is retired.
+    /// Incremented only when a detail line is actually emitted, so a line the
+    /// aggregate cap withheld does not advance the backoff.
     /// </param>
     private readonly record struct OverBudgetLogStamp(long LoggedAtTicks, int ConsecutiveLogs);
 
@@ -972,6 +1060,16 @@ internal sealed partial class BPlusLeafGrain
 
         /// <summary>Detail lines the aggregate cap withheld in the current window.</summary>
         public int Suppressed;
+
+        /// <summary>
+        /// Set under this instance's own lock when
+        /// <see cref="PruneOverBudgetTreeWindows"/> evicts it, so a caller that
+        /// took this instance from <see cref="OverBudgetTreeWindows"/> just
+        /// before the sweep can see that it is no longer the tree's window and
+        /// take a fresh one. Without it a tally accrued in that gap would be
+        /// discarded and the tree's budget would silently reset.
+        /// </summary>
+        public bool Removed;
     }
 
     /// <summary>
@@ -1013,55 +1111,154 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="partition">The WAL partition ordinal being replayed.</param>
     /// <returns><see langword="true"/> when the warning should be emitted.</returns>
     internal static bool ShouldLogOverBudgetReplay(string treeId, string leafId, int partition)
-        => ShouldLogOverBudgetReplay(treeId, leafId, partition, Stopwatch.GetTimestamp(), out _);
+    {
+        var key = (treeId, leafId, partition);
+        var now = Stopwatch.GetTimestamp();
+
+        if (!TryReserveOverBudgetReplayLog(key, now, out var observed, out var firstEver))
+        {
+            return false;
+        }
+
+        // The single-tier entry point has no aggregate cap to consult, so the
+        // line it reserves is always emitted and the stamp is committed here.
+        return firstEver || TryCommitOverBudgetLogStamp(key, observed, now);
+    }
 
     /// <summary>
-    /// True when the over-budget replay warning for this leaf partition is due
-    /// again under the per-key throttle, reporting whether this is the key's
-    /// first-ever occurrence.
+    /// Retires the stamp for a leaf partition that has just activated
+    /// <b>within</b> budget, so the next run of the condition starts from the
+    /// base interval instead of inheriting an hour of accumulated backoff.
+    /// <para>
+    /// Retiring rather than removing is deliberate. Removing would make the key
+    /// look novel again, and a novel key is exempt from the aggregate cap, so a
+    /// leaf that flapped in and out of budget could re-enter cap-exempt on every
+    /// cycle - the exact defect
+    /// <see cref="OverBudgetLogStampRetention"/> exists to prevent. A retired
+    /// stamp is due immediately, so the regression is still reported promptly;
+    /// it simply counts as a repeat rather than a first report, which is what it
+    /// is.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The tree the leaf belongs to.</param>
     /// <param name="leafId">The leaf's grain id.</param>
-    /// <param name="partition">The WAL partition ordinal being replayed.</param>
+    /// <param name="partition">The WAL partition ordinal that replayed in budget.</param>
+    internal static void RetireOverBudgetLogStamp(string treeId, string leafId, int partition)
+    {
+        var key = (treeId, leafId, partition);
+        if (OverBudgetLogStamps.TryGetValue(key, out var last) && last.ConsecutiveLogs != 0)
+        {
+            OverBudgetLogStamps.TryUpdate(key, last with { ConsecutiveLogs = 0 }, last);
+        }
+    }
+
+    /// <summary>
+    /// Peeks whether the per-key throttle would allow a line for this key,
+    /// <b>without</b> committing the stamp that starts its next backoff.
+    /// <para>
+    /// The split is load-bearing. The aggregate cap runs after this check and
+    /// may still withhold the line, and a key that emitted nothing must not pay
+    /// the backoff penalty for it: on a tree with a thousand replaying leaf
+    /// partitions, committing here drove every key to the one-hour ceiling
+    /// within a handful of rounds while only
+    /// <see cref="OverBudgetDetailLogsPerTreeWindow"/> lines an interval were
+    /// emitted for the whole tree, so a specific livelocked leaf was named
+    /// roughly once ever. That defeats the warning's own fault criterion, which
+    /// needs two comparable lines for the SAME leaf. With the commit deferred to
+    /// <see cref="TryCommitOverBudgetLogStamp"/>, capped keys genuinely stay due
+    /// and rotate through the budget, and the cap alone bounds the volume.
+    /// </para>
+    /// <para>
+    /// A genuinely novel key is the one exception: it is never withheld by the
+    /// cap, so its line is certain and its stamp is added here. That also keeps
+    /// the <see cref="ConcurrentDictionary{TKey, TValue}.TryAdd"/> race the
+    /// single-winner behaviour it has always had - the loser is covered by the
+    /// winner's line.
+    /// </para>
+    /// </summary>
+    /// <param name="key">The (tree, leaf, partition) triple being evaluated.</param>
     /// <param name="now">
     /// The <see cref="Stopwatch.GetTimestamp"/> reading to evaluate against.
     /// Passed in rather than read here so the throttle's time-dependent
     /// behaviour is testable without sleeping through a real interval.
     /// </param>
+    /// <param name="observed">
+    /// The stamp this decision was made against, to be presented back to
+    /// <see cref="TryCommitOverBudgetLogStamp"/> as a compare-and-swap witness.
+    /// Meaningless when <paramref name="firstEver"/> is <see langword="true"/>.
+    /// </param>
     /// <param name="firstEver">
     /// Set to <see langword="true"/> when this key had no stamp at all, so the
-    /// occurrence is genuinely novel rather than a repeat. Load-bearing: a
-    /// novel occurrence is exempt from the aggregate cap in
+    /// occurrence is genuinely novel rather than a repeat, and the stamp has
+    /// already been committed. Load-bearing: a novel occurrence is exempt from
+    /// the aggregate cap in
     /// <see cref="ClassifyOverBudgetReplayLog(string, string, int, long)"/>,
     /// because bounding volume must never cost the first report of a condition
     /// on a leaf that has not reported one before.
     /// </param>
-    /// <returns><see langword="true"/> when the warning should be emitted.</returns>
-    internal static bool ShouldLogOverBudgetReplay(string treeId, string leafId, int partition, long now, out bool firstEver)
+    /// <returns><see langword="true"/> when a line is due for this key.</returns>
+    private static bool TryReserveOverBudgetReplayLog(
+        (string TreeId, string LeafId, int Partition) key,
+        long now,
+        out OverBudgetLogStamp observed,
+        out bool firstEver)
     {
-        var key = (treeId, leafId, partition);
         if (!OverBudgetLogStamps.TryGetValue(key, out var last))
         {
-            if (OverBudgetLogStamps.Count >= OverBudgetLogStampCapacity)
+            if (OverBudgetLogStamps.Count >= OverBudgetLogStampCapacity
+                && TryEnterCapacitySweep(ref _overBudgetLogStampsSweptAtTicks, now))
             {
                 PruneOverBudgetLogStamps(now);
             }
 
+            observed = default;
             firstEver = OverBudgetLogStamps.TryAdd(key, new OverBudgetLogStamp(now, 1));
-            return firstEver;
-        }
+            if (firstEver)
+            {
+                return true;
+            }
 
-        firstEver = false;
-        if (Stopwatch.GetElapsedTime(last.LoggedAtTicks, now) < OverBudgetLogIntervalFor(last.ConsecutiveLogs))
-        {
+            // Lost the add race: the winner is emitting this key's first line,
+            // so this occurrence is a repeat and is withheld by the throttle.
             return false;
         }
 
+        observed = last;
+        firstEver = false;
+
+        // A retired stamp (count zero) is due immediately: it records only that
+        // the key has been seen, not that it is suppressing.
+        return last.ConsecutiveLogs == 0
+            || Stopwatch.GetElapsedTime(last.LoggedAtTicks, now) >= OverBudgetLogIntervalFor(last.ConsecutiveLogs);
+    }
+
+    /// <summary>
+    /// Commits the stamp for a line that is actually being emitted, advancing
+    /// the key's backoff. Called only once the aggregate cap has agreed to the
+    /// line, so a withheld occurrence leaves the stamp untouched and stays due.
+    /// </summary>
+    /// <param name="key">The (tree, leaf, partition) triple being emitted for.</param>
+    /// <param name="observed">
+    /// The stamp <see cref="TryReserveOverBudgetReplayLog"/> decided against,
+    /// used as the compare-and-swap witness.
+    /// </param>
+    /// <param name="now">The timestamp the calling check is evaluated at.</param>
+    /// <returns>
+    /// <see langword="false"/> when the stamp moved underneath this occurrence,
+    /// meaning a concurrent activation for the same key emitted the line
+    /// instead. Suppression is deliberately best-effort under races, but losing
+    /// the swap is precisely the signal that this occurrence is the duplicate.
+    /// </returns>
+    private static bool TryCommitOverBudgetLogStamp(
+        (string TreeId, string LeafId, int Partition) key,
+        OverBudgetLogStamp observed,
+        long now)
+    {
         // Saturate rather than wrap: the interval is already pinned to the
         // ceiling long before the count could overflow, so clamping costs
         // nothing and removes the overflow case entirely.
-        var next = last.ConsecutiveLogs < int.MaxValue ? last.ConsecutiveLogs + 1 : last.ConsecutiveLogs;
-        return OverBudgetLogStamps.TryUpdate(key, new OverBudgetLogStamp(now, next), last);
+        var next = observed.ConsecutiveLogs < int.MaxValue ? observed.ConsecutiveLogs + 1 : observed.ConsecutiveLogs;
+        return OverBudgetLogStamps.TryUpdate(key, new OverBudgetLogStamp(now, next), observed);
     }
 
     /// <summary>
@@ -1129,7 +1326,8 @@ internal sealed partial class BPlusLeafGrain
     /// <returns>The logging decision for this occurrence.</returns>
     internal static OverBudgetReplayLogDecision ClassifyOverBudgetReplayLog(string treeId, string leafId, int partition, long now)
     {
-        if (!ShouldLogOverBudgetReplay(treeId, leafId, partition, now, out var firstEver))
+        var key = (treeId, leafId, partition);
+        if (!TryReserveOverBudgetReplayLog(key, now, out var observed, out var firstEver))
         {
             // Withheld by the per-key throttle, which is not the aggregate cap
             // and is not itself summarised: the exact census is the metric.
@@ -1145,35 +1343,62 @@ internal sealed partial class BPlusLeafGrain
         }
 
         if (OverBudgetTreeWindows.Count >= OverBudgetTreeWindowCapacity
-            && !OverBudgetTreeWindows.ContainsKey(treeId))
+            && !OverBudgetTreeWindows.ContainsKey(treeId)
+            && TryEnterCapacitySweep(ref _overBudgetTreeWindowsSweptAtTicks, now))
         {
             PruneOverBudgetTreeWindows(now);
         }
 
-        // The state-carrying overload with a static factory. A capturing lambda
-        // here would allocate a closure on EVERY occurrence, including ones the
-        // gate then withholds - a rate limiter that allocates per occurrence on
-        // the path it exists to bound just trades log volume for garbage.
-        var window = OverBudgetTreeWindows.GetOrAdd(
-            treeId,
-            static (_, startedAt) => new OverBudgetTreeWindow { WindowStartedAtTicks = startedAt },
-            now);
-
-        lock (window)
+        while (true)
         {
-            var suppressedInClosedWindow = RollWindowIfClosed(window, now);
+            // The state-carrying overload with a static factory. A capturing
+            // lambda here would allocate a closure on EVERY occurrence,
+            // including ones the gate then withholds - a rate limiter that
+            // allocates per occurrence on the path it exists to bound just
+            // trades log volume for garbage.
+            var window = OverBudgetTreeWindows.GetOrAdd(
+                treeId,
+                static (_, startedAt) => new OverBudgetTreeWindow { WindowStartedAtTicks = startedAt },
+                now);
 
-            // Novel first, and unconditionally. A novel occurrence still spends
-            // budget, so that a burst of new leaves crowds out repeats rather
-            // than the other way round, but it is never itself withheld.
-            if (firstEver || window.DetailsLogged < OverBudgetDetailLogsPerTreeWindow)
+            lock (window)
             {
+                // Evicted by the sweep between the lookup and the lock. The
+                // instance is already out of the map, so a fresh GetOrAdd
+                // cannot hand back the same one and this cannot spin.
+                if (window.Removed)
+                {
+                    continue;
+                }
+
+                var suppressedInClosedWindow = RollWindowIfClosed(window, now);
+
+                // Novel first, and unconditionally. A novel occurrence still
+                // spends budget, so that a burst of new leaves crowds out
+                // repeats rather than the other way round, but it is never
+                // itself withheld.
+                if (!firstEver && window.DetailsLogged >= OverBudgetDetailLogsPerTreeWindow)
+                {
+                    // Withheld by the cap. The stamp is deliberately left
+                    // untouched, so this key stays due and takes a slot in a
+                    // later window rather than backing off having said nothing.
+                    window.Suppressed++;
+                    return new OverBudgetReplayLogDecision(false, suppressedInClosedWindow);
+                }
+
+                // The line is going out, so the backoff may advance. A novel
+                // key committed its stamp when it was added.
+                if (!firstEver && !TryCommitOverBudgetLogStamp(key, observed, now))
+                {
+                    // A concurrent activation for the same key won the swap and
+                    // is emitting the line. This occurrence is the duplicate: it
+                    // neither logs nor counts as withheld by the cap.
+                    return new OverBudgetReplayLogDecision(false, suppressedInClosedWindow);
+                }
+
                 window.DetailsLogged++;
                 return new OverBudgetReplayLogDecision(true, suppressedInClosedWindow);
             }
-
-            window.Suppressed++;
-            return new OverBudgetReplayLogDecision(false, suppressedInClosedWindow);
         }
     }
 
@@ -1238,7 +1463,9 @@ internal sealed partial class BPlusLeafGrain
 
         lock (window)
         {
-            return RollWindowIfClosed(window, now);
+            // Evicted by the sweep between the lookup and the lock: it is no
+            // longer the tree's window and owes this caller nothing.
+            return window.Removed ? 0 : RollWindowIfClosed(window, now);
         }
     }
 
@@ -1258,39 +1485,83 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     /// <param name="now">The timestamp the calling check is evaluated at.</param>
-    private static void PruneOverBudgetLogStamps(long now)
+    /// <remarks>
+    /// Internal rather than private so the retirement semantics - that a swept
+    /// key is due again but is <b>not</b> novel - can be proven directly by a
+    /// test instead of inferred from capacity pressure.
+    /// </remarks>
+    internal static void PruneOverBudgetLogStamps(long now)
     {
         foreach (var stamp in OverBudgetLogStamps)
         {
-            if (Stopwatch.GetElapsedTime(stamp.Value.LoggedAtTicks, now) >= OverBudgetLogIntervalFor(stamp.Value.ConsecutiveLogs))
+            var elapsed = Stopwatch.GetElapsedTime(stamp.Value.LoggedAtTicks, now);
+
+            if (stamp.Value.ConsecutiveLogs == 0)
             {
-                OverBudgetLogStamps.TryRemove(stamp);
+                // Already retired. Drop it only once the key has been silent for
+                // the whole retention, at which point treating its next
+                // occurrence as novel is correct rather than an artefact.
+                if (elapsed >= OverBudgetLogStampRetention)
+                {
+                    OverBudgetLogStamps.TryRemove(stamp);
+                }
+
+                continue;
+            }
+
+            if (elapsed >= OverBudgetLogIntervalFor(stamp.Value.ConsecutiveLogs))
+            {
+                OverBudgetLogStamps.TryUpdate(stamp.Key, stamp.Value with { ConsecutiveLogs = 0 }, stamp.Value);
             }
         }
     }
 
     /// <summary>
-    /// Drops every <see cref="OverBudgetTreeWindows"/> entry whose window has
-    /// closed with nothing withheld. Such an entry owes no summary line and
-    /// would be reopened from scratch by the next occurrence, so removing it
-    /// cannot change what is logged.
+    /// Drops every <see cref="OverBudgetTreeWindows"/> entry that is closed and
+    /// owes no summary line, plus any entry older than
+    /// <see cref="OverBudgetTreeWindowRetention"/> whether or not it owes one.
+    /// <para>
+    /// The age escape hatch is what makes the sweep able to free anything at
+    /// all. A tree that withholds repeats and then falls quiet keeps
+    /// <see cref="OverBudgetTreeWindow.Suppressed"/> non-zero forever, because
+    /// the flush is occurrence-driven (see
+    /// <see cref="FlushClosedOverBudgetWindow"/>) - so a skip-if-owing rule
+    /// alone pins exactly the entries that will never be reclaimed, and past
+    /// the capacity the map grows monotonically with the number of distinct
+    /// tree ids the process has ever seen. An hour-stale tally has no
+    /// diagnostic value and the metric is the documented exact census, so
+    /// dropping it is the right trade against unbounded growth.
+    /// </para>
     /// </summary>
     /// <param name="now">The timestamp the calling check is evaluated at.</param>
-    private static void PruneOverBudgetTreeWindows(long now)
+    /// <remarks>
+    /// Internal rather than private so the age escape hatch can be proven
+    /// directly by a test instead of inferred from capacity pressure.
+    /// </remarks>
+    internal static void PruneOverBudgetTreeWindows(long now)
     {
         foreach (var entry in OverBudgetTreeWindows)
         {
             var window = entry.Value;
             lock (window)
             {
-                if (window.Suppressed != 0
-                    || Stopwatch.GetElapsedTime(window.WindowStartedAtTicks, now) < OverBudgetLogInterval)
+                var elapsed = Stopwatch.GetElapsedTime(window.WindowStartedAtTicks, now);
+                if (elapsed < OverBudgetLogInterval)
                 {
                     continue;
                 }
-            }
 
-            OverBudgetTreeWindows.TryRemove(entry);
+                if (window.Suppressed != 0 && elapsed < OverBudgetTreeWindowRetention)
+                {
+                    continue;
+                }
+
+                // Mark and remove under the same lock. Checking here and
+                // removing after the lock was released let a tally accrued in
+                // the gap be discarded silently, resetting the tree's budget.
+                window.Removed = true;
+                OverBudgetTreeWindows.TryRemove(entry);
+            }
         }
     }
 
