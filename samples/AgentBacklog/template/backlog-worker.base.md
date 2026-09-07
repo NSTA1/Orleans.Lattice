@@ -712,6 +712,17 @@ you completed, released, refused or exited empty:
   are the findings that never reach anyone if you leave them out, because nothing
   else in the system is looking.
 
+**Send it on the immediate lane.** When a project manager deployed you
+(`coordinate_with_creator`), the report goes back with `send_session_message` and
+`delivery_mode: "immediate"`, never the default `enqueue`. The default puts the
+report on the recipient's queued lane, and a message landing there at the instant
+the recipient's turn ends has been observed to wedge that session: it never
+finalises as idle, its queue never drains, and it accepts no further input until
+the process is restarted. The immediate lane is delivered as steering input
+mid-turn and does not have that failure mode. This matters most for your final
+sign-off, which by construction arrives while the manager is busy supervising the
+workers that are still running.
+
 ## Boundaries (what this agent does NOT do)
 
 - **Does not choose its own work outside the backlog.** No theme, no standing

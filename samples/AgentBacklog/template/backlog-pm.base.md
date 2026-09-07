@@ -516,7 +516,7 @@ sequenceDiagram
     W->>GH: Claim comment on the mirrored issue
     W->>GH: Pull request into the item's baseBranch
     W->>L: repocontext_renew_claim / repocontext_release_claim
-    W-->>PM: notify_on_idle
+    W-->>PM: send_session_message (delivery_mode: immediate)
     PM->>L: repocontext_claim_status (read-only, advisory)
     PM->>PM: Re-ground, then report progress to the owner
 ```
@@ -531,8 +531,20 @@ Concretely:
 3. **Dispatch each worker as an inspectable child session**, not an opaque
    background agent, so the human can open and watch it: `create_session` with
    `kickoff.agent` set to the backlog worker agent's registered name
-   (`Backlog Worker`), `kickoff.mode: "autopilot"`,
-   `coordinate_with_creator: true`, and `notify_on_idle: "once"`.
+   (`Backlog Worker`), `kickoff.mode: "autopilot"`, and
+   `coordinate_with_creator: true`.
+
+   **Do not set `notify_on_idle`.** A worker accounts for its whole run in its
+   Phase 8 report, so the notification carries nothing the report does not, and
+   it is not free: it is a second inbound message per worker, arriving
+   asynchronously while you are mid-turn. You are the one role in the system
+   that fans out to several children and then runs long turns, so you
+   accumulate that traffic faster than any other agent, and an inbound message
+   that lands on the queued lane at the instant a turn ends has been observed to
+   wedge the receiving session: it never finalises as idle, its queue never
+   drains, and it accepts no further input until the process is restarted.
+   Halving the inbound traffic is worth more than a notification that duplicates
+   a report you are going to read anyway.
 4. **Do not pre-claim, and do not hand over a pre-selected item as an instruction.**
    The worker computes the ready set and calls `repocontext_claim` itself; that is
    what makes a PM-deployed worker and a cron-started worker interchangeable, and
