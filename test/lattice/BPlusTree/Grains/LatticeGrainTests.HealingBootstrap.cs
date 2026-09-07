@@ -304,9 +304,16 @@ public partial class LatticeGrainTests
         {
             Assert.That(attempted, Is.EqualTo(1),
                 "activation must have attempted to arm, otherwise this test is vacuous");
-            Assert.That(ArmCount(healing), Is.Zero,
-                "healing is not reached when the hot-shard monitor throws first - "
-                + "unchanged from the operation path, which sequences them the same way");
+            // Issue #2187 changed this. It previously asserted Is.Zero, pinning
+            // the sequential arming as it stood rather than any requirement:
+            // there was no harm to name beyond "the count differs", and a
+            // correctly rebuilt arming path would not have to reproduce it.
+            // Healing must now be armed even when the monitor faults first,
+            // because on a read-only tree activation is the ONLY arming
+            // opportunity - the "a later write re-attempts" mitigation is
+            // write-gated and this population has no writes.
+            Assert.That(ArmCount(healing), Is.EqualTo(1),
+                "a hot-shard-monitor fault must not prevent the healing arming attempt");
         });
 
         // The narrow operation-path catch is unchanged, so the same failure

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -3630,6 +3631,15 @@ internal sealed partial class LatticeGrain(
     /// switch (<see cref="LatticeOptions.AutoSplitEnabled"/> and
     /// <see cref="LatticeOptions.ShardHealingEnabled"/>) is <c>false</c>.
     /// </para>
+    /// <para>
+    /// That independence extends to failure: an arming fault on the hot-shard
+    /// monitor does not prevent the healing arming attempt. The healing attempt
+    /// is made either way and the monitor's fault is then rethrown unchanged,
+    /// so a caller on a write path still sees exactly the exception it saw
+    /// before. Without this, one transient fault could leave a read-only tree
+    /// unhealed until it next deactivated, because activation is that tree's
+    /// only arming opportunity.
+    /// </para>
     /// </summary>
     private async Task EnsureMonitorAsync()
     {
@@ -3640,8 +3650,46 @@ internal sealed partial class LatticeGrain(
             return;
         }
 
-        await EnsureHotShardMonitorAsync();
-        await EnsureShardHealingAsync();
+        // Armed independently, in this order, and a fault arming the first must
+        // not cost this tree the second (#2187). The two are already decoupled
+        // in policy - see the note above on AutoSplitEnabled - but they used to
+        // be coupled in control flow, because a non-transient exception from
+        // EnsureHotShardMonitorAsync propagated before healing was reached.
+        // That matters most on a tree that has stopped taking writes: every
+        // other call site here is a write path, so activation is its only
+        // arming opportunity and the "a later operation re-attempts" mitigation
+        // is unavailable. A single transient monitor fault was enough to leave
+        // such a tree unhealed until it next deactivated.
+        ExceptionDispatchInfo? monitorFault = null;
+        try
+        {
+            await EnsureHotShardMonitorAsync();
+        }
+        catch (Exception ex)
+        {
+            // Captured rather than swallowed: rethrown below with its original
+            // stack trace, so the operation path still surfaces it unchanged.
+            monitorFault = ExceptionDispatchInfo.Capture(ex);
+        }
+
+        try
+        {
+            await EnsureShardHealingAsync();
+        }
+        catch (Exception ex) when (monitorFault is not null)
+        {
+            // Only reachable when both loops fault. The monitor fault is what a
+            // caller sees today, when healing is never reached at all, so it
+            // keeps precedence and this one is logged rather than allowed to
+            // displace it - attempting healing must not reshape the exception
+            // the caller already gets.
+            logger.LogWarning(
+                ex,
+                "Arming shard healing for tree {TreeId} also failed while recovering from a hot-shard-monitor arming fault; surfacing the monitor fault.",
+                TreeId);
+        }
+
+        monitorFault?.Throw();
     }
 
     /// <inheritdoc />
