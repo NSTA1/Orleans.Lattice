@@ -223,10 +223,53 @@ internal sealed partial class BPlusLeafGrain
         var replayPermit = await AcquireReplayPermitAsync(cancellationToken);
         if (replayPermit is not null)
         {
+            // The cold/warm discriminator is precisely the replay-start
+            // override computed at step 0.5: a -1 sentinel means neither the
+            // snapshot rehydrate nor a pre-populated cache supplied an anchor,
+            // so this activation replays the whole readable WAL window (cold);
+            // a null override means the activation resumed above an anchor and
+            // replays only the tail (warm). Nothing else needs to be computed
+            // or plumbed - the value is already in scope, which is why the
+            // discriminator belongs on the existing counter rather than on a
+            // second one (issue #2148).
+            var cold = replayCheckpointOverride == -1L;
+            var replayTreeId = state.State.TreeId!;
             LatticeMetrics.LeafActivationReplays.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
-                LatticeTenantLabel.ForTree(state.State.TreeId));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, replayTreeId),
+                cold ? LatticeMetrics.ActivationTemperatureCold : LatticeMetrics.ActivationTemperatureWarm,
+                LatticeTenantLabel.ForTree(replayTreeId));
+
+            // ... and sample the same two totals into the log, because a
+            // counter is only readable where something is scraping the
+            // process, and the deployed host exposes no metrics endpoint
+            // (issue #2148). Observe unconditionally - before any logger or
+            // level check - so the totals account for every permitted replay
+            // whether or not a line is emitted for it.
+            var temperatureSample = ObserveLeafActivationReplay(replayTreeId, cold, Stopwatch.GetTimestamp());
+            if (temperatureSample is { } totals)
+            {
+                // Gate on IsEnabled as the over-budget warning does: the
+                // templated call would otherwise allocate a params object[]
+                // and box both totals even when the line is filtered out.
+                var temperatureLogger = ResolveLogger();
+                if (temperatureLogger is not null && temperatureLogger.IsEnabled(LogLevel.Information))
+                {
+                    temperatureLogger.LogInformation(
+                        "Leaf activation replays for tree '{TreeId}' since this silo started: {ColdReplays} cold "
+                        + "(no snapshot rehydrate and an empty entry cache, so the whole readable WAL window is "
+                        + "replayed) and {WarmReplays} warm (resumed above a snapshot or cache anchor). These are "
+                        + "CUMULATIVE process-wide totals, not a count since the previous line: the line is "
+                        + "rate-limited to one per tree per {IntervalSeconds}s, so any single line yields the "
+                        + "cold:warm ratio and any two yield the rate between them. Activations of a leaf with no "
+                        + "tree id bound take no replay permit and are counted on neither arm. Informational: a "
+                        + "cold replay is correct, just more expensive than a warm one.",
+                        replayTreeId,
+                        totals.Cold,
+                        totals.Warm,
+                        (long)ActivationTemperatureLogInterval.TotalSeconds);
+                }
+            }
         }
         try
         {
@@ -909,6 +952,177 @@ internal sealed partial class BPlusLeafGrain
             if (Stopwatch.GetElapsedTime(stamp.Value, now) >= OverBudgetLogInterval)
             {
                 OverBudgetLogStamps.TryRemove(stamp);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The minimum interval between activation-temperature sample lines for one
+    /// tree. Matched to <see cref="OverBudgetLogInterval"/> so the two lines a
+    /// replaying tree can emit stay on the same cadence.
+    /// </summary>
+    private static readonly TimeSpan ActivationTemperatureLogInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Soft cap on <see cref="ActivationTemperatureLogStamps"/>, with the same
+    /// contract as <see cref="OverBudgetLogStampCapacity"/>: reaching it
+    /// triggers an opportunistic sweep of entries older than
+    /// <see cref="ActivationTemperatureLogInterval"/>, which is free to drop
+    /// because an aged-out stamp suppresses nothing.
+    /// </summary>
+    private const int ActivationTemperatureLogStampCapacity = 4096;
+
+    /// <summary>
+    /// Last-emitted timestamps for the activation-temperature sample line,
+    /// keyed by <b>tree only</b>. Static for the same reason as
+    /// <see cref="OverBudgetLogStamps"/> - the point is to suppress across
+    /// repeated activations, and per-activation state would reset every time
+    /// and suppress nothing.
+    /// <para>
+    /// The leaf id is deliberately <b>not</b> part of this key, which is the
+    /// opposite of the choice <see cref="OverBudgetLogStamps"/> documents for
+    /// issue #2023. That reasoning does not transfer: the over-budget warning
+    /// reports a per-leaf checkpoint, and comparing checkpoints across lines
+    /// naming different leaves is meaningless, so its key must name the leaf.
+    /// This line reports a per-tree aggregate that is already summed over every
+    /// leaf, so successive lines for one tree are comparable by construction,
+    /// and keying by leaf would emit one line per leaf per interval - the flood
+    /// the throttle exists to prevent.
+    /// </para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, long> ActivationTemperatureLogStamps = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Cumulative per-tree cold and warm activation-replay totals for the life
+    /// of the process. Growth is bounded by the number of distinct trees the
+    /// silo activates leaves for - the same bound
+    /// <see cref="LatticeMetrics.TagTree"/> already assumes - so, unlike the
+    /// stamp maps, this one is never swept: dropping an entry would reset the
+    /// totals, and a line whose totals restarted at zero would report a ratio
+    /// for an arbitrary sub-window while claiming to be cumulative.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, ActivationTemperatureTotals> ActivationTemperatureTotalsByTree = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// One tree's running cold and warm activation-replay totals. Each arm is
+    /// exact under concurrency; the returned pair is a sample, so a concurrent
+    /// activation on another silo thread may already have advanced the other
+    /// arm by the time the pair is read. That is harmless for the ratio, which
+    /// is a long-run quantity, and the counter remains the exact count.
+    /// </summary>
+    private sealed class ActivationTemperatureTotals
+    {
+        private long _cold;
+        private long _warm;
+
+        /// <summary>
+        /// Records one replay on the arm selected by <paramref name="cold"/>
+        /// and returns the totals as observed immediately afterwards.
+        /// </summary>
+        public (long Cold, long Warm) Add(bool cold)
+        {
+            if (cold)
+            {
+                Interlocked.Increment(ref _cold);
+            }
+            else
+            {
+                Interlocked.Increment(ref _warm);
+            }
+
+            return (Interlocked.Read(ref _cold), Interlocked.Read(ref _warm));
+        }
+    }
+
+    /// <summary>
+    /// Records one permitted activation replay against its tree's cumulative
+    /// cold / warm totals, and returns those totals when the sample line is due
+    /// again for that tree - or <see langword="null"/> when the line is
+    /// currently suppressed.
+    /// <para>
+    /// Accumulation is unconditional and happens <b>before</b> the throttle is
+    /// consulted, which is the property that makes the design work. A
+    /// rate-limited line that announced each activation would undercount by an
+    /// unknown factor, because suppression is invisible in the output; a
+    /// rate-limited <b>sample of a counter</b> does not, because every
+    /// suppressed activation is still in the totals the next emitted line
+    /// prints. So any one line yields the cold:warm ratio and any two yield the
+    /// rate between them.
+    /// </para>
+    /// <para>
+    /// Suppression is best-effort under races, exactly as
+    /// <see cref="ShouldLogOverBudgetReplay"/> is: two threads may each emit a
+    /// line, which costs a duplicate sample and nothing else. Internal so the
+    /// accumulate-then-throttle composition is testable as one unit rather than
+    /// re-assembled by a test in an order production does not use.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree the activating leaf belongs to.</param>
+    /// <param name="cold">
+    /// <see langword="true"/> when the activation replays from the <c>-1</c>
+    /// sentinel with no snapshot or cache anchor.
+    /// </param>
+    /// <param name="now">
+    /// The <see cref="Stopwatch.GetTimestamp"/> reading to evaluate the
+    /// throttle at. Supplied by the caller so a test can advance time
+    /// deterministically instead of waiting out the interval.
+    /// </param>
+    /// <returns>
+    /// The tree's cumulative <c>(cold, warm)</c> totals when a line is due,
+    /// otherwise <see langword="null"/>.
+    /// </returns>
+    internal static (long Cold, long Warm)? ObserveLeafActivationReplay(string treeId, bool cold, long now)
+    {
+        var totals = ActivationTemperatureTotalsByTree
+            .GetOrAdd(treeId, static _ => new ActivationTemperatureTotals())
+            .Add(cold);
+
+        return ShouldLogActivationTemperature(treeId, now) ? totals : null;
+    }
+
+    /// <summary>
+    /// True when the activation-temperature sample line is due again for
+    /// <paramref name="treeId"/>. Same shape as
+    /// <see cref="ShouldLogOverBudgetReplay"/> - a sibling stamp map, its own
+    /// interval, and the same aged-out sweep at capacity.
+    /// </summary>
+    /// <param name="treeId">The tree the activating leaf belongs to.</param>
+    /// <param name="now">The timestamp to evaluate the interval against.</param>
+    /// <returns><see langword="true"/> when the line should be emitted.</returns>
+    private static bool ShouldLogActivationTemperature(string treeId, long now)
+    {
+        if (!ActivationTemperatureLogStamps.TryGetValue(treeId, out var last))
+        {
+            if (ActivationTemperatureLogStamps.Count >= ActivationTemperatureLogStampCapacity)
+            {
+                PruneActivationTemperatureLogStamps(now);
+            }
+
+            return ActivationTemperatureLogStamps.TryAdd(treeId, now);
+        }
+
+        if (Stopwatch.GetElapsedTime(last, now) < ActivationTemperatureLogInterval)
+        {
+            return false;
+        }
+
+        return ActivationTemperatureLogStamps.TryUpdate(treeId, now, last);
+    }
+
+    /// <summary>
+    /// Drops every <see cref="ActivationTemperatureLogStamps"/> entry that has
+    /// already aged past <see cref="ActivationTemperatureLogInterval"/>. Such an
+    /// entry would permit the next line anyway, so removing it is semantically
+    /// free. The cumulative totals are a separate map and are never swept.
+    /// </summary>
+    /// <param name="now">The timestamp the calling check is evaluated at.</param>
+    private static void PruneActivationTemperatureLogStamps(long now)
+    {
+        foreach (var stamp in ActivationTemperatureLogStamps)
+        {
+            if (Stopwatch.GetElapsedTime(stamp.Value, now) >= ActivationTemperatureLogInterval)
+            {
+                ActivationTemperatureLogStamps.TryRemove(stamp);
             }
         }
     }
