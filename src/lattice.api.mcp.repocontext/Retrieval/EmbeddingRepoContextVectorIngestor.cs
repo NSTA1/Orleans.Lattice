@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Orleans.Serialization;
@@ -224,6 +225,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         RepoContextEmbeddingCoverage coverage;
         var coverageProbeFailed = false;
         var gapsSelected = 0;
+        var gapSelectedFiles = new List<RepoFileEntry>();
         try
         {
             coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken)
@@ -244,7 +246,12 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
         var toEmbed = coverageProbeFailed
             ? new List<RepoFileEntry>(changedFiles)
-            : SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles, out gapsSelected);
+            : SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles, out gapsSelected, out gapSelectedFiles);
+        if (gapSelectedFiles.Count > 0)
+        {
+            LogGapSelection(repoId, gapSelectedFiles);
+        }
+
         if (toEmbed.Count == 0)
         {
             return new RepoFileVectorIngestOutcome(0, gapsSelected, !coverageProbeFailed);
@@ -335,6 +342,17 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             _logger.LogInformation(
                 "Skipping bootstrap vectorisation for repository {RepoId}: no embedding batch succeeded. Search will use keyword recall.",
                 repoId);
+        }
+
+        // Diagnostic read-back: with this pass's vectors and contentless markers now
+        // written, re-probe the coverage of exactly the gap files just embedded. This
+        // is the immediate, in-pass arm of the (a)-versus-(b) discriminator - it says
+        // whether the write is readable now - which the cross-pass set-digest above
+        // then completes over the next quiet pass.
+        if (gapSelectedFiles.Count > 0)
+        {
+            await LogGapCoverageReadBackAsync(repoId, gapSelectedFiles, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return new RepoFileVectorIngestOutcome(embedded, gapsSelected, !coverageProbeFailed);
@@ -1314,23 +1332,138 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         RepoContextEmbeddingCoverage coverage,
         IReadOnlyList<RepoFileEntry> changedFiles,
         IReadOnlyList<RepoFileEntry> unchangedFiles,
-        out int gapsSelected)
+        out int gapsSelected,
+        out List<RepoFileEntry> gapSelectedFiles)
     {
         var toEmbed = new List<RepoFileEntry>(changedFiles.Count + unchangedFiles.Count);
         toEmbed.AddRange(changedFiles);
 
         gapsSelected = 0;
+        gapSelectedFiles = new List<RepoFileEntry>();
         foreach (var file in unchangedFiles)
         {
             var sourceId = VectorCodec.SourceId(RepoContextKeys.File(repoId, file.RelativePath));
             if (!coverage.IsCovered(sourceId))
             {
                 toEmbed.Add(file);
+                gapSelectedFiles.Add(file);
                 gapsSelected++;
             }
         }
 
         return toEmbed;
+    }
+
+    /// <summary>
+    /// The order-independent set-digest of the unchanged files the back-fill
+    /// selected as uncovered gaps: the XOR of each file's 64-bit
+    /// <see cref="VectorCodec.SourceId"/>, so the digest depends on <i>which</i> files
+    /// were selected and not on the order they were walked. Two consecutive quiet
+    /// passes that re-select the same set produce the same digest; a rotating set
+    /// produces a changing one. This is the identity the flat gap <i>count</i> in the
+    /// pass log cannot supply, and it is what discriminates a broken presence check
+    /// (same set every pass) from ongoing vector loss (a changing set) from the logs
+    /// alone. XOR means a file present an even number of times cancels, which the gap
+    /// selection never produces (each unchanged file is considered once), so the
+    /// digest is a faithful set fingerprint here.
+    /// </summary>
+    internal static ulong GapSetDigest(string repoId, IReadOnlyList<RepoFileEntry> gapSelectedFiles)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(gapSelectedFiles);
+
+        ulong digest = 0;
+        foreach (var file in gapSelectedFiles)
+        {
+            var sourceId = VectorCodec.SourceId(RepoContextKeys.File(repoId, file.RelativePath));
+            digest ^= Convert.ToUInt64(sourceId, 16);
+        }
+
+        return digest;
+    }
+
+    /// <summary>
+    /// Emits the identity of the unchanged files the back-fill selected as uncovered
+    /// gaps this pass, so two consecutive quiet passes can be compared. The pass log
+    /// already reports the gap <i>count</i>, but a flat count discriminates nothing:
+    /// re-embedding the same files every pass (a broken presence check) and
+    /// re-embedding a different set every pass (ongoing vector loss) both hold the
+    /// count flat. The order-independent set-digest makes the two distinguishable
+    /// from the logs alone, without adding per-file logging to the hot path.
+    /// Diagnostic only; it never changes what is embedded.
+    /// </summary>
+    private void LogGapSelection(string repoId, IReadOnlyList<RepoFileEntry> gapSelectedFiles)
+    {
+        const int SampleSize = 16;
+        var sample = gapSelectedFiles
+            .Select(static file => file.RelativePath)
+            .OrderBy(static path => path, StringComparer.Ordinal)
+            .Take(SampleSize)
+            .ToArray();
+
+        _logger.LogInformation(
+            "Repo {RepoId}: embedding back-fill selected {GapCount} unchanged file(s) as uncovered gaps "
+            + "(order-independent set-digest {GapDigest}; sample of up to {SampleSize}: {GapSample}). "
+            + "A stable digest across consecutive quiet passes means the same files are re-embedded every "
+            + "pass (a broken presence check); a changing digest means a rotating set (ongoing vector loss).",
+            repoId,
+            gapSelectedFiles.Count,
+            GapSetDigest(repoId, gapSelectedFiles).ToString("x16"),
+            SampleSize,
+            string.Join(", ", sample));
+    }
+
+    /// <summary>
+    /// Immediately re-probes the coverage of exactly the files this pass just
+    /// embedded as gaps, asking the same covered-set question the next pass's
+    /// selection asks. If the just-written coverage is already visible here yet the
+    /// next quiet pass still re-selects the same files, the write landed and the
+    /// fault is a stale presence read; if it is <i>not</i> visible on this immediate
+    /// re-probe, the membership write is not durably readable and the re-embedding is
+    /// correct behaviour masking a durability defect. Best-effort and diagnostic: a
+    /// probe failure is logged and swallowed so it can never take a successful pass
+    /// down.
+    /// </summary>
+    private async Task LogGapCoverageReadBackAsync(
+        string repoId, IReadOnlyList<RepoFileEntry> gapSelectedFiles, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var keys = new List<string>(gapSelectedFiles.Count);
+            foreach (var file in gapSelectedFiles)
+            {
+                keys.Add(RepoContextKeys.File(repoId, file.RelativePath));
+            }
+
+            var covered = await _writer.ProbeCoveredSourceIdsAsync(repoId, keys, cancellationToken)
+                .ConfigureAwait(false);
+
+            var visible = 0;
+            foreach (var key in keys)
+            {
+                if (covered.Contains(VectorCodec.SourceId(key)))
+                {
+                    visible++;
+                }
+            }
+
+            _logger.LogInformation(
+                "Repo {RepoId}: embedding back-fill coverage read-back: {Visible} of {GapCount} just-embedded "
+                + "gap file(s) are covered on an immediate re-probe. All covered means the write is readable and "
+                + "a persistent next-pass gap is a stale presence check; fewer than all means the just-written "
+                + "coverage is not durably readable (ongoing vector loss).",
+                repoId,
+                visible,
+                gapSelectedFiles.Count);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Repo {RepoId}: embedding back-fill coverage read-back probe failed; it is diagnostic only and "
+                + "does not affect the pass.",
+                repoId);
+        }
     }
 
     /// <inheritdoc />
