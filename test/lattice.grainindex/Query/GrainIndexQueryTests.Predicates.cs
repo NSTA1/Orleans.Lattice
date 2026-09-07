@@ -253,6 +253,29 @@ public sealed partial class GrainIndexQueryTests
     }
 
     [Test]
+    public async Task Where_greater_than_or_equal_zero_matches_negative_zero()
+    {
+        var index = Wide();
+
+        var keys = await KeysAsync(index.Index.Where(s => s.Score >= 0.0));
+
+        // bob is stored as -0.0, which satisfies `>= 0.0`; it must not be dropped
+        // by a range that starts at only the +0.0 slot.
+        Assert.That(keys, Is.EquivalentTo(new[] { "alice", "bob", "carol" }));
+    }
+
+    [Test]
+    public async Task Where_greater_than_zero_excludes_both_signed_zeros()
+    {
+        var index = Wide();
+
+        var keys = await KeysAsync(index.Index.Where(s => s.Score > 0.0));
+
+        // Neither alice (+0.0) nor bob (-0.0) is strictly greater than zero.
+        Assert.That(keys, Is.EquivalentTo(new[] { "carol" }));
+    }
+
+    [Test]
     public async Task Where_equality_with_not_a_number_matches_nothing()
     {
         var index = Wide();
