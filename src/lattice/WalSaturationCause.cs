@@ -35,7 +35,7 @@ public enum WalSaturationCause
 
     /// <summary>
     /// Recent WAL storage-provider failures crossed
-    /// <see cref="LatticeOptions.WalSaturationProviderFailureThreshold"/> in one
+    /// <see cref="LatticeOptions.WalSaturationProviderFailureRateThreshold"/> in one
     /// sample window.
     /// </summary>
     ProviderFailures = 2,

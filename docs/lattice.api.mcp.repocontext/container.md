@@ -62,10 +62,26 @@ The host is configured entirely by environment variables. The common ones:
 | `LATTICE_DATA_ROOT` | `/data` | Root for all durable local state; must be a writable host mount. |
 | `LATTICE_MCP_PORT` | `8080` | The MCP listener port (the only application listener). |
 | `LATTICE_WORKSPACE_ROOT` | `/workspace` | The read-only root that runtime-registered repositories must resolve under; a path escaping it is refused. |
-| `LATTICE_EMBEDDING_ENDPOINT` | (unset) | The separate embedding companion's base address; enables semantic search. |
+| `LATTICE_EMBEDDING_ENDPOINT` | `http://localhost:9000` | The separate embedding companion's base address. The embedding provider is always bound, so this repoints it at the companion rather than switching semantic search on; semantic search degrades to keyword ranking whenever that address cannot be reached. Must be an absolute URI or startup fails. |
 | `LATTICE_WAL_DIR` / `LATTICE_SQLITE_PATH` | under the data root | Override the WAL directory or SQLite file path individually. |
 | `LATTICE_WAL_PIN_BUCKETS` | `8` | How many persisted slots the WAL materialiser retention-floor pin state is split across, so an advancing floor rewrites a fraction of the pin blob rather than all of it. Accepts 1-256; `1` is the library's legacy single-slot write path. Widening self-migrates on activation and leaves the legacy slot intact, so reverting to `1` is a safe rollback that over-retains WAL rather than over-trimming it. |
 | `LATTICE_POSTGRES_CONNECTION_STRING` / `LATTICE_AZURE_STORAGE_CONNECTION_STRING` | (unset) | Required by the `postgres` / `azure` profiles. |
+
+A profile is a preset, not a straitjacket: each store it selects can be overridden on its own, and the remaining variables name the cluster and the embedding space. An unrecognised value for any of the four provider variables fails startup rather than falling back silently:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LATTICE_WAL_PROVIDER` | `azure` under the `azure` profile, otherwise `file` | Selects the WAL provider on its own. Accepts `file` or `azure` (`azuretable`). |
+| `LATTICE_GRAIN_STORAGE` | the profile's store (`sqlite` / `postgres` / `azure`) | Selects the grain-storage provider on its own. Accepts `sqlite`, `postgres` (`postgresql`), or `azure` (`azuretable`). |
+| `LATTICE_REMINDERS` | the profile's store | Selects the reminders provider on its own; same accepted values as the grain store. |
+| `LATTICE_CLUSTERING` | `azure` under the `azure` profile, otherwise `localhost` | Selects the clustering provider. Accepts `localhost` (`local`) or `azure`. |
+| `LATTICE_AZURE_WAL_TABLE` | `RepoContextWal` | The Azure Table the WAL writes to when the Azure WAL provider is selected. |
+| `LATTICE_EMBEDDING_MODEL` | `nomic-ai/nomic-embed-text-v1` | The embedding model id requested from the companion. |
+| `LATTICE_EMBEDDING_DIMENSION` | `768` | The embedding vector dimension; must match the model the companion serves. A non-positive value fails startup. |
+| `LATTICE_CLUSTER_ID` | `repo-context` | The Orleans cluster id. |
+| `LATTICE_SERVICE_ID` | `repo-context` | The Orleans service id. |
+
+Selecting any Azure-backed store without `LATTICE_AZURE_STORAGE_CONNECTION_STRING` refuses to start rather than silently degrading durability. Changing `LATTICE_EMBEDDING_MODEL` or `LATTICE_EMBEDDING_DIMENSION` is a **new embedding space**, so it builds a wholly separate approximate index under its own prefix - which is what `LATTICE_REPOCONTEXT_ANN_INDEX_RECLAMATION` below then retires the superseded one for.
 
 The background reconcile cadence (see [Background reconcile and change detection](#background-reconcile-and-change-detection)) is tuned by five further variables. The two periodic deadlines - the full walk and the embedding gap scan - are declared in wall clock but **counted in reconcile passes**: each is divided by the widest scheduled reconcile spacing (`LATTICE_RECONCILE_INTERVAL_SECONDS` plus `LATTICE_RECONCILE_JITTER_SECONDS`), rounded up, and clamped to at least one pass. That is what makes them hold on a large repository, where a pass routinely takes longer than its own scheduled spacing and a wall-clock deadline would be past on arrival every single time:
 
