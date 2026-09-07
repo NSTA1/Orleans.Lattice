@@ -171,7 +171,10 @@ public class SequenceProvenanceDecoderTests
         var rga = new Rga();
         rga.InsertAfter(Rga.Root, "r1", A);
 
-        Assert.That(Decoder.DecodeState(rga).All(e => e.WallClock is null), Is.True);
+        var events = Decoder.DecodeState(rga);
+
+        Assert.That(events, Is.Not.Empty, "the 'always null' claim is only meaningful over a non-empty decode");
+        Assert.That(events.All(e => e.WallClock is null), Is.True);
     }
 
     // ---- current-value (live nodes in sequence order) path ----

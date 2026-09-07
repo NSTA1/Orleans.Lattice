@@ -138,7 +138,10 @@ public class OrFlagProvenanceDecoderTests
         var flag = new OrFlag();
         flag.Enable("r1", 1);
 
-        Assert.That(Decoder.DecodeState(flag).All(e => e.WallClock is null), Is.True);
+        var events = Decoder.DecodeState(flag);
+
+        Assert.That(events, Is.Not.Empty, "the 'always null' claim is only meaningful over a non-empty decode");
+        Assert.That(events.All(e => e.WallClock is null), Is.True);
     }
 
     // ---- current-value (boolean state) path ----

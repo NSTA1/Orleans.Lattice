@@ -149,7 +149,10 @@ public class MvRegisterProvenanceDecoderTests
         var m = new MvRegister();
         m.Set("r1", X);
 
-        Assert.That(Decoder.DecodeState(m).All(e => e.WallClock is null), Is.True);
+        var events = Decoder.DecodeState(m);
+
+        Assert.That(events, Is.Not.Empty, "the 'always null' claim is only meaningful over a non-empty decode");
+        Assert.That(events.All(e => e.WallClock is null), Is.True);
     }
 
     // ---- current-value (live entries) path ----
