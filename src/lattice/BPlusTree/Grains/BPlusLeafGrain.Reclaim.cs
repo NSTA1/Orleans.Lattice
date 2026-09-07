@@ -315,6 +315,15 @@ internal sealed partial class BPlusLeafGrain
     /// in the growth direction - the direction that was already correct.
     /// </para>
     /// <para>
+    /// There are TWO declinations here, not one, and they cover opposite
+    /// orderings of the same race. The comparison covers a split that landed
+    /// after the reclaim built its plan. The <c>SplitInProgress</c> check
+    /// covers a reclaim that built its plan after the split intent landed -
+    /// in which case the plan names the split's own new sibling, the
+    /// comparison agrees, and only this leaf's split state shows that the
+    /// successor is about to receive rows. See issue #2160.
+    /// </para>
+    /// <para>
     /// Declining is safe where corrupting is not: reclaim is background work,
     /// and the next pass sees a settled topology. Covered by
     /// <c>LeafReclaimSplitRaceIntegrationTests</c>, which drives the
@@ -347,6 +356,46 @@ internal sealed partial class BPlusLeafGrain
             // safe answer; reclaim is background work and the next pass sees
             // the settled topology.
             if (state.State.NextSibling != expectedNext) return false;
+
+            // The SAME hazard arriving in the OPPOSITE order, which the
+            // comparison above cannot see. See issue #2160.
+            //
+            // The check above catches a split that landed AFTER the reclaim
+            // built its plan: the plan names the pre-split successor, our
+            // pointer names the new sibling, they differ, we decline. But
+            // SplitAsync persists SplitState, SplitKey, SplitSiblingId and
+            // NextSibling in ONE atomic block, so the new sibling S becomes
+            // chain-reachable the instant the split intent lands. The reclaim
+            // walk follows NextSibling, so a pass starting after that instant
+            // builds its plan naming S itself - and then expectedNext == S ==
+            // our NextSibling, the comparison agrees, and the fold proceeds.
+            //
+            // S passes the reclaim probe for a reason that is not a bug in the
+            // probe: CompleteSplitAsync seeds S's key range BEFORE awaiting
+            // MergeEntriesAsync, so in that window S is a fresh grain with a
+            // declared range, zero rows, SplitState.Unsplit and no
+            // MovedAwaySlots. HasReclaimBlockingState() on S is legitimately
+            // false. The evidence that S must not be touched is not on S at
+            // all - it is here, on the leaf that is splitting into it.
+            //
+            // Unlinking S then lets CompleteSplitAsync merge the split's rows
+            // into a leaf that is retired and out of the chain. The retirement
+            // latch does not save it: _reclaimRetired is a bare instance field
+            // with no persisted counterpart, so if S deactivates in between,
+            // the merge call reactivates it with the latch cleared and the
+            // rows land silently on an unreachable leaf. Nothing throws.
+            //
+            // Declining costs nothing that matters: reclaim is background work
+            // and the next pass sees a settled topology, exactly as for the
+            // comparison above. The shard root releases the retirement latch it
+            // took on S on this path (ShardRootGrain.LeafReclaim.cs, the
+            // !unlinked arm calls AbandonRetirementAsync), so a declination
+            // does not leave S refusing writes.
+            if (state.State.SplitState == SplitState.SplitInProgress
+                && state.State.SplitSiblingId == expectedNext)
+            {
+                return false;
+            }
 
             var prevNext = state.State.NextSibling;
             var prevHigh = state.State.HighKeyExclusive;
