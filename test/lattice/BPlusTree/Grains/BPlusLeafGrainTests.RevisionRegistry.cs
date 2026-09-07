@@ -179,6 +179,33 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task OnActivateAsync_publishes_a_revision_cookie()
+    {
+        // GUARD, not a discriminator (issue #2151 is explicit about this):
+        // asserting merely that activation publishes SOME cookie passes even
+        // when activations reuse each other's values, which is the more
+        // serious of the two defects. The value of this test is narrow and
+        // stated deliberately: it pins the presence of the entry, so a later
+        // refactor that drops the publish from the activation path fails
+        // here rather than silently returning caches to the TTL gate after
+        // every projection rebuild. The equal-value collision is covered by
+        // Re_activation_never_republishes_a_cookie_value_from_a_previous_activation.
+        var (grain, leafId) = CreateLeafWithUniqueId(nameof(OnActivateAsync_publishes_a_revision_cookie));
+
+        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False,
+            "precondition: nothing published before activation");
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var revision), Is.True,
+            "activation must publish a cookie: the snapshot rehydrate and WAL replay rebuild the "
+            + "projection without going through any bumping foreground site, so without an explicit "
+            + "publish a re-activated leaf leaves the registry empty and a cache holding a cookie "
+            + "from the previous activation falls back to its TTL gate.");
+        Assert.That(revision, Is.GreaterThan(0));
+    }
+
+    [Test]
     public async Task Re_activation_never_republishes_a_cookie_value_from_a_previous_activation()
     {
         // ABA discriminator (issue #2151). The cache compares cookies for

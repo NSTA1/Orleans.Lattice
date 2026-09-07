@@ -294,6 +294,76 @@ public partial class LeafCacheGrainTests
     }
 
     [Test]
+    public async Task RefreshAsync_calls_RPC_after_primary_reactivates_without_writing_under_a_non_zero_CacheTtl()
+    {
+        // DISCRIMINATOR for the replay-path half of issue #2151.
+        //
+        // Read the TTL setting first, because it is the whole reason this
+        // test can see anything. The cache's revision branch is only taken
+        // when the registry holds an entry; with no entry it falls to the
+        // TTL gate. That gate is guarded by `ttl > TimeSpan.Zero`, and
+        // LatticeOptions.CacheTtl defaults to Zero - so at the default the
+        // gate is UNREACHABLE, the cache refreshes on every read anyway, and
+        // an assertion written here passes whether or not the defect is
+        // present. Setting a non-zero TTL explicitly is what makes this a
+        // test rather than a tautology.
+        //
+        // The shape: a cache observes a real cookie from activation A, the
+        // leaf deactivates and re-activates WITHOUT any write (the projection
+        // rebuild path - rebuild deactivates, the next activation replays),
+        // and the cache reads again inside the TTL window. If activation
+        // publishes a cookie the cache sees a value different from its stamp,
+        // takes the revision branch, and refreshes. If it does not, the
+        // registry is empty, the cache falls to the TTL gate, and it keeps
+        // serving its snapshot for the rest of the window.
+        var unique = $"replaypublish-{Guid.NewGuid():N}";
+        var leafId = GrainId.Create("leaf", unique);
+
+        var mockPrimary = Substitute.For<IBPlusLeafGrain>();
+        mockPrimary.GetTreeIdAsync().Returns("test-tree");
+        mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
+
+        var cacheContext = Substitute.For<IGrainContext>();
+        cacheContext.GrainId.Returns(GrainId.Create("cache", leafId.ToString()));
+
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(mockPrimary);
+
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>())
+            .Returns(new LatticeOptions { CacheTtl = TimeSpan.FromMinutes(5) });
+
+        var resolver = CreateResolver(grainFactory, optionsMonitor);
+        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, resolver, TestOriginClusterIdResolver.Default());
+
+        var first = BPlusLeafGrainTests.CreateLeafGrainForCrossFixtureUse(replicaId: unique);
+        await first.SetAsync("k", Encoding.UTF8.GetBytes("v1"));
+
+        await cache.GetAsync("any");   // RPC #1: stamps the activation-A cookie.
+        await cache.GetAsync("any");   // skip: cookie unchanged.
+        await mockPrimary.Received(1).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
+
+        await ((IGrainBase)first).OnDeactivateAsync(
+            new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"),
+            CancellationToken.None);
+        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False,
+            "precondition: deactivation prunes the registry entry");
+
+        // Re-activate with no writes at all. Everything the leaf does here
+        // runs on the activation path.
+        var second = BPlusLeafGrainTests.CreateLeafGrainForCrossFixtureUse(replicaId: unique);
+        await ((IGrainBase)second).OnActivateAsync(CancellationToken.None);
+
+        // If this fails at Received(1): the primary re-activated and rebuilt
+        // its projection, but the cache stayed on its snapshot. With no
+        // cookie published on the activation path the registry is empty, the
+        // revision branch is not taken, and the TTL gate returns early for
+        // the rest of the window (issue #2151 defect 1).
+        await cache.GetAsync("any");
+        await mockPrimary.Received(2).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
+    }
+
+    [Test]
     public async Task RefreshAsync_calls_RPC_only_once_per_cookie_advance_across_many_reads()
     {
         // Amortisation invariant: the optimisation's value
