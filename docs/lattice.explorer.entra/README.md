@@ -13,7 +13,7 @@ It is the interactive counterpart to [`Orleans.Lattice.Explorer.Entra.Web`](../l
 - **No public API change to the released Explorer.** The package plugs into the core `IExplorerAuthMethod` seam for the `entra` scheme; the existing sign-in dialog already renders a "Sign in with Entra ID" button when the State API advertises that scheme.
 - **MSAL isolated to this package.** `AddExplorerEntraAuth` registers the Entra `IExplorerAuthMethod` alongside the built-in Basic provider without the core Explorer taking any dependency on MSAL.
 - **Client-only OIDC parameters.** Every configured value (authority, tenant, client id, scopes) is a public OIDC parameter; no client secret is ever configured on the Explorer.
-- **Advertised parameters take precedence, except the audience.** When the State API advertises its Entra authority, tenant, and client id, those advertised values take precedence over the static options, so that static configuration can be omitted. The audience is the exception: a configured `Scopes` list overrides the advertised audience, which is used only when `Scopes` is left empty.
+- **Configuration takes precedence over the advertisement.** When the State API advertises its Entra authority, tenant, client id, and audience, each advertised value is used only for what is *not* configured locally, so static configuration can be omitted without it ever being silently overridden. The advertisement is fetched over an unauthenticated RPC from the very endpoint the minted token is handed to, so it is not a trustworthy source for the identity provider you sign in against: an advertised authority is admitted only when it is `https` and names a recognised Entra login host (`login.microsoftonline.com` and the sovereign-cloud hosts), or a host you list in `AllowedAuthorityHosts`. Anything else is refused at sign-in with the remedy named.
 - **Interactive or headless.** The default is an interactive browser redirect; set `UseDeviceCode` to switch to the device-code flow for headless or CLI hosts, with a `DeviceCodeCallback` to surface the prompt text.
 
 ## Setup
@@ -46,10 +46,11 @@ services.AddExplorerEntraAuth(options =>
 | `TenantId` | `string?` | `null` | The directory tenant id, used to compose the authority when `Authority` is unset. |
 | `ClientId` | `string?` | `null` | The public client (application) id registered in Entra. |
 | `Scopes` | `IList<string>` | empty | The scopes requested for the access token, identifying the State API audience (for example `api://<app-id>/.default`). At least one scope is required to acquire a token. |
+| `AllowedAuthorityHosts` | `IList<string>` | empty | The hosts an *advertised* authority may name. Consulted only when neither `Authority` nor `TenantId` is configured. When empty, the well-known Entra login hosts are accepted. |
 | `UseDeviceCode` | `bool` | `false` | When `true`, sign-in uses the device-code flow (for headless/CLI hosts) instead of an interactive browser redirect. |
 | `DeviceCodeCallback` | `Func<string, CancellationToken, Task>?` | `null` | Invoked with the device-code prompt text when `UseDeviceCode` is enabled, so a host can surface it however it likes. Defaults to writing to the console. |
 
-Statically supplied `Authority`/`TenantId` and `ClientId` may be discovered instead at connect time from the State API's auth-scheme advertisement, and the advertised values take precedence over the static options. The audience is the exception: a configured `Scopes` list overrides the advertised audience, which is resolved only when `Scopes` is empty.
+`Authority`/`TenantId`, `ClientId` and the audience may be discovered at connect time from the State API's auth-scheme advertisement instead of being supplied statically, but only for what is left unset: a configured value always wins. An advertised authority is additionally admitted only when it is `https` and its host is a recognised Entra login host or one listed in `AllowedAuthorityHosts`, so a hostile endpoint cannot choose the directory you authenticate against.
 
 ## Reference
 

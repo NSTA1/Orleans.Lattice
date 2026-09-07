@@ -8,9 +8,11 @@ namespace Orleans.Lattice.Explorer.Entra;
 /// The Entra ID <see cref="IExplorerAuthMethod"/>: runs an interactive OIDC
 /// sign-in (auth-code + PKCE, or device-code) for the configured audience, then
 /// hands the connection a live bearer credential that refreshes silently and
-/// transparently. It resolves its parameters from the endpoint's advertised
-/// scheme (authority, tenant, client id, audience), falling back to statically
-/// configured <see cref="ExplorerEntraOptions"/>.
+/// transparently. Its parameters (authority, tenant, client id, audience) come
+/// from the statically configured <see cref="ExplorerEntraOptions"/> where they
+/// are set, falling back to the endpoint's advertised scheme where they are
+/// not; an advertised authority is admitted only when it is https and names a
+/// recognised Entra login host.
 /// </summary>
 public sealed class EntraExplorerAuthMethod : IExplorerAuthMethod
 {
@@ -79,7 +81,7 @@ public sealed class EntraExplorerAuthMethod : IExplorerAuthMethod
     private static EntraTokenRequest BuildRequest(ExplorerAuthChallengeContext context, ExplorerEntraOptions options)
     {
         var authority = ResolveAuthority(context.Parameters, options);
-        var clientId = Resolve(context.Parameters, ExplorerAuthSchemes.ClientIdParameter, options.ClientId);
+        var clientId = Resolve(options.ClientId, context.Parameters, ExplorerAuthSchemes.ClientIdParameter);
         var scopes = ResolveScopes(context.Parameters, options);
 
         if (string.IsNullOrWhiteSpace(authority))
@@ -114,19 +116,70 @@ public sealed class EntraExplorerAuthMethod : IExplorerAuthMethod
 
     private static string? ResolveAuthority(IReadOnlyDictionary<string, string> parameters, ExplorerEntraOptions options)
     {
-        var advertised = parameters.GetValueOrDefault(ExplorerAuthSchemes.AuthorityParameter);
-        if (!string.IsNullOrWhiteSpace(advertised))
-        {
-            return advertised;
-        }
-
+        // Locally configured values win over the advertisement. The endpoint's
+        // auth-scheme advertisement is fetched over an unauthenticated RPC from
+        // the very endpoint the minted token is then handed to, so it is not a
+        // trustworthy source for the identity provider the operator signs in
+        // against. Configuration must not be silently overridden by it - the
+        // same precedence ResolveScopes already applies, and the same one the
+        // hosted-web provider applies.
         if (!string.IsNullOrWhiteSpace(options.Authority))
         {
             return options.Authority;
         }
 
-        var tenant = Resolve(parameters, ExplorerAuthSchemes.TenantIdParameter, options.TenantId);
-        return string.IsNullOrWhiteSpace(tenant) ? null : $"https://login.microsoftonline.com/{tenant}";
+        if (!string.IsNullOrWhiteSpace(options.TenantId))
+        {
+            return ComposeAuthority(options.TenantId);
+        }
+
+        var advertised = parameters.GetValueOrDefault(ExplorerAuthSchemes.AuthorityParameter);
+        if (!string.IsNullOrWhiteSpace(advertised))
+        {
+            EnsureAdvertisedAuthorityIsAdmitted(advertised, options);
+            return advertised;
+        }
+
+        var advertisedTenant = parameters.GetValueOrDefault(ExplorerAuthSchemes.TenantIdParameter);
+        return string.IsNullOrWhiteSpace(advertisedTenant) ? null : ComposeAuthority(advertisedTenant);
+    }
+
+    private static string ComposeAuthority(string tenant) => $"https://login.microsoftonline.com/{tenant}";
+
+    /// <summary>
+    /// Admits an authority that came from the endpoint's advertisement, or
+    /// refuses it. Nothing is configured locally in this branch, so the host is
+    /// the only thing pinning which directory the operator is about to
+    /// authenticate against; an unrecognised one is refused rather than used.
+    /// </summary>
+    private static void EnsureAdvertisedAuthorityIsAdmitted(string authority, ExplorerEntraOptions options)
+    {
+        if (!Uri.TryCreate(authority, UriKind.Absolute, out var uri)
+            || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"The endpoint advertised the Entra authority '{authority}', which is not an absolute https URL. "
+                + "An advertised authority is refused unless it is https and its host is admitted; configure "
+                + "ExplorerEntraOptions.Authority (or TenantId) to pin the authority yourself.");
+        }
+
+        var allowed = options.AllowedAuthorityHosts.Count > 0
+            ? options.AllowedAuthorityHosts
+            : DefaultAuthorityHosts;
+
+        foreach (var host in allowed)
+        {
+            if (string.Equals(host, uri.Host, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"The endpoint advertised the Entra authority '{authority}', whose host '{uri.Host}' is not an admitted "
+            + "Entra login host. A hostile endpoint could otherwise choose the identity provider you sign in "
+            + "against. Configure ExplorerEntraOptions.Authority (or TenantId) to pin the authority, or add the "
+            + "host to ExplorerEntraOptions.AllowedAuthorityHosts to accept it.");
     }
 
     private static IReadOnlyList<string> ResolveScopes(IReadOnlyDictionary<string, string> parameters, ExplorerEntraOptions options)
@@ -151,9 +204,19 @@ public sealed class EntraExplorerAuthMethod : IExplorerAuthMethod
         return new[] { scope };
     }
 
-    private static string? Resolve(IReadOnlyDictionary<string, string> parameters, string key, string? fallback)
-    {
-        var advertised = parameters.GetValueOrDefault(key);
-        return string.IsNullOrWhiteSpace(advertised) ? fallback : advertised;
-    }
+    private static string? Resolve(string? configured, IReadOnlyDictionary<string, string> parameters, string key)
+        => string.IsNullOrWhiteSpace(configured) ? parameters.GetValueOrDefault(key) : configured;
+
+    /// <summary>
+    /// The well-known Entra login hosts an advertised authority may name when
+    /// the operator has not supplied an allow-list of their own. Covers the
+    /// public cloud and the sovereign clouds Entra serves.
+    /// </summary>
+    private static readonly string[] DefaultAuthorityHosts =
+    [
+        "login.microsoftonline.com",
+        "login.microsoftonline.us",
+        "login.partner.microsoftonline.cn",
+        "login.microsoftonline.de",
+    ];
 }
