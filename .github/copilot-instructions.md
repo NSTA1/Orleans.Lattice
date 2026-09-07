@@ -37,8 +37,9 @@ before reading source you intend to change, and capture at each durable finding 
 plus a self-check for the symptoms of under-use. Follow them; a session that files
 memories it never reads back, or that never calls `context`, is using a fraction
 of the surface. When several sessions work one epic or workstream, memory is also
-their **coordination bus**: one topic per workstream, `author` set, and a one-week
-TTL (`ttlSeconds: 604800`) on the handoffs.
+their **coordination bus**: one topic per workstream, `author` set, and no TTL on
+the handoffs - a coordination entry is retired deliberately with `forget` when its
+workstream closes, never left to lapse silently.
 
 Treat an
 explicit user instruction to *remember*, *note*, *keep in mind*, or *don't

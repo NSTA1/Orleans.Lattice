@@ -79,9 +79,10 @@ disagree with the master file, the master file wins.
   calls `context` on a task that required reading source. The master file carries
   the full under-use self-check.
 - **Coordinating with other sessions?** Memory is the bus: one topic per epic or
-  workstream, `author` set to the session identity, and a **one-week TTL**
-  (`ttlSeconds: 604800`) on handoffs - promote anything durable to
-  `gotchas` / `conventions` / `decisions` (no TTL) when the workstream closes.
+  workstream, `author` set to the session identity, and **no TTL** on handoffs -
+  expiry is silent, so retire them deliberately with `forget` when the workstream
+  closes, promoting anything durable to `gotchas` / `conventions` / `decisions`
+  first.
 - **Working the backlog?** Work items are memory entries under the `backlog`
   topic, mirrored one-to-one onto GitHub issues (the issue number *is* the
   item id). Contended state lives in **edges**, not scalar fields, because
