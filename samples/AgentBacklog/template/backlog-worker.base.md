@@ -721,6 +721,17 @@ release last.**
 5. `repocontext_release_claim(key, fencingToken)`. Release is idempotent; a stale
    or missing release reports `released: false` rather than erroring.
 
+**If you were deployed directly against an issue rather than by draining the
+backlog**, there is no item, no claim and no fencing token, so steps 2 and 5 have
+nothing to act on. Do not improvise a substitute. Specifically: do **not** author
+a backlog item for yourself, and do **not** write anything claim-shaped. Still do
+steps 1, 3 and 4 - the durable record and the issue mirror are the whole product
+in that case. Then **report the absence** to whoever deployed you, plainly, as a
+fact about the run rather than an error. The project manager authors the ledger
+row at completion; that is its artefact, not yours. Verify before reporting, with
+`repocontext_claim_status` on the key you would have held and a scan of the
+`backlog` topic, so you are reporting a checked absence and not an assumption.
+
 **On failure, and this path is the normal one, not the exception:**
 
 1. Write `lastLocation` (branch, pull request number, sha) and a short honest

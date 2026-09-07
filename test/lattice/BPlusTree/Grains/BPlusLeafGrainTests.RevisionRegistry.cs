@@ -179,50 +179,59 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Re_activation_never_republishes_a_previous_activations_cookie()
+    public async Task OnActivateAsync_publishes_a_revision_cookie()
     {
-        // The invariant LeafCacheGrain actually depends on, which is NOT
-        // "the counter restarts low".
+        // GUARD, not a discriminator (issue #2151 is explicit about this):
+        // asserting merely that activation publishes SOME cookie passes even
+        // when activations reuse each other's values, which is the more
+        // serious of the two defects. The value of this test is narrow and
+        // stated deliberately: it pins the presence of the entry, so a later
+        // refactor that drops the publish from the activation path fails
+        // here rather than silently returning caches to the TTL gate after
+        // every projection rebuild. The equal-value collision is covered by
+        // Re_activation_never_republishes_a_cookie_value_from_a_previous_activation.
+        var (grain, leafId) = CreateLeafWithUniqueId(nameof(OnActivateAsync_publishes_a_revision_cookie));
+
+        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False,
+            "precondition: nothing published before activation");
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var revision), Is.True,
+            "activation must publish a cookie: the snapshot rehydrate and WAL replay rebuild the "
+            + "projection without going through any bumping foreground site, so without an explicit "
+            + "publish a re-activated leaf leaves the registry empty and a cache holding a cookie "
+            + "from the previous activation falls back to its TTL gate.");
+        Assert.That(revision, Is.GreaterThan(0));
+    }
+
+    [Test]
+    public async Task Re_activation_never_republishes_a_cookie_value_from_a_previous_activation()
+    {
+        // ABA discriminator (issue #2151). The cache compares cookies for
+        // EQUALITY only, so the whole requirement is that a value observed
+        // under one activation is never republished by another. Seeding each
+        // activation at 0 broke exactly that: the registry entry is removed
+        // on deactivation and re-created on the next activation, so
+        // activation B's first bump reproduced activation A's first bump and
+        // a cache holding A's stamp returned early on "provably fresh".
         //
-        // The cache compares cookies for equality and treats an equal pair as
-        // provably fresh:
-        //
-        //     if (sameSiloRev == _lastSeenPrimaryRevision) return;
-        //
-        // That return happens BEFORE the TTL gate, so an equal reading skips
-        // the refresh with no bounded fallback to heal it.
-        //
-        // An earlier revision of this test asserted the opposite - that a
-        // re-activation restarts the counter below the previous activation's
-        // high value - on the reasoning that starting at N+1 "could trick the
-        // cache into thinking nothing had changed". That reasoning was
-        // inverted. Seeding ABOVE the previous high cannot collide: the entry
-        // is absent until the first bump (so the cache takes its cross-grain
-        // path), and every value published thereafter is one the cache has
-        // never seen. Restarting LOW is what collides - an activation that
-        // counts back up through a value the cache already observed makes the
-        // equality check fire on stale state, permanently.
-        //
-        // So the assertion below is the strengthened form: no cookie
-        // published by a later activation may equal any cookie a previous
-        // activation published. Asserting disjointness of the observed sets
-        // rather than a single inequality is deliberate - it fails against an
-        // implementation that merely starts higher but could still wrap or
-        // re-enter the earlier range.
+        // Classified as a DISCRIMINATOR, not a guard: it fails on the
+        // pre-fix seed (both activations publish 1, 2, 3, ...) and passes
+        // only once activations are seeded from disjoint ranges. A weaker
+        // assertion - that the re-activated leaf simply publishes SOME
+        // cookie - passes with the defect fully present.
         var unique = $"reactivate-{Guid.NewGuid():N}";
         var leafId = GrainId.Create("leaf", unique);
 
         var first = CreateGrain(replicaId: unique);
-        var publishedByFirst = new List<long>();
+        var observedUnderFirst = new List<long>();
         for (int i = 0; i < 5; i++)
         {
             await first.SetAsync($"k{i}", Encoding.UTF8.GetBytes("v"));
-            Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var seen), Is.True);
-            publishedByFirst.Add(seen);
+            Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var rev), Is.True);
+            observedUnderFirst.Add(rev);
         }
-
-        Assert.That(publishedByFirst, Is.Unique,
-            "precondition: the first activation must publish a distinct cookie per write");
 
         await ((IGrainBase)first).OnDeactivateAsync(
             new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"),
@@ -230,26 +239,140 @@ public partial class BPlusLeafGrainTests
         Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False,
             "deactivation must remove the entry so the registry stays bounded by the live-leaf set");
 
-        // Second activation of the same GrainId, writing MORE times than the
-        // first did. Under the old restart-at-one behaviour this walks
-        // straight back through every value the first activation published,
-        // so the disjointness assertion below is not vacuous.
+        // Second activation of the same GrainId, driven through the same
+        // number of writes as the first so that a per-activation counter
+        // would reproduce the first activation's values one for one.
         var second = CreateGrain(replicaId: unique);
-        var publishedBySecond = new List<long>();
-        for (int i = 0; i < 10; i++)
+        var observedUnderSecond = new List<long>();
+        for (int i = 0; i < 5; i++)
         {
-            await second.SetAsync($"j{i}", Encoding.UTF8.GetBytes("v"));
-            Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var seen), Is.True);
-            publishedBySecond.Add(seen);
+            await second.SetAsync($"k{i}", Encoding.UTF8.GetBytes("v"));
+            Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var rev), Is.True);
+            observedUnderSecond.Add(rev);
         }
 
-        Assert.That(publishedBySecond.Intersect(publishedByFirst), Is.Empty,
-            "a re-activation must never republish a cookie value a cache may still hold as its "
-            + "last-observed reading; the cache treats an equal pair as provably fresh and returns "
-            + "before the TTL gate, so a collision is unbounded staleness with nothing to heal it");
+        Assert.That(observedUnderSecond, Is.Not.Empty);
+        Assert.That(
+            observedUnderSecond.Intersect(observedUnderFirst),
+            Is.Empty,
+            "a re-activated leaf republished a cookie value that a cache may still hold from the "
+            + "previous activation; the cache compares cookies for equality, so it would return "
+            + "early on 'provably fresh' against different state (issue #2151 ABA).");
 
-        Assert.That(publishedBySecond[0], Is.GreaterThan(publishedByFirst[^1]),
-            "the new activation must be seeded above the previous activation's high-water mark");
+        // The values must also advance within the new activation, so the
+        // seed change does not accidentally freeze the counter.
+        Assert.That(observedUnderSecond, Is.Ordered.Ascending);
+    }
+
+    /// <summary>
+    /// Reflective accessor for the private <c>RevisionSeedShift</c> const, so
+    /// the overrun test below derives its arithmetic from the production
+    /// constant rather than hard-coding a copy of it that could silently
+    /// diverge if the width is ever retuned.
+    /// </summary>
+    private static int ReadRevisionSeedShiftForTest()
+    {
+        var field = typeof(BPlusLeafGrain).GetField(
+            "RevisionSeedShift",
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException(
+                "RevisionSeedShift const not found on BPlusLeafGrain - the field's name has "
+                + "changed; update this test helper to match.");
+
+        return (int)(field.GetRawConstantValue()
+            ?? throw new InvalidOperationException("RevisionSeedShift returned null"));
+    }
+
+    /// <summary>
+    /// Reflective accessor for the private <c>_revisionSeed</c> ticket source,
+    /// so the overrun test can assert the deactivate-time floor advance
+    /// directly rather than only through its downstream effect on the next
+    /// activation's seed.
+    /// </summary>
+    private static long ReadRevisionSeedForTest()
+    {
+        var field = typeof(BPlusLeafGrain).GetField(
+            "_revisionSeed",
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException(
+                "_revisionSeed field not found on BPlusLeafGrain - the field's name has changed; "
+                + "update this test helper to match.");
+
+        return (long)(field.GetValue(null)
+            ?? throw new InvalidOperationException("_revisionSeed returned null"));
+    }
+
+    [Test]
+    public async Task Re_activation_seeds_above_an_activation_that_overran_its_ticket_range()
+    {
+        // DISCRIMINATOR for the deactivate-time seed floor advance (issue
+        // #2151, PM ruling on PR #2166). The ticket shift reserves 2^24
+        // cookie values per activation, but that width is a spacing HINT and
+        // not the uniqueness guarantee: an activation that bumps past its
+        // reserved range walks into the values a later ticket would seed at,
+        // and the collision conditions are CORRELATED rather than
+        // independent - a leaf hot enough to overrun is on a workload where
+        // activations are rare, so the global ticket source has barely moved
+        // and the next ticket is exactly the adjacent one.
+        //
+        // Uniqueness is therefore made unconditional by raising the ticket
+        // source past the activation's final counter value when it
+        // deactivates. This test drives the box past its range directly
+        // rather than performing the real bumps, which would be the same
+        // assertion at several minutes of runtime.
+        //
+        // THE OVERRUN MARGIN IS A FLAKE GUARD, NOT THE DISCRIMINATING
+        // MECHANISM - stated precisely because an earlier version of this
+        // comment claimed the opposite on the strength of a control arm that
+        // had not in fact executed this test (the filter substring did not
+        // match its name). Measured properly: the control fails at a
+        // three-ticket margin AND at the margin below, so the margin is not
+        // what earns the red. What the margin buys is immunity to a false
+        // GREEN: the ticket source is process-wide and shared with every
+        // other fixture in the run, and ambient ticket consumption can only
+        // push the seed UP - satisfying the first assertion for a reason
+        // unrelated to the floor advance. A margin beyond what a whole test
+        // run can consume (tickets are bounded by leaf activations, order
+        // 10^4) removes that window rather than narrowing it.
+        var shift = ReadRevisionSeedShiftForTest();
+        var unique = $"overrun-{Guid.NewGuid():N}";
+        var leafId = GrainId.Create("leaf", unique);
+
+        var first = CreateGrain(replicaId: unique);
+        await first.SetAsync("k", Encoding.UTF8.GetBytes("v"));
+
+        var box = ReadRegistryBoxForTest(leafId)
+            ?? throw new InvalidOperationException("first activation published no cookie");
+
+        var overrun = box.Value + ((1L << 16) << shift);
+        box.Value = overrun;
+
+        await ((IGrainBase)first).OnDeactivateAsync(
+            new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"),
+            CancellationToken.None);
+
+        // The primary assertion: deactivation carried the activation's final
+        // counter value into the ticket source. Asserted directly, because
+        // the downstream effect alone is satisfiable by ambient ticket
+        // consumption whereas this is not.
+        Assert.That(
+            ReadRevisionSeedForTest(),
+            Is.GreaterThanOrEqualTo(overrun >> shift),
+            "deactivation removed the registry entry without carrying the activation's final "
+            + "counter value into the ticket source, so a later activation of the same leaf can "
+            + "seed inside the range this one already published (issue #2151 ABA). Removal and "
+            + "floor advance must happen together.");
+
+        var second = CreateGrain(replicaId: unique);
+        await ((IGrainBase)second).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var republished), Is.True);
+        Assert.That(
+            republished,
+            Is.GreaterThan(overrun),
+            "a re-activated leaf seeded at or below a cookie value the PREVIOUS activation had "
+            + "already published, so the two activations' value ranges overlap and a cache "
+            + "holding a stamp from the first can compare equal to the second (issue #2151 ABA).");
     }
 
     [Test]

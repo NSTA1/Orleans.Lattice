@@ -54,54 +54,147 @@ internal sealed partial class BPlusLeafGrain
     /// bumped on every state-advancing operation. The wrapper is shared
     /// between the leaf's bumper and the cache's reader so the bumper
     /// can <see cref="Interlocked.Increment(ref long)"/> the field
-    /// directly without a per-tick dict indexer assignment.
-    /// <para>
-    /// Absence of an entry implies "primary leaf is not activated on this
-    /// silo" -- the only silo whose activation populates the entry. Note
-    /// carefully that this has <em>two</em> causes, not one: the primary may
-    /// live on another silo (permanent, the steady state), or it may be a
-    /// same-silo primary that is currently deactivated (transient - see the
-    /// <see cref="RetireLocalRevision"/> call on the deactivation path).
-    /// Both write the same "no entry", so a consumer cannot tell them apart
-    /// from a single observation and must not treat absence as evidence of
-    /// the cross-silo case alone. <see cref="LeafCacheGrain"/> therefore
-    /// distinguishes them over <em>time</em>, by reacting to the
-    /// absent-to-present edge, rather than by interpreting one reading.
-    /// </para>
+    /// directly without a per-tick dict indexer assignment. Absence of
+    /// an entry means either that the primary leaf is activated on
+    /// another silo (permanent, for a cross-silo cache) or that it is
+    /// not currently activated anywhere (transient - an activation
+    /// publishes its cookie during <c>OnActivateAsync</c>). Either way
+    /// the cache falls back to its TTL gate while the entry is absent.
     /// </summary>
     private static readonly ConcurrentDictionary<GrainId, StrongBox<long>> LeafRevisionRegistry = new();
 
     /// <summary>
-    /// Process-wide monotonic floor that every new activation's cookie is
-    /// seeded above. Its sole purpose is to make a cookie value unique over
-    /// a leaf's whole process lifetime rather than merely over one
-    /// activation, because <see cref="LeafCacheGrain"/> compares cookies for
-    /// <em>equality</em> and treats an equal pair as "provably fresh".
+    /// Bit width of the per-activation bump space reserved below each
+    /// activation's seed. Each activation takes a ticket from
+    /// <see cref="_revisionSeed"/> and starts counting at
+    /// <c>ticket &lt;&lt; RevisionSeedShift</c>, so consecutive tickets are
+    /// separated by 2^24 == 16,777,216 cookie values.
     /// <para>
-    /// Seeding each activation at <c>0</c> would not give that: the registry
-    /// entry is removed on deactivation, so a re-activation would restart the
-    /// count and could republish a value a cache had already observed under a
-    /// previous activation. The cache would then read "equal" and skip its
-    /// refresh permanently -- an unbounded staleness, strictly worse than the
-    /// bounded TTL path an absent entry falls through to.
+    /// The shift is a SPACING HINT, not the thing that makes cookies unique.
+    /// It exists so that the common case - an activation that bumps fewer
+    /// than 2^24 times - needs no coordination at all beyond taking a
+    /// ticket. Uniqueness itself is guaranteed unconditionally by
+    /// <see cref="AdvanceRevisionSeedFloor"/>, which raises the ticket source
+    /// past an activation's final counter value when that activation
+    /// deactivates. An activation that DOES exceed 2^24 bumps therefore
+    /// consumes the tickets it overran and the next activation of the same
+    /// leaf still seeds strictly above it.
     /// </para>
     /// <para>
-    /// The floor is advanced on two events, which between them cover every
-    /// way an activation can end, so no width assumption about "bumps per
-    /// activation" is needed:
-    /// <list type="bullet">
-    /// <item><description><see cref="RetireLocalRevision"/> raises it past the
-    /// activation's final value when deactivation removes the entry.</description></item>
-    /// <item><description>If deactivation does <em>not</em> run (an aborted
-    /// activation), the entry survives and the next activation's
-    /// <c>GetOrAdd</c> reuses the same box, so the count simply continues
-    /// upward and is monotonic for that reason instead.</description></item>
-    /// </list>
-    /// Uniqueness is only required per leaf, so a single shared floor across
-    /// leaves is sufficient (and cheaper than a per-leaf one).
+    /// Sizing it without the floor advance would not have been safe, which is
+    /// worth recording because the intuition runs the other way. A bump is one
+    /// per state-advancing foreground operation, so a leaf sustaining a few
+    /// thousand writes a second reaches 2^24 bumps in under an hour, and
+    /// Orleans does not collect an actively-used activation - a hot leaf
+    /// staying up that long is ordinary. Worse, the two conditions the
+    /// collision needs are CORRELATED rather than independent: an overrun
+    /// only collides if the leaf's next activation draws a ticket inside the
+    /// range the previous one overran into, and on a workload where one leaf
+    /// is hot while activations are rare the global ticket source barely
+    /// advances, so the next ticket is exactly the adjacent one. Issue #2151.
     /// </para>
     /// </summary>
-    private static long RevisionSeedFloor;
+    private const int RevisionSeedShift = 24;
+
+    /// <summary>
+    /// Process-wide monotonic ticket source for per-activation cookie seeds.
+    /// <para>
+    /// Seeding every activation at <c>0</c> made the cookie a PER-ACTIVATION
+    /// BUMP COUNT rather than a value unique over the leaf's lifetime,
+    /// because the registry entry is removed on deactivation (see
+    /// <c>BPlusLeafGrain.OnDeactivateAsync</c>) and re-created on the next
+    /// activation. A cache that stamped cookie <c>N</c> under one activation
+    /// then compares EQUAL to a later activation that also reaches <c>N</c>,
+    /// and returns early on "provably fresh" - an ABA collision producing
+    /// UNBOUNDED staleness. Low bump counts on both sides are the normal
+    /// shape after a projection rebuild (which deactivates, so the next
+    /// activation replays), so the collision is most likely exactly where it
+    /// does the most harm. Issue #2151.
+    /// </para>
+    /// <para>
+    /// Seeding from a ticket keeps the registry bounded by the LIVE-leaf set
+    /// (the property the removal-on-deactivate exists to preserve) and needs
+    /// no change at the cache, which already treats an unequal cookie as
+    /// "refresh".
+    /// </para>
+    /// <para>
+    /// A process restart resets this counter to <c>0</c>, so seeds are NOT
+    /// monotonic across silo restarts. That is safe, and the reason is worth
+    /// stating because it is the only thing that makes a ticket source of any
+    /// kind viable here: the cache compares cookies for EQUALITY only
+    /// (<c>sameSiloRev == _lastSeenPrimaryRevision</c>), never for order. A
+    /// seed that goes DOWN therefore still reads as "not equal" and correctly
+    /// forces a refresh. Were the comparison <c>&gt;</c>, this design would be
+    /// dangerous rather than merely non-monotonic.
+    /// </para>
+    /// </summary>
+    private static long _revisionSeed;
+
+    /// <summary>
+    /// Raises the ticket source so that every ticket issued after this call
+    /// seeds strictly above <paramref name="finalValue"/>, the last counter
+    /// value an activation of some leaf published before deactivating.
+    /// <para>
+    /// This is what makes cookie uniqueness UNCONDITIONAL rather than
+    /// contingent on an activation staying inside its 2^24-wide ticket range
+    /// (see <see cref="RevisionSeedShift"/>). Without it, an activation that
+    /// overran its range into the next ticket's could be followed by an
+    /// activation of the same leaf that draws exactly that overrun ticket,
+    /// reproducing the ABA the seed was introduced to close.
+    /// </para>
+    /// <para>
+    /// The arithmetic: a ticket <c>t</c> seeds at <c>t &lt;&lt; Shift</c>, so
+    /// a seed strictly above <paramref name="finalValue"/> requires
+    /// <c>t &gt; finalValue &gt;&gt; Shift</c>. Tickets are handed out by
+    /// pre-increment, so the NEXT ticket is one more than this counter; raising
+    /// the counter to <c>finalValue &gt;&gt; Shift</c> is therefore exactly
+    /// sufficient and wastes no ticket. Only the same leaf's successive
+    /// activations matter - a cookie is only ever compared against the cache's
+    /// last-observed cookie FOR THAT GRAIN ID - so two different leaves holding
+    /// overlapping ranges concurrently is harmless and needs no coordination.
+    /// </para>
+    /// <para>
+    /// A compare-and-swap loop rather than a plain write, because deactivations
+    /// race: a lower floor from a slow leaf must never pull the counter back
+    /// below a higher one already published. The loop retries only while it is
+    /// still raising the value and exits as soon as another writer has moved it
+    /// past the floor this call needs.
+    /// </para>
+    /// </summary>
+    private static void AdvanceRevisionSeedFloor(long finalValue)
+    {
+        var floor = finalValue >> RevisionSeedShift;
+        var current = Volatile.Read(ref _revisionSeed);
+        while (current < floor)
+        {
+            var observed = Interlocked.CompareExchange(ref _revisionSeed, floor, current);
+            if (observed == current)
+            {
+                return;
+            }
+
+            current = observed;
+        }
+    }
+
+    /// <summary>
+    /// Removes <paramref name="leafId"/>'s published cookie on deactivation
+    /// and carries its final counter value into the ticket source via
+    /// <see cref="AdvanceRevisionSeedFloor"/>, so the next activation of that
+    /// leaf cannot seed at or below a value this activation already published.
+    /// <para>
+    /// Removal and floor advance belong together at this one call site: the
+    /// final value is readable only while the box is still in hand, and every
+    /// deactivation path must pay the advance or the guarantee has a hole.
+    /// </para>
+    /// </summary>
+    private static void RemoveLeafRevision(GrainId leafId)
+    {
+        if (LeafRevisionRegistry.TryRemove(leafId, out var box))
+        {
+            AdvanceRevisionSeedFloor(Interlocked.Read(ref box.Value));
+        }
+    }
 
     /// <summary>
     /// Per-activation cached reference to this leaf's revision box.
@@ -116,15 +209,23 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Reads the same-silo revision cookie for <paramref name="leafId"/>.
     /// Returns <c>true</c> iff the primary leaf is currently activated
-    /// on the calling silo and has bumped the cookie at least once.
-    /// Cookies increase monotonically within an activation and every
-    /// activation is seeded above <see cref="RevisionSeedFloor"/>, so a
-    /// value is unique over the leaf's whole process lifetime: a
-    /// re-activated primary can never republish a value a reader observed
-    /// under an earlier activation. That is what lets a reader treat an
-    /// equal pair as "no advance since last observation"; any other
-    /// relation -- greater, lesser, or an absent entry -- forces a
-    /// cross-grain refresh.
+    /// on the calling silo and has published a cookie (which every
+    /// activation does during <c>OnActivateAsync</c>, and every
+    /// state-advancing operation does thereafter).
+    /// <para>
+    /// Cookies start at an activation-unique seed (see
+    /// <see cref="RevisionSeedShift"/>) and increase monotonically within
+    /// an activation; deactivation removes the entry and raises the ticket
+    /// source past the value this activation reached (see
+    /// <see cref="RemoveLeafRevision"/>), so the next activation seeds
+    /// STRICTLY ABOVE it and a value published by one activation is never
+    /// republished by another - unconditionally, not merely while an
+    /// activation stays inside its ticket range. A reader compares the
+    /// returned value against its own last-observed cookie for equality
+    /// only: equal means "nothing has advanced since I looked", and any
+    /// other outcome - advanced within the activation, or a different
+    /// activation entirely - correctly forces a cross-grain refresh.
+    /// </para>
     /// </summary>
     internal static bool TryGetLeafRevision(GrainId leafId, out long revision)
     {
@@ -158,6 +259,16 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="MethodImplOptions.AggressiveInlining"/> is applied
     /// because tight write loops call this method once per key and the
     /// call-site overhead would otherwise dominate the tick.
+    /// <para>
+    /// The lazily-published box is seeded from a process-wide monotonic
+    /// ticket (<see cref="_revisionSeed"/>, shifted by
+    /// <see cref="RevisionSeedShift"/>) rather than from <c>0</c>, so no two
+    /// activations of the same leaf can publish the same cookie value.
+    /// A concurrent <see cref="ConcurrentDictionary{TKey, TValue}.GetOrAdd(TKey, System.Func{TKey, TValue})"/>
+    /// may invoke the factory more than once and discard the loser; that
+    /// only burns a ticket, and the surviving seed is still unique and
+    /// still higher than every previously issued one.
+    /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void BumpLocalRevision()
@@ -165,7 +276,8 @@ internal sealed partial class BPlusLeafGrain
         var box = _localRevisionBox ??=
             LeafRevisionRegistry.GetOrAdd(
                 context.GrainId,
-                static _ => new StrongBox<long>(Interlocked.Increment(ref RevisionSeedFloor)));
+                static _ => new StrongBox<long>(
+                    Interlocked.Increment(ref _revisionSeed) << RevisionSeedShift));
         Volatile.Write(ref box.Value, box.Value + 1);
     }
 

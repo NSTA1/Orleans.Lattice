@@ -7,8 +7,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Capture;
 /// <summary>
 /// Integration tests for <see cref="RepoContextStore.ResetIndexAsync"/>: the
 /// code-only reset drops the structural, symbol, content, cross-reference,
-/// session, and every vector tree for the repository plus the root marker, and
-/// leaves the store-of-record memory tree untouched. It shares the
+/// session, and every vector tree for the repository, preserves the root marker
+/// with its index-derived fields cleared so the repository stays enumerable in
+/// <see cref="RepoContextStore.ListReposAsync"/>, and leaves the store-of-record
+/// memory tree untouched. It shares the
 /// cancel/drain/clear preamble with the full remove path, so the same
 /// in-flight-run drain applies.
 /// </summary>
@@ -34,6 +36,34 @@ public sealed class RepoContextStoreIndexResetTests
         var serializer = harness.Services.GetRequiredService<Serializer<RepoNode>>();
         var bytes = serializer.SerializeToArray(new RepoNode { RepoId = repoId });
         await Tree(harness, RepoContextTrees.Structural).SetAsync(RepoContextKeys.Repo(repoId), bytes, ct);
+    }
+
+    /// <summary>
+    /// Seeds the root marker the way a completed ingest leaves it: the three
+    /// index-derived registers populated, plus authored metadata (display name,
+    /// default branch, and a tag) that a reset has no claim on.
+    /// </summary>
+    private static async Task SeedIngestedMarkerAsync(
+        RepoContextMcpHarness harness, string repoId, CancellationToken ct)
+    {
+        var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        var tags = new OrSet();
+        tags.Add(System.Text.Encoding.UTF8.GetBytes("primary"), "seed", 1);
+
+        var node = new RepoNode
+        {
+            RepoId = repoId,
+            DisplayName = RepoContextValues.Lww("Acme Platform", clock),
+            DefaultBranch = RepoContextValues.Lww("main", clock),
+            LastIngested = RepoContextValues.Lww("2026-01-01T00:00:00.0000000+00:00", clock),
+            FileCount = RepoContextValues.Lww(1234L, clock),
+            IndexedCommit = RepoContextValues.Lww("deadbeefcafe", clock),
+            Tags = tags,
+        };
+
+        var serializer = harness.Services.GetRequiredService<Serializer<RepoNode>>();
+        await Tree(harness, RepoContextTrees.Structural)
+            .SetAsync(RepoContextKeys.Repo(repoId), serializer.SerializeToArray(node), ct);
     }
 
     /// <summary>
@@ -87,7 +117,7 @@ public sealed class RepoContextStoreIndexResetTests
     }
 
     [Test]
-    public async Task ResetIndexAsync_drops_every_code_index_tree_and_the_marker_and_preserves_memory()
+    public async Task ResetIndexAsync_drops_every_code_index_tree_and_preserves_the_marker_and_memory()
     {
         await using var harness = await RepoContextMcpHarness.StartAsync(
             new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
@@ -100,9 +130,10 @@ public sealed class RepoContextStoreIndexResetTests
         Assert.Multiple(() =>
         {
             Assert.That(result.RepoId, Is.EqualTo("acme"));
-            // Six code-index records plus the root marker; the two memory records
-            // are preserved and are NOT counted.
-            Assert.That(result.EntriesDeleted, Is.EqualTo(codeIndex.Count + 1));
+            // Six code-index records. The root marker is preserved rather than
+            // deleted, so it is NOT counted, and neither are the two memory
+            // records.
+            Assert.That(result.EntriesDeleted, Is.EqualTo(codeIndex.Count));
         });
 
         foreach (var (treeName, key) in codeIndex)
@@ -113,13 +144,109 @@ public sealed class RepoContextStoreIndexResetTests
 
         var marker = await Tree(harness, RepoContextTrees.Structural)
             .GetAsync(RepoContextKeys.Repo("acme"), Ct);
-        Assert.That(marker, Is.Null, "The root marker should have been deleted.");
+        Assert.That(marker, Is.Not.Null,
+            "The root marker MUST survive: it is the only structural key left, so deleting it would drop "
+            + "the repository out of list_repos while its preserved memory sat underneath, undiscoverable.");
 
         foreach (var (treeName, key) in memory)
         {
             var value = await Tree(harness, treeName).GetAsync(key, Ct);
             Assert.That(value, Is.Not.Null, $"Memory {treeName}:{key} must survive the code-only reset.");
         }
+    }
+
+    /// <summary>
+    /// The discriminator for issue 2168. A code-only reset preserves the memory
+    /// tree, which is worthless if the repository itself becomes unreachable: a
+    /// caller resolves a repository id from <c>list_repos</c>, and the standing
+    /// guidance is explicitly not to derive it from a working directory. Deleting
+    /// the root marker emptied the repository's structural subtree entirely and
+    /// <see cref="RepoContextStore.ListRepoIdsAsync"/> derives the whole listing
+    /// from that tree, so the repository vanished from the listing while its
+    /// memory survived underneath - reachable only by an id the caller already
+    /// knew. This test fails on the delete-the-marker behaviour.
+    /// <para>
+    /// The three index-derived fields must read back null rather than carrying
+    /// the pre-reset ingest across: a file count and an ingest timestamp for an
+    /// index that was just deleted is a confidently precise lie, worse than the
+    /// absence it replaces. Null on all three says exactly what is true - the
+    /// repository is known but not indexed - which absence could never
+    /// distinguish from "never onboarded".
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task ResetIndexAsync_leaves_the_repository_listed_with_its_index_fields_cleared_and_memory_intact()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var store = Store(harness);
+
+        var (_, memory) = await SeedFullRepoAsync(harness, "acme", Ct);
+        await SeedIngestedMarkerAsync(harness, "acme", Ct);
+
+        var before = await store.ListReposAsync(Ct);
+        Assert.That(before.Repos.Select(r => r.RepoId), Does.Contain("acme"),
+            "Precondition: the seeded repository is listed before the reset.");
+
+        await store.ResetIndexAsync("acme", Ct);
+
+        var after = await store.ListReposAsync(Ct);
+        var row = after.Repos.SingleOrDefault(r => r.RepoId == "acme");
+
+        Assert.That(row, Is.Not.Null,
+            "A reset repository MUST still be resolvable through list_repos - that is the only way a caller "
+            + "who does not already know the id can reach the memory the reset deliberately preserved.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(row!.LastIngested, Is.Null,
+                "lastIngested must be cleared: the ingest it named no longer exists.");
+            Assert.That(row.FileCount, Is.Null,
+                "fileCount must be cleared: reporting a precise count for a deleted index is worse than none.");
+            Assert.That(row.IndexedCommit, Is.Null,
+                "indexedCommit must be cleared: the index no longer corresponds to any revision.");
+        });
+
+        foreach (var (treeName, key) in memory)
+        {
+            var value = await Tree(harness, treeName).GetAsync(key, Ct);
+            Assert.That(value, Is.Not.Null, $"Memory {treeName}:{key} must survive the reset.");
+        }
+    }
+
+    /// <summary>
+    /// The marker's authored metadata - display name, default branch, and tags -
+    /// is not index-derived: it is patched in through <c>repocontext_update</c>
+    /// rather than written by an ingest, so a code-only reset has no claim on it.
+    /// Only the three ingest-derived registers are cleared.
+    /// </summary>
+    [Test]
+    public async Task ResetIndexAsync_carries_authored_repository_metadata_across_the_reset()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var store = Store(harness);
+
+        await SeedIngestedMarkerAsync(harness, "acme", Ct);
+
+        await store.ResetIndexAsync("acme", Ct);
+
+        var markerBytes = await Tree(harness, RepoContextTrees.Structural)
+            .GetAsync(RepoContextKeys.Repo("acme"), Ct);
+        Assert.That(markerBytes, Is.Not.Null);
+
+        var node = harness.Services.GetRequiredService<Serializer<RepoNode>>().Deserialize(markerBytes!);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.RepoId, Is.EqualTo("acme"));
+            Assert.That(RepoContextValues.ReadString(node.DisplayName), Is.EqualTo("Acme Platform"));
+            Assert.That(RepoContextValues.ReadString(node.DefaultBranch), Is.EqualTo("main"));
+            Assert.That(node.Tags.Elements().Select(System.Text.Encoding.UTF8.GetString), Does.Contain("primary"));
+
+            Assert.That(RepoContextValues.ReadString(node.LastIngested), Is.Null);
+            Assert.That(RepoContextValues.ReadInt64(node.FileCount), Is.Null);
+            Assert.That(RepoContextValues.ReadString(node.IndexedCommit), Is.Null);
+        });
     }
 
     /// <summary>
@@ -240,6 +367,17 @@ public sealed class RepoContextStoreIndexResetTests
         var result = await store.ResetIndexAsync("never-onboarded", Ct);
 
         Assert.That(result.EntriesDeleted, Is.EqualTo(0));
+
+        // A reset preserves a registration; it must never invent one. Writing a
+        // marker here would register a repository nobody onboarded and surface it
+        // in list_repos out of nothing.
+        var marker = await Tree(harness, RepoContextTrees.Structural)
+            .GetAsync(RepoContextKeys.Repo("never-onboarded"), Ct);
+        Assert.That(marker, Is.Null,
+            "Resetting a never-onboarded repository must not write a root marker for it.");
+
+        var listing = await store.ListReposAsync(Ct);
+        Assert.That(listing.Repos.Select(r => r.RepoId), Does.Not.Contain("never-onboarded"));
     }
 
     /// <summary>
@@ -264,5 +402,43 @@ public sealed class RepoContextStoreIndexResetTests
             Assert.That(value, Is.Null,
                 $"remove_repo must still tombstone {treeName}:{key} - the destructive verb is unchanged.");
         }
+    }
+
+    /// <summary>
+    /// The guard for issue 2168, and the assertion that stops marker preservation
+    /// leaking into the destructive verb. <c>reset_index</c> now keeps the root
+    /// marker so a reset repository stays listed; <c>remove_repo</c> must still
+    /// delete it, so a removed repository disappears from
+    /// <see cref="RepoContextStore.ListReposAsync"/> entirely. This test passes
+    /// both before and after the reset change - it exists to fail if the two
+    /// verbs are ever conflated.
+    /// </summary>
+    [Test]
+    public async Task RemoveRepoAsync_still_drops_the_repository_from_the_listing_entirely()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var store = Store(harness);
+
+        await SeedFullRepoAsync(harness, "acme", Ct);
+        await SeedIngestedMarkerAsync(harness, "acme", Ct);
+        await SeedFullRepoAsync(harness, "acme-tools", Ct);
+
+        await store.RemoveRepoAsync("acme", Ct);
+
+        var listing = await store.ListReposAsync(Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(listing.Repos.Select(r => r.RepoId), Does.Not.Contain("acme"),
+                "remove_repo must still drop the repository from list_repos entirely - marker preservation "
+                + "belongs to reset_index alone and must not leak into the destructive verb.");
+            Assert.That(listing.Repos.Select(r => r.RepoId), Does.Contain("acme-tools"),
+                "A sibling repository is unaffected.");
+        });
+
+        var marker = await Tree(harness, RepoContextTrees.Structural)
+            .GetAsync(RepoContextKeys.Repo("acme"), Ct);
+        Assert.That(marker, Is.Null, "remove_repo must still delete the root marker.");
     }
 }

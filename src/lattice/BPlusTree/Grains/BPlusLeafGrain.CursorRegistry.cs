@@ -244,6 +244,35 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="ReportCursorIfActiveAsync"/> so a later real-frontier
     /// report advances the same key rather than orphaning the Zero seed.
     /// Never throws.
+    /// <para>
+    /// The offset half of the seed is coverage-gated through
+    /// <see cref="ResolveDurablePinForPartition"/>, exactly as
+    /// <see cref="ReportCursorIfActiveAsync"/> and
+    /// <see cref="FlushDurableMaterialiserFrontierAsync"/> are, and for the same
+    /// reason. The two dimensions of the pin merge <b>independently</b> and both
+    /// monotonically (<c>WalMaterialiserPinGrain.Merge</c>), so a Zero frontier
+    /// does <em>not</em> neutralise an over-reported offset: the offset is
+    /// recorded permanently and no later, correctly-gated report can lower it.
+    /// A leaf can hold a checkpoint at or past a WAL offset its durable snapshot
+    /// does not cover while its clock is still Zero - replay bumps the
+    /// per-partition checkpoint for entries it <em>skips</em> because they route
+    /// to another leaf's key range, which never advances this leaf's clock - so
+    /// seeding the raw checkpoint publishes an offset floor beyond durable
+    /// coverage. That floor outlives the Zero block: once the leaf takes real
+    /// data and its first gated flush releases the frontier, the stale
+    /// over-advanced offset is still the merged maximum, and the shared-shard
+    /// WAL GC is authorised to trim a prefix no cold rebuild can replay
+    /// (<c>LeafProjectionStaleException</c>).
+    /// </para>
+    /// <para>
+    /// Note that the frontier half is inert at this seam - the sole caller
+    /// (<c>OnActivateAsync</c>) invokes this only when
+    /// <c>Clock &lt;= HybridLogicalClock.Zero</c>, and every branch of
+    /// <see cref="ResolveDurablePinForPartition"/> returns either that clock or
+    /// the literal Zero, so the seeded frontier is Zero either way. The gate is
+    /// therefore doing offset work only, which is precisely why its absence here
+    /// was survivable rather than harmless.
+    /// </para>
     /// </summary>
     private async Task SeedDurableMaterialiserFrontierAsync()
     {
@@ -263,11 +292,14 @@ internal sealed partial class BPlusLeafGrain
         var clock = state.State.Clock;
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
+        var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
+            var (frontier, offset) = ResolveDurablePinForPartition(
+                partition, clock, partitionsWithLiveData);
             reporter.NoteDurableMaterialiserFrontier(
-                treeId, consumerId, clock, GetCurrentCheckpointForPartition(partition));
+                treeId, consumerId, frontier, offset);
         }
     }
 

@@ -4,9 +4,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// The result of <c>repocontext_reset_index</c>: the repository whose code index
 /// was dropped and how many entries were tombstoned across the code-index trees
 /// (structural, symbol, content, cross-reference, session, and every vector
-/// tree) plus the repository root marker. The agent-memory tree is preserved
-/// and its entries are never counted. A count of zero means neither an index
-/// nor a root marker was present.
+/// tree). The repository root marker is preserved - rewritten with its
+/// index-derived fields cleared so the repository stays listed by
+/// <c>repocontext_list_repos</c> - and so is never counted here, and neither is
+/// any record in the agent-memory tree. A count of zero means no code index was
+/// present.
 /// </summary>
 /// <remarks>
 /// An MCP protocol payload projected to JSON by the SDK, not an Orleans grain
@@ -18,9 +20,10 @@ public sealed record RepoContextIndexResetResult
     public required string RepoId { get; init; }
 
     /// <summary>
-    /// The total number of entries tombstoned across the code-index trees,
-    /// including the repository root marker. Records in the memory tree are
-    /// preserved and are never counted here.
+    /// The total number of entries tombstoned across the code-index trees. The
+    /// repository root marker is preserved rather than deleted, so it is not
+    /// counted; records in the memory tree are preserved and are never counted
+    /// here either.
     /// </summary>
     public required int EntriesDeleted { get; init; }
 }

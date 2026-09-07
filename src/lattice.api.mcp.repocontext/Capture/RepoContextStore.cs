@@ -1047,11 +1047,18 @@ internal sealed partial class RepoContextStore
     /// durable agent-memory records: the cancel/drain/clear preamble is shared
     /// with <see cref="RemoveRepoAsync"/>, then a resilient range-delete drain
     /// tombstones each code-index tree's <c>repo/{repoId}/</c> subtree in bounded
-    /// steps, and the bare <c>repo/{repoId}</c> root marker is deleted from the
-    /// structural tree. The <see cref="RepoContextTrees.Memory"/> tree is not
+    /// steps. The bare <c>repo/{repoId}</c> root marker is deliberately
+    /// <em>preserved</em> - it is what keeps the repository enumerable by
+    /// <see cref="ListRepoIdsAsync"/> - but is rewritten with its index-derived
+    /// fields (last-ingested marker, file count, and indexed commit) cleared, so
+    /// the listing reports a repository with no index rather than quoting figures
+    /// for one that was just deleted. Authored metadata (display name, default
+    /// branch, and tags) is carried across unchanged. The
+    /// <see cref="RepoContextTrees.Memory"/> tree is not
     /// touched, so every memory entry survives with its fields, tags, links, and
     /// remaining time-to-live intact. Resetting the index for an absent
-    /// repository is a no-op that reports zero deletions. The set of trees to
+    /// repository is a no-op that reports zero deletions and invents no marker.
+    /// The set of trees to
     /// sweep is the local constant <see cref="RepoContextTrees.CodeIndexTrees"/>;
     /// see that member's remarks for why the vector payload tree is included
     /// here even though the auto-healer's allow-list excludes it, and why the
@@ -1092,15 +1099,45 @@ internal sealed partial class RepoContextStore
         }
 
         // The root marker sits at repo/{repoId} with no trailing separator, so it
-        // is outside the subtree range deleted above and is removed explicitly.
-        // It is only ever written to the structural tree, which is a code-index
-        // tree, so it is dropped here alongside the rest of the index. The
-        // repository stays queryable through the memory records, and the next
-        // onboarding rewrites the marker as part of the fresh ingest.
+        // is outside the subtree range swept above. It is NOT deleted here, and
+        // that is the whole point of this branch rather than an oversight:
+        // ListRepoIdsAsync derives the listing by scanning the structural tree,
+        // so once the subtree is swept the marker is the only key left that keeps
+        // the repository enumerable. Delete it and a reset repository vanishes
+        // from list_repos while its deliberately-preserved memory survives
+        // underneath, reachable only by an agent that already knows the id -
+        // which defeats the reason this verb exists.
+        //
+        // Rewriting it must happen AFTER the sweep above, not before: the sweep
+        // is a range delete over repo/{repoId}/ and would otherwise simply
+        // re-delete anything written first.
+        //
+        // The three index-derived fields are cleared rather than carried across.
+        // Keeping them would have list_repos report a file count and an ingest
+        // timestamp for an index that no longer exists - a confident, precise
+        // lie, which is worse than the absence it replaces. BuildRepoSummaryAsync
+        // already tolerates unset registers and renders them as nulls, which is
+        // exactly the "registered, no index" state a caller needs to distinguish
+        // a just-reset repository from a never-onboarded one. Authored metadata
+        // (display name, default branch, tags) is not index-derived, so it is
+        // carried across untouched.
+        //
+        // An absent marker stays absent: a reset must not invent a registration
+        // for a repository that was never onboarded.
         var structural = Tree(RepoContextTrees.Structural);
-        if (await structural.DeleteAsync(RepoContextKeys.Repo(repoId), cancellationToken).ConfigureAwait(false))
+        var markerKey = RepoContextKeys.Repo(repoId);
+        var markerBytes = await structural.GetAsync(markerKey, cancellationToken).ConfigureAwait(false);
+        if (markerBytes is not null)
         {
-            deleted++;
+            var node = _serializer.Deserialize<RepoNode>(markerBytes) with
+            {
+                LastIngested = new BoundedRegister(),
+                FileCount = new BoundedRegister(),
+                IndexedCommit = new BoundedRegister(),
+            };
+
+            await structural.SetAsync(markerKey, _serializer.SerializeToArray(node), cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return new RepoContextIndexResetResult { RepoId = repoId, EntriesDeleted = checked((int)deleted) };

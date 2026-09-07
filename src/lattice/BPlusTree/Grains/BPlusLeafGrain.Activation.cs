@@ -280,29 +280,37 @@ internal sealed partial class BPlusLeafGrain
             replayPermit?.Release();
         }
 
-        // Publish a same-silo revision cookie for this activation now that
-        // replay has materialised the projection. Replay reaches Entries
-        // through StoreEntry, which advances the delivery sequence but never
-        // bumps the revision cookie, and OnDeactivateAsync removes the
-        // previous activation's registry entry. Without this bump the
-        // registry has no entry at all, so a co-located LeafCacheGrain that
-        // still holds a non-zero _lastSeenPrimaryRevision from the previous
-        // activation fails the `> 0 && TryGetLeafRevision` guard and falls
-        // through to the TTL gate (LeafCacheGrain.RefreshAsync) - which
-        // returns its pre-existing snapshot until the TTL elapses. That is
-        // harmless while replay reproduces the same rows on the same leaf,
-        // and is silent data loss when it does not: a leaf whose span was
-        // widened by leaf reclaim materialises rows this cache has never
-        // seen, and the cache answers null for them for the whole TTL
-        // window even though the leaf holds them. Publishing a cookie here
-        // makes the registry entry present and different from any value a
-        // cache observed under the previous activation, so the cache takes
-        // the revision branch and refreshes immediately instead of the
-        // TTL branch. The bump is unconditional rather than gated on
-        // `advanced`: it costs one refresh per activation on caches that
-        // were already correct, which is the same trade
-        // BPlusLeafGrain.Consolidation.cs makes when it bumps to take
-        // at-head caches off the fast path for exactly one refresh.
+        // Step 1.4 - publish this activation's same-silo revision cookie
+        // now that the in-memory projection has been rebuilt (issue #2151).
+        //
+        // The cookie is the mechanism LeafCacheGrain.RefreshAsync uses to
+        // decide whether its snapshot is stale, and it is bumped from every
+        // state-advancing FOREGROUND site on the leaf. The snapshot
+        // rehydrate and WAL replay above are not foreground sites: neither
+        // ILeafProjection.Apply nor TryRehydrateFromSnapshotAsync bumps, so
+        // before this call a leaf that came back from a projection rebuild
+        // (which deactivates, so the next activation replays) had NO
+        // registry entry at all. The cache's guard requires an entry to
+        // take the revision branch, so a cache still holding a cookie from
+        // the previous activation fell through to the TTL gate instead and
+        // kept serving its existing snapshot until the TTL elapsed. The
+        // removal-on-deactivate comment claims that fall-through reaches
+        // "the cross-grain refresh path"; without this publish it reaches a
+        // gate that can return early.
+        //
+        // Publishing unconditionally - rather than only when the replay
+        // advanced - keeps the rule simple and the entry's presence tied to
+        // the activation rather than to what the WAL happened to contain: a
+        // cache cannot tell the two apart, and a leaf whose replay applied
+        // nothing may still hold state a cache has drifted from. The cost is
+        // one registry entry per live leaf, which is the bound the
+        // removal-on-deactivate already maintains.
+        //
+        // This is only safe because activations are seeded from disjoint
+        // cookie ranges (see BumpLocalRevision). Publishing here while
+        // activations still restarted from zero would ARM the ABA
+        // collision, by making the entry present with a value a previous
+        // activation had already published.
         BumpLocalRevision();
 
         // Step 1.5 - if the fall-off-log detector raised the
@@ -329,6 +337,28 @@ internal sealed partial class BPlusLeafGrain
         // here would be a redundant (idempotent but wasteful) RPC. On
         // the no-replay path (no new entries since checkpoint) we
         // still want to publish so the GC sees the leaf eagerly.
+        //
+        // Publishing no durable pin on this path is DELIBERATE, and is
+        // load-bearing in the safe direction rather than an oversight -
+        // do not "tidy" it by adding a publish call here. A data-free
+        // leaf can reach this return with its clock still at Zero,
+        // because the replay bumps a partition's max-applied offset for
+        // entries it SKIPS as belonging to another leaf's key range. Were
+        // it to publish, the frontier half would be Zero again (identical
+        // to what stands, so no gain) while the offset half would be
+        // strictly HIGHER - and a higher offset raises the WAL GC's
+        // offset floor, which REDUCES retention. That is exactly the
+        // direction the coverage gate on
+        // SeedDurableMaterialiserFrontierAsync now forbids (issue 2150),
+        // so a publish here would reintroduce a weaker form of it.
+        // Nothing is left unprotected in the meantime: both tree-id birth
+        // seams (SetTreeIdAsync and InitializeSiblingAsync) await
+        // SeedDurableMaterialiserBlockPinAsync before any routed write
+        // makes the leaf's data reachable, and that Zero frontier
+        // disables the WAL GC's cursor-trim branch outright until the
+        // leaf first checkpoints. The leaf is holding that branch OFF,
+        // not holding a weak floor - so there is no window here in which
+        // it has no pin at all.
         if (advanced)
             return;
 
