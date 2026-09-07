@@ -49,6 +49,13 @@ namespace Orleans.Lattice.Explorer.Core.Connection;
 public static class LatticeGrpcChannelFactory
 {
     /// <summary>
+    /// The lower-case gRPC metadata key for the proxy authorization header,
+    /// treated as credential-bearing alongside
+    /// <see cref="LatticeCallAuthentication.AuthorizationHeaderName"/>.
+    /// </summary>
+    private const string ProxyAuthorizationHeaderName = "proxy-authorization";
+
+    /// <summary>
     /// Builds the channel for <paramref name="settings"/> over the options
     /// <see cref="BuildChannelOptions"/> resolves - the insecure-channel
     /// safeguard, and a transport handler scoped to this channel alone.
@@ -88,7 +95,7 @@ public static class LatticeGrpcChannelFactory
         ArgumentNullException.ThrowIfNull(settings);
 
         var invoker = ApplyTransportHeaders(channel.CreateCallInvoker(), settings.TransportHeaders);
-        return ApplyAuthentication(invoker, settings.Authentication);
+        return ApplyAuthentication(invoker, settings);
     }
 
     /// <summary>
@@ -185,12 +192,23 @@ public static class LatticeGrpcChannelFactory
     }
 
     /// <summary>
-    /// Attaches <paramref name="authentication"/> to every call: a live token
-    /// provider consulted per RPC, or the static headers a non-interactive
+    /// Attaches the sign-in in <paramref name="settings"/> to every call: a live
+    /// token provider consulted per RPC, or the static headers a non-interactive
     /// sign-in supplied. An anonymous connection is returned undecorated.
     /// </summary>
-    private static CallInvoker ApplyAuthentication(CallInvoker invoker, LatticeCallAuthentication? authentication)
+    /// <remarks>
+    /// A static credential header is attached through an ordinary metadata
+    /// interceptor rather than through <see cref="CallCredentials"/>, so gRPC's
+    /// own insecure-channel safeguard - which refuses to send call credentials
+    /// over a channel it cannot confirm is secure - never sees it. Without the
+    /// explicit gate applied here a Basic credential would therefore cross a
+    /// plaintext <c>http</c> endpoint unencrypted with no operator opt-in at all,
+    /// while the strictly less sensitive refreshable bearer token was correctly
+    /// gated. <see cref="EnforceStaticCredentialTransportGate"/> closes that gap.
+    /// </remarks>
+    private static CallInvoker ApplyAuthentication(CallInvoker invoker, LatticeConnectionSettings settings)
     {
+        var authentication = settings.Authentication;
         if (authentication is { HasCredentialProvider: true, CredentialProvider: { } provider })
         {
             // CallCredentials.FromInterceptor is invoked per RPC and may await, so
@@ -213,6 +231,7 @@ public static class LatticeGrpcChannelFactory
         if (authentication is { HasHeaders: true })
         {
             var headers = authentication.Headers!;
+            EnforceStaticCredentialTransportGate(headers, settings);
             return invoker.Intercept(metadata =>
             {
                 foreach (var (key, value) in headers)
@@ -225,6 +244,59 @@ public static class LatticeGrpcChannelFactory
         }
 
         return invoker;
+    }
+
+    /// <summary>
+    /// Refuses to attach a static credential header over a channel that is not
+    /// confirmed secure, mirroring the safeguard gRPC applies to
+    /// <see cref="CallCredentials"/> and the replication transport's scheme gate.
+    /// The credential travels only over an <c>https</c> endpoint, or over a
+    /// plaintext one the operator explicitly opted into through
+    /// <see cref="LatticeConnectionSettings.AllowUnencryptedHttp2"/>.
+    /// </summary>
+    /// <param name="headers">The static sign-in headers about to be attached.</param>
+    /// <param name="settings">The endpoint settings the channel was built from.</param>
+    /// <exception cref="InvalidOperationException">
+    /// The headers carry a credential and the endpoint is neither <c>https</c> nor
+    /// an opted-in plaintext endpoint.
+    /// </exception>
+    private static void EnforceStaticCredentialTransportGate(
+        IReadOnlyDictionary<string, string> headers,
+        LatticeConnectionSettings settings)
+    {
+        if (settings.AllowUnencryptedHttp2
+            || IsHttpsAddress(settings.Address)
+            || !CarriesCredential(headers))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"The Orleans.Lattice Explorer refuses to send a sign-in credential to '{settings.Address}' because the endpoint is not https. "
+            + "A static credential (for example 'authorization: Basic ...') would cross the network unencrypted and be recoverable by anyone observing it. "
+            + $"Use an https:// endpoint, or - only for loopback / development scenarios - set "
+            + $"{nameof(LatticeConnectionSettings)}.{nameof(LatticeConnectionSettings.AllowUnencryptedHttp2)} = true to accept an unencrypted transport explicitly.");
+    }
+
+    /// <summary>
+    /// Whether <paramref name="headers"/> carry a credential-bearing header. Only
+    /// the two standard authentication headers count: everything else a sign-in
+    /// supplies is routing metadata, and
+    /// <see cref="LatticeConnectionSettings.TransportHeaders"/> is documented as
+    /// non-secret and is attached separately.
+    /// </summary>
+    private static bool CarriesCredential(IReadOnlyDictionary<string, string> headers)
+    {
+        foreach (var key in headers.Keys)
+        {
+            if (string.Equals(key, LatticeCallAuthentication.AuthorizationHeaderName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(key, ProxyAuthorizationHeaderName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
