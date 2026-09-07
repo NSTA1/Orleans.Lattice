@@ -887,6 +887,40 @@ internal static class RepoContextToolHandlers
     }
 
     /// <summary>
+    /// Drops a repository's code index and its derived planes but preserves its
+    /// durable agent-memory records: the same cancel/drain/clear preamble runs
+    /// as <c>repocontext_remove_repo</c>, then the structural, symbol, content,
+    /// cross-reference, session, and every vector tree are tombstoned for the
+    /// repository, along with the repository root marker. The
+    /// <see cref="RepoContextTrees.Memory"/> tree is not touched, so every
+    /// memory entry survives with its fields, tags, links, and remaining
+    /// time-to-live intact. The repository stays registered and re-indexable, so
+    /// a subsequent <c>repocontext_add_repo</c> rebuilds the code index and its
+    /// derived planes from the working files. Resetting the index for an
+    /// unknown repository is a no-op that reports zero deletions. Reaching this
+    /// handler means the caller cleared the fail-closed authorization gate and
+    /// the host opted writes in.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="repoId">The repository identity whose code index to reset.</param>
+    /// <param name="cancellationToken">Cancels the reset.</param>
+    /// <returns>The repository id and the number of code-index entries dropped.</returns>
+    /// <exception cref="McpException">The repository id is missing (a caller error).</exception>
+    public static Task<RepoContextIndexResetResult> ResetIndexAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identity whose code index to reset. Agent memory for this repository is preserved.")]
+        string repoId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        return ResolveStore(context).ResetIndexAsync(repoId, cancellationToken);
+    }
+
+    /// <summary>
     /// Derives a repository id from the final segment of a path, tolerating
     /// trailing separators of either platform. Returns an empty string when no
     /// segment remains (for example a bare root path).

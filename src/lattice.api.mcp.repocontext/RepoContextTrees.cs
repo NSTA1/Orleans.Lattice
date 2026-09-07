@@ -165,6 +165,83 @@ internal static class RepoContextTrees
         [.. All, .. LocalDerived];
 
     /// <summary>
+    /// Every tree an operator-invoked code-only index reset sweeps for a
+    /// repository, in a stable order. This is the classification behind
+    /// <c>repocontext_reset_index</c>: it holds every named tree that carries
+    /// the code index or its derived planes (structural, symbol, content,
+    /// cross-reference, session bookkeeping, and every vector tree including
+    /// the local-derived approximate index) and it deliberately excludes
+    /// <see cref="Memory"/>, whose entries are agent-authored store-of-record
+    /// and are preserved across a code-only reset.
+    /// <para>
+    /// It is <b>not</b> the same as <see cref="RebuildableVectorTrees"/>, which
+    /// answers a narrower question the auto-healer asks: which trees may be
+    /// dropped and re-embedded silently on the self-healer's own initiative.
+    /// That set intentionally excludes <see cref="VectorPayload"/> because it
+    /// is content-addressed and write-once and cannot be re-derived by a plain
+    /// drop-and-re-embed - it needs a re-embed pass that only an ingest can
+    /// drive. An operator-invoked reset is that pass: dropping
+    /// <see cref="VectorPayload"/> here is defensible because the reset both
+    /// consents to the re-embedding cost and re-drives the ingest that pays
+    /// it, so this list carries the payload tree even though the allow-list
+    /// does not.
+    /// </para>
+    /// <para>
+    /// Membership markers (the <c>memkey-</c> flags that record which memory
+    /// entries are already embedded) live in <see cref="VectorMembership"/>
+    /// and go with the vector payloads and metadata. Preserving the markers
+    /// while dropping the payloads would leave every surviving memory record
+    /// flagged as embedded but permanently unreachable by semantic search;
+    /// dropping the whole vector plane together lets the ingestor re-embed
+    /// the surviving memory records on its next pass.
+    /// </para>
+    /// <para>
+    /// The set is enumerated by name rather than derived from
+    /// <see cref="AllIncludingLocalDerived"/> minus <see cref="Memory"/>
+    /// deliberately: a tree added to <see cref="AllIncludingLocalDerived"/>
+    /// later must be classified explicitly, either into this list or as
+    /// store-of-record memory, rather than defaulting into either bucket on
+    /// its own. The <see cref="IsCodeIndexTree"/> predicate follows the same
+    /// discipline as <see cref="IsRebuildableVectorTree"/> - it checks only
+    /// against these local constants and fails closed on any unrecognised name,
+    /// so the classification can never be driven by a wire- or exception-supplied
+    /// tree id. An invariant test asserts that this list plus <see cref="Memory"/>
+    /// covers <see cref="AllIncludingLocalDerived"/> exactly, so a missed
+    /// classification fails the build rather than the reset.
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyList<string> CodeIndexTrees { get; } = new[]
+    {
+        Structural,
+        Symbol,
+        Content,
+        CrossReference,
+        Session,
+        VectorMembership,
+        VectorPayload,
+        VectorMetadata,
+        VectorIndex,
+    };
+
+    private static readonly IReadOnlySet<string> CodeIndexTreeSet =
+        new HashSet<string>(CodeIndexTrees, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Reports whether <paramref name="treeName"/> is a code-index tree the
+    /// operator-invoked <c>repocontext_reset_index</c> is permitted to sweep.
+    /// Fails closed: a null, empty, unknown, or store-of-record name (including
+    /// <see cref="Memory"/>) returns <see langword="false"/>, so a code-only
+    /// reset can never touch a tree that holds primary data. Checked against
+    /// local constants only - never against a tree id parsed from a wire- or
+    /// exception-supplied string - mirroring
+    /// <see cref="IsRebuildableVectorTree"/>.
+    /// </summary>
+    /// <param name="treeName">The tree name to classify. May be <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> only when the name is one of <see cref="CodeIndexTrees"/>.</returns>
+    internal static bool IsCodeIndexTree(string? treeName)
+        => treeName is not null && CodeIndexTreeSet.Contains(treeName);
+
+    /// <summary>
     /// The fail-closed allow-list of derived vector-plane trees the self-healing
     /// re-derivation may reset when one falls terminally off its write-ahead log.
     /// It contains exactly the two <b>rebuildable</b> vector projections
