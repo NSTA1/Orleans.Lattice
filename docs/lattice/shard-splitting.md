@@ -383,7 +383,8 @@ Per-tree options resolve through named `IOptionsMonitor<LatticeOptions>.Get(tree
 ## Scope
 
 Shard splitting is an autonomic concern. `ITreeShardSplitGrain` is internal
-infrastructure protected by `InternalGrainGuardFilter` - external client
-calls are rejected with `InvalidOperationException`. There is no public
+infrastructure: every entry point asserts that the call originated inside
+the silo, so an external client call is rejected with
+`InvalidOperationException`. There is no public
 API to trigger or control a split; tuning is performed exclusively through
 the `LatticeOptions` listed above.
