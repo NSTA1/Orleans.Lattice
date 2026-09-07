@@ -237,6 +237,31 @@ internal sealed partial class BPlusLeafGrain
             replayPermit?.Release();
         }
 
+        // Publish a same-silo revision cookie for this activation now that
+        // replay has materialised the projection. Replay reaches Entries
+        // through StoreEntry, which advances the delivery sequence but never
+        // bumps the revision cookie, and OnDeactivateAsync removes the
+        // previous activation's registry entry. Without this bump the
+        // registry has no entry at all, so a co-located LeafCacheGrain that
+        // still holds a non-zero _lastSeenPrimaryRevision from the previous
+        // activation fails the `> 0 && TryGetLeafRevision` guard and falls
+        // through to the TTL gate (LeafCacheGrain.RefreshAsync) - which
+        // returns its pre-existing snapshot until the TTL elapses. That is
+        // harmless while replay reproduces the same rows on the same leaf,
+        // and is silent data loss when it does not: a leaf whose span was
+        // widened by leaf reclaim materialises rows this cache has never
+        // seen, and the cache answers null for them for the whole TTL
+        // window even though the leaf holds them. Publishing a cookie here
+        // makes the registry entry present and different from any value a
+        // cache observed under the previous activation, so the cache takes
+        // the revision branch and refreshes immediately instead of the
+        // TTL branch. The bump is unconditional rather than gated on
+        // `advanced`: it costs one refresh per activation on caches that
+        // were already correct, which is the same trade
+        // BPlusLeafGrain.Consolidation.cs makes when it bumps to take
+        // at-head caches off the fast path for exactly one refresh.
+        BumpLocalRevision();
+
         // Step 1.5 - if the fall-off-log detector raised the
         // SnapshotPending advisory while classifying the replay path,
         // proactively capture the leaf's projection into the dedicated

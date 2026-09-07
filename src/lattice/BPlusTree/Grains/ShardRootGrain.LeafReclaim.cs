@@ -55,6 +55,31 @@ internal sealed partial class ShardRootGrain
     /// shard behind thousands of sequential cross-grain calls, and forces an
     /// activation of every leaf in the shard - the exact cost the feature
     /// exists to remove, worst on the degenerate chains it targets.
+    /// <para>
+    /// <b>The worst-case cost of one pass, stated rather than left implicit.</b>
+    /// At default settings a pass probes at most 1024 leaves (see
+    /// <see cref="_leafReclaimResumeLowKey"/> for the arithmetic), and on the
+    /// healthy path each probe is exactly one grain call -
+    /// <c>RepairRangeGapAsync</c> and the back-pointer repair both decide
+    /// locally and issue nothing. So the bound is 1024 <em>sequential</em>
+    /// leaf activations inside one non-reentrant turn. Warm and co-located
+    /// that is sub-second; cold against remote storage, where each activation
+    /// pays a state read, it is seconds. That is affordable for background
+    /// tidy-up, and the writes most likely to be racing it -
+    /// <c>SetManyAsync</c> and its predicated variant - are
+    /// <c>[AlwaysInterleave]</c> and are not blocked by it. Plain
+    /// <c>SetAsync</c> and single-key reads are, for the length of the pass.
+    /// </para>
+    /// <para>
+    /// <b>Coupling warning.</b> That bound is a multiple of an operator-tunable
+    /// knob. Raising <see cref="LatticeOptions.CompactionLeafBatchSize"/> to
+    /// 625 or beyond saturates <see cref="MaxLeafReclaimWalk"/>, making a
+    /// single pass walk 10,000 leaves sequentially while holding the turn -
+    /// which on cold storage will exceed the Orleans response timeout of the
+    /// caller and fail the pass outright. The knob reads as a compaction
+    /// batch size and does not look like it controls a non-reentrant walk, so
+    /// the coupling is recorded at both ends.
+    /// </para>
     /// </summary>
     private const int LeafReclaimProbesPerFold = 16;
 
@@ -72,14 +97,37 @@ internal sealed partial class ShardRootGrain
     /// state field that has to be migrated.
     /// </para>
     /// <para>
-    /// The one case where that trade bites: on a shard whose first
-    /// <see cref="MaxLeafReclaimWalk"/> leaves all hold live rows, a pass that
-    /// restarts from the leftmost leaf never reaches the candidates beyond
-    /// them, so a very large sparse shard that recycles its activation faster
-    /// than it drains stops making progress. It is self-limiting in the
-    /// ordinary case, because a folded leaf leaves the chain and is not
-    /// re-walked. Persisting the cursor is the fix if that shape is ever
-    /// observed.
+    /// The one case where that trade bites, stated as a threshold an operator
+    /// can actually evaluate rather than as an adjective. A pass probes at
+    /// most <c>maxLeaves * LeafReclaimProbesPerFold</c> leaves from the
+    /// cursor; the sole production caller is <c>TombstoneCompactionGrain</c>,
+    /// which passes <see cref="LatticeOptions.CompactionLeafBatchSize"/>, so
+    /// the reach is <b>1024 leaves at default settings</b> (64 x 16).
+    /// <see cref="MaxLeafReclaimWalk"/> is a cycle guard and an upper clamp,
+    /// not the operative number - it only binds once a caller passes 625 or
+    /// more, which no default path does. Do not read 10,000 as the reach.
+    /// </para>
+    /// <para>
+    /// The stall condition is therefore <b>distributional, not a matter of
+    /// size</b>, and the distinction is the whole point: it takes more than
+    /// 1024 <em>consecutive non-reclaimable</em> leaves at the head of the
+    /// chain, sustained across activations, because a shard that recycles its
+    /// activation between passes always restarts at the head. A large tree
+    /// does not qualify; a large tree with a long contiguous run of live
+    /// leaves at its head and its empties only beyond leaf 1024 does.
+    /// </para>
+    /// <para>
+    /// Which means this bound does not undercut the feature on the trees it
+    /// exists to treat. Candidates are empty leaves, and a bloated chain is by
+    /// definition dense in them, so the walk meets one almost at once, folds
+    /// up to <c>maxLeaves</c>, and each folded leaf leaves the chain
+    /// permanently. <b>The worse the bloat, the more certainly a pass makes
+    /// progress</b> - bloat is self-clearing under this design, and the stall
+    /// shape is close to its opposite. Do not reason about it from leaf count:
+    /// on a tree suffering this bug, leaf count is decoupled from key count by
+    /// construction, so estimating one from the other assumes the pathology is
+    /// absent on precisely the tree that has it. Persisting the cursor is the
+    /// fix if a chain with that head-run shape is ever observed.
     /// </para>
     /// </summary>
     private string? _leafReclaimResumeLowKey;
@@ -286,8 +334,36 @@ internal sealed partial class ShardRootGrain
 
     /// <summary>
     /// Widens <paramref name="prevId"/>'s high bound up to
-    /// <paramref name="currentProbe"/>'s low bound when a previous pass was
-    /// interrupted between unrouting a leaf and widening its predecessor.
+    /// <paramref name="currentProbe"/>'s low bound when two chain-adjacent
+    /// leaves have stopped tiling the keyspace.
+    /// <para>
+    /// Read what this compares before relying on it: both operands are the
+    /// DECLARED SPANS of two leaves that are still chain-adjacent, so it can
+    /// only ever see a SPAN gap. It is blind to a ROUTING gap, and the
+    /// distinction matters because a routing gap is the one that loses writes.
+    /// A leaf that has been unrouted still sits in the chain declaring its
+    /// full span, so its predecessor's high bound still equals its low bound,
+    /// this method finds the invariant intact and returns having done nothing.
+    /// Routing gaps are prevented by the fold ordering - the predecessor is
+    /// widened onto the range before anything stops routing to the leaf - and
+    /// are NOT repaired here. Nothing in the safety argument may lean on this
+    /// method to sweep one up.
+    /// </para>
+    /// <para>
+    /// What finishes an interrupted fold is <see cref="TryReclaimLeafAsync"/>'s
+    /// own already-unrouted branch: a descent on the leaf's own low bound that
+    /// lands elsewhere is the fingerprint of a fold interrupted after it
+    /// retired routing, and the fold is then completed rather than repaired.
+    /// </para>
+    /// <para>
+    /// That leaves this method covering span gaps only, and no fold can
+    /// produce one, because the unlink and the widen are a single
+    /// compare-and-swap. It is retained as a cheap invariant check on a
+    /// topology this pass does not otherwise verify - it costs three local
+    /// comparisons on the healthy path and no grain call - and it logs before
+    /// it acts, so a span gap arriving from anywhere else is repaired loudly
+    /// rather than walked past.
+    /// </para>
     /// </summary>
     private async Task RepairRangeGapAsync(
         GrainId prevId,
@@ -320,28 +396,50 @@ internal sealed partial class ShardRootGrain
     /// to <paramref name="prevId"/>, and returns whether it did.
     /// <para>
     /// The ordering is the whole of the safety argument, so it is worth
-    /// stating plainly. Routing is retired first, so no new write can reach
-    /// the leaf. The leaf is then asked to latch itself retired, which both
-    /// re-checks the emptiness this pass decided on several calls ago and
+    /// stating plainly. The leaf is first asked to latch itself retired, which
+    /// both re-checks the emptiness this pass decided on several calls ago and
     /// stops its contents changing from that point: after it, what was
-    /// measured is what will be destroyed. Only then does the predecessor take
-    /// over the chain link and the vacated range in a single compare-and-swap:
-    /// the compare is what stops a split that landed underneath us from having
-    /// its new leaf pointed past and orphaned, and the single write is what
-    /// stops the predecessor ever routing a range its WAL replay filter would
-    /// reject. The retired leaf's state is cleared last, once nothing can
-    /// reach it by routing or by the chain.
+    /// measured is what will be destroyed. The predecessor then takes over the
+    /// chain link and the vacated range in a single compare-and-swap: the
+    /// compare is what stops a split that landed underneath us from having its
+    /// new leaf pointed past and orphaned, and the single write is what stops
+    /// the predecessor ever routing a range its WAL replay filter would
+    /// reject. Routing is retired only after that, and the leaf's state is
+    /// cleared last, once nothing can reach it by routing or by the chain.
     /// </para>
     /// <para>
-    /// Every step between retiring routing and completing the fold is
-    /// compensated, because each leaves the tree in a state where the vacated
-    /// range is owned by nobody: a write into it would route to a leaf whose
-    /// replay filter rejects it, so the row would live in the cache and vanish
-    /// on the next projection rebuild. The compensation restores the leaf's
-    /// routing rather than widening a neighbour onto the gap, because
-    /// restoring returns the tree to exactly its pre-fold state, whereas
-    /// widening would leave two leaves declaring one span and both
-    /// materialising the same WAL records.
+    /// Routing is retired LAST, not first, and that is the whole of the
+    /// safety argument. The predecessor takes over the range before anything
+    /// stops routing to this leaf, so there is never a moment when a routed
+    /// leaf does not declare the span being sent to it. This is the same order
+    /// the SPLIT path has always used - the sibling is initialised owning
+    /// [splitKey, donorHigh) and the rows are moved before the donor narrows
+    /// its own high bound - so the fold's transient state is now an overlap,
+    /// as split's is, rather than a gap.
+    /// </para>
+    /// <para>
+    /// The earlier ordering retired routing first and opened exactly such a
+    /// gap: a write landing in it was accepted and acknowledged by the
+    /// predecessor, whose replay filter then rejected the key because its
+    /// declared span had not been widened yet, so the row lived in cache and
+    /// vanished on the next projection rebuild.
+    /// </para>
+    /// <para>
+    /// Retiring routing first used to look necessary because widening the
+    /// predecessor while the leaf was still routed would let a write reach the
+    /// leaf while both claimed the range - a permanent duplicate, because the
+    /// leaf was then no longer empty and so was never reclaimed again. The
+    /// retirement latch is what voids that: the leaf is frozen and refusing
+    /// writes before the widen, so it cannot accept the write that rule
+    /// existed to protect against.
+    /// </para>
+    /// <para>
+    /// Because nothing destructive precedes the compare-and-swap, a declined
+    /// fold has nothing to compensate: the leaf is unlatched and the tree is
+    /// exactly as it was found. Between the swap and the routing retirement
+    /// the leaf is routed but latched, so a write there is refused and
+    /// retried rather than lost - a bounded, visible failure in place of a
+    /// silent one.
     /// </para>
     /// <para>
     /// At no point is a key claimed by two leaves at once, and every step is
@@ -356,42 +454,31 @@ internal sealed partial class ShardRootGrain
         Stack<GrainId> path)
     {
         // Find the internal node that routes to this leaf by descending on the
-        // leaf's own low bound.
+        // leaf's own low bound. Routing is not retired here - it is retired
+        // once the predecessor owns the range - but whether it CAN be retired
+        // has to be settled before the fold commits to anything, because a
+        // leftmost child cannot be unrouted at all and folding one would strand
+        // its range.
         path.Clear();
         var routedLeafId = await ResolveWriteLeafAsync(currentProbe.LowKeyInclusive!, path);
 
-        // Set once routing has been retired by THIS pass, which is what makes
-        // the pass responsible for putting it back if it cannot finish. A leaf
-        // that was already unrouted on entry was retired by an earlier,
-        // interrupted pass, and abandoning it again simply leaves it as it was
-        // found.
-        GrainId? routingRetiredFrom = null;
+        GrainId? retireRoutingFrom = null;
 
         if (routedLeafId == currentId)
         {
             if (path.Count == 0) return false;
 
             var parentId = path.Peek();
-            var parent = ResolveInternalGrain(parentId);
-
-            var childIds = await parent.GetChildIdsAsync();
-            var childIndex = childIds.IndexOf(currentId);
+            var childIds = await ResolveInternalGrain(parentId).GetChildIdsAsync();
 
             // The leftmost child carries the null separator and is the
             // catch-all for everything below the first real separator in this
             // node, so it has no predecessor here to widen onto its range and
             // it stays. Reclaiming it would need a parent-level coalesce,
             // which is a larger change than this one.
-            if (childIndex <= 0) return false;
+            if (childIds.IndexOf(currentId) <= 0) return false;
 
-            if (!await parent.RemoveChildAsync(currentId)) return false;
-
-            routingRetiredFrom = parentId;
-
-            // Every routing decision this activation has cached for the parent
-            // still names the removed child. Not invalidating here would keep
-            // routing writes onto a leaf that is about to be cleared.
-            InvalidateRoutingTable(parentId);
+            retireRoutingFrom = parentId;
         }
 
         // Otherwise the leaf is already unrouted: routing is a total function,
@@ -402,30 +489,22 @@ internal sealed partial class ShardRootGrain
 
         var leaf = ResolveLeafGrain(currentId);
 
-        try
+        // The decision point. This re-runs the emptiness judgement against the
+        // leaf as it is now rather than as the probe found it several calls
+        // ago, and latches the leaf closed to further writes. Taking it HERE,
+        // before anything destructive, is what makes the rest of the fold
+        // safe: from this point the leaf's contents cannot change, so the
+        // state measured is the state destroyed. Nothing has been mutated yet,
+        // so a refusal simply leaves the tree as it was found.
+        if (!await leaf.TryBeginRetirementAsync())
         {
-            // The decision point. This re-runs the emptiness judgement against
-            // the leaf as it is now rather than as the probe found it several
-            // calls ago, and latches the leaf closed to further writes. Taking
-            // it HERE, before anything destructive, is what makes the rest of
-            // the fold safe: from this point the leaf's contents cannot change,
-            // so the state measured is the state destroyed.
-            if (!await leaf.TryBeginRetirementAsync())
-            {
-                logger.LogDebug(
-                    "Shard {ShardIndex} of tree '{TreeId}' abandoned the fold of leaf {LeafId}: it is no longer empty, so a write reached it after the reclaim probe.",
-                    MyShardIndex,
-                    TreeId,
-                    currentId);
+            logger.LogDebug(
+                "Shard {ShardIndex} of tree '{TreeId}' abandoned the fold of leaf {LeafId}: it is no longer empty, so a write reached it after the reclaim probe.",
+                MyShardIndex,
+                TreeId,
+                currentId);
 
-                await RestoreRetiredRoutingAsync(routingRetiredFrom, currentId, currentProbe);
-                return false;
-            }
-        }
-        catch
-        {
-            await RestoreRetiredRoutingAsync(routingRetiredFrom, currentId, currentProbe);
-            throw;
+            return false;
         }
 
         try
@@ -449,25 +528,31 @@ internal sealed partial class ShardRootGrain
                     prevId);
 
                 await leaf.AbandonRetirementAsync();
-                await RestoreRetiredRoutingAsync(routingRetiredFrom, currentId, currentProbe);
                 return false;
             }
         }
         catch
         {
             await leaf.AbandonRetirementAsync();
-            await RestoreRetiredRoutingAsync(routingRetiredFrom, currentId, currentProbe);
             throw;
         }
 
         // Past the compare-and-swap the fold has committed: the predecessor
-        // owns the range and points past this leaf, so the leaf is unreachable
-        // by routing and by the chain alike and there is nothing left to
-        // compensate. Everything that follows is tidy-up, and a failure in it
-        // must not be reported as a failed fold - doing so would have the pass
-        // treat a leaf it has already unlinked as still present. Each step is
-        // idempotent and is re-attempted by the walk's own repair, so log and
-        // carry on.
+        // owns the range and points past this leaf, so nothing that follows
+        // can be undone and a failure in it must not be reported as a failed
+        // fold - doing so would have the pass treat a leaf it has already
+        // unlinked as still present. Each step is idempotent and is
+        // re-attempted by the walk's own repair, so log and carry on.
+        //
+        // Retiring routing is the one step here that is not merely tidy-up:
+        // until it lands the leaf is routed but latched, so its range refuses
+        // writes. That is bounded and visible rather than silent, but it is
+        // worth a retry rather than a single attempt.
+        if (retireRoutingFrom is { } parentToRetireFrom)
+        {
+            await RetireRoutingAsync(parentToRetireFrom, currentId);
+        }
+
         try
         {
             if (currentProbe.NextSibling is { } nextId)
@@ -501,62 +586,70 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Puts back the routing entry this pass retired, when the fold that
-    /// retired it could not be completed.
+    /// Retires the routing entry for a leaf the predecessor has already
+    /// absorbed.
     /// <para>
-    /// Between retiring a leaf's routing and widening its predecessor onto the
-    /// vacated range, that range is owned by nobody: a descent on a key in it
-    /// lands on whichever leaf now covers the span, and that leaf's WAL replay
-    /// filter rejects the key because it falls outside the range the leaf
-    /// declares. A write into the gap would therefore be acknowledged, served
-    /// from the cache, and then lost at the next projection rebuild. The
-    /// walk's own <see cref="RepairRangeGapAsync"/> cannot close this one,
-    /// because it compares CHAIN neighbours and on an abandoned fold the chain
-    /// still tiles perfectly - the hole exists only in routing.
+    /// This runs AFTER the compare-and-swap that widens the predecessor onto
+    /// the range, which is what makes it safe. Retiring routing first would
+    /// leave the range routed to a predecessor that does not yet declare it,
+    /// and the two admission rules disagree: the write path admits by routing
+    /// and performs no span check, while WAL replay admits by declared span.
+    /// A write landing in that window is appended, merged, and acknowledged,
+    /// and then filtered out the moment the projection is rebuilt - durable,
+    /// readable, and gone on restart.
     /// </para>
     /// <para>
-    /// Restoring the separator is the exact inverse of removing it, and is
-    /// preferred over widening a neighbour onto the gap: widening would leave
-    /// two leaves declaring one span, and since replay admits a record by
-    /// span, both would materialise the same records. Restoring instead
-    /// returns the tree to its pre-fold state, and the next pass retries the
-    /// fold from scratch.
+    /// Doing it in this order trades that gap for a transient overlap: until
+    /// this lands, the predecessor and the folded leaf both declare the range.
+    /// The two are not equally bad. An overlap costs at most a double
+    /// materialisation of a record, which is visible and recoverable; a gap
+    /// silently destroys an acknowledged write. And here the overlap cannot
+    /// even cost that much, because the leaf is latched closed by
+    /// <c>TryBeginRetirementAsync</c> before the swap and is empty, so it can
+    /// neither accept a new record nor replay an old one.
     /// </para>
     /// <para>
-    /// A failure to compensate is logged and swallowed. It leaves the gap the
-    /// caller was already living with, and throwing here would replace the
-    /// caller's own outcome - including its exception - with this one.
+    /// A failure is retried and then logged and swallowed. The fold has
+    /// already committed on the chain, so reporting it as failed would have
+    /// the pass treat an unlinked leaf as still present; and the leaf is empty
+    /// and latched, so a stale routing entry costs refused writes on that
+    /// range until a later pass or the activation recycles, not lost ones.
     /// </para>
     /// </summary>
-    private async Task RestoreRetiredRoutingAsync(
-        GrainId? parentId,
-        GrainId currentId,
-        LeafReclaimProbe currentProbe)
+    private async Task RetireRoutingAsync(GrainId parentId, GrainId currentId)
     {
-        if (parentId is not { } parent) return;
-        if (currentProbe.LowKeyInclusive is not { } separator) return;
-
-        try
+        for (var attempt = 0; ; attempt++)
         {
-            await ResolveInternalGrain(parent).AcceptSplitAsync(separator, currentId);
-            InvalidateRoutingTable(parent);
+            try
+            {
+                await ResolveInternalGrain(parentId).RemoveChildAsync(currentId);
 
-            logger.LogDebug(
-                "Shard {ShardIndex} of tree '{TreeId}' restored routing for leaf {LeafId} at '{Separator}' after abandoning its fold.",
-                MyShardIndex,
-                TreeId,
-                currentId,
-                separator);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(
-                ex,
-                "Shard {ShardIndex} of tree '{TreeId}' abandoned the fold of leaf {LeafId} but could not restore its routing entry at '{Separator}'; the range is unrouted until a later pass or repair closes it.",
-                MyShardIndex,
-                TreeId,
-                currentId,
-                separator);
+                // Every routing decision this activation has cached for the
+                // parent still names the removed child. Not invalidating here
+                // would keep routing writes onto a leaf that has been cleared.
+                InvalidateRoutingTable(parentId);
+                return;
+            }
+            catch (Exception ex) when (attempt < MaxRetries)
+            {
+                logger.LogDebug(
+                    ex,
+                    "Shard {ShardIndex} of tree '{TreeId}' could not retire routing for folded leaf {LeafId} on attempt {Attempt}; retrying.",
+                    MyShardIndex,
+                    TreeId,
+                    currentId,
+                    attempt + 1);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Shard {ShardIndex} of tree '{TreeId}' folded leaf {LeafId} onto its predecessor but could not retire its routing entry; the range is served by the predecessor and the stale entry refuses writes to the empty leaf until a later pass closes it.",
+                    MyShardIndex,
+                    TreeId,
+                    currentId);
+                return;
+            }
         }
     }
 }

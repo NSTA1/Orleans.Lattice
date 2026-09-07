@@ -172,6 +172,81 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Drops a split boundary that a widen has just absorbed, so the leaf
+    /// stops advertising that keys it now owns belong to somebody else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>SplitKey</c> means "keys at or above this value moved to my
+    /// successor", and every <c>LeafCacheGrain</c> acts on it by pruning
+    /// exactly those keys from its mirror on every refresh - including an
+    /// empty one, because the prune runs before the is-empty early return.
+    /// That is sound while the successor owns them, and it is why the prune
+    /// was written unconditional: a split leaf never regains keys above its
+    /// split point, so re-applying the boundary costs nothing.
+    /// </para>
+    /// <para>
+    /// Leaf reclaim is the feature that makes that premise false. Folding an
+    /// empty successor away widens this leaf back over the boundary, so it
+    /// owns those keys again and replay legitimately materialises them -
+    /// while the boundary it still publishes says they belong elsewhere.
+    /// Every cache then prunes rows this leaf holds, which reads as a null
+    /// through the cache while a direct read returns the row, and no refresh
+    /// of any kind heals it because each one re-applies the same prune.
+    /// </para>
+    /// <para>
+    /// Only once the split has finished. <c>SplitState</c> is the guard on
+    /// the two forwarding sites - the recovery branch in <c>SetCoreAsync</c>
+    /// and the matching one on the merge path - and both dereference
+    /// <c>SplitKey</c> with a null-forgiving operator, encoding
+    /// "SplitInProgress implies SplitKey is not null". Nulling the key under
+    /// an in-flight split would break that invariant, and since
+    /// <c>CompareOrdinal(key, null) &gt;= 0</c> holds for every non-null key,
+    /// every write would then be forwarded to the sibling instead of only the
+    /// keys above the boundary. Gating on the split being finished preserves
+    /// the invariant exactly, and is the honest reading besides: while a
+    /// split really is in flight there is no stale boundary to clear, because
+    /// the keys above it really do belong elsewhere.
+    /// </para>
+    /// <para>
+    /// <c>SplitSiblingId</c> goes with the key it qualifies: after a fold it
+    /// can name the leaf reclaim has just retired, and a reference to a
+    /// retired grain left in persisted state invites a future reader to
+    /// follow it. <c>SplitState</c> itself is a monotone lattice merged
+    /// across replicas and is deliberately not reset - driving it backwards
+    /// is not an operation the type supports.
+    /// </para>
+    /// <para>
+    /// The caller must have already applied the widen, and must revert
+    /// <c>SplitKey</c> and <c>SplitSiblingId</c> alongside the bound if the
+    /// persist fails, so that no observer can ever see one without the other.
+    /// </para>
+    /// </remarks>
+    /// <param name="newHighKeyExclusive">
+    /// The bound the leaf is widening to; <see langword="null"/> is unbounded
+    /// and therefore always past the boundary.
+    /// </param>
+    /// <returns>Whether a boundary was cleared.</returns>
+    private bool TryClearAbsorbedSplitBoundary(string? newHighKeyExclusive)
+    {
+        if (state.State.SplitKey is not { } splitKey) return false;
+
+        if (state.State.SplitState == SplitState.SplitInProgress) return false;
+
+        // A widen that stops at or below the boundary has not absorbed it,
+        // and the successor still owns the keys above it.
+        if (newHighKeyExclusive is not null
+            && string.CompareOrdinal(newHighKeyExclusive, splitKey) <= 0)
+        {
+            return false;
+        }
+
+        state.State.SplitKey = null;
+        state.State.SplitSiblingId = null;
+        return true;
+    }
+
+    /// <summary>
     /// Whether this leaf carries state that forbids reclaim however empty it
     /// looks. Each condition is a case where removing the leaf from the chain
     /// would lose information that is not held anywhere else.
@@ -189,6 +264,14 @@ internal sealed partial class BPlusLeafGrain
         // donor resurfacing an orphan snapshot for a slot that has migrated
         // to another shard. Deleting the leaf would delete the seal, and the
         // seal outliving the rows is the entire point of it.
+        //
+        // NOTE (see issue #2143): this guards the *victim* only. Nothing
+        // checks the predecessor's seal before the fold widens it to cover
+        // the victim's span, so a sealed predecessor can end up owning a
+        // range it will answer for while its own seal still suppresses
+        // slots inside it. Latent rather than live - deliberately left
+        // unfixed here to keep this change reviewable - but it is the
+        // asymmetry to close if the seal ever gains a second reader.
         if (state.State.MovedAwaySlots is { Length: > 0 })
             return true;
 
@@ -267,6 +350,8 @@ internal sealed partial class BPlusLeafGrain
 
             var prevNext = state.State.NextSibling;
             var prevHigh = state.State.HighKeyExclusive;
+            var prevSplitKey = state.State.SplitKey;
+            var prevSplitSiblingId = state.State.SplitSiblingId;
 
             state.State.NextSibling = newNext;
 
@@ -281,6 +366,11 @@ internal sealed partial class BPlusLeafGrain
                     || string.CompareOrdinal(absorbHighKeyExclusive, prevHigh) > 0))
             {
                 state.State.HighKeyExclusive = absorbHighKeyExclusive;
+
+                // And drop a split boundary this widen has just absorbed, in
+                // that same write, for the same reason the widen is in it.
+                // See TryClearAbsorbedSplitBoundary.
+                TryClearAbsorbedSplitBoundary(absorbHighKeyExclusive);
             }
 
             try
@@ -291,9 +381,12 @@ internal sealed partial class BPlusLeafGrain
             {
                 // Class B revert: an activation that believes it has absorbed a
                 // range storage says it has not would route and replay-filter
-                // against a topology no peer shares.
+                // against a topology no peer shares. The absorbed split
+                // boundary is part of the same decision and reverts with it.
                 state.State.NextSibling = prevNext;
                 state.State.HighKeyExclusive = prevHigh;
+                state.State.SplitKey = prevSplitKey;
+                state.State.SplitSiblingId = prevSplitSiblingId;
                 throw;
             }
 
@@ -333,7 +426,16 @@ internal sealed partial class BPlusLeafGrain
             }
 
             var prevHighKey = current;
+            var prevSplitKey = state.State.SplitKey;
+            var prevSplitSiblingId = state.State.SplitSiblingId;
+
             state.State.HighKeyExclusive = highKeyExclusive;
+
+            // A widen can absorb a split boundary here too, on the resume
+            // path, and it has to be cleared in the same persist for the same
+            // reason. See TryClearAbsorbedSplitBoundary.
+            TryClearAbsorbedSplitBoundary(highKeyExclusive);
+
             try
             {
                 await PersistAsync();
@@ -343,8 +445,13 @@ internal sealed partial class BPlusLeafGrain
                 // Class B revert: leaving the widened bound in memory while
                 // storage still holds the narrow one would have this
                 // activation claim ownership of a range no peer routes to it,
-                // and the WAL materialiser filters by exactly this bound.
+                // and the WAL materialiser filters by exactly this bound. The
+                // absorbed split boundary is part of the same decision and
+                // reverts with it, so no observer can see one without the
+                // other.
                 state.State.HighKeyExclusive = prevHighKey;
+                state.State.SplitKey = prevSplitKey;
+                state.State.SplitSiblingId = prevSplitSiblingId;
                 throw;
             }
         }

@@ -241,4 +241,97 @@ public class LeafReclaimSplitRaceIntegrationTests
 
         Assert.That(await router.CountAsync(), Is.EqualTo(insertedKeys.Count));
     }
+
+    /// <summary>
+    /// A split racing a fold must not leave a leaf advertising a split
+    /// boundary that falls strictly inside the range it owns.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The fold widens a predecessor onto a range it did not previously own,
+    /// and <c>TryClearAbsorbedSplitBoundary</c> drops the now-absorbed
+    /// <c>SplitKey</c> in the same persist - but deliberately declines to do
+    /// so while that predecessor's own split is still in progress, because
+    /// <c>SplitInProgress</c> implies <c>SplitKey</c> is not null and two
+    /// forwarding sites dereference it on that basis.
+    /// </para>
+    /// <para>
+    /// That skip is safe only because <c>CompleteSplitAsync</c> ends by
+    /// assigning <c>HighKeyExclusive = splitKey</c> unconditionally, which
+    /// overwrites whatever the fold widened to and restores
+    /// <c>SplitKey == HighKeyExclusive</c> - a boundary at the leaf's own
+    /// edge, not inside its span. That is an argument about two call sites in
+    /// another file, so it is asserted here rather than trusted: if the
+    /// completion path ever stops re-narrowing, this goes red instead of the
+    /// invariant going quietly false and every cache pruning rows the leaf
+    /// owns.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task A_split_racing_a_fold_leaves_no_boundary_inside_a_leafs_own_span()
+    {
+        var treeName = $"reclaim-race-boundary-{Guid.NewGuid():N}";
+        var (router, shard) = await CreateSingleShardTreeAsync(treeName);
+        var (head, staleNext, _, insertedKeys) = await BuildSplitUnderneathAsync(router, shard);
+
+        // Precondition: the split must have left a boundary published
+        // somewhere, or the sweep below is vacuous and would pass against an
+        // implementation that never clears anything at all.
+        Assert.That(await AnyLeafPublishesABoundaryAsync(shard), Is.True,
+            "precondition: the split must publish a boundary before the fold, or this test proves nothing");
+
+        // Drive the interleaving, then let a settled pass fold for real.
+        var staleNextRange = await Leaf(staleNext).GetKeyRangeAsync();
+        await Leaf(head).TryUnlinkSuccessorAsync(
+            staleNext,
+            await Leaf(staleNext).GetNextSiblingAsync(),
+            staleNextRange.HighKeyExclusive);
+
+        await router.DeleteRangeAsync("k000", "k999");
+        await shard.ReclaimEmptyLeavesAsync(int.MaxValue);
+
+        foreach (var leafId in await WalkChainAsync(shard))
+        {
+            var leaf = Leaf(leafId);
+            var range = await leaf.GetKeyRangeAsync();
+            var delta = await leaf.GetDeltaSinceCursorAsync(default);
+
+            if (delta.SplitKey is null) continue;
+
+            var insideOwnSpan = range.HighKeyExclusive is null
+                || string.CompareOrdinal(delta.SplitKey, range.HighKeyExclusive) < 0;
+
+            Assert.That(insideOwnSpan, Is.False,
+                $"leaf {leafId} spans [{range.LowKeyInclusive ?? "-inf"}, {range.HighKeyExclusive ?? "+inf"}) "
+                + $"but publishes SplitKey='{delta.SplitKey}' inside it; every cache prunes keys >= that "
+                + "boundary, discarding rows this leaf owns");
+        }
+
+        // And the consequence the boundary would cause, end to end.
+        foreach (var key in insertedKeys)
+            Assert.That(await router.GetAsync(key), Is.Not.Null,
+                $"'{key}' must remain readable through the caches the boundary would misdirect");
+    }
+
+    private async Task<bool> AnyLeafPublishesABoundaryAsync(IShardRootGrain shard)
+    {
+        foreach (var leafId in await WalkChainAsync(shard))
+        {
+            if ((await Leaf(leafId).GetDeltaSinceCursorAsync(default)).SplitKey is not null)
+                return true;
+        }
+        return false;
+    }
+
+    private async Task<List<GrainId>> WalkChainAsync(IShardRootGrain shard)
+    {
+        var chain = new List<GrainId>();
+        var walk = await shard.GetLeftmostLeafIdAsync();
+        while (walk is { } id)
+        {
+            chain.Add(id);
+            walk = await Leaf(id).GetNextSiblingAsync();
+        }
+        return chain;
+    }
 }
