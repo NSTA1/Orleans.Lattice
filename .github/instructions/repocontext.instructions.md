@@ -763,11 +763,17 @@ anywhere to explain it.
   gotchas, conventions) is worth keeping, `reset_index` is the tool - it drops
   the code index and every derived plane but preserves the memory tree, so the
   repository stays queryable through its notes and a follow-up `add_repo`
-  rebuilds the code index from the working files. `reset_index` is a
+  rebuilds the code index from the working files. A reset repository **stays in
+  `list_repos`**, reporting a null `lastIngested`, `fileCount`, and
+  `indexedCommit` until it is re-onboarded - which is what distinguishes
+  "index just reset, memory intact" from "never onboarded", and is why the
+  preserved memory stays discoverable rather than reachable only by an id you
+  already knew. `reset_index` is a
   lighter-consent operation (no memory is destroyed) but is still destructive
   and fail-closed like every other write tool, so do not call it speculatively -
   reach for it when the index is actually degraded and the memory is worth
-  preserving.
+  preserving. `remove_repo` remains the only verb that drops a repository from
+  the listing entirely.
 
 ## Freshness and re-ingest
 

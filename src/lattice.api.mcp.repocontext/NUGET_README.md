@@ -34,7 +34,7 @@ app.MapLatticeMcp();
 
 `AddRepoContextTools()` with writes off offers only the read-only tools; pass `enableWrites: true` to also contribute bootstrap and the memory-writing tools. Bind an `IEmbeddingProvider` to turn on semantic search; without one, search still works in keyword mode.
 
-For a container or multi-tenant host, pass `workspaceMode: true` with a `workspaceRoot`. This mounts a broad parent directory once and lets the client register individual repositories under it dynamically with `repocontext_add_repo`, list them with `repocontext_list_repos`, drop them with `repocontext_remove_repo`, and reset a wedged code index while preserving the repository's durable memory with `repocontext_reset_index` - instead of baking one repository path into configuration. Every added path is resolved to its real location and must sit inside the workspace root, so `..` traversal and symlink escape are refused.
+For a container or multi-tenant host, pass `workspaceMode: true` with a `workspaceRoot`. This mounts a broad parent directory once and lets the client register individual repositories under it dynamically with `repocontext_add_repo`, list them with `repocontext_list_repos`, drop them with `repocontext_remove_repo`, and reset a wedged code index while preserving the repository's durable memory - and its place in the listing, with a null ingest marker and file count - with `repocontext_reset_index` - instead of baking one repository path into configuration. Every added path is resolved to its real location and must sit inside the workspace root, so `..` traversal and symlink escape are refused.
 
 ```csharp
 builder.Services.AddRepoContextTools(enableWrites: true, workspaceMode: true, workspaceRoot: "/workspace");
