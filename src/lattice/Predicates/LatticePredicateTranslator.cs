@@ -187,11 +187,7 @@ public static class LatticePredicateTranslator
 
     private static LatticeConstant CaptureConstant(Expression expression)
     {
-        object? value;
-        if (expression is ConstantExpression constant)
-            value = constant.Value;
-        else
-            value = Expression.Lambda(expression).Compile().DynamicInvoke();
+        object? value = ExpressionConstantReader.Read(expression);
 
         return value switch
         {
