@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq.Expressions;
 using System.Reflection;
 using BenchmarkDotNet.Attributes;
@@ -110,6 +111,10 @@ public class GrainIndexPlanFoldBenchmarks
 
     private string[] _unionKeys = [];
 
+    private Expression<Func<BenchFoldState, bool>> _scanPredicate = _ => true;
+    private ParameterExpression _parameterTarget = Expression.Parameter(typeof(BenchFoldState), "s");
+    private Expression[] _parameterOperands = [];
+
     [GlobalSetup]
     public void Setup()
     {
@@ -157,6 +162,57 @@ public class GrainIndexPlanFoldBenchmarks
                 (i & 1) == 0 ? "Country" : "Age",
                 GrainIndexKeyEncoder.EncodeValue(grain % 97),
                 GrainKey(grain));
+        }
+
+        // The parameter-scan lane's fixture: the operand pairs the planner
+        // actually interrogates while routing a four-atom predicate. Each atom
+        // contributes both sides - the parameter-rooted member chain the planner
+        // must recognise, and the captured constant side it must reject - which
+        // is precisely the two calls per atom the router makes.
+        _scanPredicate = s => s.Age >= captured
+            && s.Status == 2
+#pragma warning disable CA1310 // The planner supports only the ordinal single-argument overload.
+            && s.Country.StartsWith(bound.Country)
+#pragma warning restore CA1310
+            && s.Score < 99.5;
+
+        _parameterTarget = _scanPredicate.Parameters[0];
+
+        var operands = new List<Expression>();
+        CollectOperands(_scanPredicate.Body, operands);
+        _parameterOperands = [.. operands];
+    }
+
+    /// <summary>
+    /// Walks the conjunction the same way the planner's router does, recording
+    /// the operand pairs it would ask about.
+    /// </summary>
+    private static void CollectOperands(Expression expression, List<Expression> operands)
+    {
+        if (expression is BinaryExpression { NodeType: ExpressionType.AndAlso or ExpressionType.OrElse } chain)
+        {
+            CollectOperands(chain.Left, operands);
+            CollectOperands(chain.Right, operands);
+            return;
+        }
+
+        switch (expression)
+        {
+            case BinaryExpression comparison:
+                operands.Add(comparison.Left);
+                operands.Add(comparison.Right);
+                break;
+            case MethodCallExpression { Object: not null } call:
+                operands.Add(call.Object);
+                for (var i = 0; i < call.Arguments.Count; i++)
+                {
+                    operands.Add(call.Arguments[i]);
+                }
+
+                break;
+            default:
+                operands.Add(expression);
+                break;
         }
     }
 
@@ -340,8 +396,191 @@ public class GrainIndexPlanFoldBenchmarks
     }
 
     // ---------------------------------------------------------------------
+    // Lane 4: answering "does this operand mention the lambda parameter?".
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// The shape before the change: allocate a fresh
+    /// <see cref="ExpressionVisitor"/> per question and walk the whole operand
+    /// sub-tree even once the answer is known. The planner asks this up to twice
+    /// per binary atom while routing a predicate, so a four-atom conjunction
+    /// pays for eight visitors per query.
+    /// </summary>
+    [Benchmark]
+    public int ParameterScan_Baseline_VisitorPerCall()
+    {
+        var found = 0;
+        for (var i = 0; i < _parameterOperands.Length; i++)
+        {
+            if (BaselineParameterFinder.Contains(_parameterOperands[i], _parameterTarget))
+                found++;
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// The shipped shape: a static structural walk over the node kinds a
+    /// routable predicate is built from, returning the moment the parameter is
+    /// seen and allocating nothing. Unrecognised node kinds fall back to the
+    /// visitor, so no operand answers <c>false</c> that previously answered
+    /// <c>true</c>.
+    /// </summary>
+    [Benchmark]
+    public int ParameterScan_Optimized_StaticWalk()
+    {
+        var found = 0;
+        for (var i = 0; i < _parameterOperands.Length; i++)
+        {
+            if (StaticContainsParameter(_parameterOperands[i], _parameterTarget))
+                found++;
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// The cheaper alternative that was considered and rejected: keep the
+    /// visitor but short-circuit the common case where the operand is the
+    /// parameter itself or a member chain rooted directly in it. It removes the
+    /// allocation only for the operands that were already cheapest, and leaves
+    /// the constant side - the operand that costs the most to walk - unchanged.
+    /// </summary>
+    [Benchmark]
+    public int ParameterScan_Contrast_MemberChainShortcut()
+    {
+        var found = 0;
+        for (var i = 0; i < _parameterOperands.Length; i++)
+        {
+            var expression = _parameterOperands[i];
+            while (expression is MemberExpression { Expression: not null } member)
+            {
+                expression = member.Expression;
+            }
+
+            if (ReferenceEquals(expression, _parameterTarget))
+            {
+                found++;
+                continue;
+            }
+
+            if (BaselineParameterFinder.Contains(_parameterOperands[i], _parameterTarget))
+                found++;
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// The real shipped planner over a wider predicate than the constant-fold
+    /// lane's - four atoms, one of them a string method call - so the parameter
+    /// scan is exercised at production call depth. This is what pins the copied
+    /// walk above to the code that actually ships.
+    /// </summary>
+    [Benchmark]
+    public int ParameterScan_Production_RealPlanner()
+    {
+        var plan = GrainIndexQueryPlanner.Build(_scanPredicate, "Bench", _properties, _propertyNames);
+        return plan.Disjuncts.Length;
+    }
+
+    // ---------------------------------------------------------------------
     // Reproduced shells and fixtures.
     // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// A verbatim copy of the planner's prior <c>ParameterFinder</c>, kept so the
+    /// baseline arm measures the shape that actually shipped before the change.
+    /// </summary>
+    private sealed class BaselineParameterFinder : ExpressionVisitor
+    {
+        private readonly ParameterExpression _target;
+        private bool _found;
+
+        private BaselineParameterFinder(ParameterExpression target) => _target = target;
+
+        internal static bool Contains(Expression expression, ParameterExpression target)
+        {
+            var finder = new BaselineParameterFinder(target);
+            finder.Visit(expression);
+            return finder._found;
+        }
+
+        protected override Expression VisitParameter(ParameterExpression node)
+        {
+            if (node == _target)
+            {
+                _found = true;
+            }
+
+            return base.VisitParameter(node);
+        }
+    }
+
+    /// <summary>
+    /// A copy of the shipped static walk. The production copy is
+    /// <c>private</c> to the planner, so the arm above reproduces it rather than
+    /// calling it; the <c>ParameterScan_Production_RealPlanner</c> arm pins the
+    /// two together end to end.
+    /// </summary>
+    private static bool StaticContainsParameter(Expression? expression, ParameterExpression target)
+    {
+        switch (expression)
+        {
+            case null:
+                return false;
+            case ParameterExpression parameterExpression:
+                return ReferenceEquals(parameterExpression, target);
+            case ConstantExpression:
+                return false;
+            case UnaryExpression unary:
+                return StaticContainsParameter(unary.Operand, target);
+            case MemberExpression member:
+                return StaticContainsParameter(member.Expression, target);
+            case TypeBinaryExpression typeBinary:
+                return StaticContainsParameter(typeBinary.Expression, target);
+            case BinaryExpression binary:
+                return StaticContainsParameter(binary.Left, target)
+                    || StaticContainsParameter(binary.Right, target)
+                    || StaticContainsParameter(binary.Conversion, target);
+            case ConditionalExpression conditional:
+                return StaticContainsParameter(conditional.Test, target)
+                    || StaticContainsParameter(conditional.IfTrue, target)
+                    || StaticContainsParameter(conditional.IfFalse, target);
+            case MethodCallExpression call:
+                return StaticContainsParameter(call.Object, target)
+                    || StaticContainsAnyParameter(call.Arguments, target);
+            case InvocationExpression invocation:
+                return StaticContainsParameter(invocation.Expression, target)
+                    || StaticContainsAnyParameter(invocation.Arguments, target);
+            case NewExpression construction:
+                return StaticContainsAnyParameter(construction.Arguments, target);
+            case NewArrayExpression newArray:
+                return StaticContainsAnyParameter(newArray.Expressions, target);
+            case IndexExpression index:
+                return StaticContainsParameter(index.Object, target)
+                    || StaticContainsAnyParameter(index.Arguments, target);
+            case LambdaExpression lambda:
+                return StaticContainsAnyParameter(lambda.Parameters, target)
+                    || StaticContainsParameter(lambda.Body, target);
+            default:
+                return BaselineParameterFinder.Contains(expression, target);
+        }
+    }
+
+    private static bool StaticContainsAnyParameter<TExpression>(
+        ReadOnlyCollection<TExpression> expressions,
+        ParameterExpression target)
+        where TExpression : Expression
+    {
+        for (var i = 0; i < expressions.Count; i++)
+        {
+            if (StaticContainsParameter(expressions[i], target))
+                return true;
+        }
+
+        return false;
+    }
 
     private static List<List<int>> Leaf(int atom) => [[atom]];
 

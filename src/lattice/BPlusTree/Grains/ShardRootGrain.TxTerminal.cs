@@ -539,6 +539,21 @@ internal sealed partial class ShardRootGrain
         if (committed && committedValues is { Count: > 0 })
         {
             leafTargets ??= new Dictionary<GrainId, Dictionary<string, byte[]>?>();
+
+            // Per-leaf subset width. A single-leaf root routes the whole
+            // payload to one bucket, which is an exact width. Otherwise the
+            // leaves that took a prepare-phase write are the fan-out's own
+            // measure of its width, and the shared floor/cap keeps a wide saga
+            // from pre-allocating the whole payload per leaf. With neither
+            // signal the width is genuinely unknown, so the subsets stay
+            // unhinted rather than take a guess that over-allocates every one
+            // of them.
+            var subsetCapacity = RootIsLeafTyped
+                ? committedValues.Count
+                : trackedAffected is { Count: > 0 }
+                    ? ShardFanout.BucketCapacity(committedValues.Count, trackedAffected.Count)
+                    : 0;
+
             foreach (var kvp in committedValues)
             {
                 if (state.State.RootNodeId is null)
@@ -548,11 +563,16 @@ internal sealed partial class ShardRootGrain
                 var leafId = RootIsLeafTyped
                     ? state.State.RootNodeId!.Value
                     : await TraverseToLeafAsync(kvp.Key);
+                // Deliberately a read probe plus a store on the miss rather
+                // than a single ref-returning probe: in the steady state every
+                // leaf is already present, and the add-capable probe measured
+                // consistently slower there for no byte saving at all.
                 if (!leafTargets.TryGetValue(leafId, out var bucket) || bucket is null)
                 {
-                    bucket = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                    bucket = new Dictionary<string, byte[]>(subsetCapacity, StringComparer.Ordinal);
                     leafTargets[leafId] = bucket;
                 }
+
                 bucket[kvp.Key] = kvp.Value;
             }
         }
