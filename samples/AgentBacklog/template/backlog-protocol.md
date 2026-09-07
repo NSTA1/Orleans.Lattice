@@ -90,9 +90,10 @@ attribute expressed this way is filterable without reading bodies. Arbitrary
 |-----|---------|
 | `backlog` | Plain marker tag. Every item carries it. |
 | `priority:P0` .. `priority:P3` | Ordering priority. |
-| `phase:research` \| `phase:implementation` \| `phase:integration` | Which phase of its grouping the item belongs to. Set at authoring, never changed by a worker. |
+| `phase:research` \| `phase:implementation` \| `phase:integration` | Which phase of its grouping the item belongs to. Set at authoring, never changed by a worker, and it never carries execution state - a `phase:complete` or `phase:review` tag is a defect, not a status. |
 | `homeRegion:<region>` | The region in which claims for this item are taken. **Verify this is enforced before relying on it.** The intent is that a claim attempted from any other region fails closed, because the underlying lock is cluster-wide and therefore region-scoped - but that is a property of the deployment, not of the tag. On a single-region deployment `lattice_list_regions` reports only `current`, claims report region `local`, and a geographic value such as `uksouth` is **not enforced at all**: a claim from anywhere succeeds. Treat a value the cluster does not route as a **defect in the binding**, and note the failure is worse than a no-op - an unenforced safety assumption that the protocol documents as enforced is more dangerous than an absent one, because it is relied upon. |
 | `baseBranch:<branch>` | The branch this item's pull request targets. For an item in a grouping this is the **epic branch**, never `main`. |
+| `state:complete` \| `state:parked` | The item's **terminal** state, and the only execution state carried on the item. Absent means the item is live. See [Recording completion](#recording-completion). |
 | `resource:<name>` | **Optional, repeatable-by-name but one tag per distinct resource.** Names a scarce **non-file** resource the item needs exclusively - a shared test box, a physical device, a deployment slot, a rate-limited external account. Two items naming the same resource may never be in flight together, however disjoint their code radii are. |
 
 **Exactly one tag per prefix.** Two `priority:` tags on one item means two
@@ -102,7 +103,43 @@ one arbitrarily.
 
 Keep attribute tags **low-churn**. OR-Set dots accumulate per add, so an
 attribute rewritten every run would grow a long-lived item record without bound.
-That is why execution state is deliberately not a tag (see below).
+That is why *per-run* execution state - attempts, claims, leases, review rounds -
+is deliberately not a tag (see below). The one exception is the terminal
+`state:` tag, which is written at most once in an item's life and so costs a
+single dot.
+
+### Recording completion
+
+**An item is complete when, and only when, it carries `state:complete`.** The
+tag is the record; nothing else is. Without a defined encoding every worker
+invents one, and the inventions do not agree - which is how an item ends up
+tagged `phase:complete` (clobbering a reserved authoring attribute) or described
+as finished only in prose inside `body`, where the ready-set computation cannot
+see it.
+
+Three rules make the tag trustworthy:
+
+- **It is written by the claim holder, under its fencing token, and only after
+  the thing it asserts is true.** For an implementation item that means *after*
+  the pull request is merged into its `baseBranch`, not after CI goes green and
+  not after a review passes. Green-and-unmerged is not complete: the lifecycle
+  transition is `Claimed --> Complete: pull request merged into the base branch`,
+  and an item tagged complete while its pull request is still open is a defect
+  the next ready-set computation reports.
+- **It is terminal and it is not a status field.** There is no `state:review`,
+  no `state:in-progress`, no `state:blocked`. Everything short of terminal is
+  derived from state that already exists elsewhere and is authoritative there:
+  blocked from `blockedBy`, claimed from the claim surface, admitted from the
+  mirrored issue's labels. Adding a mutable status tag would duplicate all three
+  and churn the record besides.
+- **`body` explains, the tag decides.** The resume block says what landed and
+  what is left, for a human and for the next claim holder. It is prose and is
+  never parsed. No agent may infer completeness from it.
+
+A worker that cannot merge - because it lost its claim, because review requested
+changes, or because it ran out of run - **does not tag the item complete**. It
+writes an honest `resumeNote`, posts `result=released`, and leaves the item live
+for the next holder. That is the normal path, not a failure.
 
 ### The item body
 
@@ -391,7 +428,10 @@ The computation:
 
 1. `repocontext_scan` scope `MemoryTopic`, topic `backlog`, paging on the
    continuation token, to enumerate every live item.
-2. Drop items already complete, parked, or held under a live fenced claim.
+2. Drop items tagged `state:complete` or `state:parked`, and items held under a
+   live fenced claim (`repocontext_claim_status`). Completeness is read from the
+   tag and from nothing else - never from prose in `body`, and never from a
+   merged-looking pull request.
 3. **Drop grouping records.** A grouping (an epic, or any item that other items
    declare themselves `partOf`) is a container, not a unit of work. It is
    completed by its integration item, never claimed directly. Omitting this step
@@ -409,7 +449,8 @@ The computation:
    which drops it at step 4 anyway. Author both. The redundancy is one-way safe -
    it can only ever remove a container from the ready set, never admit one.
 4. For each remaining candidate, one depth-1 `repocontext_neighbors` on
-   `blockedBy`. A candidate survives when every target it names is complete.
+   `blockedBy`. A candidate survives when every target it names carries
+   `state:complete`.
 5. Drop survivors whose mirrored issue is not admitted (see
    [Entry gating](#entry-gating---mirror-first-admit-by-label)). This is checked
    *after* the `blockedBy` narrowing, so it costs one issue read per survivor
@@ -451,6 +492,17 @@ These are reported, never silently absorbed:
   `stale`. Re-validate the spec before spending a run on it.
 - **Duplicate attribute tag.** Two tags sharing a `key:` prefix means two
   concurrent authors. Reconcile; never pick one arbitrarily.
+- **Execution state on a `phase:` tag.** `phase:` carries the authored phase and
+  nothing else, so `phase:complete` or `phase:review` means a worker wrote a
+  status into a reserved attribute - and, because add-wins never replaces, the
+  item's real phase is either lost or now duplicated. Reconcile to the authored
+  phase plus a `state:` tag if one is warranted.
+- **Item tagged `state:complete` with an unmerged pull request.** Completion was
+  claimed before the merge that defines it. The item is not complete; the merge
+  is outstanding work.
+- **Green, mergeable pull request on an item with no live claim and no
+  `state:complete`.** The attempt died between CI passing and the merge. This is
+  the cheapest possible resume and should be picked up before any fresh item.
 - **Ready set empty while pending is not.** There is no cycle detection in the
   store, so a dependency cycle is silent permanent starvation. Alarm rather than
   exit quietly.

@@ -193,10 +193,11 @@ over memory links, so "who is blocked by me?" cannot be asked. Do not design
 around a lookup this surface cannot serve.
 
 In outline: scan the `backlog` topic paging on the continuation token; drop items
-already complete, parked, or under a live claim; run one depth-1 `neighbors` call
-on `blockedBy` per surviving candidate and keep only those whose every target is
-complete; drop candidates whose mirrored issue is not admitted; then order and
-select.
+tagged `state:complete` or `state:parked` and items under a live claim; run one
+depth-1 `neighbors` call on `blockedBy` per surviving candidate and keep only
+those whose every target carries `state:complete`; drop candidates whose mirrored
+issue is not admitted; then order and select. Completeness is that tag and
+nothing else - not prose in `body`, and not your reading of a pull request.
 
 Two properties of the scan matter to you specifically:
 
@@ -218,6 +219,9 @@ Each of these is a required check, and each one is **surfaced**, never absorbed.
 | A `blockedBy` target returns `exists: false` | **Defect.** A dangling blocker is *not* a satisfied dependency. Report it and treat the dependent item as blocked. Treating absence as satisfaction is how a deleted item silently releases work that was deliberately gated on it. |
 | `recall` reports the candidate `stale` (an `anchoredTo` target drifted) | **Re-validate before spending a run.** Read the drifted anchor and the mirrored issue, and decide whether the specification still holds. If it does, refresh nothing and proceed, noting the drift. If it does not, skip the item and report it for respecification. |
 | Two tags share a `key:` prefix (for example two `priority:` tags) | **Defect.** It means two authors wrote concurrently and add-wins made the collision visible. Report it; never pick one arbitrarily. |
+| A `phase:` tag carries execution state (`phase:complete`, `phase:review`) | **Defect.** `phase:` is authored and add-wins never replaces it, so the item's real phase is now lost or duplicated. Report it; the project manager reconciles. |
+| An item tagged `state:complete` whose pull request is still open | **Defect.** Completion was claimed before the merge that defines it. Report it; the merge is outstanding work, and the item is not a satisfied `blockedBy` target. |
+| A green, mergeable pull request on an item with no live claim and no `state:complete` | The previous attempt died between CI and the merge. This is the **cheapest possible resume** - prefer it over starting a fresh item. |
 | The item is `partOf` an epic but carries `baseBranch:main` | **Defect.** Report it and skip the item. Do not guess the epic branch: guessing produces a pull request into `main` that looks perfectly normal. |
 | A grouping's fan-out is complete but its integration item is not | The grouping is **not** complete. Do not treat the epic as closable. The integration item is the next work. |
 | The candidate's mirrored issue carries `needs-specification` | Not admitted. Skip it. You never remove that label. |
@@ -562,19 +566,36 @@ release last.**
 
 **On success:**
 
-1. Write the item's final state under your fencing token: the completion, and a
-   `body` whose resume block reflects what actually landed (the merged pull
-   request and the sha). The `body` register is LWW and is safe only because you
-   hold the claim; nothing else may write it while your claim is live.
-2. Capture durable findings with `repocontext_remember`: decisions with their
+1. **Merge your pull request into its `baseBranch` first.** The merge is what
+   makes the item complete - the lifecycle transition is `Claimed --> Complete:
+   pull request merged into the base branch` - so everything below asserts
+   something that is not yet true until you have done it. Inside a grouping the
+   base is the epic branch, which carries no protection, so its `build-and-test`
+   run is advisory: merge once it is green rather than waiting for a check that
+   will never gate. This is **your** call and your responsibility, not the
+   product owner's and not the project manager's. A worker that leaves a green,
+   mergeable pull request open and reports the item done has not completed it; it
+   has released it while claiming otherwise, and the next ready-set computation
+   reports that as a defect. If you genuinely may not merge - review requested
+   changes, or the merge is refused - you are on the failure path below, not this
+   one.
+2. Write the item's final state under your fencing token: the `state:complete`
+   tag, and a `body` whose resume block reflects what actually landed (the merged
+   pull request and the sha). The tag is the only record of completeness that any
+   other agent reads; prose in `body` is never parsed. The `body` register is LWW
+   and is safe only because you hold the claim; nothing else may write it while
+   your claim is live. Do not write completion into a `phase:` tag - that
+   attribute is authored, add-wins never replaces it, and writing status there
+   destroys the item's real phase.
+3. Capture durable findings with `repocontext_remember`: decisions with their
    rationale, gotchas that cost you time, conventions you had to infer. Use a
    deterministic `id` you choose, set `author` to your run identity, and link the
    entry to the code it depends on so a later `recall` flags it stale. If you are
    inside a grouping, post a handoff to the workstream topic with
    `ttlSeconds: 604800`.
-3. Mirror the outcome: post the `outcome ... result=complete` comment on the
+4. Mirror the outcome: post the `outcome ... result=complete` comment on the
    issue and close it if the merged pull request did not already.
-4. `repocontext_release_claim(key, fencingToken)`. Release is idempotent; a stale
+5. `repocontext_release_claim(key, fencingToken)`. Release is idempotent; a stale
    or missing release reports `released: false` rather than erroring.
 
 **On failure, and this path is the normal one, not the exception:**
@@ -583,6 +604,7 @@ release last.**
    `resumeNote` saying what is done and what is left, under your token. Write it
    for a reader who was not there: the next holder will re-decide from it, and a
    note that only makes sense with your conversation in hand is worse than none.
+   Do **not** write `state:complete`; the item stays live for the next holder.
 2. Post the `outcome ... result=released` comment.
 3. If this attempt takes the issue's claim-marker count to the poison threshold,
    **park the item**: apply the existing `stale` label and say in the comment what
