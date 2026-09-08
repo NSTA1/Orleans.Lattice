@@ -118,11 +118,19 @@ public partial class BPlusLeafGrainTests
         ILeafReplayCoordinatorGrain coordinator,
         ILeafSnapshotStorageGrain snapshotStub,
         int reclassifyEveryN,
-        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork)
+        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
+        ITxRegistryGrain? registry = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStub);
+        // Wire the per-tree transaction registry only when a test supplies one.
+        // Left unset, GetGrain<ITxRegistryGrain> returns an auto-substitute whose
+        // GetStatusAsync yields the default TxStatus.InFlight, which is the
+        // strict-isolation view every pre-existing resumable-replay test relies
+        // on (an unresolved prepare stays clamped).
+        if (registry is not null)
+            grainFactory.GetGrain<ITxRegistryGrain>(Arg.Any<string>()).Returns(registry);
 
         var sc = new ServiceCollection();
         sc.AddSingleton(Substitute.For<ICommitLogReader>());

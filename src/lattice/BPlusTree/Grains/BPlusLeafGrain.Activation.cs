@@ -807,6 +807,18 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
+        // Pass 2.5 (issue #2190). Self-terminalise any saga prepare still
+        // resident after the deferred terminals drained whose saga the registry
+        // has already decided but whose terminal never reached this leaf. This
+        // lands the decision locally through ApplyTxCommit / ApplyTxAbort, so the
+        // prepare's clamp on the flush ceiling lifts as a consequence of the
+        // effect landing and the final reconciliation below can bank the freed
+        // prefix instead of the leaf re-reading the same window on every future
+        // activation. A prepare the registry has not decided - or whose decision
+        // has aged out of retention - is left resident and still clamps, exactly
+        // as before.
+        await SelfTerminaliseResolvedPreparesAsync(cancellationToken);
+
         // Final reconciliation: every pending-tx clamp has lifted now
         // that the terminals have drained, so the per-partition
         // checkpoint can advance to the actual maxApplied observed
