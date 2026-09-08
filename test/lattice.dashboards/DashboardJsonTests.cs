@@ -34,15 +34,30 @@ public sealed class DashboardJsonTests
 
     /// <summary>
     /// Canonical dotted names of instruments that are intentionally not charted
-    /// on any bundled dashboard. Every live instrument is currently referenced
-    /// by at least one panel, so this opt-out set is empty. If a future
-    /// instrument is deliberately left off the dashboards (for example a
-    /// short-lived diagnostic counter), add its canonical name here together
-    /// with a comment explaining why, and the forward-coverage guard below will
-    /// tolerate the gap.
+    /// on any bundled dashboard. Holds one provider-conditional safety counter
+    /// (issue #2183, see the inline comment). If a future instrument is
+    /// deliberately left off the dashboards (for example a short-lived
+    /// diagnostic counter), add its canonical name here together with a comment
+    /// explaining why, and the forward-coverage guard below will tolerate the
+    /// gap.
     /// </summary>
     private static readonly IReadOnlySet<string> IntentionallyUnpaneledInstruments =
-        new HashSet<string>(StringComparer.Ordinal);
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            // orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap (issue
+            // #2183) is a provider-conditional safety counter. It fires only
+            // when a leaf's durable UnresolvedReplayWork row grows past the
+            // MaxDurableUnresolvedReplayWork cap, which is a persist hazard only
+            // on an Azure Table deployment (1MB entity cap) and is benign on the
+            // default `local` SQLite profile the bundled dashboards target -
+            // where it sits flat at zero. A bundled panel would therefore show
+            // every default-deployment operator a permanently-empty graph; the
+            // signal belongs in an Azure-Table alert rule keyed off the metric
+            // name, which docs/lattice/metrics.md and the panel-map row both
+            // direct operators to. Documented in both reference docs; left off
+            // the bundled panels deliberately.
+            "orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap",
+        };
 
     private static IReadOnlyDictionary<string, string> ExpectedTokenToMeter { get; } =
         BuildExpectedTokenToMeterMap();

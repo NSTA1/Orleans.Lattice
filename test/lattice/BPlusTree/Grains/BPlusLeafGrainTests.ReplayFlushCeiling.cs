@@ -96,7 +96,9 @@ public partial class BPlusLeafGrainTests
         ILeafReplayCoordinatorGrain[] coordinators,
         ILeafSnapshotStorageGrain snapshotStub,
         int reclassifyEveryN = 0,
-        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork)
+        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
+        int maxLeafReplayEntries = LatticeOptions.DefaultMaxLeafReplayEntries,
+        bool recordUnresolvedPreparesBeyondCap = true)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>())
@@ -126,6 +128,7 @@ public partial class BPlusLeafGrainTests
             LeafSnapshotReClassifyEveryNCheckpoints = reclassifyEveryN,
             WalPartitions = coordinators.Length,
             MaxDurableUnresolvedReplayWork = maxDurableUnresolvedReplayWork,
+            MaxLeafReplayEntries = maxLeafReplayEntries,
         };
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
@@ -135,7 +138,10 @@ public partial class BPlusLeafGrainTests
 
         return new BPlusLeafGrain(
             context, state, grainFactory, optionsResolver,
-            TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
+            TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default())
+        {
+            RecordUnresolvedPreparesBeyondCap = recordUnresolvedPreparesBeyondCap,
+        };
     }
 
     private static FakePersistentState<LeafNodeState> NewFlushCeilingState()
@@ -203,7 +209,9 @@ public partial class BPlusLeafGrainTests
         FakePersistentState<LeafNodeState> state,
         Func<CancellationTokenSource, ILeafReplayCoordinatorGrain[]> buildCoordinators,
         int attempts,
-        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork)
+        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
+        int maxLeafReplayEntries = LatticeOptions.DefaultMaxLeafReplayEntries,
+        bool recordUnresolvedPreparesBeyondCap = true)
     {
         var store = new InMemorySnapshotStore();
         var observed = new List<long>();
@@ -213,7 +221,9 @@ public partial class BPlusLeafGrainTests
             using var cts = new CancellationTokenSource();
             var grain = BuildFlushCeilingLeaf(
                 state, buildCoordinators(cts), store.Stub, reclassifyEveryN: 1,
-                maxDurableUnresolvedReplayWork: maxDurableUnresolvedReplayWork);
+                maxDurableUnresolvedReplayWork: maxDurableUnresolvedReplayWork,
+                maxLeafReplayEntries: maxLeafReplayEntries,
+                recordUnresolvedPreparesBeyondCap: recordUnresolvedPreparesBeyondCap);
 
             try
             {
@@ -803,6 +813,121 @@ public partial class BPlusLeafGrainTests
             "No checkpoint persist may advance past the unresolved prepare at offset 2.");
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1L),
             "The checkpoint stays clamped one below the open prepare offset.");
+    }
+
+    /// <summary>
+    /// Builds a 12-offset single-partition window carrying TWO unresolved saga
+    /// prepares near its head (offsets 2 and 3) that never terminate, with
+    /// plain Sets either side. This is the issue #2183 shape: with a durable
+    /// ledger too small to hold both, the second prepare cannot be recorded
+    /// and - before the fix - falls back to the in-memory clamp that pins the
+    /// ceiling at (prepare - 1) forever.
+    /// </summary>
+    private static CommitLogSliceEntry[] WindowWithTwoUnresolvedPrepares(Guid txA, Guid txB)
+    {
+        var entries = new CommitLogSliceEntry[12];
+        entries[0] = FlushSet(1, "p01");
+        entries[1] = new CommitLogSliceEntry(2, BuildPreparedSet(
+            txA, "p02", Encoding.UTF8.GetBytes("vA"), treeId: FlushCeilingTreeId));
+        entries[2] = new CommitLogSliceEntry(3, BuildPreparedSet(
+            txB, "p03", Encoding.UTF8.GetBytes("vB"), treeId: FlushCeilingTreeId));
+        for (var i = 4; i <= 12; i++)
+            entries[i - 1] = FlushSet(i, $"p{i:D2}");
+        return entries;
+    }
+
+    [Test]
+    public async Task Saturated_ledger_resident_prepare_still_advances_the_checkpoint_across_activations()
+    {
+        // FIX ARM (issue #2183). A leaf whose durable unresolved-work ledger is
+        // saturated (cap 1, but TWO resident unresolved prepares at offsets 2
+        // and 3) and whose partition gap (12) far exceeds an advisory
+        // MaxLeafReplayEntries budget of 2. The second prepare cannot fit the
+        // capped ledger, but a resident prepare must never be dropped, so the
+        // fix records it beyond the cap. The checkpoint must therefore advance
+        // PAST both prepares and climb strictly across successive interrupted
+        // activations until it converges on the head of the window.
+        //
+        // The gap (12) is the whole partition's extent and is only an upper
+        // bound on the per-leaf work; the advisory budget (2) is compared
+        // against this leaf's own applied entries. The two are deliberately
+        // different quantities (issue #2149 units trap) and the checkpoint
+        // still crosses the saturated prepare regardless of either.
+        var txA = Guid.NewGuid();
+        var txB = Guid.NewGuid();
+        var state = NewFlushCeilingState();
+
+        var observed = await RunInterruptedReplaysAsync(
+            state,
+            cts =>
+            [
+                BuildObservableCoordinator(
+                    head: 12,
+                    sliceSize: 2,
+                    tail: state.State.ProjectionCheckpointOffset,
+                    onRead: read =>
+                    {
+                        if (read == 2)
+                            cts.Cancel();
+                    },
+                    WindowWithTwoUnresolvedPrepares(txA, txB)),
+            ],
+            attempts: 12,
+            maxDurableUnresolvedReplayWork: 1,
+            maxLeafReplayEntries: 2,
+            recordUnresolvedPreparesBeyondCap: true);
+
+        Assert.That(observed, Is.Ordered.Ascending.And.Unique,
+            "With the resident prepare recorded beyond the saturated cap, each interrupted "
+            + "activation must advance the persisted checkpoint strictly - a repeated value would "
+            + "mean the prepare clamp has pinned the ceiling and the leaf is banking zero progress.");
+        Assert.That(observed[^1], Is.EqualTo(12L),
+            "Successive interrupted activations must converge on the head of the window despite "
+            + "the resident unresolved prepares.");
+    }
+
+    [Test]
+    public async Task Saturated_ledger_without_the_fix_pins_the_checkpoint_below_the_resident_prepare()
+    {
+        // CONTROL ARM (issue #2183). Identical scenario and configuration as
+        // the fix arm above, differing ONLY in the fix: the resident prepare
+        // that overflows the cap is dropped back onto the in-memory clamp
+        // exactly as it shipped. The checkpoint must then pin at (prepare - 1)
+        // = 2 and never move, so successive activations replay the identical
+        // range forever. This is the positive control: it proves the scenario
+        // genuinely reproduces the livelock, so the fix arm's strict advance is
+        // evidence of the fix and not of a scenario that never froze.
+        var txA = Guid.NewGuid();
+        var txB = Guid.NewGuid();
+        var state = NewFlushCeilingState();
+
+        var observed = await RunInterruptedReplaysAsync(
+            state,
+            cts =>
+            [
+                BuildObservableCoordinator(
+                    head: 12,
+                    sliceSize: 2,
+                    tail: state.State.ProjectionCheckpointOffset,
+                    onRead: read =>
+                    {
+                        if (read == 2)
+                            cts.Cancel();
+                    },
+                    WindowWithTwoUnresolvedPrepares(txA, txB)),
+            ],
+            attempts: 6,
+            maxDurableUnresolvedReplayWork: 1,
+            maxLeafReplayEntries: 2,
+            recordUnresolvedPreparesBeyondCap: false);
+
+        Assert.That(observed, Has.Count.GreaterThan(1),
+            "The control must run several activations to demonstrate the pin persists.");
+        Assert.That(observed, Is.All.EqualTo(2L),
+            "Without the fix the dropped prepare pins the ceiling at (prepare - 1) = 2 on every "
+            + "activation - the leaf banks zero durable forward progress, which is the #2183 freeze.");
+        Assert.That(observed[^1], Is.LessThan(12L),
+            "The control must never converge: a saturated-ledger resident prepare freezes the leaf.");
     }
 
     [TestCase(1, 4L)]

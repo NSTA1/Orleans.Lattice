@@ -1265,6 +1265,33 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.leaf.activation_cursor_publish_failures", unit: "{failure}",
             description: "Activation-time eager cursor-publish failures, tagged by tree.");
 
+    /// <summary>
+    /// Counter of resident unresolved saga prepares recorded into
+    /// <c>LeafNodeState.UnresolvedReplayWork</c> <b>beyond</b> the
+    /// <see cref="LatticeOptions.MaxDurableUnresolvedReplayWork"/> cap, emitted
+    /// by <c>BPlusLeafGrain.EnsureUnresolvedPrepareRecorded</c> (issue #2183).
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// <para>
+    /// This exists for a PROVIDER-DEPENDENT hazard, not for the deployment this
+    /// repository runs. A resident prepare must never be dropped (dropping it
+    /// pins the flush ceiling forever - the #2183 livelock), so past the cap it
+    /// is recorded unconditionally and the row is allowed to grow while the
+    /// #2208 saga-terminal leak is unfixed. On the default <c>local</c>
+    /// durability profile that row is backed by SQLite (~1GB BLOB), so the
+    /// growth is a write-amplification cost, not a correctness one. On an
+    /// <c>Orleans.Lattice.Storage.AzureTable</c> deployment the 1MB entity cap
+    /// makes an unbounded row a genuine persist hazard, and that operator has
+    /// no other signal before the write fails. This counter (and the paired
+    /// one-shot warning) is that signal. It is observability ONLY: nothing here
+    /// caps or drops a prepare - a behavioural cap would reintroduce the exact
+    /// drop-and-freeze defect issue #2183 removes. Do not delete it because it
+    /// reads as dead weight on SQLite; it is dead weight on SQLite by design.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafUnresolvedPrepareLedgerBeyondCap =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap", unit: "{prepare}",
+            description: "Resident unresolved saga prepares recorded beyond the MaxDurableUnresolvedReplayWork cap, tagged by tree and WAL partition. Provider-dependent persist hazard on Azure Table (1MB entity cap); benign on the SQLite local profile.");
+
     // --- Storage-usage instruments (byte-accurate retained footprint) ------
     //
     // The four byte gauges and the over-threshold gauge are observable gauges

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -129,6 +130,104 @@ internal sealed partial class BPlusLeafGrain
         index.Add((partition, offset));
         return true;
     }
+
+    /// <summary>
+    /// Test seam for the issue #2183 regression control arm. Production always
+    /// records a resident unresolved prepare unconditionally (see
+    /// <see cref="EnsureUnresolvedPrepareRecorded"/>); flipping this to
+    /// <see langword="false"/> reproduces the pre-fix behaviour - the prepare
+    /// is recorded through the capped path and DROPPED once the ledger is full,
+    /// which pins the ceiling permanently - on the same build, so the two arms
+    /// differ only in the fix and not in configuration.
+    /// </summary>
+    internal bool RecordUnresolvedPreparesBeyondCap { get; set; } = true;
+
+    /// <summary>
+    /// Records a resident unresolved saga prepare durably, ALWAYS, bypassing
+    /// the <c>MaxDurableUnresolvedReplayWork</c> cap that bounds deferred
+    /// terminals (issue #2183).
+    /// <para>
+    /// The cap is a safe bound for a deferred TERMINAL: dropping one at the cap
+    /// falls back to the in-memory clamp, and pass 2 still drains it, so the
+    /// clamp is transient. It is NOT a safe bound for an unresolved PREPARE:
+    /// nothing drains a prepare whose saga never terminates, so a dropped
+    /// prepare pins the flush ceiling at (prepare - 1) forever and the leaf
+    /// banks no durable forward progress at all - the latent livelock issue
+    /// #2183 fixes, demonstrated by the two-arm control in
+    /// <c>BPlusLeafGrainTests.ReplayFlushCeiling</c>. This is a latent defect
+    /// fixed on UNIT evidence; it is NOT the freeze observed on the deployed
+    /// repocontext leaf, whose ledger was measured near-empty (so its cap was
+    /// never hit) - that field freeze is an activation aborted mid-replay by a
+    /// digest-publish timeout (issue #2220), a different mechanism on a
+    /// disjoint path. Dropping a prepare is also unsafe for
+    /// the aged-out-commit reason #2190 documents: a prepare whose commit
+    /// terminal has truncated on another partition reads InFlight yet
+    /// committed, so it must be preserved, not discarded.
+    /// </para>
+    /// <para>
+    /// Preserving every resident unresolved prepare lets the persisted row grow
+    /// while a saga-terminal leak (the parked issue #2208 orphan source) is
+    /// unfixed, but that growth is bounded by the count of genuinely
+    /// unresolved prepares, is observable, and resolves the instant each saga
+    /// terminates through <see cref="ResolveUnresolvedReplayWorkForTransaction"/>.
+    /// That is strictly preferable to the alternative it replaces, which is
+    /// silent permanent write loss.
+    /// </para>
+    /// <para>
+    /// <summary>
+    /// Idempotent: a prepare already recorded at (partition, offset) is left
+    /// untouched, so a restore-then-re-read cannot double it.
+    /// </para>
+    /// <para>
+    /// Issue #2183 observability. Recording beyond <paramref name="thresholdCap"/>
+    /// is safe on the default <c>local</c> SQLite profile but a persist hazard
+    /// on an Azure Table deployment (1MB entity cap), so the crossing is metered
+    /// (<see cref="LatticeMetrics.LeafUnresolvedPrepareLedgerBeyondCap"/>) and
+    /// warned once per activation. This is observability ONLY - the prepare is
+    /// still recorded unconditionally; nothing here caps or drops it.
+    /// </para>
+    /// </summary>
+    private void EnsureUnresolvedPrepareRecorded(int partition, long offset, in LatticeMutation mutation, int thresholdCap)
+    {
+        var index = DurableReplayWorkIndex();
+        if (!index.Add((partition, offset)))
+            return;
+
+        var work = state.State.UnresolvedReplayWork ??= [];
+        work.Add(new UnresolvedReplayWorkEntry(partition, offset, mutation));
+
+        if (thresholdCap > 0 && work.Count > thresholdCap)
+        {
+            LatticeMetrics.LeafUnresolvedPrepareLedgerBeyondCap.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+                LatticeTenantLabel.ForTree(state.State.TreeId));
+
+            if (!_warnedUnresolvedPrepareLedgerBeyondCap)
+            {
+                _warnedUnresolvedPrepareLedgerBeyondCap = true;
+                ResolveLogger()?.LogWarning(
+                    "Leaf {TreeId} has {Count} unresolved replay-work entries, beyond the "
+                    + "MaxDurableUnresolvedReplayWork cap of {Cap} (issue #2183). A resident "
+                    + "prepare is never dropped, so the row grows while the issue #2208 "
+                    + "saga-terminal leak is unfixed. This is expected and benign on the "
+                    + "default `local` SQLite durability profile (~1GB row), but on an Azure "
+                    + "Table deployment the 1MB entity cap makes an unbounded row a persist "
+                    + "hazard - alert on orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap "
+                    + "there. Observability only; the ceiling still advances.",
+                    state.State.TreeId, work.Count, thresholdCap);
+            }
+        }
+    }
+
+    /// <summary>
+    /// One-shot throttle for the issue #2183 beyond-cap warning: naturally
+    /// resets to <see langword="false"/> each activation (a fresh grain
+    /// instance), so the warning surfaces once per activation while the metric
+    /// records every crossing.
+    /// </summary>
+    private bool _warnedUnresolvedPrepareLedgerBeyondCap;
 
     /// <summary>
     /// Strikes the record for (<paramref name="partition"/>,
