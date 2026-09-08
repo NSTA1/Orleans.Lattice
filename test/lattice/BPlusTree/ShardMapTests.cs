@@ -162,6 +162,22 @@ public class ShardMapTests
     }
 
     [Test]
+    public void GetPhysicalShardIndices_handles_negative_slot_without_throwing()
+    {
+        // Regression: the bitmap dedup path indexes a bitmap by the slot value,
+        // so a negative slot indexed the span out of bounds and threw
+        // IndexOutOfRangeException instead of taking the general fallback. Slots
+        // is a public settable property (and deserialised off the wire), so a
+        // negative value is reachable; the method must dedup it faithfully - as a
+        // distinct, ascending set that includes the negative - rather than crash.
+        var map = new ShardMap { Slots = [-1, 0, 2, 0, -1] };
+
+        var result = map.GetPhysicalShardIndices();
+
+        Assert.That(result, Is.EqualTo(new[] { -1, 0, 2 }));
+    }
+
+    [Test]
     public void VirtualShardCount_reflects_slot_array_length()
     {
         var map = new ShardMap { Slots = new int[16] };
