@@ -111,4 +111,46 @@ public readonly record struct LatticeSchemaRemediationReport
             OffendingValuePreview = offendingValuePreview,
             OperationId = operationId,
         };
+
+    /// <summary>
+    /// Compares two reports by value, with <see cref="OffendingValuePreview"/>
+    /// compared by content. The compiler-generated record-struct equality compares
+    /// the <see cref="byte"/> array with <see cref="EqualityComparer{T}.Default"/>
+    /// (reference equality), so two structurally identical reports - and, in
+    /// particular, a report and its post-serialization self - would otherwise never
+    /// compare equal.
+    /// </summary>
+    /// <param name="other">The report to compare against.</param>
+    public bool Equals(LatticeSchemaRemediationReport other) =>
+        Phase == other.Phase
+        && InProgress == other.InProgress
+        && ScannedCount == other.ScannedCount
+        && string.Equals(OffendingKey, other.OffendingKey, StringComparison.Ordinal)
+        && string.Equals(Reason, other.Reason, StringComparison.Ordinal)
+        && BytesEqual(OffendingValuePreview, other.OffendingValuePreview)
+        && string.Equals(DestinationTreeId, other.DestinationTreeId, StringComparison.Ordinal)
+        && string.Equals(OperationId, other.OperationId, StringComparison.Ordinal);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Phase);
+        hash.Add(InProgress);
+        hash.Add(ScannedCount);
+        hash.Add(OffendingKey, StringComparer.Ordinal);
+        hash.Add(Reason, StringComparer.Ordinal);
+        if (OffendingValuePreview is { } preview)
+        {
+            hash.AddBytes(preview);
+        }
+
+        hash.Add(DestinationTreeId, StringComparer.Ordinal);
+        hash.Add(OperationId, StringComparer.Ordinal);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

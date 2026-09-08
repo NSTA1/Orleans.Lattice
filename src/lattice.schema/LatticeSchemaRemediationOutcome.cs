@@ -68,4 +68,39 @@ public readonly record struct LatticeSchemaRemediationOutcome
     public static LatticeSchemaRemediationOutcome Aborted(
         int scannedCount, string offendingKey, string reason, byte[] offendingValuePreview) =>
         new(false, scannedCount, offendingKey, reason, offendingValuePreview);
+
+    /// <summary>
+    /// Compares two outcomes by value, with <see cref="OffendingValuePreview"/>
+    /// compared by content. The compiler-generated record-struct equality compares
+    /// the <see cref="byte"/> array with <see cref="EqualityComparer{T}.Default"/>
+    /// (reference equality), so two structurally identical outcomes would otherwise
+    /// never compare equal.
+    /// </summary>
+    /// <param name="other">The outcome to compare against.</param>
+    public bool Equals(LatticeSchemaRemediationOutcome other) =>
+        Succeeded == other.Succeeded
+        && ScannedCount == other.ScannedCount
+        && string.Equals(OffendingKey, other.OffendingKey, StringComparison.Ordinal)
+        && string.Equals(Reason, other.Reason, StringComparison.Ordinal)
+        && BytesEqual(OffendingValuePreview, other.OffendingValuePreview);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Succeeded);
+        hash.Add(ScannedCount);
+        hash.Add(OffendingKey, StringComparer.Ordinal);
+        hash.Add(Reason, StringComparer.Ordinal);
+        if (OffendingValuePreview is { } preview)
+        {
+            hash.AddBytes(preview);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
