@@ -209,29 +209,55 @@ internal sealed class TenantUsageMeteringService : IHostedService
 
             seenTenants.Add(tenant.Value);
 
-            var samples = await SampleTenantTreesAsync(tenant, cancellationToken).ConfigureAwait(false);
-            await _publisher
-                .RollUpAndPublishAsync(tenant, samples, HybridLogicalClock.Tick(HybridLogicalClock.Zero), cancellationToken)
-                .ConfigureAwait(false);
+            // Per-tenant containment. Every await below reaches storage - a
+            // prefix scan of the tenant's trees, a usage publish, and an overage
+            // accrual that can raise an optimistic-concurrency conflict on the
+            // overage record - and an escaping exception would abandon the rest
+            // of the pass, skipping every tenant after this one and the prune
+            // below with it. That is a cross-tenant failure: admission is driven
+            // by the samples this pass publishes, so one tenant able to fault its
+            // own accrual (by contending on its own overage record) could stop
+            // its neighbours' ceilings being enforced at all. Isolate the failure
+            // to the tenant that caused it and carry on; the next tick retries.
+            //
+            // Cancellation is not contained - it must abort the whole pass.
+            try
+            {
+                var samples = await SampleTenantTreesAsync(tenant, cancellationToken).ConfigureAwait(false);
+                await _publisher
+                    .RollUpAndPublishAsync(tenant, samples, HybridLogicalClock.Tick(HybridLogicalClock.Zero), cancellationToken)
+                    .ConfigureAwait(false);
 
-            // Accrue this tick's overage against the tenant's declared caps.
-            //
-            // TenantOverageMeter carries the same "cadence-driven side ... the
-            // caller supplies the cadence" contract the publisher above does, but
-            // nothing ever supplied that cadence: it was registered in DI and
-            // unit-tested with no production caller, so ITenantOverageBilling
-            // reported nothing however far past quota a tenant ran. This is that
-            // missing driver.
-            //
-            // Deliberately NOT conditioned on the publish above returning true.
-            // The meter is a Riemann sum, so it must integrate every tick, whereas
-            // a publish is suppressed by UsagePublishHysteresis whenever the
-            // footprint has barely moved - which is exactly the shape of a tenant
-            // sitting steadily over its cap. Gating accrual on the publish would
-            // stop billing the sustained overage the meter exists to capture.
-            await _overageMeter
-                .AccrueAsync(tenant, LocalUsageSample.RollUp(samples), record.Quotas, cancellationToken)
-                .ConfigureAwait(false);
+                // Accrue this tick's overage against the tenant's declared caps.
+                //
+                // TenantOverageMeter carries the same "cadence-driven side ... the
+                // caller supplies the cadence" contract the publisher above does, but
+                // nothing ever supplied that cadence: it was registered in DI and
+                // unit-tested with no production caller, so ITenantOverageBilling
+                // reported nothing however far past quota a tenant ran. This is that
+                // missing driver.
+                //
+                // Deliberately NOT conditioned on the publish above returning true.
+                // The meter is a Riemann sum, so it must integrate every tick, whereas
+                // a publish is suppressed by UsagePublishHysteresis whenever the
+                // footprint has barely moved - which is exactly the shape of a tenant
+                // sitting steadily over its cap. Gating accrual on the publish would
+                // stop billing the sustained overage the meter exists to capture.
+                await _overageMeter
+                    .AccrueAsync(tenant, LocalUsageSample.RollUp(samples), record.Quotas, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Tenant usage metering failed for tenant {TenantId}; the remaining tenants in this pass are unaffected and the next tick retries.",
+                    tenant.Value);
+            }
         }
 
         // Only after a complete pass: a cycle that faulted part-way has not proved

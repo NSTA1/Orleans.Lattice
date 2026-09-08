@@ -187,10 +187,35 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
 
         // The real controller throws LatticeQuotaExceededException on a breach; a
         // plain refusal is treated as fail-closed, matching the tenant-scoped facade.
-        if (!await admission.IsAdmittedAsync(tenant, effectiveTreeId, cancellationToken).ConfigureAwait(false))
+        //
+        // The controller is handed a callback rather than a count so that the
+        // authoritative read happens only if it has a tree-count ceiling to
+        // enforce. Counting from the registry - rather than from the tenant's
+        // metered usage sample - is what makes MaxTreeCount actually bind: the
+        // sample is published on a cadence and is absent entirely for a tenant that
+        // has never been metered, so a controller deciding on it alone admits a new
+        // tenant's creates without limit and lets an established tenant overshoot
+        // by a whole metering interval's worth of concurrent creates.
+        if (!await admission
+                .IsTreeCreateAdmittedAsync(tenant, effectiveTreeId, CountTenantTreesAsync, cancellationToken)
+                .ConfigureAwait(false))
         {
             throw new LatticeTenantAccessDeniedException(
                 $"Tenant '{tenant}' is not admitted to create tree '{effectiveTreeId}': the tenant's quota would be exceeded.");
+        }
+
+        async ValueTask<long> CountTenantTreesAsync(CancellationToken ct)
+        {
+            // The registry is reserved infrastructure, so the count is read under a
+            // system-origin scope exactly as the tenancy layer's own metering pass
+            // reads it. Prefix-scoped to the tenant's own contiguous key range
+            // rather than enumerating the whole cluster catalog.
+            using var origin = LatticeAccessGateContext.EnterSystemOrigin();
+            var ids = await _grainFactory
+                .GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+                .GetAllTreeIdsAsync(LatticeTenantTrees.ComposePrefix(tenant))
+                .ConfigureAwait(false);
+            return ids.Count;
         }
     }
 

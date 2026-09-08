@@ -969,4 +969,66 @@ public sealed class TenantUsageMeteringServiceTests
             await Task.CompletedTask;
         }
     }
+    // ---- Per-tenant failure containment (security review F4) --------------
+    //
+    // Overage accrual was awaited inside the per-tenant loop with no containment,
+    // so a throw - the optimistic-concurrency conflict the overage store raises
+    // under contention is the obvious one - propagated out of MeterOnceAsync and
+    // skipped every remaining tenant's usage publish, plus the retention prune.
+    // Since quota admission is driven by those published samples, a tenant able to
+    // induce contention on its own overage record could suppress quota enforcement
+    // for every tenant that sorted after it: a cross-tenant denial of enforcement.
+
+    [Test]
+    public async Task A_tenant_whose_overage_accrual_throws_does_not_abort_the_pass()
+    {
+        var harness = new MutableUsageHarness();
+        harness.AddTree("t/acme/orders", bytes: 4096, keys: 32);
+        harness.AddTree("t/globex/orders", bytes: 2048, keys: 16);
+        var store = new RecordingStore();
+
+        // acme is enumerated first and its accrual always fails.
+        var overageStore = new OverageTestData.FakeTenantOverageStore
+        {
+            ThrowFor = tenant => tenant.Equals(Acme)
+                ? new TenantOverageConcurrencyException(Acme, 3)
+                : null,
+        };
+
+        // A ceiling low enough that both tenants are over it, so accrual is
+        // actually attempted for each rather than short-circuited as within quota.
+        var registry = new FakeRegistry(Acme, Globex) { Quotas = new TenantQuotas { MaxBytes = 1 } };
+        var service = Create(registry, store, harness.Factory, overageStore: overageStore);
+
+        Assert.That(
+            async () => await service.MeterOnceAsync(CancellationToken.None),
+            Throws.Nothing,
+            "one tenant's accrual failure must not surface as a pass-wide failure");
+
+        Assert.That(
+            store.Published.Select(p => p.Id),
+            Does.Contain(Globex),
+            "a tenant sorting after the failing one must still have its usage published");
+    }
+
+    [Test]
+    public async Task A_failing_tenant_still_has_its_own_usage_published()
+    {
+        // Containment is scoped so that the publish already performed for the
+        // failing tenant stands: accrual runs after it, so its failure must not
+        // retract the sample that quota admission depends on.
+        var harness = new MutableUsageHarness();
+        harness.AddTree("t/acme/orders", bytes: 4096, keys: 32);
+        var store = new RecordingStore();
+        var overageStore = new OverageTestData.FakeTenantOverageStore
+        {
+            ThrowFor = _ => new TenantOverageConcurrencyException(Acme, 3),
+        };
+        var registry = new FakeRegistry(Acme) { Quotas = new TenantQuotas { MaxBytes = 1 } };
+        var service = Create(registry, store, harness.Factory, overageStore: overageStore);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        Assert.That(store.Published.Select(p => p.Id), Does.Contain(Acme));
+    }
 }

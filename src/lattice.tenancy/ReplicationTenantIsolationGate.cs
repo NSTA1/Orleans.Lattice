@@ -46,6 +46,9 @@ internal sealed class ReplicationTenantIsolationGate(
     ITenantResidencyResolver residency,
     CompiledTenantPolicySnapshotMaintainer policy) : IReplicationTenantIsolationGate
 {
+    private readonly ITenantRegistry _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+    private readonly ITenantResidencyResolver _residency = residency ?? throw new ArgumentNullException(nameof(residency));
+    private readonly CompiledTenantPolicySnapshotMaintainer _policy = policy ?? throw new ArgumentNullException(nameof(policy));
     /// <inheritdoc />
     /// <remarks>
     /// Always <see langword="true"/>: the tenancy add-on registers this gate only
@@ -88,12 +91,24 @@ internal sealed class ReplicationTenantIsolationGate(
         // must be resident in this serving region.
         //
         // The compiled snapshot is rebuilt on every mutation of the tenant registry
-        // tree, so a tenant present in it demonstrably exists; answering from it
-        // keeps the steady-state apply path free of a per-entry grain call. A miss
-        // is not treated as absence - a tenant created moments ago may not be
-        // compiled yet - so it falls through to the authoritative registry, which is
-        // what keeps this fail-closed.
-        if (policy.Current.TryGetTenant(tenant.Value ?? string.Empty, out _))
+        // tree, so a tenant present in it demonstrably existed as of the last
+        // successful rebuild; answering from it keeps the steady-state apply path
+        // free of a per-entry grain call. A miss is not treated as absence - a
+        // tenant created moments ago may not be compiled yet - so it falls through
+        // to the authoritative registry, which is what keeps this fail-closed.
+        //
+        // A hit is trusted only while the snapshot is authoritative. A tenant
+        // DELETED from the registry stays present in the snapshot until the
+        // rebuild that deletion scheduled actually lands, and indefinitely if that
+        // rebuild keeps failing (the maintainer logs and retains the previous
+        // snapshot). Trusting a hit unconditionally would therefore keep admitting
+        // a peer region's writes for a revoked tenant - a deny silently becoming an
+        // allow, which is the one regression this optimisation must not introduce.
+        // IsSnapshotAuthoritative is false exactly while a rebuild is outstanding
+        // or failing, so those windows fall back to the registry and the fast path
+        // is kept for the steady state it was added for.
+        if (_policy.IsSnapshotAuthoritative
+            && _policy.Current.TryGetTenant(tenant.Value ?? string.Empty, out _))
         {
             return new ValueTask<ReplicationTenantIsolationDecision>(EvaluateResidency(tenant));
         }
@@ -108,7 +123,7 @@ internal sealed class ReplicationTenantIsolationGate(
     /// wired.
     /// </summary>
     private ReplicationTenantIsolationDecision EvaluateResidency(TenantId tenant)
-        => residency.IsActive && !residency.IsOnlineInServingRegion(tenant)
+        => _residency.IsActive && !_residency.IsOnlineInServingRegion(tenant)
             ? ReplicationTenantIsolationDecision.RejectOutOfRegion
             : ReplicationTenantIsolationDecision.Admit;
 
@@ -121,7 +136,7 @@ internal sealed class ReplicationTenantIsolationGate(
         TenantId tenant,
         CancellationToken cancellationToken)
     {
-        if (!await registry.ExistsAsync(tenant, cancellationToken).ConfigureAwait(false))
+        if (!await _registry.ExistsAsync(tenant, cancellationToken).ConfigureAwait(false))
         {
             return ReplicationTenantIsolationDecision.RejectUnknownTenant;
         }

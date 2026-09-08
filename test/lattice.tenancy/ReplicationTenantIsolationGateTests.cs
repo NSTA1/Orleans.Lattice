@@ -293,4 +293,125 @@ public sealed class ReplicationTenantIsolationGateTests
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectUnknownTenant));
     }
+    // ---- Snapshot staleness (security review F3) -------------------------
+    //
+    // The compiled-snapshot fast path replaced a registry read on every inbound
+    // apply. Rebuilds are background and coalesced, and the rebuild loop keeps the
+    // previous snapshot when one fails - so a tenant deleted from the registry went
+    // on being admitted for the whole rebuild lag, and indefinitely if rebuilds
+    // kept failing. That is a deny-to-allow regression: a peer region shipping for
+    // a revoked tenant would be applied.
+    //
+    // Age is the wrong staleness signal here, because rebuilds are mutation-driven
+    // rather than periodic: on a quiet estate an hours-old snapshot is exactly
+    // correct, and an age bound would reintroduce the per-apply registry call the
+    // fast path exists to remove. The signal used instead is an outstanding or
+    // failing rebuild, since a tenant deletion always schedules one.
+
+    /// <summary>
+    /// The regression proper: a tenant present in a compiled snapshot but since
+    /// deleted from the registry is refused once the snapshot stops being
+    /// authoritative, rather than being admitted from the stale compile.
+    /// </summary>
+    [Test]
+    public async Task Deleted_tenant_is_refused_when_the_snapshot_is_not_authoritative()
+    {
+        var policy = await FailingPolicyAsync(Acme);
+        Assert.That(policy.IsSnapshotAuthoritative, Is.False, "guard: the snapshot must be non-authoritative");
+        Assert.That(policy.Current.TryGetTenant(Acme.Value!, out _), Is.True, "guard: the stale compile still holds acme");
+
+        // The authoritative registry no longer knows the tenant.
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.ExistsAsync(Acme, Arg.Any<CancellationToken>()).Returns(Task.FromResult(false));
+        var gate = CreateGate(registry, policy: policy);
+
+        var decision = await gate.EvaluateAsync(AcmeTree, CancellationToken.None);
+
+        Assert.That(
+            decision,
+            Is.EqualTo(ReplicationTenantIsolationDecision.RejectUnknownTenant),
+            "a stale snapshot must not keep a deleted tenant admitted");
+        await registry.Received(1).ExistsAsync(Acme, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The converse: while the snapshot is authoritative the fast path still
+    /// answers from memory, so the fallback costs nothing on the warm path.
+    /// </summary>
+    [Test]
+    public async Task Authoritative_snapshot_answers_without_touching_the_registry()
+    {
+        var policy = await CompiledPolicyAsync(Acme);
+        Assert.That(policy.IsSnapshotAuthoritative, Is.True);
+
+        var registry = Substitute.For<ITenantRegistry>();
+        var gate = CreateGate(registry, policy: policy);
+
+        var decision = await gate.EvaluateAsync(AcmeTree, CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+        await registry.DidNotReceive().ExistsAsync(Arg.Any<TenantId>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A non-authoritative snapshot still fails closed for a tenant the registry
+    /// also does not know: the fallback is a registry consult, not a default-allow.
+    /// </summary>
+    [Test]
+    public async Task Non_authoritative_snapshot_still_admits_a_tenant_the_registry_knows()
+    {
+        var policy = await FailingPolicyAsync(Acme);
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.ExistsAsync(Acme, Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
+        var gate = CreateGate(registry, policy: policy);
+
+        var decision = await gate.EvaluateAsync(AcmeTree, CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+    }
+
+    [Test]
+    public void Constructor_null_policy_throws() =>
+        Assert.That(
+            () => new ReplicationTenantIsolationGate(
+                Substitute.For<ITenantRegistry>(), new NullTenantResidencyResolver(), null!),
+            Throws.ArgumentNullException);
+
+    /// <summary>
+    /// Builds a maintainer holding a good compile of <paramref name="tenants"/>
+    /// whose subsequent rebuild has failed, so the snapshot is populated but no
+    /// longer authoritative. Deterministic: the scheduled rebuild is awaited.
+    /// </summary>
+    private static async Task<CompiledTenantPolicySnapshotMaintainer> FailingPolicyAsync(
+        params TenantId[] tenants)
+    {
+        var scans = 0;
+        var source = Substitute.For<ITenantRegistry>();
+        source.ListAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+            Interlocked.Increment(ref scans) == 1 ? ToAsync(tenants) : Throwing());
+
+        var maintainer = new CompiledTenantPolicySnapshotMaintainer(
+            source, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+
+        // First scan succeeds: the snapshot is populated and authoritative.
+        await maintainer.RebuildNowAsync();
+
+        // A registry mutation schedules a rebuild; the second scan throws, so the
+        // maintainer keeps the previous snapshot and records the failure.
+        await maintainer.OnMutationAsync(
+            new LatticeMutation { TreeId = TenantTreeNames.RegistryTree }, CancellationToken.None);
+        await maintainer.BackgroundRebuild;
+
+        return maintainer;
+    }
+
+#pragma warning disable CS1998 // the throw is the point; no await is reachable
+    private static async IAsyncEnumerable<TenantRecord> Throwing()
+    {
+        throw new InvalidOperationException("registry scan failed");
+#pragma warning disable CS0162
+        yield break;
+#pragma warning restore CS0162
+    }
+#pragma warning restore CS1998
 }

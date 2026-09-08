@@ -82,12 +82,17 @@ internal sealed partial class LatticeCursorGrain
 
     /// <summary>
     /// Resolves the fail-closed read-path key-filter for a snapshot cursor page
-    /// over the cursor's effective range. Returns <c>null</c> when no filtering
-    /// is required (default null gate, system-origin, or a plain allow), a
-    /// reject-all predicate on a full deny, or the gate's per-key filter on a
-    /// partial allow.
+    /// over the cursor's effective range, and charges the page against the
+    /// tenant's read budget. Returns <c>null</c> when no filtering is required
+    /// (default null gate, system-origin, or a plain allow), a reject-all
+    /// predicate on a full deny, or the gate's per-key filter on a partial allow.
     /// </summary>
+    /// <remarks>
+    /// The charge follows the filter resolution and never precedes it, the same
+    /// authorize-then-account ordering the data-plane grain observes: the tenant
+    /// billed is a caller assertion that only the gate validates.
+    /// </remarks>
     private ValueTask<Func<string, bool>?> ResolveSnapshotKeyFilterAsync(string? startInclusive, string? endExclusive) =>
-        LatticeAccessGateEnforcement.ResolveRangeReadFilterAsync(
-            AccessGate, MembershipContext, state.State.TreeId, startInclusive, endExclusive, CancellationToken.None);
+        ChargeSnapshotReadAsync(LatticeAccessGateEnforcement.ResolveRangeReadFilterAsync(
+            AccessGate, MembershipContext, state.State.TreeId, startInclusive, endExclusive, CancellationToken.None));
 }

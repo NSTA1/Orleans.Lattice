@@ -94,10 +94,50 @@ internal sealed partial class LatticeGrain
     private ValueTask ThrowIfWriteNotAdmittedAsync(CancellationToken cancellationToken)
     {
         var controller = AdmissionController;
-        if (controller is not { IsActive: true } || LatticeAccessGateContext.IsSystemOrigin)
+        if (controller is not { IsActive: true } || AdmissionSkipped)
             return default;
         return AdmitOrThrowAsync(controller, cancellationToken);
     }
+
+    /// <summary>
+    /// True when tenant admission must not be evaluated for this turn, because
+    /// the access gate did not run and so the ambient tenant is an
+    /// <em>unvalidated</em> caller assertion.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The condition is <see cref="LatticeAccessGateContext.IsGateBypassed"/> -
+    /// a system-origin turn, or an authorised materialised-view maintenance read
+    /// or write. The enforcement helpers return a successfully-completed
+    /// <see cref="ValueTask"/> for every one of those, which is indistinguishable
+    /// from "the gate ran and allowed". Testing only
+    /// <see cref="LatticeAccessGateContext.IsSystemOrigin"/> here therefore
+    /// charged a tenant for turns the gate never adjudicated: under a view scope
+    /// the gate is bypassed entirely, so a caller authorised on some view tree
+    /// could assert a victim tenant id and burn that victim's budget - precisely
+    /// the attack the authorize-then-account ordering exists to prevent - and
+    /// internal view maintenance became billable and refusable.
+    /// </para>
+    /// <para>
+    /// It is deliberately <em>narrower</em> than
+    /// <see cref="LatticeAccessGateEnforcement.SkipsEnforcement"/>, which also
+    /// short-circuits on the default <c>NullLatticeAccessGate</c>. That arm must
+    /// not be inherited here, because a null gate is a <em>permissive policy</em>
+    /// - "every request is allowed" is a decision, and the caller is still an
+    /// ordinary tenant caller whose request must still be metered - whereas a
+    /// bypassed gate means the turn is infrastructure and is not a tenant request
+    /// at all. Folding the null gate in would silently disable admission for any
+    /// host that registered tenancy without an access gate, turning an unrelated
+    /// composition choice into a quota bypass.
+    /// </para>
+    /// <para>
+    /// Ordered second at both call sites, after the controller's
+    /// <see cref="ITenantAdmissionController.IsActive"/> test, so a host with no
+    /// tenancy add-on still pays a single bool read and never touches
+    /// <c>RequestContext</c>.
+    /// </para>
+    /// </remarks>
+    private static bool AdmissionSkipped => LatticeAccessGateContext.IsGateBypassed;
 
     /// <remarks>
     /// Reads <see cref="LatticeActiveTenantContext.Current"/> directly. That is
@@ -144,7 +184,7 @@ internal sealed partial class LatticeGrain
     private void ThrowIfReadNotAdmitted()
     {
         var controller = AdmissionController;
-        if (controller is not { IsActive: true } || LatticeAccessGateContext.IsSystemOrigin)
+        if (controller is not { IsActive: true } || AdmissionSkipped)
             return;
 
         var tenant = LatticeActiveTenantContext.Current ?? TenantId.Default;

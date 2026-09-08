@@ -66,4 +66,52 @@ public interface ITenantAdmissionController
     /// <param name="treeId">The fully-qualified tree id the read targets.</param>
     /// <returns><c>true</c> when the read is admitted; <c>false</c> when it is refused.</returns>
     bool IsReadAdmitted(TenantId tenant, string treeId) => true;
+
+    /// <summary>
+    /// Decides whether <paramref name="tenant"/> may create
+    /// <paramref name="treeId"/>. Invoked only when <see cref="IsActive"/> is
+    /// <c>true</c>, and only after the caller has been authorized for the tree.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separate from <see cref="IsAdmittedAsync"/> because a create is the one
+    /// operation whose governing ceiling - the tenant's owned-tree count - cannot
+    /// be answered from a usage sample without being wrong. Usage is published on
+    /// a metering cadence, so a count read from it is stale by up to one interval
+    /// and, for a tenant that has never been sampled, absent altogether. A
+    /// controller that admits on a missing sample therefore does not bind the
+    /// ceiling at all for a brand-new tenant, and binds it only loosely for an
+    /// established one: concurrent creates all observe the same stale count and
+    /// overshoot it together.
+    /// </para>
+    /// <para>
+    /// <paramref name="countTenantTrees"/> closes that by letting the controller
+    /// obtain an <em>authoritative</em> count at the moment of decision, from the
+    /// caller that owns the registry, without core taking a dependency on either
+    /// the registry or the tenancy package. It is a callback rather than a value
+    /// so it is invoked only when a controller actually has a tree-count ceiling
+    /// to enforce - a tenant with no such ceiling costs nothing - and a create is
+    /// rare enough that one registry read is affordable where it would not be on
+    /// the data-plane path.
+    /// </para>
+    /// <para>
+    /// The default implementation delegates to <see cref="IsAdmittedAsync"/> and
+    /// never invokes the callback, so an existing external implementation keeps
+    /// compiling and keeps its previous behaviour.
+    /// </para>
+    /// </remarks>
+    /// <param name="tenant">The tenant the create runs under.</param>
+    /// <param name="treeId">The fully-qualified tree id being created.</param>
+    /// <param name="countTenantTrees">
+    /// Yields the number of trees the tenant currently owns, read authoritatively.
+    /// Invoked at most once, and only when the decision needs it.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the admission decision.</param>
+    /// <returns><c>true</c> when the create is admitted; <c>false</c> when it is refused.</returns>
+    ValueTask<bool> IsTreeCreateAdmittedAsync(
+        TenantId tenant,
+        string treeId,
+        Func<CancellationToken, ValueTask<long>> countTenantTrees,
+        CancellationToken cancellationToken = default)
+        => IsAdmittedAsync(tenant, treeId, cancellationToken);
 }

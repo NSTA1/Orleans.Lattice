@@ -115,6 +115,20 @@ internal sealed partial class LatticeGrain
         var gate = AccessGate;
         if (gate is NullLatticeAccessGate)
         {
+            // A null gate is a permissive policy, not a bypassed adjudication:
+            // "every request is allowed" is a decision, and the caller is still an
+            // ordinary tenant caller whose read must be metered. Charging here is
+            // what keeps the null-gate case consistent across the whole read
+            // surface - the static-helper seams charge it too - and stops an
+            // unrelated composition choice (tenancy registered without an auth
+            // add-on) from silently becoming a quota bypass. Safe against the
+            // re-entrancy this arm exists to avoid, because the charge is a
+            // synchronous rate-limiter probe that reads no tree.
+            if (IsReadOperation(operation))
+            {
+                ThrowIfReadNotAdmitted();
+            }
+
             return LatticeAccessDecision.Allow();
         }
 
@@ -154,13 +168,38 @@ internal sealed partial class LatticeGrain
     }
 
     /// <summary>
-    /// True for the operation shapes that constitute a read of tree data. Both
-    /// single-key and range reads are charged: a range scan is by far the more
-    /// expensive of the two, so excluding it would leave the cheapest possible
-    /// budget-free path to the most expensive possible work.
+    /// True for the operation shapes that constitute a read of tree data, and for
+    /// no shape that mutates. Single-key reads, range reads and backup captures
+    /// are all charged: a range scan is by far the more expensive of the three, so
+    /// excluding it would leave the cheapest possible budget-free path to the most
+    /// expensive possible work.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Written as a mask test rather than an exact <c>is ... or ...</c> match
+    /// because <see cref="LatticeOperation"/> is a <c>[Flags]</c> enum and a
+    /// composite request is a legitimate value. An exact match silently
+    /// classified every composite as a non-read and so left it uncharged.
+    /// </para>
+    /// <para>
+    /// <see cref="LatticeOperation.Backup"/> is included so this agrees with the
+    /// tenancy gate's own <c>ReadOnlyMask</c>, which has always counted a backup
+    /// as a read capability. The mutating half of a composite disqualifies it:
+    /// such an operation is charged by <see cref="ThrowIfWriteNotAdmittedAsync"/>
+    /// at its own call site, and counting it here as well would double-bill one
+    /// operation.
+    /// </para>
+    /// </remarks>
     private static bool IsReadOperation(LatticeOperation operation)
-        => operation is LatticeOperation.Read or LatticeOperation.RangeRead;
+        => (operation & ReadChargeMask) != 0 && (operation & WriteChargeMask) == 0;
+
+    private const LatticeOperation ReadChargeMask =
+        LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Backup;
+
+    private const LatticeOperation WriteChargeMask =
+        LatticeOperation.Write | LatticeOperation.Delete | LatticeOperation.RangeDelete
+        | LatticeOperation.CrdtApply | LatticeOperation.AtomicWrite | LatticeOperation.BulkLoad
+        | LatticeOperation.Restore;
 
     /// <summary>
     /// Applies the per-tenant read charge once <paramref name="enforced"/> - a

@@ -257,4 +257,69 @@ public class LatticeGrainReadAdmissionTests
         Assert.DoesNotThrowAsync(() => grain.CountAsync());
         Assert.That(controller.ReadCallCount, Is.Zero);
     }
+    // ----- Charge-after-gate: a bypassed gate must not charge (review F1) -----
+    //
+    // Every LatticeAccessGateEnforcement helper returns a successfully-completed
+    // ValueTask when it skips enforcement - indistinguishable, to the caller, from
+    // "the gate ran and allowed". The charge inspected only IsCompletedSuccessfully
+    // and re-tested IsSystemOrigin, but the skip condition is IsGateBypassed, which
+    // is strictly wider: it also folds in the authorised view read and write
+    // scopes. So under a view scope the gate was never consulted, yet the read was
+    // still billed to the ambient tenant.
+    //
+    // That inverts the invariant the whole design rests on. The active tenant is a
+    // caller-asserted, client-supplied value that ONLY the gate validates; charging
+    // when the gate did not run bills an unvalidated assertion. A caller authorised
+    // on a view tree could nominate a victim tenant, drain its request-rate budget
+    // and observe the refusal - the exact attack the read charge exists to prevent,
+    // reached by skipping the validation instead of passing it.
+    //
+    // The secondary harm is symmetrical: internal view-maintenance traffic became
+    // billable, and could be REFUSED with a quota exception from inside maintenance
+    // machinery that has no caller to report it to.
+
+    [TestCaseSource(nameof(ReadVerbs))]
+    public void Read_under_an_authorised_view_read_scope_is_not_charged(Func<ILattice, Task> op)
+    {
+        // admitRead: false, so any charge that does fire is loudly visible as a
+        // refusal rather than silently passing.
+        var (grain, controller) = CreateGrain(new AllowingGate(), admitRead: false);
+
+        using var _view = Orleans.Lattice.Views.ViewReadContext.BeginScope();
+
+        Assert.DoesNotThrowAsync(() => op(grain));
+        Assert.That(
+            controller.ReadCallCount,
+            Is.Zero,
+            "the gate is bypassed under a view scope, so the caller-asserted tenant was never validated and must not be charged");
+    }
+
+    [TestCaseSource(nameof(ReadVerbs))]
+    public void Read_under_an_authorised_view_write_scope_is_not_charged(Func<ILattice, Task> op)
+    {
+        var (grain, controller) = CreateGrain(new AllowingGate(), admitRead: false);
+
+        using var _view = Orleans.Lattice.Views.ViewWriteContext.BeginScope();
+
+        Assert.DoesNotThrowAsync(() => op(grain));
+        Assert.That(controller.ReadCallCount, Is.Zero);
+    }
+
+    /// <summary>
+    /// The null gate is deliberately <em>not</em> part of the skip condition. It
+    /// is a permissive policy - "every request is allowed" is a decision, and the
+    /// caller is still an ordinary tenant caller whose read must still be metered -
+    /// rather than a bypassed adjudication, which means the turn is infrastructure
+    /// and not a tenant request at all. Folding it in would silently disable
+    /// admission for any host that registered tenancy without an access gate,
+    /// turning an unrelated composition choice into a quota bypass.
+    /// </summary>
+    [TestCaseSource(nameof(ReadVerbs))]
+    public void Read_through_a_null_access_gate_is_still_charged(Func<ILattice, Task> op)
+    {
+        var (grain, controller) = CreateGrain(new NullLatticeAccessGate(), admitRead: false);
+
+        Assert.ThrowsAsync<LatticeTenantAccessDeniedException>(() => op(grain));
+        Assert.That(controller.ReadCallCount, Is.EqualTo(1));
+    }
 }
