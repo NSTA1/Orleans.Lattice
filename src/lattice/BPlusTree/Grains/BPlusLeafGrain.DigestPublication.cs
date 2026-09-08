@@ -592,10 +592,13 @@ internal sealed partial class BPlusLeafGrain
 
         // Piggyback the per-leaf byte-footprint publish on the digest
         // commit boundary. Skipped when the values are unchanged since
-        // the last publish (see TryPublishByteFootprintAsync). Failures
-        // are swallowed: the shard root's running totals are best-effort
-        // and re-anchored by the operator-driven
-        // ILatticeAdmin.RefreshStorageUsageAsync seam.
+        // the last publish (see TryPublishByteFootprintAsync). Every
+        // failure is contained inside that helper - both the shard-root
+        // hop and, since #2264, the state/cache reads that precede it -
+        // so nothing thrown here can abort this method after the digest
+        // publish above has already landed on the parent. The shard
+        // root's running totals are best-effort and re-anchored by the
+        // operator-driven ILatticeAdmin.RefreshStorageUsageAsync seam.
         await TryPublishByteFootprintAsync();
     }
 
