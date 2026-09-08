@@ -1157,6 +1157,15 @@ internal sealed class RepoContextVectorWriter
             // rather than dead code, and an unrequested row is not benign: it would be
             // folded into the embedded set below and mark a source covered that this
             // probe never asked about.
+            //
+            // This arm counts and FALLS THROUGH, deliberately: the row is still
+            // classified by the checks below, which is what makes an unparseable row
+            // necessarily an unrequested one too (a requested key always parses back,
+            // its collection being a fixed-width hex source id). Do not add a
+            // `continue` here as a tidy-up. It would decouple the two counts, and the
+            // anomaly test's disjunction on Unparseable - documented in
+            // RepoContextVectorWriterMembershipProbeAccountingTests as redundant
+            // BECAUSE of this fall-through - would silently become load-bearing again.
             if (!requested.Contains(key))
             {
                 accounting.Unrequested++;

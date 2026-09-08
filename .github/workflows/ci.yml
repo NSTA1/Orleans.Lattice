@@ -224,8 +224,17 @@ jobs:
           # These planted controls make that state observable: the gate must
           # demonstrate on every run that it still detects a keyword it should
           # act on, and still ignores the three forms it should not.
+          #
+          # There is one control per REGION the predicate claims to strip, not
+          # one per region that is convenient to write inline. The fenced-block
+          # control is load-bearing for that reason: with the fence arm of
+          # honoured() disabled, the other three probes still pass unanimously,
+          # so without it a third of this predicate could break and the
+          # self-test would report itself healthy - the precise failure the
+          # self-test exists to make impossible.
           probes = [("Closes #1", True), ("`Closes #1`", False),
-                    ("> Closes #1", False), ("Refs #1", False)]
+                    ("> Closes #1", False), ("Refs #1", False),
+                    ("```\nCloses #1\n```", False)]
           broken = [p for p, want in probes if bool(honoured(p)) is not want]
           if broken:
               print("::error::This gate's own matcher is broken - it failed its "

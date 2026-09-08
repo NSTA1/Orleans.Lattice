@@ -196,6 +196,89 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
         });
     }
 
+    /// <summary>
+    /// Pins the anomaly policy as the subject rather than as a side assertion: a
+    /// probe whose only irregularity is that the store did not answer for some keys
+    /// must NOT warn, while a probe that saw a row nobody asked for must.
+    /// <para>
+    /// The other fixtures here assert the level incidentally, as one clause among
+    /// several about counts, so a refactor of their counting could take the pin with
+    /// it. The exclusion of the not-returned count is now load-bearing beyond this
+    /// class: the ruling on issue #2277 withdrew an acceptance criterion that would
+    /// have treated a short read as a probe failure, citing this exclusion as
+    /// evidence that a key with no presence flag is the ordinary case rather than an
+    /// alarm. Folding NotReturned into the disjunction would fire the warning on
+    /// nearly every page of every pass, and a warning that always fires gets muted,
+    /// taking the real signal with it.
+    /// </para>
+    /// <para>
+    /// The unparseable arm is deliberately not asserted in isolation, because that
+    /// state is unreachable rather than merely untested. Every key this probe
+    /// requests is built as <c>VectorMembership(repoId, SourceId(...))</c>, whose
+    /// collection is sixteen hex characters and whose payload is therefore never
+    /// empty, so a requested key always parses back for any repository id. An
+    /// unparseable row is necessarily one that was never requested, and so trips the
+    /// unrequested arm as well.
+    /// </para>
+    /// <para>
+    /// That last step depends on a detail of the counting loop worth naming, because
+    /// an edit could remove it without looking like a behaviour change: the
+    /// unrequested arm increments and FALLS THROUGH - it has no <c>continue</c> - so
+    /// a row nobody asked for still reaches the key parse below it. Adding a
+    /// <c>continue</c> there as a tidy-up would make the two counts independent
+    /// again, at which point the unparseable arm becomes reachable, this paragraph
+    /// becomes false, and the disjunct it describes as redundant becomes
+    /// load-bearing. The disjunct is kept for that reason rather than removed as
+    /// dead: if this analysis is right it costs nothing, and if it is subtly wrong
+    /// the check is still there.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task The_anomaly_test_excludes_a_short_read_and_includes_an_unrequested_row()
+    {
+        var keys = SourceKeys("A", "B", "C");
+
+        // The store answers for one key and omits two, with nothing else irregular,
+        // which isolates the not-returned count.
+        var (quietWriter, quietLogs) = Create(requested => Rows(requested.Take(1), Enabled));
+        var quietCovered = await quietWriter.ProbeEmbeddedMembersAsync(RepoId, keys, Ct);
+        var quiet = Single(quietLogs);
+
+        // Every key answered, plus one well-formed row nobody asked for.
+        var (loudWriter, loudLogs) = Create(requested =>
+        {
+            var rows = Rows(requested, Enabled);
+            rows[requested[0] + "ZZZ"] = Enabled();
+            return rows;
+        });
+        var loudCovered = await loudWriter.ProbeEmbeddedMembersAsync(RepoId, keys, Ct);
+        var loud = Single(loudLogs);
+
+        Assert.Multiple(() =>
+        {
+            // The condition must actually have arisen, or "it did not warn" is
+            // vacuously true of a probe that saw nothing irregular at all. If this
+            // floor ever fails, repair the fake so it really does short-read; do not
+            // delete the floor to make the test pass.
+            Assert.That(quiet.Message, Does.Contain("notReturned=2"), "the short read must actually have occurred");
+            Assert.That(quiet.Message, Does.Contain("unparseable=0"), "no other anomaly may be present");
+            Assert.That(quiet.Message, Does.Contain("unrequested=0"), "no other anomaly may be present");
+            Assert.That(
+                quiet.Level,
+                Is.EqualTo(LogLevel.Debug),
+                "a key with no presence flag is the ordinary finding a gap probe exists to make");
+            Assert.That(quietCovered, Has.Count.EqualTo(1), "classification must be unchanged");
+
+            Assert.That(loud.Message, Does.Contain("unrequested=1"), "the excess must actually have occurred");
+            Assert.That(loud.Message, Does.Contain("notReturned=0"), "the excess arm must fire on its own");
+            Assert.That(
+                loud.Level,
+                Is.EqualTo(LogLevel.Warning),
+                "a row the probe never asked for has no benign reading");
+            Assert.That(loudCovered, Has.Count.EqualTo(4), "classification must be unchanged");
+        });
+    }
+
     [Test]
     public async Task An_empty_candidate_set_reports_nothing()
     {
