@@ -816,16 +816,6 @@ internal sealed partial class BPlusLeafGrain
                 $"checkpoint={checkpoint} entryCount={Cache.Count}");
 #endif
 
-            // Whether the detector elected this partition an OVER-BUDGET
-            // CANDIDATE. It is a candidate and not a verdict because the
-            // detector compares a partition-wide, pre-filter offset gap
-            // against a per-leaf, post-filter budget (issue #2149); the gap
-            // is a sound upper bound on this leaf's own work, so it can only
-            // over-elect, never under-elect. ReplayPartitionAsync confirms it
-            // below against the exact count of entries this leaf actually
-            // applies.
-            var overBudgetCandidate = false;
-
             if (detector is not null)
             {
                 var decision = await detector.ClassifyAsync(
@@ -879,13 +869,14 @@ internal sealed partial class BPlusLeafGrain
                         // actually applies are counted for free during the
                         // replay that is happening anyway.
                         //
-                        // The candidate is still load-bearing: it is a sound
-                        // upper bound (applied <= gap), so it can only
-                        // over-elect. That is exactly what makes it safe to
-                        // use as the gate on the STALL check downstream - the
-                        // new fault line can never fire anywhere the old line
-                        // did not.
-                        overBudgetCandidate = true;
+                        // NOTHING IS ELECTED HERE EITHER (issue #2291). This
+                        // arm used to raise an over-budget CANDIDATE that gated
+                        // the stall check in ReplayPartitionAsync. Doing so
+                        // conjoined a partition-wide quantity onto a per-leaf
+                        // convergence fault, which made that fault unreportable
+                        // on any partition shallower than MaxLeafReplayEntries -
+                        // see the STALL (FAULT) CHECK there for why no budget
+                        // value could have closed that blind spot.
                         break;
                     case FallOffLogDecision.SnapshotThenWal:
                     case FallOffLogDecision.FullRebuildFromWal:
@@ -901,7 +892,7 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, overBudgetCandidate, cancellationToken);
+            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, cancellationToken);
             partitionsAbsorbed++;
             if (advanced)
                 anyAdvanced = true;
@@ -2515,7 +2506,6 @@ internal sealed partial class BPlusLeafGrain
         int maxDurableUnresolvedWork,
         long? probedHead,
         int maxLeafReplayEntries,
-        bool overBudgetCandidate,
         CancellationToken cancellationToken)
     {
         var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
@@ -2549,28 +2539,75 @@ internal sealed partial class BPlusLeafGrain
         // its own trailing disclaimer forbade - which is how #2285 came to be
         // filed, by a reader who quoted the line and truncated the disclaimer.
         // A disclaimer that must survive quotation to work is not a control;
-        // omitting the quantity is.
+        // omitting the quantity is. The budget does still ROUTE that line
+        // (issue #2291): it selects the level, which is a decision about
+        // warning volume and not a claim about this leaf's work. Keeping it out
+        // of the message is exactly what stops it being read as one.
         var gap = head - checkpoint;
 
-        // STALL (FAULT) CHECK - issue #2149, fault shape of issue #2165.
+        // STALL (FAULT) CHECK - issue #2149, fault shape of issue #2165,
+        // sensitivity corrected by issue #2291.
         //
         // Run BEFORE the scan, so a replay torn down by the activation deadline
         // - which is precisely the fault being detected - still reports it.
-        //
-        // Gated on the detector's over-budget CANDIDATE. That gate is what
-        // makes this line a strict SUBSET of where the old unconditional cost
-        // warning fired: this fix can silence noise but can never move the
-        // signal to somewhere an operator was not already looking. It is also
-        // sound on its own terms - a frozen checkpoint whose partition gap fits
-        // inside the budget is an idle leaf, not a livelock - and the #2165
-        // leaf's gap was >= 30,639 against a 10,000 budget, three times over.
         //
         // The criterion is the one the old warning stated in prose and left an
         // operator to evaluate by hand: the checkpoint does not advance across
         // repeats for the SAME leaf and partition. n >= 2 by construction, so
         // a single cold activation never trips it.
-        if (NoteReplayCheckpointObservation(treeId, ReplicaId, partition, checkpoint) is { IsStall: true } stall
-            && overBudgetCandidate)
+        //
+        // NOT gated on the detector's over-budget candidate any more (issue
+        // #2291). Nothing about the budget decides whether this fault is
+        // detected, counted, or reported; it selects only the LOG LEVEL.
+        //
+        // That gate was defended on two grounds. The first was a strict-subset
+        // safety property: the new line can never fire where the old cost line
+        // did not. The second was that it was sound on its own terms, because
+        // "a frozen checkpoint whose partition gap fits inside the budget is an
+        // idle leaf, not a livelock". The second claim is false, and the code a
+        // few lines above is what refutes it: an idle leaf returns on the
+        // head <= checkpoint check and never arrives here, so past this point
+        // there is unreplayed work by construction and a frozen checkpoint is a
+        // livelock at ANY gap.
+        //
+        // The first claim was true but bought the wrong thing. The gap is
+        // partition-wide and pre-filter, shared with ~1,350 sibling leaves,
+        // while convergence is a property of THIS leaf; conjoining them made a
+        // permanent stall silent wherever the partition happened to be shallow.
+        // That blind spot is arithmetic rather than a matter of threshold: the
+        // gap can never exceed its partition's readable WAL depth, so on a
+        // partition holding at most MaxLeafReplayEntries entries the
+        // conjunction is UNSATISFIABLE and no leaf pinned to it could be
+        // reported however completely it was stuck. No value of
+        // MaxLeafReplayEntries closes that. Measured on the deployed container,
+        // the visible population sat between 2.64x and 8.18x the configured cap
+        // of 10,000, with not one observation inside 164% of it, so the whole
+        // under-cap region was unlit.
+        //
+        // THE COUNTER IS WHERE THIS BIT HARDEST. The line below tells an
+        // operator in as many words that the exact census of the condition is
+        // orleans.lattice.leaf.activation_stalled_replays (issue #2285). While
+        // the counter sat inside the over-budget conjunction that claim was
+        // false: it was an exact census of the over-cap SUBSET, undercounting by
+        // an amount nothing in the system could observe, and it was documented
+        // as a census in the very message an operator would use to check it.
+        // Counting on the convergence predicate alone is what makes the shipped
+        // claim true.
+        //
+        // The budget survives only as a volume governor on the WARNING stream,
+        // and only because the size of the under-cap population is still
+        // unknown: it has never been observable, so it cannot be estimated from
+        // the visible one without reading a population off the very filter that
+        // hid it. Over-cap keeps Warning, so warning volume is exactly what it
+        // is today; under-cap emits at Information. When the distribution is
+        // unknown, prefer the option whose worst case is bounded. The counter,
+        // now un-gated, is what supplies the missing number, after which
+        // promoting the under-cap arm is a one-line change decided on evidence.
+        //
+        // Volume stays bounded where it always actually was: ShouldLogStalledReplay
+        // throttles per (tree, leaf, partition) on OverBudgetLogInterval, behind
+        // a capacity cap with pruning, and it throttles BOTH levels.
+        if (NoteReplayCheckpointObservation(treeId, ReplicaId, partition, checkpoint) is { IsStall: true } stall)
         {
             // Counted BEFORE the log throttle, and outside it, so the counter is
             // the exact census of the condition while the warning below stays a
@@ -2580,18 +2617,25 @@ internal sealed partial class BPlusLeafGrain
             // steady trickle, which is the distinction the counter exists to
             // make. The leaf is deliberately not a tag: leaf count is unbounded,
             // so per-leaf detail belongs in the warning, not in a time series.
+            //
+            // It is outside the BUDGET too (issue #2291), which is what makes
+            // "exact census" true rather than merely intended.
             LatticeMetrics.LeafActivationStalledReplays.Add(
                 1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
                 LatticeTenantLabel.ForTree(treeId));
 
+            var stalledLevel = gap > maxLeafReplayEntries
+                ? LogLevel.Warning
+                : LogLevel.Information;
             var stalledLogger = ResolveLogger();
             if (stalledLogger is not null
-                && stalledLogger.IsEnabled(LogLevel.Warning)
+                && stalledLogger.IsEnabled(stalledLevel)
                 && ShouldLogStalledReplay(treeId, ReplicaId, partition))
             {
-                stalledLogger.LogWarning(
+                stalledLogger.Log(
+                    stalledLevel,
                     "Leaf projection for tree '{TreeId}' leaf '{Leaf}' WAL partition {Partition} re-entered "
                     + "replay WITHOUT its persisted checkpoint having advanced (persistedCheckpoint "
                     + "{Checkpoint}, unchanged across {Repeats} consecutive replay(s) of this leaf partition "
