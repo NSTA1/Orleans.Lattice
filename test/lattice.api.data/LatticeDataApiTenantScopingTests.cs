@@ -122,6 +122,10 @@ public sealed class LatticeDataApiTenantScopingTests
         await api.DeleteAsync(UnqualifiedName, "k");
         await api.SetManyAsync(UnqualifiedName, [new DataEntry { Key = "k", Value = [1] }]);
 
+        // Each verb dials exactly once (every write verb resolves the tree a
+        // single time), so pinning the count is what makes "every write verb"
+        // mean three: Is.All alone would pass if no verb dialled at all.
+        Assert.That(dialled, Has.Count.EqualTo(3), "one dial per write verb: Set, Delete, SetMany");
         Assert.That(dialled, Is.All.EqualTo("t/acme/orders"));
     }
 

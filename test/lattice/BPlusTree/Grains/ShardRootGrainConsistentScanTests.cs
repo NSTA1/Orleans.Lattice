@@ -415,6 +415,9 @@ public class ShardRootGrainConsistentScanTests
 
         var page = await h.Grain.GetSortedKeysBatchForSlotsAsync(null, null, 100, null, sorted, VirtualShardCount);
 
+        // An empty page satisfies "only keys in the requested slot" vacuously, so
+        // the filter silently returning nothing would read as a pass.
+        Assert.That(page.Keys, Is.Not.Empty, "the requested slot holds keys, so the filtered scan must surface some");
         Assert.That(page.Keys, Is.All.Matches<string>(
             k => ShardMap.GetVirtualSlot(k, VirtualShardCount) == slot));
         Assert.That(page.MovedAwaySlots, Is.Null,
@@ -450,6 +453,9 @@ public class ShardRootGrainConsistentScanTests
 
         var page = await h.Grain.GetSortedEntriesBatchForSlotsAsync(null, null, 100, null, sorted, VirtualShardCount);
 
+        // Same vacuity as the keys overload: an empty page would pass "only
+        // entries in the requested slot" without ever exercising the filter.
+        Assert.That(page.Entries, Is.Not.Empty, "the requested slot holds entries, so the filtered scan must surface some");
         Assert.That(page.Entries, Is.All.Matches<KeyValuePair<string, byte[]>>(
             kv => ShardMap.GetVirtualSlot(kv.Key, VirtualShardCount) == slot));
     }
