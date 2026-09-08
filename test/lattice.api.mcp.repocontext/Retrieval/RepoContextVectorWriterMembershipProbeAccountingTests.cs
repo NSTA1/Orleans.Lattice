@@ -80,6 +80,7 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
             Assert.That(line.Message, Does.Contain("returned=2"));
             Assert.That(line.Message, Does.Contain("notReturned=1"));
             Assert.That(line.Message, Does.Contain("accounted=3"), "the categories must partition the request");
+            Assert.That(line.Message, Does.Contain("unrequested=0"), "a short read is a shortfall, never an excess");
 
             // Deliberately not a warning. A source with no presence flag has not been
             // embedded, which is the ordinary case on nearly every probe, so warning
@@ -148,6 +149,50 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
             Assert.That(line.Level, Is.EqualTo(LogLevel.Warning));
             Assert.That(line.Message, Does.Contain("unparseable=1"));
             Assert.That(line.Message, Does.Contain("notReturned=1"));
+        });
+    }
+
+    [Test]
+    public async Task A_row_the_store_returns_that_was_never_requested_is_counted_and_warns()
+    {
+        var keys = SourceKeys("A", "B");
+
+        // The excess case, and the single way the category partition can fail to add
+        // up. Every category is exhaustive over returned rows and notReturned is the
+        // exact complement over requested keys, so (accounted - requested) is
+        // identically the count of rows nobody asked for. The extra row here is a
+        // well-formed repo-context key, so the unparseable arm does NOT fire: this
+        // fixture isolates the unrequested arm on its own, which is what makes it a
+        // reachability proof for that arm rather than for warning in general.
+        var (writer, logs) = Create(requested =>
+        {
+            var rows = Rows(requested, Enabled);
+
+            // Derived from a key the probe really asked for, so it is well formed and
+            // parses back into a source id. Only its identity differs, which is what
+            // isolates the unrequested arm from the unparseable one.
+            rows[requested[0] + "ZZZ"] = Enabled();
+            return rows;
+        });
+
+        var covered = await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct);
+
+        var line = Single(logs);
+        Assert.Multiple(() =>
+        {
+            Assert.That(line.Level, Is.EqualTo(LogLevel.Warning), "an unrequested row has no benign reading");
+            Assert.That(line.Message, Does.Contain("requested=2"));
+            Assert.That(line.Message, Does.Contain("returned=3"));
+            Assert.That(line.Message, Does.Contain("unrequested=1"));
+            Assert.That(line.Message, Does.Contain("unparseable=0"), "the unrequested arm fires on its own");
+            Assert.That(line.Message, Does.Contain("notReturned=0"));
+            Assert.That(line.Message, Does.Contain("accounted=3"), "the excess is exactly the unrequested row");
+
+            // The consequence, and why this warns rather than being a curiosity: the
+            // row is folded into the covered set, marking a source embedded that this
+            // probe never asked about.
+            Assert.That(covered, Has.Count.EqualTo(3));
+            Assert.That(covered, Has.Some.Contains("ZZZ"));
         });
     }
 
