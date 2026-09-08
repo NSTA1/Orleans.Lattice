@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 
 [TestFixture]
 [Category("Integration")]
-public class CrdtAccessorIntegrationTests
+public partial class CrdtAccessorIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;
