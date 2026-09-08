@@ -96,8 +96,9 @@ public sealed class TenantMetricDimensionHygieneTests
     ///   caller-chosen name, and an insecure-channel warning is keyed by peer and
     ///   transport; neither carries a tree.</item>
     ///   <item><b>Platform tooling</b> - the repository-context MCP surface meters
-    ///   its own usage and its own retrieval readiness, which are properties of the
-    ///   operator-facing host process rather than of any tenant's traffic.</item>
+    ///   its own usage, its own retrieval readiness, and which plane its retrieval
+    ///   was served from, all of which are properties of the operator-facing host
+    ///   process rather than of any tenant's traffic.</item>
     /// </list>
     /// Adding an instrument here is a deliberate, reviewable act: it declares the
     /// series invisible to every tenant-scoped telemetry query.
@@ -157,6 +158,15 @@ public sealed class TenantMetricDimensionHygieneTests
         "TreesMismatchedCounter",
         "TreesProbedCounter",
         "WriteFailures",
+        // repocontext.retrieval.ann.search - every approximate-plane outcome, tagged by
+        // serving state (bootstrapping / exhaustive / approximate). Which plane answered
+        // is a property of the HOST PROCESS: one index per repository and embedding
+        // space serves every caller, so the state is identical for all of them and a
+        // tenant tag would partition a series that cannot vary by tenant. It is on this
+        // list for the same reason as _readySeconds and _unavailable, and the whole
+        // point of the instrument is that its state tag is the dimension that carries
+        // the signal.
+        "_annSearches",
         "_callsCounter",
         // repocontext.retrieval.ready_seconds - time from host start to the retrieval
         // plane first serving. Readiness is a property of the HOST PROCESS, not of any
