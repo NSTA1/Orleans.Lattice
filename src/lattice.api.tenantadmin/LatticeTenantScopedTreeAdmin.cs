@@ -98,10 +98,10 @@ internal sealed class LatticeTenantScopedTreeAdmin : ILatticeTenantScopedTreeAdm
         int? maxInternalChildren = null,
         CancellationToken cancellationToken = default)
     {
-        var (tenant, treeId) = ResolveScope(name);
+        var (_, treeId) = ResolveScope(name);
 
-        // Authorization strictly precedes quota accounting. The tenant resolved
-        // above comes from the ambient active-tenant assertion, which is
+        // Authorization strictly precedes quota accounting. The tenant resolved by
+        // ResolveScope comes from the ambient active-tenant assertion, which is
         // client-supplied and validated only by the gate, so consulting the
         // admission controller first would let an unauthorized caller charge a
         // named victim tenant's quota and rate budget and read its usage and
@@ -112,17 +112,14 @@ internal sealed class LatticeTenantScopedTreeAdmin : ILatticeTenantScopedTreeAdm
             .EnforceWholeTreeAsync(_gate, _membership, treeId, LatticeOperation.Admin, cancellationToken)
             .ConfigureAwait(false);
 
-        // Count the create against the tenant's quota before it is applied. The
-        // real controller throws LatticeQuotaExceededException on a breach; a
-        // plain refusal is treated as fail-closed here. The IsActive short-circuit
-        // keeps a tenancy-off cluster allocation-free on this path.
-        if (_admission.IsActive
-            && !await _admission.IsAdmittedAsync(tenant, treeId, cancellationToken).ConfigureAwait(false))
-        {
-            throw new LatticeTenantAccessDeniedException(
-                $"Tenant '{tenant.Value}' is not admitted to create tree '{treeId}': the tenant's quota would be exceeded.");
-        }
-
+        // Quota admission - MaxTreeCount in particular - is enforced by the
+        // delegated CreateTreeAsync below, on the same composed id and strictly
+        // after its own authorization check. It deliberately is not repeated here:
+        // admission is stateful (it consumes a request-rate token), so evaluating
+        // it at both layers would charge a single create twice, and enforcing it
+        // only at the outer layer was the defect - the inner facade is itself
+        // tenant-aware and reachable directly, so a ceiling applied only here did
+        // not bind on every path that creates a tenant tree.
         return await _treeAdmin
             .CreateTreeAsync(treeId, shardCount, maxLeafKeys, maxInternalChildren, cancellationToken)
             .ConfigureAwait(false);

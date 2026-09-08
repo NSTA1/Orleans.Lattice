@@ -117,6 +117,42 @@ internal sealed partial class LatticeGrain
                 $"Tenant '{tenant}' is not admitted to write to tree '{TreeId}'.");
     }
 
+    /// <summary>
+    /// Consults the per-tenant <see cref="ITenantAdmissionController"/> for the
+    /// active tenant and refuses a non-admitted <em>read</em>. Called from the
+    /// access-gate seam immediately after a read has been allowed, so every read
+    /// verb on the facade is charged without each having to remember to do so.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Fully synchronous and allocation-free on both the inactive and the admitted
+    /// path: the controller is activation-cached, the inactive short-circuit is a
+    /// single property read, and an active controller's decision is an in-memory
+    /// rate check. Only a refusal allocates (its exception). This matters because,
+    /// unlike write admission, this sits on the read hot path.
+    /// </para>
+    /// <para>
+    /// Only reads the active tenant once the gate has allowed the read. That
+    /// ordering is the same security invariant the write path observes and is
+    /// load-bearing for the same reason: the active tenant is a caller-asserted
+    /// value that only the gate validates. Charging a rate budget before the gate
+    /// has admitted the call would let an unauthorized caller name any tenant and
+    /// burn that victim's read budget - turning the quota system itself into the
+    /// denial-of-service vector it exists to prevent.
+    /// </para>
+    /// </remarks>
+    private void ThrowIfReadNotAdmitted()
+    {
+        var controller = AdmissionController;
+        if (controller is not { IsActive: true } || LatticeAccessGateContext.IsSystemOrigin)
+            return;
+
+        var tenant = LatticeActiveTenantContext.Current ?? TenantId.Default;
+        if (!controller.IsReadAdmitted(tenant, TreeId))
+            throw new LatticeTenantAccessDeniedException(
+                $"Tenant '{tenant}' is not admitted to read from tree '{TreeId}'.");
+    }
+
     // Slow-path continuations for the two non-async public write entry points
     // (SetAsync and DeleteAsync) whose synchronous fast path manages the
     // enforcement ValueTask by hand. They run only when an active controller

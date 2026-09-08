@@ -96,4 +96,46 @@ internal sealed class LatticeTenantAdmissionController(
         TenantQuotaEvaluator.Admit(tenant, view.Quotas, usage, treeId);
         return new ValueTask<bool>(true);
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// Applies the sustained request-rate ceiling (<c>MaxOpsPerSecond</c>) to reads,
+    /// and nothing else. Before this, the limiter was consulted only from the
+    /// write-mutation sites, so the dimension its own quota documents as a
+    /// "cluster-wide ops/sec ceiling" silently governed writes alone: a tenant
+    /// could issue unbounded reads - including whole-keyspace counts and scans -
+    /// with no budget and no fairness against its neighbours.
+    /// </para>
+    /// <para>
+    /// The footprint dimensions are deliberately not evaluated here. They bound
+    /// stored volume, which a read does not increase, and refusing reads on a
+    /// storage breach would trap an over-quota tenant: it could no longer read its
+    /// own data back in order to delete it and get under the cap. Storage pressure
+    /// is answered by refusing writes.
+    /// </para>
+    /// <para>
+    /// Synchronous and allocation-free on the admit path (a lock-free token
+    /// acquisition), because this runs on the read hot path. Only a refusal
+    /// allocates.
+    /// </para>
+    /// </remarks>
+    public bool IsReadAdmitted(TenantId tenant, string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        if (!_rateLimiter.TryAcquire(tenant))
+        {
+            throw new LatticeQuotaExceededException(
+                $"Tenant '{tenant}' exceeded its sustained request-rate budget reading from tree '{treeId}'. "
+                + "This is a transient back-off signal: the budget refills continuously, so retry after a short backoff.",
+                treeId,
+                LatticeQuotaExceededException.OpsPerSecondDimension,
+                current: 0,
+                limit: 0,
+                tenantId: tenant.Value ?? string.Empty);
+        }
+
+        return true;
+    }
 }

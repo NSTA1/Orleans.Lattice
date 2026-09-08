@@ -32,4 +32,38 @@ public interface ITenantAdmissionController
     /// <param name="cancellationToken">Cancels the admission decision.</param>
     /// <returns><c>true</c> when the operation is admitted; <c>false</c> when it is refused.</returns>
     ValueTask<bool> IsAdmittedAsync(TenantId tenant, string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Decides whether a tenant-scoped <em>read</em> of <paramref name="treeId"/>
+    /// is admitted for <paramref name="tenant"/>. Invoked only when
+    /// <see cref="IsActive"/> is <c>true</c>, and only after the access gate has
+    /// already allowed the read.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separate from <see cref="IsAdmittedAsync"/>, and deliberately
+    /// <b>synchronous</b>, because it sits on the data-plane read hot path: the
+    /// only quota dimension that can apply to a read is the request-rate ceiling,
+    /// which is an in-memory, lock-free check needing no I/O. Returning
+    /// <see cref="bool"/> rather than <see cref="ValueTask{TResult}"/> keeps the
+    /// admit path free of an async state machine and of any allocation, so the
+    /// cost of an admitted read is one virtual call.
+    /// </para>
+    /// <para>
+    /// Footprint dimensions (bytes, keys, memory, tree count) must <b>not</b> be
+    /// applied here. Refusing reads because a tenant is over its storage cap would
+    /// deny it the ability to read its own data back in order to delete it, so an
+    /// over-quota tenant could never recover. Storage pressure is answered by
+    /// refusing writes; reads are governed only by rate.
+    /// </para>
+    /// <para>
+    /// The default implementation admits everything, so an existing external
+    /// implementation of this interface keeps compiling and keeps its previous
+    /// behaviour.
+    /// </para>
+    /// </remarks>
+    /// <param name="tenant">The tenant the read runs under.</param>
+    /// <param name="treeId">The fully-qualified tree id the read targets.</param>
+    /// <returns><c>true</c> when the read is admitted; <c>false</c> when it is refused.</returns>
+    bool IsReadAdmitted(TenantId tenant, string treeId) => true;
 }

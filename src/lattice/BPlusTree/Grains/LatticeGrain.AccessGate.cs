@@ -130,7 +130,66 @@ internal sealed partial class LatticeGrain
             .ResolveAsync(MembershipContext, cancellationToken);
 
         var request = new LatticeAccessRequest(TreeId, operation, subject, key, rangeStart, rangeEnd);
-        return await gate.AuthorizeAsync(in request, cancellationToken);
+        var decision = await gate.AuthorizeAsync(in request, cancellationToken);
+
+        // Per-tenant read admission. Every read verb on the facade funnels through
+        // this one method, so charging the tenant's request-rate budget here covers
+        // the whole read surface at once - and, more importantly, a read verb added
+        // later inherits the charge instead of having to remember it. Previously
+        // the rate limiter was reachable only from the write-mutation sites, so
+        // MaxOpsPerSecond - documented as a cluster-wide ops/sec ceiling - did not
+        // bind on reads at all, leaving the read plane with no fairness mechanism
+        // and a tenant free to starve its neighbours with unbounded scans.
+        //
+        // Charged only on an ALLOWED read, and only after the gate has decided:
+        // the tenant this is billed to is a caller assertion that only the gate
+        // validates, so charging a denied read would let an unauthorized caller
+        // drain another tenant's budget.
+        if (IsReadOperation(operation) && decision.Allowed)
+        {
+            ThrowIfReadNotAdmitted();
+        }
+
+        return decision;
+    }
+
+    /// <summary>
+    /// True for the operation shapes that constitute a read of tree data. Both
+    /// single-key and range reads are charged: a range scan is by far the more
+    /// expensive of the two, so excluding it would leave the cheapest possible
+    /// budget-free path to the most expensive possible work.
+    /// </summary>
+    private static bool IsReadOperation(LatticeOperation operation)
+        => operation is LatticeOperation.Read or LatticeOperation.RangeRead;
+
+    /// <summary>
+    /// Applies the per-tenant read charge once <paramref name="enforced"/> - a
+    /// fail-closed authorization enforcement that throws on denial - has
+    /// completed successfully. Used by the read seams that enforce through the
+    /// static <c>LatticeAccessGateEnforcement</c> helpers rather than the local
+    /// <c>AuthorizeAsync</c> choke point, so the whole read surface is charged
+    /// uniformly regardless of which enforcement shape a verb uses.
+    /// <para>
+    /// Keeps the overwhelmingly common synchronously-completed case
+    /// allocation-free rather than unconditionally building an async
+    /// continuation, because this sits on the read hot path.
+    /// </para>
+    /// </summary>
+    private ValueTask ChargeReadAsync(ValueTask enforced)
+    {
+        if (enforced.IsCompletedSuccessfully)
+        {
+            ThrowIfReadNotAdmitted();
+            return default;
+        }
+
+        return AwaitThenChargeReadAsync(enforced);
+    }
+
+    private async ValueTask AwaitThenChargeReadAsync(ValueTask enforced)
+    {
+        await enforced;
+        ThrowIfReadNotAdmitted();
     }
 
     /// <summary>
@@ -165,8 +224,20 @@ internal sealed partial class LatticeGrain
     /// Fail-closed enforcement for a whole-tree operation carrying no key or range
     /// (<see cref="LatticeOperation.Admin"/> / <see cref="LatticeOperation.BulkLoad"/>).
     /// </summary>
-    private ValueTask EnforceWholeTreeAsync(LatticeOperation operation, CancellationToken cancellationToken) =>
-        LatticeAccessGateEnforcement.EnforceWholeTreeAsync(AccessGate, MembershipContext, TreeId, operation, cancellationToken);
+    private ValueTask EnforceWholeTreeAsync(LatticeOperation operation, CancellationToken cancellationToken)
+    {
+        var enforced = LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
+            AccessGate, MembershipContext, TreeId, operation, cancellationToken);
+
+        // Whole-tree reads (DiagnoseAsync, GetStorageUsageAsync, GetAllTreeIdsAsync,
+        // GetHistoryRetentionAsync, WarmUpAsync) enforce through the static helper
+        // rather than the local AuthorizeAsync seam, so they need the read charge
+        // applied here to stay consistent with the rest of the read surface. Write
+        // and admin operations are excluded: they are already charged by
+        // ThrowIfWriteNotAdmittedAsync at their own call sites, and charging both
+        // would double-bill a single operation.
+        return IsReadOperation(operation) ? ChargeReadAsync(enforced) : enforced;
+    }
 
     /// <summary>
     /// Fail-closed enforcement of the caller's right to read the <b>whole</b> of a
@@ -189,8 +260,8 @@ internal sealed partial class LatticeGrain
     /// <param name="sourceTreeId">The tree whose entire contents the caller will read.</param>
     /// <param name="cancellationToken">Cancels subject resolution and authorization.</param>
     private ValueTask EnforceSourceTreeReadAsync(string sourceTreeId, CancellationToken cancellationToken) =>
-        LatticeAccessGateEnforcement.EnforceUniformRangeReadAsync(
-            AccessGate, MembershipContext, sourceTreeId, rangeStart: null, rangeEnd: null, cancellationToken);
+        ChargeReadAsync(LatticeAccessGateEnforcement.EnforceUniformRangeReadAsync(
+            AccessGate, MembershipContext, sourceTreeId, rangeStart: null, rangeEnd: null, cancellationToken));
 
     /// <summary>
     /// Fail-closed authorization check for a single-key point read
@@ -290,7 +361,8 @@ internal sealed partial class LatticeGrain
     /// whole-range allow proceeds.
     /// </summary>
     private ValueTask EnforceUniformRangeReadAsync(string? startInclusive, string? endExclusive, CancellationToken cancellationToken) =>
-        LatticeAccessGateEnforcement.EnforceUniformRangeReadAsync(AccessGate, MembershipContext, TreeId, startInclusive, endExclusive, cancellationToken);
+        ChargeReadAsync(LatticeAccessGateEnforcement.EnforceUniformRangeReadAsync(
+            AccessGate, MembershipContext, TreeId, startInclusive, endExclusive, cancellationToken));
 
     /// <summary>
     /// Resolves the read-path key-filter for a range scan

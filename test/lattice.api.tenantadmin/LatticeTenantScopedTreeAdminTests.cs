@@ -253,8 +253,12 @@ public sealed class LatticeTenantScopedTreeAdminTests
     // ----- quota admission on create ------------------------------------------
 
     [Test]
-    public async Task CreateTree_when_admission_active_and_admits_delegates_and_records_scope()
+    public async Task CreateTree_delegates_without_charging_admission_itself()
     {
+        // Quota admission moved down to LatticeTreeAdmin, the narrowest seam every
+        // create funnels through. It must not also be charged here: admission
+        // consumes a request-rate token, so charging at both layers would bill a
+        // single create twice.
         var admission = Admission(active: true, admit: true);
         var facade = CreateFacade(out var treeAdmin, out _, admission);
         treeAdmin
@@ -264,29 +268,23 @@ public sealed class LatticeTenantScopedTreeAdminTests
         using var scope = ActiveTenant();
         await facade.CreateTreeAsync("orders");
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(admission.AdmitCalls, Is.EqualTo(1));
-            Assert.That(admission.LastTenant, Is.EqualTo(TenantId.Parse(TenantValue)));
-            Assert.That(admission.LastTreeId, Is.EqualTo("t/acme/orders"));
-        });
+        Assert.That(admission.AdmitCalls, Is.Zero,
+            "the delegated facade charges admission; charging here too would double-bill the create");
         await treeAdmin.Received(1).CreateTreeAsync("t/acme/orders", null, null, null, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task CreateTree_when_admission_refuses_throws_and_does_not_create()
+    public void CreateTree_propagates_a_tenancy_refusal_from_the_delegated_facade()
     {
-        var admission = Admission(active: true, admit: false);
-        var facade = CreateFacade(out var treeAdmin, out _, admission);
+        var facade = CreateFacade(out var treeAdmin, out _, Admission(active: true, admit: true));
+        treeAdmin
+            .CreateTreeAsync(Arg.Any<string>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns<Task<TreeCreationResult>>(_ => throw new LatticeTenantAccessDeniedException("refused"));
 
         using var scope = ActiveTenant();
         Assert.That(
             async () => await facade.CreateTreeAsync("orders"),
             Throws.TypeOf<LatticeTenantAccessDeniedException>());
-
-        Assert.That(admission.AdmitCalls, Is.EqualTo(1));
-        await treeAdmin.DidNotReceive().CreateTreeAsync(
-            Arg.Any<string>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -306,18 +304,17 @@ public sealed class LatticeTenantScopedTreeAdminTests
     }
 
     [Test]
-    public async Task CreateTree_propagates_quota_exceeded_from_controller_and_does_not_create()
+    public void CreateTree_propagates_quota_exceeded_from_the_delegated_facade()
     {
-        var admission = Admission(active: true, admit: true, throwOnAdmit: new LatticeQuotaExceededException("quota"));
-        var facade = CreateFacade(out var treeAdmin, out _, admission);
+        var facade = CreateFacade(out var treeAdmin, out _, Admission(active: true, admit: true));
+        treeAdmin
+            .CreateTreeAsync(Arg.Any<string>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns<Task<TreeCreationResult>>(_ => throw new LatticeQuotaExceededException("quota"));
 
         using var scope = ActiveTenant();
         Assert.That(
             async () => await facade.CreateTreeAsync("orders"),
             Throws.TypeOf<LatticeQuotaExceededException>());
-
-        await treeAdmin.DidNotReceive().CreateTreeAsync(
-            Arg.Any<string>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
     }
 
     // ----- authorize-before-account ordering (cross-tenant regression) --------

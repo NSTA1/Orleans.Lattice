@@ -27,10 +27,24 @@ namespace Orleans.Lattice.Tenancy;
 /// well-formed <c>t/{tenantId}/{name}</c> tree naming a real tenant pays the existence
 /// and residency checks, and only that path allocates.
 /// </para>
+/// <para>
+/// Tenant existence is answered from the same compiled in-memory snapshot the
+/// authoring-side policy engine already decides on - an O(1) frozen-dictionary
+/// lookup - and falls back to an authoritative <see cref="ITenantRegistry"/> grain
+/// call only when the tenant is absent from that snapshot. Previously every inbound
+/// apply for a tenant tree made that grain call unconditionally, which made the
+/// isolation gate itself the throughput ceiling of the replication apply path: the
+/// apply path is deliberately not rate-limited (a replicated write is receiver-side
+/// convergence and must not be refused), so a single busy tenant's replication
+/// stream could saturate the registry grain and slow inbound convergence for every
+/// other tenant in the estate. The asymmetry was visible within this one method,
+/// whose residency check three lines later was already an in-memory lookup.
+/// </para>
 /// </remarks>
 internal sealed class ReplicationTenantIsolationGate(
     ITenantRegistry registry,
-    ITenantResidencyResolver residency) : IReplicationTenantIsolationGate
+    ITenantResidencyResolver residency,
+    CompiledTenantPolicySnapshotMaintainer policy) : IReplicationTenantIsolationGate
 {
     /// <inheritdoc />
     /// <remarks>
@@ -41,7 +55,7 @@ internal sealed class ReplicationTenantIsolationGate(
     public bool IsActive => true;
 
     /// <inheritdoc />
-    public async ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
+    public ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
         string treeId,
         CancellationToken cancellationToken = default)
     {
@@ -54,7 +68,8 @@ internal sealed class ReplicationTenantIsolationGate(
         // ownership fast path with no registry / residency call.
         if (ownership.IsPlatformOwned)
         {
-            return ReplicationTenantIsolationDecision.Admit;
+            return new ValueTask<ReplicationTenantIsolationDecision>(
+                ReplicationTenantIsolationDecision.Admit);
         }
 
         var tenant = ownership.Tenant;
@@ -64,22 +79,53 @@ internal sealed class ReplicationTenantIsolationGate(
         // existing (unsegmented) trees keep replicating exactly as before tenancy.
         if (tenant.IsDefault)
         {
-            return ReplicationTenantIsolationDecision.Admit;
+            return new ValueTask<ReplicationTenantIsolationDecision>(
+                ReplicationTenantIsolationDecision.Admit);
         }
 
         // A well-formed t/{tenantId}/{name} tree naming a real tenant. The tenant
         // must exist here - never auto-create a tenant from an inbound write - and
         // must be resident in this serving region.
+        //
+        // The compiled snapshot is rebuilt on every mutation of the tenant registry
+        // tree, so a tenant present in it demonstrably exists; answering from it
+        // keeps the steady-state apply path free of a per-entry grain call. A miss
+        // is not treated as absence - a tenant created moments ago may not be
+        // compiled yet - so it falls through to the authoritative registry, which is
+        // what keeps this fail-closed.
+        if (policy.Current.TryGetTenant(tenant.Value ?? string.Empty, out _))
+        {
+            return new ValueTask<ReplicationTenantIsolationDecision>(EvaluateResidency(tenant));
+        }
+
+        return EvaluateAgainstRegistryAsync(tenant, cancellationToken);
+    }
+
+    /// <summary>
+    /// Residency half of the decision, shared by the snapshot-hit fast path and the
+    /// registry fallback so both apply identical rules. An in-memory lookup against
+    /// the residency snapshot; inert (admits every region) when residency is not
+    /// wired.
+    /// </summary>
+    private ReplicationTenantIsolationDecision EvaluateResidency(TenantId tenant)
+        => residency.IsActive && !residency.IsOnlineInServingRegion(tenant)
+            ? ReplicationTenantIsolationDecision.RejectOutOfRegion
+            : ReplicationTenantIsolationDecision.Admit;
+
+    /// <summary>
+    /// Slow path for a tenant absent from the compiled snapshot: consults the
+    /// authoritative registry before admitting, so a not-yet-compiled tenant is
+    /// evaluated correctly and an unknown one is still refused.
+    /// </summary>
+    private async ValueTask<ReplicationTenantIsolationDecision> EvaluateAgainstRegistryAsync(
+        TenantId tenant,
+        CancellationToken cancellationToken)
+    {
         if (!await registry.ExistsAsync(tenant, cancellationToken).ConfigureAwait(false))
         {
             return ReplicationTenantIsolationDecision.RejectUnknownTenant;
         }
 
-        if (residency.IsActive && !residency.IsOnlineInServingRegion(tenant))
-        {
-            return ReplicationTenantIsolationDecision.RejectOutOfRegion;
-        }
-
-        return ReplicationTenantIsolationDecision.Admit;
+        return EvaluateResidency(tenant);
     }
 }

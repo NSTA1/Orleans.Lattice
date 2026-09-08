@@ -113,10 +113,48 @@ internal static class LatticeTenantResolution
         // reserved namespaces are governed by their own guards.
         if (IsReservedOrQualified(treeName))
         {
+            ThrowIfSystemDataNamespaceEscape(tenant, treeName);
             return treeName;
         }
 
         return LatticeTenantTrees.Compose(tenant, treeName);
+    }
+
+    /// <summary>
+    /// Fails closed when a confined tenant names a tree in the reserved
+    /// <see cref="LatticeConstants.SystemDataTreePrefix"/> namespace.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Passing an already-qualified name through uncomposed is right for the
+    /// first-party add-ons that own the <c>sys-</c> trees, but it is the one way a
+    /// tenant could name a tree that resolves <em>outside</em> its own namespace:
+    /// the id stays global, so the tree is invisible to the per-tenant tree-count
+    /// and footprint accounting that enumerates the tenant's <c>t/{tenant}/</c>
+    /// prefix, it is shared with every other tenant that picks the same name, and
+    /// it can collide with an add-on store. Refusing here rather than in each
+    /// facade puts the check on the single seam every tenant-scoped resolution
+    /// passes through, so a facade added later inherits it.
+    /// </para>
+    /// <para>
+    /// The default tenant has already returned above, so only a genuinely confined
+    /// caller reaches this. First-party add-ons administering their own stores run
+    /// inside a system-origin scope and are exempt, exactly as they are exempt from
+    /// the reserved-namespace rejection in the data plane.
+    /// </para>
+    /// </remarks>
+    private static void ThrowIfSystemDataNamespaceEscape(TenantId tenant, string treeName)
+    {
+        if (!treeName.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal)
+            || LatticeAccessGateContext.IsSystemOrigin)
+        {
+            return;
+        }
+
+        throw new LatticeTenantAccessDeniedException(
+            $"Tenant '{tenant}' may not address the reserved '{LatticeConstants.SystemDataTreePrefix}' "
+            + "namespace: it holds first-party add-on state, sits outside every tenant, and is therefore "
+            + "never composed into the calling tenant's namespace.");
     }
 
     private static bool IsReservedOrQualified(string treeName) =>
