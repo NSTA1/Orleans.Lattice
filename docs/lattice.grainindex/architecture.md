@@ -60,6 +60,27 @@ for null, `U+0002` for present - so null sorts below every present value, as
 `Comparer<T>.Default` orders it, and an empty string is never confused with
 null.
 
+### Floating point
+
+`float` and `double` are order preserving, but their key order and C# comparison
+semantics disagree in two places, so a query over one is planned around both.
+
+Every NaN payload collapses to a single slot, the lowest of the present values,
+which is where .NET's total order puts NaN. C# instead makes every comparison
+against NaN false apart from `!=`, which is true for every value including
+another NaN. A predicate written against NaN is therefore answered without
+consulting the payload: `!=` matches the property's whole range and every other
+operator matches nothing. In the other direction a relational scan whose bound
+is an ordinary number over-includes that NaN slot when it reaches downward, so
+`<` and `<=` keep their payload predicate to re-apply IEEE semantics, while `>`
+and `>=` already exclude the lowest slot and stand on the range alone.
+
+`-0.0` and `+0.0` compare equal but occupy adjacent, distinct slots. A
+comparison against zero therefore treats the pair as one equivalence class - the
+zero band - and includes or excludes both slots together, whichever zero literal
+the query happened to use. Without that, `Score >= 0.0` would start at the
+`+0.0` slot and silently drop a grain that stored `-0.0`.
+
 ### Fallback for unordered types
 
 A property whose type has no total order gets a constant, empty value component,

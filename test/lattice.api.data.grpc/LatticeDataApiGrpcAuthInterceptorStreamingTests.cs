@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Api.Data.Grpc.Tests;
 /// reaches an authorization decision on the <em>streaming</em> call shapes, not
 /// only on unary calls.
 /// <para>
-/// <see cref="Grpc.Core.Interceptors.Interceptor"/> implements every handler as a
+/// <c>Grpc.Core.Interceptors.Interceptor</c> implements every handler as a
 /// pass-through to the continuation, so a handler the interceptor does not
 /// override admits the call with no authorization check whatsoever. An
 /// interceptor that gated only <c>UnaryServerHandler</c> would therefore leave
