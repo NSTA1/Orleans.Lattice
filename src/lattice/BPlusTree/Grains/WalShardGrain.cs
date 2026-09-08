@@ -456,6 +456,21 @@ internal sealed class WalShardGrain(
     }
 
     /// <summary>
+    /// Computes the Stopwatch-tick drain deadline for <paramref name="budget"/>,
+    /// saturating at <c>long.MaxValue</c> so an extreme <c>LatticeOptions.WalDrainBudget</c>
+    /// cannot overflow the cast to a negative deadline - which would make the drain
+    /// loop force-fault every in-flight slot immediately instead of granting the
+    /// configured (effectively unbounded) grace.
+    /// </summary>
+    internal static long SaturatingDrainDeadlineTicks(long startTicks, TimeSpan budget)
+    {
+        var deltaTicks = budget.TotalSeconds * Stopwatch.Frequency;
+        return deltaTicks >= long.MaxValue - startTicks
+            ? long.MaxValue
+            : startTicks + (long)deltaTicks;
+    }
+
+    /// <summary>
     /// Awaits every in-flight flush in chronological order, swallowing
     /// individual failures because they are already surfaced to their
     /// respective ack TCSs (and to <see cref="_stickyFailure"/>).
@@ -475,7 +490,7 @@ internal sealed class WalShardGrain(
         var startTicks = Stopwatch.GetTimestamp();
         var deadlineTicks = budget == Timeout.InfiniteTimeSpan
             ? long.MaxValue
-            : startTicks + (long)(budget.TotalSeconds * Stopwatch.Frequency);
+            : SaturatingDrainDeadlineTicks(startTicks, budget);
 
         while (true)
         {
