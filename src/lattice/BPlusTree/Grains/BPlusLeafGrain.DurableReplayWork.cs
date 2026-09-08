@@ -166,8 +166,17 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// <para>
     /// Preserving every resident unresolved prepare lets the persisted row grow
-    /// while a saga-terminal leak (the parked issue #2208 orphan source) is
-    /// unfixed, but that growth is bounded by the count of genuinely
+    /// for as long as a saga can leave a prepare permanently unresolved. That
+    /// is the residual population after issue #2190's self-terminalisation: a
+    /// prepare the registry still reports <see cref="TxStatus.InFlight"/>,
+    /// either because the saga never reached a terminal decision at all, or
+    /// because its decision aged out of <c>TxDecisionRetention</c>. Nothing
+    /// reaps it, because removal is wired only to the terminal-replay paths and
+    /// the operator rebuild. That orphan source is tracked as issue #2304,
+    /// which also records why an age-based reaper is unsafe: a prepare whose
+    /// decision aged out reads InFlight yet may be committed, so discarding it
+    /// loses an acknowledged write.
+    /// The growth is bounded by the count of genuinely
     /// unresolved prepares, is observable, and resolves the instant each saga
     /// terminates through <see cref="ResolveUnresolvedReplayWorkForTransaction"/>.
     /// That is strictly preferable to the alternative it replaces, which is
@@ -210,8 +219,9 @@ internal sealed partial class BPlusLeafGrain
                 ResolveLogger()?.LogWarning(
                     "Leaf {TreeId} has {Count} unresolved replay-work entries, beyond the "
                     + "MaxDurableUnresolvedReplayWork cap of {Cap} (issue #2183). A resident "
-                    + "prepare is never dropped, so the row grows while the issue #2208 "
-                    + "saga-terminal leak is unfixed. This is expected and benign on the "
+                    + "prepare is never dropped, so the row grows for as long as a saga "
+                    + "leaves a prepare unresolved (registry status InFlight; that orphan "
+                    + "source is issue #2304). This is expected and benign on the "
                     + "default `local` SQLite durability profile (~1GB row), but on an Azure "
                     + "Table deployment the 1MB entity cap makes an unbounded row a persist "
                     + "hazard - alert on orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap "
