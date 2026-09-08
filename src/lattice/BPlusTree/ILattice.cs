@@ -881,8 +881,16 @@ public interface ILattice : IGrainWithStringKey
     /// cold-start placement-directory storm is absorbed while the silo is
     /// idle rather than against producer-driven flush concurrency.
     /// </para>
+    /// <para>
+    /// Requires whole-tree <see cref="LatticeOperation.Read"/> authorization on
+    /// this tree, the same authority as <see cref="DiagnoseAsync"/> and
+    /// <see cref="GetStorageUsageAsync"/>. Warm-up returns no key data, but it does
+    /// fan out real activation work across every shard, so an unauthorized caller
+    /// must not be able to direct that cost at a tree it does not hold a grant on.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the warm-up fan-out before the next shard probe is dispatched. In-flight probes are not cooperatively cancelled.</param>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read this tree.</exception>
     Task WarmUpAsync(CancellationToken cancellationToken = default);
 
     /// <summary>

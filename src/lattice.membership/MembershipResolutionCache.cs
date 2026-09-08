@@ -6,7 +6,11 @@ namespace Orleans.Lattice.Membership;
 /// <summary>
 /// The per-silo resolution cache. Stores resolved subjects keyed by credential
 /// token and serves a warm entry without re-authenticating or touching the
-/// directory. Freshness is enforced two ways: every entry is bounded by the
+/// directory. Only a resolved identity is cached: an anonymous verdict is never
+/// stored, so an unauthenticated caller cannot populate the map, and the map is
+/// capped at <see cref="MaxCachedSubjects"/> live entries so a rotating-token
+/// population cannot grow it without bound. Freshness is enforced two ways:
+/// every entry is bounded by the
 /// minimum of the configured cache lifetime and the credential's own expiry (so
 /// a subject is never served past its token's <c>exp</c>), and the cache is
 /// flushed whenever a <c>sys-membership-*</c> tree mutates (observed through the
@@ -18,6 +22,16 @@ internal sealed class MembershipResolutionCache(
     TimeProvider timeProvider,
     IOptionsMonitor<LatticeMembershipOptions> options) : IMutationObserver
 {
+    /// <summary>
+    /// The hard ceiling on cached subjects. The cache key is the caller-supplied
+    /// credential token, so without a ceiling a population that rotates tokens
+    /// grows the map without bound: entries expire logically but nothing removes
+    /// them until a membership tree happens to mutate. Refusing an insert at the
+    /// ceiling is safe because a miss re-authenticates and re-resolves, so the
+    /// bound costs latency and never correctness.
+    /// </summary>
+    internal const int MaxCachedSubjects = 4096;
+
     private readonly ConcurrentDictionary<string, Entry> _entries = new(StringComparer.Ordinal);
 
     /// <summary>The number of live cache entries. Exposed for tests.</summary>
@@ -77,7 +91,14 @@ internal sealed class MembershipResolutionCache(
 
         var resolved = await resolver(cancellationToken).ConfigureAwait(false);
 
-        if (ttl > TimeSpan.Zero)
+        // Only a resolved identity is cached. An unrecognised, invalid, or
+        // expired credential resolves to the anonymous subject, and caching that
+        // verdict would key an entry on a token no authenticator accepted -
+        // letting an unauthenticated caller mint an unbounded number of distinct
+        // cache keys before proving anything. A positive-only cache is bounded
+        // by the real subject population, and re-resolving an anonymous verdict
+        // is cheap because it never reaches the directory.
+        if (ttl > TimeSpan.Zero && !resolved.Subject.IsAnonymous)
         {
             var expiresAt = now + ttl;
             if (resolved.TokenExpiry is { } tokenExpiry && tokenExpiry < expiresAt)
@@ -87,11 +108,46 @@ internal sealed class MembershipResolutionCache(
 
             if (expiresAt > now)
             {
-                _entries[cacheKey] = new Entry(resolved.Subject, expiresAt);
+                StoreBounded(cacheKey, new Entry(resolved.Subject, expiresAt), now);
             }
         }
 
         return resolved.Subject;
+    }
+
+    /// <summary>
+    /// Stores <paramref name="entry"/> without letting the map exceed
+    /// <see cref="MaxCachedSubjects"/> live keys. Refreshing a key that is
+    /// already present cannot grow the map, so it is always allowed and an
+    /// in-use entry is never dropped from under the warm path. Admitting a new
+    /// key at the ceiling first drops whatever has already expired, and skips
+    /// the insert only when the map is genuinely full of live entries.
+    /// </summary>
+    private void StoreBounded(string cacheKey, Entry entry, DateTimeOffset now)
+    {
+        if (_entries.ContainsKey(cacheKey))
+        {
+            _entries[cacheKey] = entry;
+            return;
+        }
+
+        if (_entries.Count >= MaxCachedSubjects)
+        {
+            foreach (var pair in _entries)
+            {
+                if (now >= pair.Value.ExpiresAt)
+                {
+                    _entries.TryRemove(pair.Key, out _);
+                }
+            }
+
+            if (_entries.Count >= MaxCachedSubjects)
+            {
+                return;
+            }
+        }
+
+        _entries[cacheKey] = entry;
     }
 
     /// <summary>Drops every cached entry. Exposed for tests.</summary>

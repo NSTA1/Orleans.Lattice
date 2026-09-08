@@ -63,6 +63,14 @@ internal static class OverageTestData
         /// <summary>The (tenant, cluster, increment) triples handed to <see cref="MeterAsync"/>, in order.</summary>
         public List<(TenantId Tenant, string Cluster, TenantOverageSample Increment)> Metered { get; } = [];
 
+        /// <summary>
+        /// When set, <see cref="MeterAsync"/> throws for any tenant this predicate
+        /// selects. Models the optimistic-concurrency conflict the real store
+        /// raises under contention, so a test can prove one tenant's failure does
+        /// not abort the whole metering pass.
+        /// </summary>
+        public Func<TenantId, Exception?>? ThrowFor { get; set; }
+
         public Task<TenantOverageRecord?> GetAsync(TenantId tenant, CancellationToken cancellationToken = default) =>
             Task.FromResult<TenantOverageRecord?>(Records.Find(r => r.Id.Equals(tenant)));
 
@@ -83,6 +91,11 @@ internal static class OverageTestData
             TenantOverageSample increment,
             CancellationToken cancellationToken = default)
         {
+            if (ThrowFor?.Invoke(tenant) is { } failure)
+            {
+                throw failure;
+            }
+
             Metered.Add((tenant, cluster, increment));
 
             var existing = Records.Find(r => r.Id.Equals(tenant));

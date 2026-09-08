@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
@@ -43,8 +44,28 @@ public sealed class AnnRepoContextSemanticIndexTests
 
     private static AnnRepoContextSemanticIndex Create(
         IRepoContextAnnIndex plane, IRepoContextSemanticIndex exact, RepoContextExactScanBudget budget)
-        => new(plane, exact, budget, new RepoContextExactScanBreaker(),
-            NullLogger<AnnRepoContextSemanticIndex>.Instance);
+        => Create(plane, exact, budget, NullLogger<AnnRepoContextSemanticIndex>.Instance);
+
+    /// <summary>
+    /// Builds an index whose guard reporter emits its summary on every search, so a
+    /// fixture can read the steady-state line without waiting out a real interval.
+    /// The paced default is a production concern; a test asserting the line exists
+    /// should not be a test of the clock.
+    /// </summary>
+    /// <param name="plane">The approximate plane.</param>
+    /// <param name="exact">The exact fallback.</param>
+    /// <param name="budget">The exact-scan budget.</param>
+    /// <param name="logger">The logger to capture from.</param>
+    /// <param name="breaker">An optional shared breaker, when the fixture inspects it.</param>
+    /// <returns>The index.</returns>
+    private static AnnRepoContextSemanticIndex Create(
+        IRepoContextAnnIndex plane,
+        IRepoContextSemanticIndex exact,
+        RepoContextExactScanBudget budget,
+        ILogger<AnnRepoContextSemanticIndex> logger,
+        RepoContextExactScanBreaker? breaker = null)
+        => new(plane, exact, budget, breaker ?? new RepoContextExactScanBreaker(),
+            new RepoContextRetrievalGuardReporter(summaryInterval: TimeSpan.Zero), logger);
 
     private static IRepoContextAnnIndex PlaneReturning(RepoContextAnnSearchOutcome outcome)
     {
@@ -266,27 +287,32 @@ public sealed class AnnRepoContextSemanticIndexTests
         var exact = ExactReturning("k");
         var budget = UnboundedBudget();
         var breaker = new RepoContextExactScanBreaker();
+        var guards = new RepoContextRetrievalGuardReporter();
 
         Assert.Multiple(() =>
         {
             Assert.That(
                 () => new AnnRepoContextSemanticIndex(
-                    null!, exact, budget, breaker, NullLogger<AnnRepoContextSemanticIndex>.Instance),
+                    null!, exact, budget, breaker, guards, NullLogger<AnnRepoContextSemanticIndex>.Instance),
                 Throws.ArgumentNullException);
             Assert.That(
                 () => new AnnRepoContextSemanticIndex(
-                    plane, null!, budget, breaker, NullLogger<AnnRepoContextSemanticIndex>.Instance),
+                    plane, null!, budget, breaker, guards, NullLogger<AnnRepoContextSemanticIndex>.Instance),
                 Throws.ArgumentNullException);
             Assert.That(
                 () => new AnnRepoContextSemanticIndex(
-                    plane, exact, null!, breaker, NullLogger<AnnRepoContextSemanticIndex>.Instance),
+                    plane, exact, null!, breaker, guards, NullLogger<AnnRepoContextSemanticIndex>.Instance),
                 Throws.ArgumentNullException);
             Assert.That(
                 () => new AnnRepoContextSemanticIndex(
-                    plane, exact, budget, null!, NullLogger<AnnRepoContextSemanticIndex>.Instance),
+                    plane, exact, budget, null!, guards, NullLogger<AnnRepoContextSemanticIndex>.Instance),
                 Throws.ArgumentNullException);
             Assert.That(
-                () => new AnnRepoContextSemanticIndex(plane, exact, budget, breaker, null!),
+                () => new AnnRepoContextSemanticIndex(
+                    plane, exact, budget, breaker, null!, NullLogger<AnnRepoContextSemanticIndex>.Instance),
+                Throws.ArgumentNullException);
+            Assert.That(
+                () => new AnnRepoContextSemanticIndex(plane, exact, budget, breaker, guards, null!),
                 Throws.ArgumentNullException);
         });
     }

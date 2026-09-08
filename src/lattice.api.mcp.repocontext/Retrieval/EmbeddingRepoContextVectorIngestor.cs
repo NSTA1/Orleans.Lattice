@@ -75,6 +75,24 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     internal const int MaxSymbolGapScanBackoffPasses = 8;
 
     /// <summary>
+    /// The ingest arm names carried into every batched embed-and-store log line.
+    /// <para>
+    /// The three arms share one embed body, so before these existed its warnings
+    /// named only the repository. A batch-record failure that repeats every
+    /// reconcile then could not be attributed to an arm from a deployed
+    /// container's log at all, which is the same defect class as issue #2253: a
+    /// message that cannot distinguish the states it is meant to report on.
+    /// </para>
+    /// </summary>
+    internal const string FileArm = "file";
+
+    /// <inheritdoc cref="FileArm"/>
+    internal const string SymbolArm = "symbol";
+
+    /// <inheritdoc cref="FileArm"/>
+    internal const string MemoryArm = "memory";
+
+    /// <summary>
     /// The stand-in coverage set used when real coverage could not be read, or was
     /// deliberately not read, so a missing probe degrades to "no coverage evidence
     /// this pass" rather than failing the arm. Shared and immutable because it is
@@ -337,7 +355,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 string.Join(", ", unreadable.Take(10)));
         }
 
-        var embedOutcome = await EmbedAndStoreReportingLandedAsync(repoId, sources, "file", onProgress, cancellationToken)
+        var embedOutcome = await EmbedAndStoreReportingLandedAsync(repoId, FileArm, sources, onProgress, cancellationToken)
             .ConfigureAwait(false);
         var embedded = embedOutcome.Landed.Count;
 
@@ -396,6 +414,30 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 embedOutcome.Landed,
                 walkedFiles: changedFiles.Count + unchangedFiles.Count,
                 cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            // An empty selection has two OPPOSITE causes, and the guard above was
+            // silent for both: either the coverage probe failed, so no gap sweep was
+            // attempted at all and the back-fill made no progress it could have made,
+            // or the probe succeeded and genuinely found nothing left to back-fill,
+            // which is convergence. Reading the first as the second says a stuck
+            // back-fill has finished; reading the second as the first says a finished
+            // one is stuck. Two agents spent hours discriminating these from indirect
+            // evidence because this branch said nothing. It is one line either way.
+            _logger.LogInformation(
+                "Repo {RepoId}: back-fill gap set shape not measured this pass: {Reason} (walked={Walked} file(s), "
+                + "changed={Changed}, unchanged={Unchanged}, coverageProbe={Probe}).",
+                repoId,
+                coverageProbeFailed
+                    ? "the embedding-coverage probe failed, so no gap sweep was attempted and this pass advanced "
+                      + "the back-fill by nothing. This is NOT convergence"
+                    : "the coverage probe succeeded and selected no gap files, so every walked file is already "
+                      + "covered or contentless. This IS convergence for the file arm",
+                changedFiles.Count + unchangedFiles.Count,
+                changedFiles.Count,
+                unchangedFiles.Count,
+                coverageProbeFailed ? "failed" : "succeeded");
         }
 
         return new RepoFileVectorIngestOutcome(embedded, gapsSelected, !coverageProbeFailed);
@@ -554,7 +596,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         EmbedOutcome outcome;
         try
         {
-            outcome = await EmbedAndStoreReportingLandedAsync(repoId, sources, "symbol", onProgress: null, cancellationToken)
+            outcome = await EmbedAndStoreReportingLandedAsync(repoId, SymbolArm, sources, onProgress: null, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -946,7 +988,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 .ConfigureAwait(false);
         }
 
-        var landed = (await EmbedAndStoreReportingLandedAsync(repoId, sources, "memory", onProgress: null, cancellationToken)
+        var landed = (await EmbedAndStoreReportingLandedAsync(repoId, MemoryArm, sources, onProgress: null, cancellationToken)
             .ConfigureAwait(false)).Landed;
 
         // Record only what actually landed. Marking every source the pass intended
@@ -1109,18 +1151,23 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// </para>
     /// </summary>
     /// <param name="repoId">The repository being embedded.</param>
+    /// <param name="arm">
+    /// Which ingest arm is embedding, one of <see cref="FileArm"/>,
+    /// <see cref="SymbolArm"/>, or <see cref="MemoryArm"/>. Every warning this
+    /// method raises names it. All three arms share this one body, so a warning
+    /// that reported only the repository was unattributable in a deployed
+    /// container: the batch-record failure repeats every reconcile and an operator
+    /// could not tell which arm was failing, which is the same "the log cannot
+    /// distinguish two different states" defect issue #2253 was filed over.
+    /// </param>
     /// <param name="sources">The sources to embed.</param>
-    /// <param name="arm">Which embedding arm is driving this call, so the shared
-    /// per-batch failure warning identifies its caller. Three arms call this helper
-    /// (file, symbol, and memory) and a warning that names none of them cannot be
-    /// attributed from the logs alone, which cost real time on issue #2208.</param>
     /// <param name="onProgress">Optional incremental progress callback.</param>
     /// <param name="cancellationToken">Cancels the pass.</param>
     /// <returns>The source keys whose vectors were stored and whose membership was recorded, and whether the vector plane looked saturated.</returns>
     private async Task<EmbedOutcome> EmbedAndStoreReportingLandedAsync(
         string repoId,
-        IReadOnlyList<EmbeddingSource> sources,
         string arm,
+        IReadOnlyList<EmbeddingSource> sources,
         Func<int, CancellationToken, ValueTask>? onProgress,
         CancellationToken cancellationToken)
     {
@@ -1170,10 +1217,10 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             if (!result.Succeeded || result.Vectors.Count != count)
             {
                 _logger.LogInformation(
-                    "Bootstrap vectorisation for repository {RepoId} skipped a batch of {Count} passage(s) on the {Arm} arm: the embedding call did not succeed ({Error}). Those sources fall back to keyword recall.",
+                    "Bootstrap vectorisation for repository {RepoId} ({Arm} arm) skipped a batch of {Count} passage(s): the embedding call did not succeed ({Error}). Those sources fall back to keyword recall.",
                     repoId,
-                    count,
                     arm,
+                    count,
                     result.Error ?? "no vectors returned");
                 continue;
             }
@@ -1281,9 +1328,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     saturated = true;
                     var deferred = unitTexts.Count - (start + count);
                     _logger.LogWarning(
-                        "Repo {RepoId}: {Failures} consecutive batches failed to record on the {Arm} arm; the vector "
-                        + "plane looks saturated, so deferring the remaining {Deferred} passage(s) to the next "
-                        + "reconcile rather than adding load.",
+                        "Repo {RepoId}: {Failures} consecutive {Arm}-arm batches failed to record; the vector plane "
+                        + "looks saturated, so deferring the remaining {Deferred} passage(s) to the next reconcile "
+                        + "rather than adding load.",
                         repoId,
                         consecutiveBatchFailures,
                         arm,
@@ -1313,10 +1360,11 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         if (embedded == 0 && firstBatchFailure is not null)
         {
             _logger.LogWarning(
-                "Repo {RepoId}: every one of the {Failed} batch(es) that produced vectors failed to record them; "
-                + "surfacing the first fault so the arm reports incomplete.",
+                "Repo {RepoId}: every one of the {Failed} {Arm}-arm batch(es) that produced vectors failed to "
+                + "record them; surfacing the first fault so the arm reports incomplete.",
                 repoId,
-                failedBatches);
+                failedBatches,
+                arm);
             throw firstBatchFailure;
         }
 

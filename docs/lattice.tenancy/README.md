@@ -315,6 +315,47 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   explicitly **transient**: the budget refills continuously, so an immediate retry
   after a short backoff succeeds, unlike a footprint breach which persists until
   the tenant's usage drops.
+- **Reads are rate-admitted too, but never footprint-admitted.** A read is charged
+  against `MaxOpsPerSecond` at the read plane, so a tenant cannot saturate a shared
+  silo with reads that cost it nothing - the rate ceiling is what bounds a noisy
+  neighbour, and leaving the entire read plane outside it left that ceiling
+  bounding only half the traffic. The footprint dimensions are deliberately **not**
+  applied to reads: refusing reads because a tenant is over its storage quota would
+  trap it, unable to read the data it must delete to get back under. The charge is
+  taken strictly **after** the access gate authorizes the read, never before,
+  because the tenant is a caller assertion that only the gate validates - charging
+  first would let an unauthorized caller drain a named victim's budget and read the
+  victim's usage and ceiling back out of the refusal. The charge covers every read
+  shape a tenant can drive, including the two that do not cross the data-plane
+  seam: a **backup capture**, which is the largest tenant-triggerable read the
+  platform offers, is charged once per capture at its own seam after the backup
+  authorizer allows it; and a **snapshot cursor** page, which reads snapshot leaf
+  grains directly, is charged per page. A turn the access gate never adjudicated -
+  a system-origin turn, or authorised view-maintenance traffic - is never charged,
+  because there is no validated tenant to charge it to.
+- **Tree creation is admitted.** `MaxTreeCount` is charged where a tree is actually
+  created, so the one dimension whose whole purpose is to bound tree creation binds
+  at the point of creation. It is enforced once, at the tree-administration facade
+  every create funnels through, rather than additionally at the tenant-scoped
+  facade above it: admission consumes a rate token, so evaluating it at both layers
+  would bill a single create twice.
+- **The reserved `sys-` namespace is closed to tenants.** Tenant scoping composes
+  the active tenant into a tree name, and deliberately passes an already-qualified
+  name through uncomposed so it is never double-composed. The reserved `sys-`
+  system-data namespace counts as already-qualified, which is right for the
+  first-party add-ons that own those trees but meant a tenant naming one had the id
+  returned **uncomposed** - and therefore global. Such a tree sits outside the
+  `t/{tenant}/` prefix that per-tenant tree-count and footprint accounting
+  enumerates, so it is invisible to the quotas meant to bound it; it is shared with
+  every other tenant that picks the same name; and it can collide with an add-on's
+  own store. A non-default tenant addressing that namespace outside a system-origin
+  scope is now refused with `LatticeTenantAccessDeniedException`. A malformed
+  `t/`-prefixed id carrying no tenant segment is refused on the same seam, for the
+  same reason: it resolves to platform ownership, which the tenancy gate allows
+  unconditionally. A **well-formed** foreign id such as `t/other/orders` is
+  deliberately *not* refused here, because cross-tenant grants are real and only
+  the gate can adjudicate them - the resolution layer cannot see grants, so it must
+  not decide crossings.
 - **Apply-path admission bypass, never isolation bypass.** As in core, the
   replication-apply and saga-apply paths bypass quota *admission* (they re-enter
   under a foreign/prepared scope) but never bypass the tenant *isolation* boundary.
