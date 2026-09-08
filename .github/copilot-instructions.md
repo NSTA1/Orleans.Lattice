@@ -373,9 +373,26 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     `Closes #N` in a pull request based on a bucket is silently inert - it
     merges, it looks right, and the issue stays open. Verify with
     `gh pr view <n> --json closingIssuesReferences`, never by reading the body.
-    This is the single most likely way bucketing goes wrong, because nothing
-    reports it: the cost of forgetting is a set of completed items left open
-    with no signal anywhere that they were meant to close.
+    This is the single most likely way bucketing goes wrong, and the cost of
+    forgetting is a set of completed items left open with no signal anywhere
+    that they were meant to close.
+    - **Only the member half is enforced.** The
+      `Guard - inert closing keywords` step in `.github/workflows/ci.yml` fails
+      a pull request whose base is not the default branch and whose body
+      carries a closing keyword GitHub would honour, so writing `Closes #N` on
+      a member pull request is now caught rather than merged. Its predicate
+      mirrors GitHub's own parser rather than approximating it: fenced blocks,
+      blockquotes, and inline code spans are stripped first, because GitHub
+      does not act on a reference inside them either - so a pull request that
+      *discusses* this trap is not a violation, and the way to discuss one is
+      to put it in backticks.
+    - **The other half is advice and nothing checks it.** That the bucket's own
+      pull request into the default branch carries every `Closes #N` its
+      members gave up is unenforced - no test, no gate, no report. It is the
+      half that actually closes the issues, and it remains yours to get right.
+      Stated explicitly because a gate covering one half of a convention is
+      easy to mistake for one covering both, which would turn "unchecked" into
+      "checked and clean" without changing anything that is known.
   - **Retarget, do not rename.** An already-raised pull request joins a bucket by
     changing its base (`gh pr edit <n> --base <bucket>`); its head branch keeps
     whatever name it has. The `<bucket-slug>-<item-slug>` head naming is for work

@@ -144,6 +144,109 @@ jobs:
           fi
           echo "OK: branch name and commit trailers are compliant."
 
+      # Guard - inert closing keywords on a non-default base.
+      #
+      # GitHub honours a closing keyword ONLY when the pull request targets the
+      # repository's default branch. In a pull request based on an epic or
+      # bucket integration branch, a `Closes #N` is silently inert: it merges,
+      # it reads correctly, and the issue stays open. Nothing reports this. The
+      # cost of the mistake is a completed item left open with no signal
+      # anywhere that it was meant to close, which is why it is gated here
+      # rather than left to review.
+      #
+      # WHAT THIS GATE DOES AND DOES NOT COVER. It catches the MEMBER half of
+      # the convention - a keyword that will not fire because of where the
+      # pull request is aimed. It does NOT and cannot check the other half,
+      # that the integration pull request into the default branch carries every
+      # `Closes #N` its members gave up. Nothing here observes that, and it
+      # stays advice (see .github/copilot-instructions.md). This is stated
+      # explicitly because a gate that half-covers a convention while appearing
+      # to cover it is worse than no gate: it converts "unchecked" into
+      # "checked and clean" without changing what is actually known.
+      #
+      # PREDICATE. The test is "a closing reference GitHub would ACT ON", not
+      # "the string appears in the body". Those differ, and the difference is
+      # not hypothetical: a pull request that DISCUSSES this very trap contains
+      # the literal text and is entirely correct. GitHub does not linkify - and
+      # so cannot honour - a reference inside a fenced code block, a blockquote,
+      # or an inline code span, so those regions are removed before matching. A
+      # gate whose predicate is broader than the one it stands in for reports a
+      # state the system does not have.
+      - name: Guard - inert closing keywords
+        if: github.event.pull_request.base.ref != github.event.repository.default_branch
+        env:
+          # Passed through the environment, never interpolated into the script
+          # body: a pull request description is attacker-controlled text.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os, re, sys
+
+          keywords = r"close[sd]?|fix(?:e[sd])?|resolve[sd]?"
+          target = r"(?:#\d+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#\d+|https?://\S+?/issues/\d+)"
+
+          def honoured(body):
+              """References GitHub would ACT ON. Fenced blocks, blockquotes and
+              inline code spans are removed first, because GitHub does not
+              linkify a reference inside them and so cannot honour one."""
+              out, fence = [], None
+              for line in body.splitlines():
+                  stripped = line.lstrip()
+                  if fence is None:
+                      m = re.match(r"(`{3,}|~{3,})", stripped)
+                      if m:
+                          fence = m.group(1)[:3]
+                          continue
+                      if stripped.startswith(">"):
+                          continue
+                      out.append(line)
+                  elif stripped.startswith(fence):
+                      fence = None
+              text = re.sub(r"`[^`\n]*`", "", "\n".join(out))
+              return [m.group(0).strip()
+                      for m in re.finditer(rf"(?i)\b(?:{keywords})\b[ \t]*:?[ \t]+{target}", text)]
+
+          # Anti-vacuity self-test (issue #2275). A silent pass is this gate's
+          # desired outcome, so a matcher that has stopped matching ANYTHING
+          # looks exactly like a repository full of correct pull requests.
+          # These planted controls make that state observable: the gate must
+          # demonstrate on every run that it still detects a keyword it should
+          # act on, and still ignores the three forms it should not.
+          probes = [("Closes #1", True), ("`Closes #1`", False),
+                    ("> Closes #1", False), ("Refs #1", False)]
+          broken = [p for p, want in probes if bool(honoured(p)) is not want]
+          if broken:
+              print("::error::This gate's own matcher is broken - it failed its "
+                    f"planted self-test on: {broken!r}. Until that is fixed the gate "
+                    "cannot detect anything, and a pass from it means nothing.")
+              sys.exit(1)
+
+          base = os.environ.get("BASE_REF", "")
+          default = os.environ.get("DEFAULT_BRANCH", "")
+          hits = honoured(os.environ.get("PR_BODY") or "")
+
+          if not hits:
+              print(f"OK: matcher self-test passed, and no closing keyword GitHub would "
+                    f"honour appears in a PR targeting '{base}' rather than '{default}'.")
+              sys.exit(0)
+
+          print(f"::error::This pull request targets '{base}', not the default branch "
+                f"'{default}', so GitHub will NOT honour its closing keyword(s): "
+                + "; ".join(sorted(set(hits)))
+                + ". The reference is inert - this PR will merge, read as correct, and "
+                  "leave the issue open. Reword it to 'Refs #N' here, and put the "
+                  "'Closes #N' on the integration pull request that targets "
+                  f"'{default}'. Verify that one with: gh pr view <n> --json "
+                  "closingIssuesReferences (read the command's output, not the body). "
+                  "If a keyword above is only being discussed rather than used, put it "
+                  "in a code span or fenced block, which is also what stops GitHub "
+                  "acting on it.")
+          sys.exit(1)
+          PY
+
       # Classify what changed so we can skip expensive steps when the PR only
       # touches docs, or run a lightweight samples-only build when nothing
       # outside samples/ (plus docs) changed.
