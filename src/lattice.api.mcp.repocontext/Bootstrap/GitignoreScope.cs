@@ -27,9 +27,17 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <c>[...]</c> character class (with ranges and <c>!</c>/<c>^</c> negation, as in
 /// the ubiquitous <c>[Bb]in/</c> and <c>[Oo]bj/</c>), and a leading <c>\</c> escape
 /// of <c>#</c> or <c>!</c>. It does not read <c>.git/info/exclude</c> or the user's
-/// global excludes. Because the walker prunes an ignored directory rather than
-/// descending it, the Git rule that a path under an excluded directory cannot be
-/// re-included falls out naturally.
+/// global excludes.
+/// </para>
+/// <para>
+/// <b>Hierarchy.</b> Each rule matches the entry it names and nothing deeper; a path
+/// beneath an ignored directory is excluded because <see cref="IsIgnored"/>
+/// classifies every ancestor directory first and the shallowest ignored ancestor
+/// decides. That reproduces the Git rule that a path under an excluded directory
+/// cannot be re-included, and - the reason it matters here - it stops a
+/// <c>!</c> negation naming a directory from re-including that directory's whole
+/// subtree, which would silently readmit the build output a later-losing
+/// <c>[Bb]in/</c> rule had excluded.
 /// </para>
 /// </summary>
 internal sealed class GitignoreScope
@@ -72,10 +80,44 @@ internal sealed class GitignoreScope
     /// Reports whether <paramref name="relativePath"/> is ignored by the layered
     /// rules. The path is repository-relative and <c>'/'</c>-separated;
     /// <paramref name="isDirectory"/> selects whether directory-only patterns apply.
+    /// <para>
+    /// Evaluation is hierarchical, as Git's is: every ancestor directory is
+    /// classified first and the shallowest ignored ancestor decides, so an entry
+    /// beneath an excluded directory is excluded and cannot be re-included by a
+    /// later negation. Only when no ancestor is ignored is the entry itself
+    /// classified, by <see cref="IsEntryIgnored"/>.
+    /// </para>
     /// </summary>
     /// <param name="relativePath">The repository-relative path to classify. Must not be <see langword="null"/>.</param>
     /// <param name="isDirectory"><see langword="true"/> when the path names a directory.</param>
     public bool IsIgnored(string relativePath, bool isDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(relativePath);
+
+        for (var slash = relativePath.IndexOf('/'); slash >= 0;
+            slash = relativePath.IndexOf('/', slash + 1))
+        {
+            if (IsEntryIgnored(relativePath[..slash], isDirectory: true))
+            {
+                return true;
+            }
+        }
+
+        return IsEntryIgnored(relativePath, isDirectory);
+    }
+
+    /// <summary>
+    /// Reports whether <paramref name="relativePath"/> is ignored considering the
+    /// entry itself only, on the caller's guarantee that no ancestor directory is
+    /// ignored. The tree walk holds that guarantee by construction: it prunes an
+    /// ignored directory rather than descending it, so every entry it classifies
+    /// already sits under a chain of directories it found not ignored. Callers
+    /// without that guarantee must use <see cref="IsIgnored"/>, which establishes it
+    /// by classifying each ancestor first.
+    /// </summary>
+    /// <param name="relativePath">The repository-relative path to classify. Must not be <see langword="null"/>.</param>
+    /// <param name="isDirectory"><see langword="true"/> when the path names a directory.</param>
+    public bool IsEntryIgnored(string relativePath, bool isDirectory)
     {
         ArgumentNullException.ThrowIfNull(relativePath);
         bool? decision = null;
@@ -140,14 +182,12 @@ internal sealed class GitignoreScope
     /// </summary>
     private sealed class GitignoreRule
     {
-        private readonly Regex _exactRegex;
-        private readonly Regex _subtreeRegex;
+        private readonly Regex _regex;
         private readonly bool _directoryOnly;
 
-        private GitignoreRule(Regex exactRegex, Regex subtreeRegex, bool negated, bool directoryOnly)
+        private GitignoreRule(Regex regex, bool negated, bool directoryOnly)
         {
-            _exactRegex = exactRegex;
-            _subtreeRegex = subtreeRegex;
+            _regex = regex;
             Negated = negated;
             _directoryOnly = directoryOnly;
         }
@@ -155,21 +195,15 @@ internal sealed class GitignoreScope
         /// <summary>Whether the rule re-includes (a leading <c>!</c>) rather than excludes.</summary>
         public bool Negated { get; }
 
-        /// <summary>Reports whether a base-relative path matches this rule.</summary>
-        public bool Matches(string scopedPath, bool isDirectory)
-        {
-            // A path nested beneath the pattern is always covered: its ancestor
-            // directory matched, so the whole subtree is ignored regardless of the
-            // directory-only flag or whether this leaf is itself a directory.
-            if (_subtreeRegex.IsMatch(scopedPath))
-            {
-                return true;
-            }
-
-            // An exact match of the entry itself: a directory-only pattern only
-            // applies when the entry is a directory.
-            return _exactRegex.IsMatch(scopedPath) && (!_directoryOnly || isDirectory);
-        }
+        /// <summary>
+        /// Reports whether a base-relative path matches this rule. The match is on
+        /// the entry itself only: a path nested beneath the pattern is covered by
+        /// the caller classifying each ancestor directory in turn (see
+        /// <see cref="GitignoreScope.IsIgnored"/>), which is what keeps a negation
+        /// from re-including a whole subtree the way Git never does.
+        /// </summary>
+        public bool Matches(string scopedPath, bool isDirectory) =>
+            _regex.IsMatch(scopedPath) && (!_directoryOnly || isDirectory);
 
         /// <summary>Parses <c>.gitignore</c> text into ordered rules, skipping blank and comment lines.</summary>
         public static IReadOnlyList<GitignoreRule> Parse(string content)
@@ -249,10 +283,8 @@ internal sealed class GitignoreScope
             // so the one-off JIT cost of a compiled matcher is repaid many times
             // over and keeps the per-path match allocation-free.
             const RegexOptions options = RegexOptions.CultureInvariant | RegexOptions.Compiled;
-            var body = Translate(line, anchored);
             return new GitignoreRule(
-                new Regex(body + "$", options),
-                new Regex(body + "/.+$", options),
+                new Regex(Translate(line, anchored) + "$", options),
                 negated,
                 directoryOnly);
         }
@@ -277,7 +309,7 @@ internal sealed class GitignoreScope
         /// <summary>
         /// Translates a <c>.gitignore</c> pattern into the body of a regular
         /// expression (anchored at <c>^</c> but with no terminator), so the caller
-        /// can append either an exact <c>$</c> or a subtree <c>/.+$</c> terminator.
+        /// can append the <c>$</c> terminator that matches the entry itself.
         /// </summary>
         private static string Translate(string pattern, bool anchored)
         {
