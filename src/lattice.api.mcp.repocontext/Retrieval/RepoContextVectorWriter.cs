@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
@@ -170,6 +172,7 @@ internal sealed class RepoContextVectorWriter
     private readonly RepoContextVectorCache _cache;
     private readonly RepoContextVectorPlaneReDeriver _reDeriver;
     private readonly IRepoContextAnnIndex? _annIndex;
+    private readonly ILogger<RepoContextVectorWriter> _logger;
 
     /// <summary>
     /// Memoized embedded-source counts per repository, keyed by the cache generation
@@ -239,6 +242,7 @@ internal sealed class RepoContextVectorWriter
     /// <param name="cache">The warm decoded-candidate cache invalidated after every local mutation. Must not be <see langword="null"/>.</param>
     /// <param name="reDeriver">The vector-plane self-healer that detects, meters, and re-derives a rebuildable vector tree that fell terminally off its write-ahead log. Must not be <see langword="null"/>.</param>
     /// <param name="annIndex">The approximate retrieval plane kept in step with every local mutation, or <see langword="null"/> when the host binds the exact scan and no index is maintained.</param>
+    /// <param name="logger">Receives the membership probe's per-key accounting when a probe cannot account for every key it requested (issue #2287), or <see langword="null"/> to discard it.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     public RepoContextVectorWriter(
         IGrainFactory grainFactory,
@@ -246,7 +250,8 @@ internal sealed class RepoContextVectorWriter
         ILatticeReplicationContext replication,
         RepoContextVectorCache cache,
         RepoContextVectorPlaneReDeriver reDeriver,
-        IRepoContextAnnIndex? annIndex = null)
+        IRepoContextAnnIndex? annIndex = null,
+        ILogger<RepoContextVectorWriter>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -259,6 +264,7 @@ internal sealed class RepoContextVectorWriter
         _cache = cache;
         _reDeriver = reDeriver;
         _annIndex = annIndex;
+        _logger = logger ?? NullLogger<RepoContextVectorWriter>.Instance;
     }
 
     // ── Vector-plane self-heal guards ──────────────────────────────────────
@@ -1024,6 +1030,7 @@ internal sealed class RepoContextVectorWriter
             }
 
             var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+            var accounting = new MembershipProbeAccounting();
             var batch = new List<string>(MembershipProbeBatchSize);
             foreach (var sourceId in sourceIds)
             {
@@ -1036,46 +1043,230 @@ internal sealed class RepoContextVectorWriter
 
                 if (batch.Count >= MembershipProbeBatchSize)
                 {
-                    await ProbeBatchAsync(tree, batch, embedded, contentless, cancellationToken).ConfigureAwait(false);
+                    await ProbeBatchAsync(tree, batch, embedded, contentless, accounting, cancellationToken).ConfigureAwait(false);
                     batch.Clear();
                 }
             }
 
             if (batch.Count > 0)
             {
-                await ProbeBatchAsync(tree, batch, embedded, contentless, cancellationToken).ConfigureAwait(false);
+                await ProbeBatchAsync(tree, batch, embedded, contentless, accounting, cancellationToken).ConfigureAwait(false);
             }
 
+            ReportProbeAccounting(repoId, accounting);
             return new RepoContextEmbeddingCoverage(embedded, contentless);
         }, cancellationToken);
+
+    /// <summary>
+    /// Emits the probe's per-key accounting (issue #2287).
+    /// <para>
+    /// At debug level on every non-empty probe, because the gain this item was opened
+    /// for is that a gap count now arrives with its denominator and its breakdown
+    /// instead of on its own. At warning level only when the probe saw something with
+    /// no benign reading - see <see cref="MembershipProbeAccounting.IsAnomalous"/>,
+    /// which deliberately excludes the not-returned count.
+    /// </para>
+    /// </summary>
+    private void ReportProbeAccounting(string repoId, MembershipProbeAccounting accounting)
+    {
+        if (accounting.Requested == 0)
+        {
+            return;
+        }
+
+        const string Template =
+            "Repo-context membership probe for '{RepoId}': "
+            + "requested={Requested} returned={Returned} accounted={Accounted} "
+            + "embedded={Embedded} contentless={Contentless} memoryMarker={MemoryMarker} "
+            + "disabled={Disabled} unparseable={Unparseable} notReturned={NotReturned}. "
+            + "A not-returned key is read as an absent presence flag, so an incomplete read is "
+            + "indistinguishable from a genuinely unembedded source and re-selects it for embedding; "
+            + "an unparseable key was written by this writer and cannot be read back.";
+
+        if (accounting.IsAnomalous)
+        {
+            _logger.LogWarning(
+                Template,
+                repoId,
+                accounting.Requested,
+                accounting.Returned,
+                accounting.Accounted,
+                accounting.Embedded,
+                accounting.Contentless,
+                accounting.MemoryMarker,
+                accounting.Disabled,
+                accounting.Unparseable,
+                accounting.NotReturned);
+            return;
+        }
+
+        if (!_logger.IsEnabled(LogLevel.Debug))
+        {
+            return;
+        }
+
+        _logger.LogDebug(
+            Template,
+            repoId,
+            accounting.Requested,
+            accounting.Returned,
+            accounting.Accounted,
+            accounting.Embedded,
+            accounting.Contentless,
+            accounting.MemoryMarker,
+            accounting.Disabled,
+            accounting.Unparseable,
+            accounting.NotReturned);
+    }
 
     private static async Task ProbeBatchAsync(
         ILattice tree,
         List<string> keys,
         HashSet<string> embedded,
         HashSet<string> contentless,
+        MembershipProbeAccounting accounting,
         CancellationToken cancellationToken)
     {
+        accounting.Requested += keys.Count;
         var found = await tree.GetManyAsync(keys, cancellationToken).ConfigureAwait(false);
+        var seen = new HashSet<string>(keys.Count, StringComparer.Ordinal);
+        var returned = 0;
         foreach (var (key, value) in found)
         {
-            if (!JsonLatticeSerializer<OrFlag>.Default.Deserialize(value).IsEnabled
-                || !TryReadSourceId(key, out var collection))
+            returned++;
+            seen.Add(key);
+
+            // Split what used to be one short-circuited condition into its two
+            // arms. The CLASSIFICATION is unchanged - a disabled flag and an
+            // unparseable key are both still skipped, and the deserialize still
+            // runs before the key parse - but the two are no longer indistinguishable
+            // in the accounting, which is the whole point of issue #2287: a key the
+            // writer wrote and cannot now read back is a defect, while a disabled
+            // flag is an ordinary negative, and the old shared `continue` reported
+            // them identically (as nothing at all).
+            if (!JsonLatticeSerializer<OrFlag>.Default.Deserialize(value).IsEnabled)
             {
+                accounting.Disabled++;
+                continue;
+            }
+
+            if (!TryReadSourceId(key, out var collection))
+            {
+                accounting.Unparseable++;
                 continue;
             }
 
             if (collection.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
             {
+                accounting.Contentless++;
                 contentless.Add(collection[ContentlessMarkerPrefix.Length..]);
             }
             else if (!collection.StartsWith(MemoryKeyMarkerPrefix, StringComparison.Ordinal))
             {
                 // A memory-key marker shares this tree but is keyed by a record key,
                 // not a source id, so it must never be folded into the embedded set.
+                accounting.Embedded++;
                 embedded.Add(collection);
             }
+            else
+            {
+                accounting.MemoryMarker++;
+            }
         }
+
+        accounting.Returned += returned;
+
+        // The silent drop this item was opened on. A key the store does not return is
+        // never touched by the loop above, so it leaves no trace at all and the caller
+        // reads it as "not covered" - indistinguishable from a source that genuinely
+        // has no presence flag. That is the difference between ABSENCE and
+        // UNAVAILABILITY, and the two are not equally benign: an absent flag is the
+        // ordinary finding a gap probe exists to make, while an unavailable one
+        // re-selects an already-embedded source for embedding again.
+        //
+        // Counted per requested key rather than as (requested - returned), so a row
+        // the store returns that was never asked for cannot offset, and thereby hide,
+        // a key that was asked for and did not come back.
+        foreach (var key in keys)
+        {
+            if (!seen.Contains(key))
+            {
+                accounting.NotReturned++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Per-probe tally of what became of every key a membership probe requested
+    /// (issue #2287).
+    /// <para>
+    /// Diagnostic only: it classifies nothing and changes no outcome. It exists
+    /// because <see cref="ProbeBatchAsync"/> had three paths that dropped a key with
+    /// no trace - a key the store did not return at all, a returned key whose flag
+    /// was disabled, and a returned key whose shape would not parse - and all three
+    /// presented downstream as the same observation, "this source is not covered".
+    /// Issue #2208 established that the perpetually re-selected gap set is a
+    /// READ-path instability rather than a write-path one, so the question of which
+    /// of those three a probe actually saw is the question.
+    /// </para>
+    /// <para>
+    /// The invariant is that the categories partition the request exactly:
+    /// <see cref="Accounted"/> equals <see cref="Requested"/>. A shortfall is not
+    /// possible by construction here, which is the point - it makes
+    /// <see cref="NotReturned"/> an observable number rather than an inference.
+    /// </para>
+    /// </summary>
+    private sealed class MembershipProbeAccounting
+    {
+        /// <summary>Keys asked for across every batch of this probe.</summary>
+        public int Requested { get; set; }
+
+        /// <summary>Rows the store actually returned.</summary>
+        public int Returned { get; set; }
+
+        /// <summary>Returned rows folded into the embedded set.</summary>
+        public int Embedded { get; set; }
+
+        /// <summary>Returned rows recognised as contentless markers.</summary>
+        public int Contentless { get; set; }
+
+        /// <summary>Returned rows that are memory-key markers, deliberately not folded into the embedded set.</summary>
+        public int MemoryMarker { get; set; }
+
+        /// <summary>Returned rows whose presence flag was disabled. An ordinary negative.</summary>
+        public int Disabled { get; set; }
+
+        /// <summary>
+        /// Returned rows whose key would not parse back into a source id. This one has
+        /// no benign reading: the writer wrote the key and cannot now read it back.
+        /// </summary>
+        public int Unparseable { get; set; }
+
+        /// <summary>
+        /// Keys the store did not return. Read as "no presence flag exists" by every
+        /// caller, which is correct only if the store is complete.
+        /// </summary>
+        public int NotReturned { get; set; }
+
+        /// <summary>The sum of the categories, which must equal <see cref="Requested"/>.</summary>
+        public int Accounted
+            => Embedded + Contentless + MemoryMarker + Disabled + Unparseable + NotReturned;
+
+        /// <summary>
+        /// Whether this probe saw something that has no benign reading: a key the
+        /// writer wrote and cannot read back, or a partition that does not add up.
+        /// <para>
+        /// <see cref="NotReturned"/> is deliberately NOT part of this test. A source
+        /// with no presence flag is exactly a source that has not been embedded, which
+        /// is the ordinary case a gap probe exists to find, so a not-returned key is
+        /// expected on nearly every probe and warning on it would emit noise on every
+        /// page of every pass - and a warning that fires always is a warning that gets
+        /// muted, taking the real signal with it. The count is still reported at debug
+        /// level on every probe, because the diagnostic gain of issue #2287 is the
+        /// DENOMINATOR and the breakdown, not an alarm.
+        /// </para>
+        /// </summary>
+        public bool IsAnomalous => Unparseable > 0 || Accounted != Requested;
     }
 
     /// <summary>
