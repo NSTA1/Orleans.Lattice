@@ -80,6 +80,15 @@ internal sealed class ShardHealingOrchestratorGrain(
         // the kill switch back on takes effect on the next call rather than
         // requiring a reactivation. The disabled path registers no reminder and
         // starts no timer, so it costs nothing to re-evaluate.
+        //
+        // INVARIANT (load-bearing for [AlwaysInterleave] on the interface,
+        // #2218): there must be no await between the `if (_running) return;`
+        // guard above and `_running = true;` below. This ShardHealingEnabled
+        // check may sit between them only because `Options` is a synchronous
+        // property and so introduces no turn boundary; a call admitted while a
+        // healing sweep holds the turn must observe `_running == true` and return
+        // at the guard. Introducing an await here would admit a second caller
+        // into the body.
         if (!Options.ShardHealingEnabled) return;
 
         _running = true;
