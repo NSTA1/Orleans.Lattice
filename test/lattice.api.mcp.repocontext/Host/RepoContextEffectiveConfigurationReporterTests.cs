@@ -32,6 +32,14 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
 {
     private const string UnknownKey = "LATTICE_SOMETHING_NOBODY_HAS_CLASSIFIED";
 
+    // Supplied value and assertion reference one symbol deliberately. Two independent
+    // literals could drift apart, and an assertion checking for a token the test never
+    // supplied would still pass while checking nothing - which is the failure this wave
+    // keeps cataloguing. Deliberately not credential-shaped, because a redaction layer on
+    // a viewing path rewrites a credential-shaped literal, and a reader shown the rewrite
+    // sees exactly that vacuous test whether or not one is present.
+    private const string SuppliedSecret = "sentinel-2294-must-not-be-logged";
+
     private static IConfiguration Configuration(params (string Key, string Value)[] settings)
         => new ConfigurationBuilder()
             .AddInMemoryCollection(settings.ToDictionary(s => s.Key, s => (string?)s.Value))
@@ -46,7 +54,7 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
                 Is.False,
                 "a key nobody has classified must not be assumed harmless");
             Assert.That(
-                RepoContextEffectiveConfiguration.RenderValue(UnknownKey, "hunter2"),
+                RepoContextEffectiveConfiguration.RenderValue(UnknownKey, SuppliedSecret),
                 Is.EqualTo(RepoContextEffectiveConfiguration.UnclassifiedMarker),
                 "the allowlist is chosen on which failure announces itself: an unclassified "
                 + "value printed in full leaks silently into logs this wave has pasted into "
@@ -70,14 +78,14 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
     {
         var line = RepoContextEffectiveConfiguration.DescribeSetting(
             "LATTICE_POSTGRES_CONNECTION_STRING",
-            "Host=db;Password=hunter2",
+            SuppliedSecret,
             null);
 
         Assert.Multiple(() =>
         {
             Assert.That(
                 line,
-                Does.Not.Contain("hunter2"),
+                Does.Not.Contain(SuppliedSecret),
                 "the value must never appear, in either position of the line");
             Assert.That(
                 line,
