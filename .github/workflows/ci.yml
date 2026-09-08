@@ -56,9 +56,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          # Need full history so the package-scope discovery step can
-          # `git diff` against the PR base SHA. Shallow clone (the default)
-          # would not have the base commit available.
+          # Need full history so the change-detection steps below can diff
+          # against the PR base SHA. A shallow clone (the default) would not
+          # have the base commit available.
+          #
+          # `fetch-depth: 0` is LOAD-BEARING and not merely a convenience: every
+          # change-detection step in this job uses the THREE-dot form
+          # (`git diff "$BASE_SHA...$HEAD_SHA"`), which resolves the MERGE BASE
+          # of the two commits and needs the common ancestry of both to be
+          # present locally. Shallow it and those diffs fail outright rather
+          # than quietly narrowing, which is the failure mode we want - but it
+          # is still a broken CI run, so do not reduce this depth.
+          # `CiChangeDetectionDiffFormTests` guards both halves.
           fetch-depth: 0
 
       # Fail fast on the two repository conventions that are cheap to check and
@@ -382,7 +391,15 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          # THREE-dot. `git diff A B` reports what turns A into B, which on a
+          # PR whose head is BEHIND its base also reports the REVERSE of every
+          # commit merged into the base since the branch was cut - attributing
+          # other people's files to this PR. `git diff A...B` diffs against the
+          # MERGE BASE, which is the question every step in this job is asking:
+          # what did THIS branch change. See the checkout step for the
+          # fetch-depth precondition, and the comment on `Discover changed
+          # packages` for why the two-dot form can also UNDER-select.
+          changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
           if echo "$changed" \
                | grep -E '^(benchmark/|test/azure-throughput-silo/)' \
                | grep -vE '\.md$' > /dev/null; then
@@ -428,7 +445,10 @@ jobs:
           # exclusion set exactly (docs / text / benchmark / apps /
           # reference-architecture / workflow files never gate the library
           # matrix, so they must not influence the carve-out decision either).
-          mapfile -t files < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+          # Three-dot: this branch's own changes, not the reverse of what
+          # merged into the base since it was cut. See `Detect benchmark
+          # harness changes`.
+          mapfile -t files < <(git diff --name-only "$BASE_SHA...$HEAD_SHA" \
             | grep -vE '\.md$' \
             | grep -vE '\.txt$' \
             | grep -vE '^docs/' \
@@ -458,7 +478,10 @@ jobs:
             # <Version> element. --unified=0 keeps the hunk bodies to just the
             # changed lines; strip the +++/--- file headers, then flag any
             # surviving +/- line that is not a <Version>...</Version> element.
-            offending=$(git diff --unified=0 "$BASE_SHA" "$HEAD_SHA" -- "$f" \
+            # Three-dot, matching the file list above: a two-dot hunk body for
+            # a file the base moved would show that move REVERSED, so the two
+            # forms must not be mixed within one decision.
+            offending=$(git diff --unified=0 "$BASE_SHA...$HEAD_SHA" -- "$f" \
               | grep -E '^[+-]' \
               | grep -vE '^(\+\+\+|---)' \
               | grep -vE '^[+-][[:space:]]*<Version>[^<]*</Version>[[:space:]]*$' \
@@ -526,7 +549,37 @@ jobs:
         run: |
           set -euo pipefail
 
-          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > /tmp/changed-files.txt
+          # THREE-dot: diff against the MERGE BASE, so this seeds from the
+          # files THIS branch changed.
+          #
+          # The two-dot form `git diff A B` is wrong here in both directions,
+          # and the second one is the reason this matters:
+          #
+          #   OVER-select. Two-dot reports what turns the base into the head,
+          #   so when the head is behind its base it also reports the REVERSE
+          #   of every commit merged into the base since the branch was cut.
+          #   Those files are attributed to this PR and seed their packages.
+          #   On an epic/bucket branch this is the COMMON case, not an edge
+          #   case: such a branch deliberately carries no strict protection
+          #   (that is the whole point - strict mode is what serialises PRs),
+          #   so a member PR is behind its base whenever any other member has
+          #   merged since it was cut.
+          #
+          #   UNDER-select, which is a false green rather than a slow one. If
+          #   this PR sets file F to content X and the base has INDEPENDENTLY
+          #   set F to the same content X, two-dot reports no difference for F
+          #   at all, and F's package is never seeded even though this PR
+          #   genuinely modifies it. That needs byte-identical content, so it
+          #   is narrower - but it is reachable exactly when it is most likely
+          #   to bite: two agents in one wave making the same small correction.
+          #
+          # Note this is UPSTREAM of the dependency closure below, so a seed
+          # lost here is not recovered by the expansion: the closure widens a
+          # seed set, it cannot invent a seed that was never in the file list.
+          #
+          # Requires the merge base to be present locally; see the fetch-depth
+          # note on the checkout step.
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > /tmp/changed-files.txt
 
           # The report goes to the job summary, not just the log. A green
           # `build-and-test` says nothing about its own scope - a run over one
@@ -652,9 +705,10 @@ jobs:
           fi
 
           # Per-sample change detection: only act on samples whose tree has at
-          # least one non-markdown change between BASE_SHA and HEAD_SHA. The
+          # least one non-markdown change this branch actually made. Three-dot
+          # (diff against the merge base); see `Discover changed packages`. The
           # diff is computed once and filtered per-sample below.
-          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
 
           samples=()
           for sampleDir in "${allSamples[@]}"; do
@@ -788,7 +842,9 @@ jobs:
           set -euo pipefail
 
           # Resolve which apps/<name>/ directories have a non-markdown change.
-          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          # Three-dot (diff against the merge base); see `Discover changed
+          # packages`.
+          changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
           mapfile -t appDirs < <(echo "$changed" \
             | grep -E '^apps/[^/]+/' \
             | grep -vE '\.md$' \
