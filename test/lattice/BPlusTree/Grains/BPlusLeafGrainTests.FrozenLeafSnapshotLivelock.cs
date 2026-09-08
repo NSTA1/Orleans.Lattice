@@ -316,4 +316,68 @@ public partial class BPlusLeafGrainTests
             "the durable blob records the partial re-applied frontier, so a subsequent activation resumes from "
             + "158412 and banks strictly more - monotone convergence, not a single jump");
     }
+
+    [Test]
+    public async Task Frozen_leaf_escape_still_fires_when_the_periodic_recheck_cadence_is_disabled()
+    {
+        // PLACEMENT GUARD. The coverage-deficit escape must run ABOVE the
+        // `threshold <= 0` early return, because
+        // LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints is documented to
+        // govern the PERIODIC re-classification only ("the activation-time
+        // capture itself is not affected by this option") and this escape is
+        // activation-scoped by construction: latched during rehydrate, gated on
+        // the activation's no-loss precondition, one-shot, off the cadence.
+        // Behind the gate, an operator who sets the cadence to 0 - a documented,
+        // supported tuning value - would leave a frozen leaf with NO escape at
+        // all: its WAL pin never lifts and its WAL grows without bound, which is
+        // disk exhaustion reachable from a cadence knob. Same field arrays and
+        // same seam as the first discriminator; the ONLY difference is
+        // reclassifyEveryN: 0.
+        const int partitions = 8;
+        var dataKey = FrozenLeafKeyForPartition(FrozenLeafDivergentPartition, partitions);
+
+        var snapshotState = new FakePersistentState<LeafSnapshotBlob>();
+        var store = new LeafSnapshotStorageGrain(Substitute.For<IGrainContext>(), snapshotState);
+        await store.SaveAsync(FrozenLeafStaleSnapshotBlob(dataKey), default);
+
+        // Periodic re-classification fully disabled.
+        var (leaf, leafState) = CreateResidualLeafWithSnapshotStore(
+            partitions, store, coordinatorTail: 1, reclassifyEveryN: 0);
+        leafState.State.ProjectionCheckpointOffset = FrozenLeafDurableCheckpoints[0];
+        leafState.State.ProjectionCheckpointOffsetsByPartition =
+            (long[])FrozenLeafDurableCheckpoints.Clone();
+
+        var rehydrated = await leaf.TryRehydrateFromSnapshotAsync(default);
+        Assert.That(rehydrated, Is.True, "the stale snapshot must be accepted (a prefix was trimmed)");
+        Assert.That(
+            leaf.GetCurrentCheckpointForPartition(FrozenLeafDivergentPartition),
+            Is.EqualTo(FrozenLeafStaleOffset),
+            "precondition: rehydrate rolled the divergent partition back to the stale offset");
+        Assert.That(
+            leaf.DurableSnapshotCoverageForPartition(FrozenLeafDivergentPartition),
+            Is.EqualTo(FrozenLeafStaleOffset),
+            "precondition: durable coverage on entry is the stale snapshot's");
+
+        AsProjection(leaf).Apply(BuildSet(
+            dataKey, Encoding.UTF8.GetBytes("readvanced"), hlcPhysical: 1000, treeId: ResidualTreeId));
+        using (LatticeApplyOffsetContext.BeginScope(FrozenLeafDivergentPartition, FrozenLeafDurableOffset))
+        {
+            await AsProjection(leaf).SetCheckpointOffsetAsync(FrozenLeafDurableOffset, default);
+        }
+        await AsProjection(leaf).FlushCheckpointAsync(default);
+
+        Assert.That(
+            leaf.DurableSnapshotCoverageForPartition(FrozenLeafDivergentPartition),
+            Is.EqualTo(FrozenLeafDurableOffset),
+            "with the periodic cadence disabled the escape MUST still bank fresh coverage: it is activation-scoped, "
+            + "not periodic, so the cadence knob does not govern it. Behind the `threshold <= 0` return a frozen "
+            + "leaf would have no escape at all and its WAL would grow without bound");
+
+        var reloaded = await store.LoadAsync(default);
+        Assert.That(reloaded, Is.Not.Null);
+        Assert.That(
+            reloaded!.SnapshotOffsetsByPartition![FrozenLeafDivergentPartition],
+            Is.EqualTo(FrozenLeafDurableOffset),
+            "the durable blob records the re-advanced frontier, so the WAL pin lifts even with cadence 0");
+    }
 }

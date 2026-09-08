@@ -427,6 +427,11 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="Orleans.Lattice.BPlusTree.Grains.FallOffLogDecision.SnapshotPending"/>) drives a
     /// capture. Returns synchronously when the option is <c>0</c>
     /// (disabled) or the threshold has not yet been reached.
+    /// <para>
+    /// The coverage-deficit escape (#2220) runs BEFORE that option is read,
+    /// because it is activation-scoped rather than periodic and the option is
+    /// documented to govern periodic capture only.
+    /// </para>
     /// </summary>
     private async Task MaybeRunPeriodicSnapshotRecheckAsync()
     {
@@ -436,13 +441,6 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var resolved = await GetOptionsAsync();
-        var threshold = resolved.LeafSnapshotReClassifyEveryNCheckpoints;
-        if (threshold <= 0)
-        {
-            // Periodic recheck disabled. The activation-time advisory
-            // path is the only proactive-capture driver.
-            return;
-        }
 
         // Coverage-deficit fast path (frozen-leaf livelock escape, #2220).
         // A leaf that rehydrated a snapshot sitting BEHIND its durable
@@ -465,8 +463,22 @@ internal sealed partial class BPlusLeafGrain
         // > the inherited snapshot offset), so even if teardown interrupts a
         // full replay each activation banks a STRICTLY higher snapshot: a
         // monotone escape that needs no single activation to finish the
-        // 30k-entry replay (#2220 point 3). Respecting the threshold > 0 gate
-        // above keeps an operator's global disable of periodic capture honoured.
+        // 30k-entry replay (#2220 point 3).
+        //
+        // This escape deliberately sits ABOVE the cadence gate below.
+        // LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints is documented
+        // to govern the PERIODIC re-classification only: "Set to 0 to disable
+        // the periodic re-classification entirely; only the once-per-activation
+        // capture ... will fire. The activation-time capture itself is not
+        // affected by this option." That is a contract, and this escape is
+        // activation-scoped by construction - latched during rehydrate, gated on
+        // THIS activation's no-loss precondition, one-shot per activation, and
+        // explicitly off the cadence - so placing it behind the cadence gate
+        // would make that documented sentence untrue. The consequence would also
+        // be out of all proportion to a tuning knob: with the cadence set to 0 a
+        // frozen leaf could NEVER escape, so its WAL pin would never lift and its
+        // WAL would grow without bound - a disk-exhaustion failure mode reachable
+        // by setting a cadence value.
         if (_snapshotCoverageDeficitAtActivation
             && !_snapshotCaptureInFlight
             && (_checkpointAdvancedThisActivation || _cacheRebuiltFromWalStartThisActivation))
@@ -498,6 +510,15 @@ internal sealed partial class BPlusLeafGrain
             // cadence or another capture beat us): retire the latch and fall
             // through to normal cadence handling.
             _snapshotCoverageDeficitAtActivation = false;
+        }
+
+        var threshold = resolved.LeafSnapshotReClassifyEveryNCheckpoints;
+        if (threshold <= 0)
+        {
+            // Periodic recheck disabled. The activation-scoped drivers - the
+            // activation-time advisory and the coverage-deficit escape above -
+            // remain the only proactive-capture drivers.
+            return;
         }
 
         _checkpointPersistCountSinceRecheck++;
