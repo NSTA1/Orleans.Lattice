@@ -17,6 +17,22 @@ internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvid
     private readonly ILatticeSchemaVersionStore _store;
     private readonly ConcurrentDictionary<string, LatticeSchemaVersionConfig?> _cache = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The maximum number of per-tree entries retained. The cache key is a tree id
+    /// a caller supplies freely, and a tree with no version config still caches a
+    /// null sentinel, so an unbounded map let any caller able to name trees grow
+    /// silo memory without limit by writing to an unlimited stream of distinct tree
+    /// ids (CWE-770). The bound is safe because a miss simply reloads from the
+    /// store, so refusing an insert costs a round-trip and never changes the answer.
+    /// </summary>
+    internal const int MaxCachedTrees = 4096;
+
+    /// <summary>
+    /// The number of per-tree entries currently cached. Exposed for unit testing
+    /// that the cache honours <see cref="MaxCachedTrees"/>.
+    /// </summary>
+    internal int CachedTreeCount => _cache.Count;
+
     /// <summary>Initializes a new <see cref="LatticeSchemaVersionProvider"/>.</summary>
     /// <param name="store">The durable version-config store to load misses from.</param>
     /// <param name="options">The versioning options carrying the global strict flag.</param>
@@ -60,7 +76,13 @@ internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvid
         var config = await _store.GetConfigAsync(treeId, cancellationToken).ConfigureAwait(false);
 
         // Last write wins on a concurrent miss; the load is idempotent.
-        _cache[treeId] = config;
+        // Refreshing a key already present never grows the map, so it stays
+        // allowed at the cap; only a brand-new key is refused there.
+        if (_cache.Count < MaxCachedTrees || _cache.ContainsKey(treeId))
+        {
+            _cache[treeId] = config;
+        }
+
         return config;
     }
 

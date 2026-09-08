@@ -34,6 +34,49 @@ public class LatticeSchemaPolicyProviderTests
     }
 
     [Test]
+    public async Task GetCompiledPolicyAsync_distinct_tree_ids_do_not_grow_cache_without_bound()
+    {
+        var store = Substitute.For<ILatticeSchemaPolicyStore>();
+        store.GetPolicyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns((LatticeSchemaPolicy?)null);
+        var provider = CreateProvider(store);
+
+        // Every miss caches a null sentinel, and the key is a caller-supplied tree
+        // id, so an unbounded cache let a caller grow silo memory without limit by
+        // naming an unlimited stream of distinct trees (CWE-770).
+        for (var i = 0; i < LatticeSchemaPolicyProvider.MaxCachedTrees + 500; i++)
+        {
+            Assert.That(await provider.GetCompiledPolicyAsync("tree-" + i), Is.Null);
+        }
+
+        Assert.That(
+            provider.CachedTreeCount,
+            Is.LessThanOrEqualTo(LatticeSchemaPolicyProvider.MaxCachedTrees));
+    }
+
+    [Test]
+    public async Task GetCompiledPolicyAsync_still_resolves_correctly_once_the_cache_is_full()
+    {
+        var store = Substitute.For<ILatticeSchemaPolicyStore>();
+        store.GetPolicyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns((LatticeSchemaPolicy?)null);
+        store.GetPolicyAsync("orders", Arg.Any<CancellationToken>()).Returns(JsonPolicy());
+        var provider = CreateProvider(store);
+
+        for (var i = 0; i < LatticeSchemaPolicyProvider.MaxCachedTrees + 10; i++)
+        {
+            _ = await provider.GetCompiledPolicyAsync("filler-" + i);
+        }
+
+        // The bound must never change an answer: a refused insert costs an extra
+        // store round-trip, it does not make a governed tree look ungoverned.
+        var compiled = await provider.GetCompiledPolicyAsync("orders");
+
+        Assert.That(compiled, Is.Not.Null);
+        Assert.That(compiled!.RuleCount, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task GetCompiledPolicyAsync_ungoverned_tree_returns_null()
     {
         var store = Substitute.For<ILatticeSchemaPolicyStore>();

@@ -18,6 +18,22 @@ internal sealed class ConfiguredLatticeMergeModeResolver : ILatticeMergeModeReso
     private readonly Func<string, LatticeMergeMode?> _factory;
     private readonly IDisposable? _changeSubscription;
 
+    /// <summary>
+    /// The maximum number of per-tree entries retained. The cache key is a tree id
+    /// the caller supplies, and an entry is added for every tree id resolved -
+    /// including unreplicated ids, which cache a null sentinel - so an unbounded
+    /// map grew silo memory without limit as distinct tree ids accumulated
+    /// (CWE-770). The bound is safe because a miss simply re-reads the options, so
+    /// refusing an insert costs a dictionary lookup and never changes the answer.
+    /// </summary>
+    internal const int MaxCachedTrees = 4096;
+
+    /// <summary>
+    /// The number of per-tree entries currently cached. Exposed for unit testing
+    /// that the cache honours <see cref="MaxCachedTrees"/>.
+    /// </summary>
+    internal int CachedTreeCount => _cache.Count;
+
     public ConfiguredLatticeMergeModeResolver(IOptionsMonitor<LatticeReplicationOptions> options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -39,7 +55,21 @@ internal sealed class ConfiguredLatticeMergeModeResolver : ILatticeMergeModeReso
     public LatticeMergeMode? Resolve(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        return _cache.GetOrAdd(treeId, _factory);
+
+        // The hot path stays a single dictionary read; only a miss consults the
+        // cap, and only a brand-new key is refused there.
+        if (_cache.TryGetValue(treeId, out var cached))
+        {
+            return cached;
+        }
+
+        var resolved = _factory(treeId);
+        if (_cache.Count < MaxCachedTrees)
+        {
+            _cache.TryAdd(treeId, resolved);
+        }
+
+        return resolved;
     }
 
     /// <inheritdoc />
