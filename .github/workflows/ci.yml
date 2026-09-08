@@ -476,22 +476,47 @@ jobs:
             echo "::notice::Release version-bump-only change detected; skipping the per-package build/test matrix."
           fi
 
-      # Auto-discover packages by convention: each subdirectory of `src/`
-      # is a package; tests live at `test/{name}/`; docs at `docs/{name}/`.
-      # A package is in scope when any **non-markdown** file under one of
-      # those three subtrees changed. Markdown-only edits (e.g. a design
-      # note) skip that package's test run - the top-level `nonSample`
-      # filter already gates the whole job on at least one non-doc edit
-      # somewhere in the tree, but per-package discovery without the
-      # extension filter would still pull a heavy package's chaos suite into
-      # CI for a markdown-only edit inside its subtree. When no package
-      # matched (e.g. the PR only edits `Orleans.Lattice.slnx` or a shared
-      # root file) we conservatively test every discovered package.
+      # The selector is a script rather than an inline heredoc so it can be run
+      # and asserted over outside a CI run. This self-test is the control that
+      # a planted needle cannot be: a needle proves the selection reaches ONE
+      # package, whereas these assertions quantify over the whole emitted
+      # package list - what is selected, what is not, and why each exclusion is
+      # sound. Both controls are carried; neither substitutes for the other.
+      #
+      # Ungated on purpose. It is pure bash (no restore, no build, seconds), and
+      # a pull request that touches only `.github/workflows/**` sets `code` and
+      # `nonSample` to false, so nothing else in this job would validate a
+      # change to the selector itself.
+      - name: Self-test the package selector
+        run: .github/workflows/select-test-packages-selftest.sh
+
+      # Auto-discover packages by convention: each subdirectory of `src/` is a
+      # package; tests live at `test/{name}/`; docs at `docs/{name}/`.
+      #
+      # A changed **non-markdown** file under one of those three subtrees SEEDS
+      # that package, and the seed set is then expanded along the reverse
+      # ProjectReference edges to every package that could observe the change.
+      # Markdown-only edits (e.g. a design note) seed nothing - the top-level
+      # `nonSample` filter already gates the whole job on at least one non-doc
+      # edit somewhere in the tree, but per-package discovery without the
+      # extension filter would still pull a heavy package's chaos suite into CI
+      # for a markdown-only edit inside its subtree. When no package is seeded
+      # (e.g. the PR only edits `Orleans.Lattice.slnx` or a shared root file) we
+      # conservatively test every discovered package.
+      #
+      # The expansion is what issue #2330 is about. The lexical seed alone made
+      # a change to `src/lattice` - the core library nearly every other package
+      # references - run only `test/lattice`, so a break it caused anywhere else
+      # was indistinguishable from a pass because nothing looked. That is how a
+      # red `test/lattice.api.backup` assertion sat on `main` for an unknown
+      # number of merges (#2329). `lattice.dashboards` had already been
+      # hand-patched into every run for one instance of the same class; the
+      # closure generalises that remedy without retiring it (see the script).
       #
       # Rationale for not using dorny/paths-filter here: its filter set is
-      # static YAML, so adding a new src/{name}/ folder would still require
-      # a workflow edit. The bash discovery below picks up new packages
-      # automatically.
+      # static YAML, so adding a new src/{name}/ folder would still require a
+      # workflow edit. The script picks up new packages - and new project
+      # references - automatically.
       - name: Discover changed packages
         id: discover
         if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
@@ -501,76 +526,64 @@ jobs:
         run: |
           set -euo pipefail
 
-          packages=()
-          for dir in src/*/; do
-            packages+=("$(basename "$dir")")
-          done
-          echo "Discovered packages: ${packages[*]}"
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > /tmp/changed-files.txt
 
-          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          # The report goes to the job summary, not just the log. A green
+          # `build-and-test` says nothing about its own scope - a run over one
+          # package and a run over every package are identical in the check name
+          # - so the run page states which packages were tested and which were
+          # not.
+          .github/workflows/select-test-packages.sh \
+            --changed-file /tmp/changed-files.txt \
+            --report-file "$GITHUB_STEP_SUMMARY" \
+            > /tmp/selected-packages.txt
 
           matched=()
-          for name in "${packages[@]}"; do
-            # Match files under src/<name>/, test/<name>/, or docs/<name>/
-            # whose extension is not .md. A package whose only change is a
-            # markdown file (design note, etc.) is not pulled into
-            # the test matrix - its expensive suites (e.g. chaos) would add
-            # minutes of CI runtime for a docs edit.
-            #
-            # NOTE: the downstream grep must NOT use `-q`. Under
-            # `set -o pipefail`, an early-exiting `grep -q` causes the
-            # upstream `grep -E` to receive SIGPIPE on its next write,
-            # which GNU grep reports as `write error: Broken pipe` and
-            # exit status 141. `pipefail` then propagates 141 as the
-            # pipeline's status, making the `if` skip the body - so the
-            # package with the largest matching diff (the one whose
-            # upstream grep is still flushing when the downstream exits)
-            # gets silently dropped from the test matrix. Letting the
-            # downstream grep read to EOF (no `-q`, redirect output to
-            # /dev/null) keeps the conditional driven solely by grep's
-            # match/no-match exit status (0 / 1) and avoids the race.
-            if echo "$changed" \
-                 | grep -E "^(src|test|docs)/${name}/" \
-                 | grep -vE '\.md$' > /dev/null; then
-              matched+=("$name")
-            fi
-          done
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            matched+=("$name")
+          done < /tmp/selected-packages.txt
 
           if [ ${#matched[@]} -eq 0 ]; then
-            matched=("${packages[@]}")
-            echo "No package-scoped changes detected; testing all packages."
-            # A shared/root change (e.g. Orleans.Lattice.slnx or
-            # Directory.Packages.props) fans out to every package. Signal the
-            # Build step to compile the whole solution in one invocation rather
-            # than looping project-by-project - a single solution build is
-            # faster than N separate builds when the fan-out is total.
+            echo "::error::The package selector produced an empty selection; refusing to report a green run that tested nothing."
+            exit 1
+          fi
+
+          total=$(find src -mindepth 1 -maxdepth 1 -type d | wc -l)
+
+          # One whole-solution build beats looping project-by-project once the
+          # selection is broad: each per-project `dotnet build` pays its own
+          # MSBuild evaluation, and past roughly half the repository the
+          # evaluations cost more than compiling the packages that were not
+          # selected. The threshold only trades speed for speed - building a
+          # superset is always safe, because the `--no-build` test steps below
+          # consume only their own package's outputs - so it is a heuristic, not
+          # a correctness boundary.
+          if [ "${#matched[@]}" -ge $(( (total + 1) / 2 )) ]; then
             echo "build_all=true" >> "$GITHUB_OUTPUT"
           else
             echo "build_all=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # Always test lattice.dashboards. The bundled Grafana dashboards chart
-          # metric instruments owned by OTHER packages' meters (the core
-          # `orleans.lattice` meter and the `orleans.lattice.replication` meter),
-          # and its drift guards in test/lattice.dashboards/DashboardJsonTests.cs
-          # assert BOTH directions: every live instrument is referenced by at
-          # least one panel, and every panel token resolves to a live instrument.
-          # Those guards must therefore run whenever any meter could have changed
-          # - e.g. adding a counter in src/lattice.replication/ - not only when a
-          # dashboards-owned file changes. Under the package-scoped matrix a new
-          # unpaneled counter in another package would otherwise never trip the
-          # guard (the dashboards suite is not in `matched`), which is exactly how
-          # such a gap can reach main. The suite is tiny and fast, so always
-          # including it costs negligibly while closing the cross-package hole.
-          if [ -d "test/lattice.dashboards" ]; then
-            case " ${matched[*]} " in
-              *" lattice.dashboards "*) ;;
-              *) matched+=("lattice.dashboards") ;;
-            esac
-          fi
-
           echo "to_test=${matched[*]}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Testing ${#matched[@]} of ${total} packages."
           echo "Packages to test: ${matched[*]}"
+
+      # The most dangerous denominator is zero. When the matrix is skipped
+      # entirely - a docs-only, samples-only, workflow-only, or version-bump-only
+      # change - the check still reports green, and nothing on the run page says
+      # that no package was built or tested. Say it.
+      - name: Report a skipped test matrix
+        if: steps.filter.outputs.nonSample != 'true' || steps.verbump.outputs.version_only == 'true'
+        run: |
+          {
+            echo "### Test selection: 0 packages"
+            echo
+            echo "The per-package build/test matrix did not run for this change"
+            echo "(docs-only, samples-only, workflow-only, or a release version bump)."
+            echo "A green \`build-and-test\` here means the gates that did run passed,"
+            echo "not that any package's tests were executed."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup .NET
         if: steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || steps.benchmark.outputs.changed == 'true' || (steps.filter.outputs.code == 'true' && steps.verbump.outputs.version_only != 'true')
