@@ -522,40 +522,115 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
 
     internal async Task SetTagsForKeyAsync(string treeId, string key, IReadOnlyList<string> tags, CancellationToken cancellationToken)
     {
-        var desired = new HashSet<string>(StringComparer.Ordinal);
+        // Presized from the tag list: the loop adds at most one entry per tag,
+        // so tags.Count is an exact upper bound on the final population.
+        var desired = new HashSet<string>(tags.Count, StringComparer.Ordinal);
         foreach (var tag in tags)
         {
             ValidateTag(tag);
             desired.Add(tag);
         }
         var current = await GetTagsForKeyAsync(treeId, key, cancellationToken).ConfigureAwait(false);
-        var currentSet = new HashSet<string>(current, StringComparer.Ordinal);
 
-        var toAdd = new List<string>();
-        foreach (var tag in desired)
-        {
-            if (!currentSet.Contains(tag))
-            {
-                toAdd.Add(tag);
-            }
-        }
-        var toRemove = new List<string>();
-        foreach (var tag in currentSet)
-        {
-            if (!desired.Contains(tag))
-            {
-                toRemove.Add(tag);
-            }
-        }
+        ReconcileTagSet(desired, current, out var toAdd, out var toRemove);
 
-        if (toAdd.Count > 0)
+        if (toAdd is not null)
         {
             await AddTagsForKeyAsync(treeId, key, toAdd, cancellationToken).ConfigureAwait(false);
         }
-        if (toRemove.Count > 0)
+        if (toRemove is not null)
         {
             await RemoveTagsForKeyAsync(treeId, key, toRemove, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Tag-set width at or below which membership of the current tag list is
+    /// answered by a linear ordinal scan instead of by building a
+    /// <see cref="HashSet{T}"/>.
+    /// </summary>
+    internal const int LinearTagScanThreshold = 16;
+
+    /// <summary>
+    /// Splits the desired-versus-current tag reconciliation into the tags to
+    /// add and the tags to remove. Both outputs are <see langword="null"/> when
+    /// that side of the reconciliation is empty.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two allocation properties matter here, because this runs once per
+    /// tag-carrying write. First, both partition lists are created lazily: the
+    /// steady state of re-writing a key is "tags unchanged", where both sides
+    /// are empty, and an empty <see cref="List{T}"/> is still a heap object.
+    /// Deferring construction until the first member makes the converged case
+    /// allocate neither list.
+    /// </para>
+    /// <para>
+    /// Second, membership of <paramref name="current"/> is answered by a linear
+    /// ordinal scan rather than by copying it into a <see cref="HashSet{T}"/>.
+    /// A key's tag set is small by construction, and at those widths the scan
+    /// beats the set outright - the set costs a bucket array, an entry array,
+    /// and a hash per probe, purely to answer a handful of comparisons. Above
+    /// <see cref="LinearTagScanThreshold"/> the set is built after all, so the
+    /// quadratic term stays bounded for a pathologically wide tag set. The
+    /// scan is deliberately linear rather than binary: <c>GetTagsForKeyAsync</c>
+    /// happens to return its rows ordinally sorted, but it is typed
+    /// <see cref="IReadOnlyList{T}"/> and publishes no ordering contract, so a
+    /// binary search here would fail silently the day that changes.
+    /// </para>
+    /// </remarks>
+    internal static void ReconcileTagSet(
+        HashSet<string> desired,
+        IReadOnlyList<string> current,
+        out List<string>? toAdd,
+        out List<string>? toRemove)
+    {
+        toAdd = null;
+        toRemove = null;
+
+        HashSet<string>? currentSet = null;
+        if (current.Count > LinearTagScanThreshold)
+        {
+            currentSet = new HashSet<string>(current, StringComparer.Ordinal);
+        }
+
+        foreach (var tag in desired)
+        {
+            var present = currentSet is not null
+                ? currentSet.Contains(tag)
+                : ContainsOrdinal(current, tag);
+            if (!present)
+            {
+                (toAdd ??= []).Add(tag);
+            }
+        }
+
+        // Iterating the row list directly rather than a deduplicated copy is
+        // safe: the key-major mirror stores one row per (treeId, key, tag), so
+        // `current` carries no duplicates to collapse. RemoveRowAsync is
+        // idempotent in any case.
+        for (var i = 0; i < current.Count; i++)
+        {
+            var tag = current[i];
+            if (!desired.Contains(tag))
+            {
+                (toRemove ??= []).Add(tag);
+            }
+        }
+    }
+
+    /// <summary>Ordinal linear membership test over a small tag list.</summary>
+    private static bool ContainsOrdinal(IReadOnlyList<string> values, string value)
+    {
+        for (var i = 0; i < values.Count; i++)
+        {
+            if (string.Equals(values[i], value, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     internal async Task CommitValueWithTagsAsync(string treeId, string key, byte[] value, string[] tags, TagConsistency consistency, CancellationToken cancellationToken)
