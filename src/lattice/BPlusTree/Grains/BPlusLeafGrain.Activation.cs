@@ -2136,12 +2136,26 @@ internal sealed partial class BPlusLeafGrain
     /// Soft cap on <see cref="ReplayCheckpointObservations"/>. Unlike the log
     /// stamps there is no age at which an observation is free to drop - a stall
     /// is detected by comparing against an ARBITRARILY old prior observation -
-    /// so the map is cleared wholesale when it overflows rather than pruned.
-    /// Clearing loses at most one repeat of the fault warning per affected leaf:
-    /// a genuinely stuck leaf re-activates continuously and is re-observed on
-    /// its next attempt.
+    /// so overflow is handled by shedding entries rather than by pruning old
+    /// ones. Which entries are shed is not arbitrary; see
+    /// <see cref="EvictReplayCheckpointObservations"/>.
     /// </summary>
-    private const int ReplayCheckpointObservationCapacity = 8192;
+    internal const int ReplayCheckpointObservationCapacity = 8192;
+
+    /// <summary>
+    /// The point overflow eviction must get the map back below, so that the
+    /// next eviction is at least this many insertions away. Without a low-water
+    /// mark an eviction that freed only a handful of entries would leave the map
+    /// at capacity and re-run its full scan on nearly every subsequent insert.
+    /// </summary>
+    private const int ReplayCheckpointObservationLowWater = ReplayCheckpointObservationCapacity / 2;
+
+    /// <summary>
+    /// Live entry count of <see cref="ReplayCheckpointObservations"/>. Test seam
+    /// only, so the memory bound the capacity exists to enforce can be asserted
+    /// rather than assumed.
+    /// </summary>
+    internal static int ReplayCheckpointObservationCountForTests => ReplayCheckpointObservations.Count;
 
     /// <summary>
     /// Records the checkpoint this leaf partition is replaying from and reports
@@ -2172,7 +2186,7 @@ internal sealed partial class BPlusLeafGrain
         {
             if (ReplayCheckpointObservations.Count >= ReplayCheckpointObservationCapacity)
             {
-                ReplayCheckpointObservations.Clear();
+                EvictReplayCheckpointObservations();
             }
 
             ReplayCheckpointObservations[key] = new ReplayCheckpointObservation(checkpoint, now, 0);
@@ -2185,6 +2199,63 @@ internal sealed partial class BPlusLeafGrain
             true,
             repeats,
             Stopwatch.GetElapsedTime(previous.FirstObservedAt, now));
+    }
+
+    /// <summary>
+    /// Sheds observations when the map overflows, preferring the entries that
+    /// carry NO stall run.
+    /// <para>
+    /// The map previously shed everything wholesale, on the ground that
+    /// "clearing loses at most one repeat of the fault warning per affected
+    /// leaf: a genuinely stuck leaf re-activates continuously and is re-observed
+    /// on its next attempt". That was true when an observation held only a
+    /// checkpoint. It stopped being true when issue #2285 added
+    /// <see cref="ReplayCheckpointObservation.Repeats"/> and
+    /// <see cref="ReplayCheckpointObservation.FirstObservedAt"/>: those are the
+    /// two quantities the stall line now instructs an operator to judge a freeze
+    /// by, and a wholesale clear restarts both, so the stuck leaf re-presents at
+    /// repeat 1 over a zero span - wearing the exact signature of the transient
+    /// burst that #2285 was mistakenly filed over. The observation immediately
+    /// after a clear also compares against nothing, so it reports no stall and
+    /// the counter the same line advertises as "the exact census of the
+    /// condition" is not incremented.
+    /// </para>
+    /// <para>
+    /// The asymmetry that fixes it: a converging entry is fully reconstructed by
+    /// its very next observation, and a stall run is not reconstructible at all -
+    /// it is the accumulated history. So evict the reconstructible entries and
+    /// keep the rest. On a healthy silo virtually every entry is converging, so
+    /// this sheds virtually everything, exactly as before.
+    /// </para>
+    /// <para>
+    /// The wholesale clear survives as the fallback, which is what keeps the cap
+    /// a real bound: if too few entries were reclaimable the map is emptied
+    /// anyway, so a silo whose tracked leaf partitions are overwhelmingly
+    /// stalling degrades to precisely today's behaviour and never grows past
+    /// capacity. The low-water mark is what stops the scan being quadratic - it
+    /// guarantees at least <see cref="ReplayCheckpointObservationLowWater"/>
+    /// insertions before the next eviction, rather than letting an eviction that
+    /// freed a handful of entries leave the map at capacity to re-scan on the
+    /// next insert.
+    /// </para>
+    /// </summary>
+    private static void EvictReplayCheckpointObservations()
+    {
+        foreach (var observation in ReplayCheckpointObservations)
+        {
+            if (observation.Value.Repeats == 0)
+            {
+                // Pair-wise removal, so an entry that acquired a stall run
+                // between this scan reading it and removing it is left alone
+                // rather than silently discarded.
+                ReplayCheckpointObservations.TryRemove(observation);
+            }
+        }
+
+        if (ReplayCheckpointObservations.Count > ReplayCheckpointObservationLowWater)
+        {
+            ReplayCheckpointObservations.Clear();
+        }
     }
 
     /// <summary>
