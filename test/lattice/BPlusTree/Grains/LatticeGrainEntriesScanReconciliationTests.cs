@@ -464,6 +464,48 @@ public class LatticeGrainEntriesScanReconciliationTests
     }
 
     /// <summary>
+    /// A slot can be reconciled by the <em>owner-diff</em> half of a
+    /// reconciliation step (the shard map advanced) before any cursor reports it
+    /// as moved. When a later page then does report it, it is not new work: every
+    /// reported slot is already covered, so the scan must fall through without
+    /// spending another retry. This is the interlock between the two independent
+    /// reconciliation triggers - moved-slot reports and map-version changes - and
+    /// without it a split that both moves a slot and bumps the map would be
+    /// reconciled twice and charged twice against the budget.
+    /// </summary>
+    [Test]
+    public async Task A_slot_already_covered_by_an_owner_diff_is_not_reconciled_again_when_reported_as_moved()
+    {
+        var h = CreateGrain(
+            new LatticeOptions { PrefetchEntriesScan = false, MaxScanRetries = 4 },
+            // Scan starts at v1 ...
+            SingleShardMap(version: 1, 0, 0, 0, 0),
+            // ... the first reconciliation sees v2, whose owner diff covers BOTH
+            // slot 1 (reported moved) and slot 2 (not yet reported) ...
+            SingleShardMap(version: 2, 0, 1, 1, 0),
+            // ... and the map is stable thereafter.
+            SingleShardMap(version: 2, 0, 1, 1, 0));
+
+        ScriptPages(h.Shard,
+            Page(["a"], hasMore: true, movedAwaySlots: [1]),
+            // Slot 2 is reported moved only now - after the owner diff already
+            // covered it.
+            Page(["b"], hasMore: false, movedAwaySlots: [2]));
+        ScriptDrain(h.Shard, Page());
+
+        var keys = await DrainKeysAsync(h.Grain.EntriesAsync());
+
+        Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
+        // Exactly one reconciliation step: the second sighting found every
+        // reported slot already covered and did no work.
+        Assert.That(
+            h.Shard.ReceivedCalls().Count(c =>
+                c.GetMethodInfo().Name == nameof(IShardRootGrain.GetSortedEntriesBatchForSlotsAsync)),
+            Is.EqualTo(1),
+            "an already-covered slot must not trigger a second reconciliation drain");
+    }
+
+    /// <summary>
     /// Cancellation is observed at the merge loop's own check.
     /// </summary>
     [Test]
