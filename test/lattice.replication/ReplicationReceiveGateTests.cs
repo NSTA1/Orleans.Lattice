@@ -59,6 +59,44 @@ public class ReplicationReceiveGateTests
     }
 
     [Test]
+    public async Task Distinct_tree_ids_do_not_grow_the_cache_without_bound()
+    {
+        var (gate, fence) = CreateGate();
+        fence.IsPausedAsync().Returns(Task.FromResult(false));
+
+        // Entries carry an expiry but were never removed, so the map grew by one
+        // permanent entry per distinct tree id ever applied - including trees
+        // since deleted - letting a peer shipping an unlimited stream of distinct
+        // tree ids grow silo memory without bound (CWE-770).
+        for (var i = 0; i < ReplicationReceiveGate.MaxCachedTrees + 500; i++)
+        {
+            _ = await gate.IsReceivePausedAsync("tree-" + i);
+        }
+
+        Assert.That(
+            gate.CachedTreeCount,
+            Is.LessThanOrEqualTo(ReplicationReceiveGate.MaxCachedTrees));
+    }
+
+    [Test]
+    public async Task Still_reports_the_authoritative_answer_once_the_cache_is_full()
+    {
+        var (gate, fence) = CreateGate();
+        fence.IsPausedAsync().Returns(Task.FromResult(false));
+
+        for (var i = 0; i < ReplicationReceiveGate.MaxCachedTrees + 10; i++)
+        {
+            _ = await gate.IsReceivePausedAsync("filler-" + i);
+        }
+
+        // A refused insert only costs an extra grain call; it must never mask an
+        // engaged fence, which would let deferred entries apply during a pause.
+        fence.IsPausedAsync().Returns(Task.FromResult(true));
+
+        Assert.That(await gate.IsReceivePausedAsync("orders-late"), Is.True);
+    }
+
+    [Test]
     public void Rejects_null_or_empty_tree()
     {
         var (gate, _) = CreateGate();
