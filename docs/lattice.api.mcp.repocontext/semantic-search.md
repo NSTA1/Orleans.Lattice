@@ -121,6 +121,25 @@ Arming is idempotent. A coordinator that finds its index already built still per
 
 **Multi-silo note.** A coordinator is a single cluster-wide activation, and the in-memory index a query is served from is per silo. On a multi-silo host the coordinator's silo is warmed with no query; another silo opens its own handle on its first query, which is a **reload** of the already-built index rather than a rebuild. The expensive half - streaming the corpus - is paid once, off the request path, whichever silo hosts the coordinator.
 
+### Observing whether the sweep is running
+
+The sweep is the sole backstop for an already-onboarded host: the self-index grain arms a coordinator directly only on an indexing pass, so a container restored from a volume with nothing left to index depends entirely on the periodic sweep. That made its silence expensive. Every state of the sweep used to log at debug or not at all, so a host running at information level emitted **nothing** whether the sweep was arming successfully, throwing on every attempt and backing off forever, or had never started - three states behind one observation. On the deployed container that presented as a plane that never left `bootstrapping`, with no signal anywhere able to say which state produced it.
+
+Two signals separate them, and neither does alone:
+
+| Signal | Kind | What it settles |
+| --- | --- | --- |
+| `Repository-context approximate-index build sweep entered` | one information line, written unconditionally ahead of every branch | **Whether the loop started at all.** Present means the service executed, and the line names the scheduling decision; absent means it never ran. |
+| `repocontext.ann.sweep` | counter, tag `outcome` = `armed` \| `empty` \| `faulted` | **What the loop is doing.** Every sweep that runs is counted, so the total advances once per sweep interval. |
+
+The counter deliberately cannot answer the first question. A loop that never runs emits no measurements, so all three of its series read zero exactly as they do on a host that has only just come up. That gap is closed by the startup line, not by any counter the loop could carry, which is why the line is emitted before the scheduling branch rather than inside one.
+
+Because the partition is total, a zero is readable. `armed` at zero beside a rising `faulted` is a **measured** absence of arming - the sweep is alive, it is throwing, and nothing is being scheduled - which is a different and much stronger claim than `armed` reading zero on its own. The `empty` arm exists for its own reason: a sweep that finds no repository to arm completes cleanly, settles into the long cadence and schedules nothing, so folding it into `armed` would leave "the plane never builds because nothing is registered" indistinguishable from "the plane never builds for some other reason".
+
+The scheduling decision the startup line carries names **every** condition currently blocking scheduling rather than the first one found. The sentence it replaced named the disjunction - switch disabled, exact retrieval configured, or no embedding provider bound - which left an operator to work out which disjunct held, and then to discover only on the next restart that another had held too.
+
+Faults are announced once per episode rather than once per attempt. The first fault of a run is a warning carrying the exception; its repetitions go to the counter, because the retry backoff tops out at thirty seconds and an unconditional line would write roughly 2,880 of them a day for as long as the fault lasted. A sweep that completes after one or more faults logs a closing line reporting how long the episode ran, so an episode that has ended is distinguishable from one still in progress.
+
 ### When the exact fallback is declined
 
 The exact fallback is bounded rather than unconditional, because on a large corpus it can cost more than it is worth while the build holds the same tree. The gather range-scans the whole vector-metadata prefix a page at a time, and while the build is streaming into those same shards a page fill can queue behind the build's writes on non-reentrant shard roots until it exceeds `LatticeOptions.MaxScanPageStallDuration` and the shard root abandons it. The query then reaches keyword recall anyway, having spent the full ceiling first, and having spent it loading the very tree whose build completing is the only thing that would end the condition.

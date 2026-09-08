@@ -176,6 +176,13 @@ public sealed class TenantMetricDimensionHygieneTests
         "_readySeconds",
         "_replacedCounter",
         "_responseCounter",
+        // repocontext.ann.sweep - approximate-index build sweeps partitioned by
+        // outcome. The sweep is a single HOST-PROCESS background loop over every
+        // registered repository, not per-tenant work: one iteration covers them all
+        // and either completes or throws for all of them together, so a tenant tag
+        // would partition a series that cannot vary by tenant. The outcome tag is the
+        // dimension that carries the signal.
+        "_annSweeps",
         // repocontext.retrieval.unavailable - vector-plane fault episodes. Same reason:
         // the plane is unavailable for the whole process, not for one tenant.
         "_unavailable",
