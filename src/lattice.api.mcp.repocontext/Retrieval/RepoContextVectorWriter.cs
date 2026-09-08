@@ -1078,10 +1078,12 @@ internal sealed class RepoContextVectorWriter
             "Repo-context membership probe for '{RepoId}': "
             + "requested={Requested} returned={Returned} accounted={Accounted} "
             + "embedded={Embedded} contentless={Contentless} memoryMarker={MemoryMarker} "
-            + "disabled={Disabled} unparseable={Unparseable} notReturned={NotReturned}. "
+            + "disabled={Disabled} unparseable={Unparseable} notReturned={NotReturned} "
+            + "unrequested={Unrequested}. "
             + "A not-returned key is read as an absent presence flag, so an incomplete read is "
             + "indistinguishable from a genuinely unembedded source and re-selects it for embedding; "
-            + "an unparseable key was written by this writer and cannot be read back.";
+            + "an unparseable key was written by this writer and cannot be read back; "
+            + "an unrequested row is one the store returned that this probe never asked for.";
 
         if (accounting.IsAnomalous)
         {
@@ -1096,7 +1098,8 @@ internal sealed class RepoContextVectorWriter
                 accounting.MemoryMarker,
                 accounting.Disabled,
                 accounting.Unparseable,
-                accounting.NotReturned);
+                accounting.NotReturned,
+                accounting.Unrequested);
             return;
         }
 
@@ -1116,7 +1119,8 @@ internal sealed class RepoContextVectorWriter
             accounting.MemoryMarker,
             accounting.Disabled,
             accounting.Unparseable,
-            accounting.NotReturned);
+            accounting.NotReturned,
+            accounting.Unrequested);
     }
 
     private static async Task ProbeBatchAsync(
@@ -1129,12 +1133,34 @@ internal sealed class RepoContextVectorWriter
     {
         accounting.Requested += keys.Count;
         var found = await tree.GetManyAsync(keys, cancellationToken).ConfigureAwait(false);
+        var requested = new HashSet<string>(keys, StringComparer.Ordinal);
         var seen = new HashSet<string>(keys.Count, StringComparer.Ordinal);
         var returned = 0;
         foreach (var (key, value) in found)
         {
             returned++;
             seen.Add(key);
+
+            // A contract assertion against the STORE, and the only way the category
+            // partition can fail to add up. It is not a check on this method's own
+            // arithmetic: the categories below are exhaustive over returned rows and
+            // NotReturned is the exact complement over requested keys, so
+            // (Accounted - Requested) is identically the number of rows returned that
+            // nobody asked for. It is counted directly rather than inferred from that
+            // subtraction for the same reason issue #2287 counted NotReturned per key
+            // instead of as (requested - returned): an observable number survives a
+            // later edit to the categories, an arithmetic identity silently does not.
+            //
+            // Unreachable through today's ILattice.GetManyAsync, whose read-path key
+            // filter can only REMOVE keys, so the returned set is a subset of the
+            // requested one. That makes this a cross-component contract assertion
+            // rather than dead code, and an unrequested row is not benign: it would be
+            // folded into the embedded set below and mark a source covered that this
+            // probe never asked about.
+            if (!requested.Contains(key))
+            {
+                accounting.Unrequested++;
+            }
 
             // Split what used to be one short-circuited condition into its two
             // arms. The CLASSIFICATION is unchanged - a disabled flag and an
@@ -1211,9 +1237,13 @@ internal sealed class RepoContextVectorWriter
     /// </para>
     /// <para>
     /// The invariant is that the categories partition the request exactly:
-    /// <see cref="Accounted"/> equals <see cref="Requested"/>. A shortfall is not
+    /// <see cref="Accounted"/> equals <see cref="Requested"/>. A SHORTFALL is not
     /// possible by construction here, which is the point - it makes
-    /// <see cref="NotReturned"/> an observable number rather than an inference.
+    /// <see cref="NotReturned"/> an observable number rather than an inference. An
+    /// EXCESS is possible, and is the single way the invariant can break: it means
+    /// the store returned a row that was never requested. That is a property of the
+    /// collaborator rather than of this class, so it is counted directly as
+    /// <see cref="Unrequested"/> rather than left to be inferred from the subtraction.
     /// </para>
     /// </summary>
     private sealed class MembershipProbeAccounting
@@ -1248,13 +1278,37 @@ internal sealed class RepoContextVectorWriter
         /// </summary>
         public int NotReturned { get; set; }
 
+        /// <summary>
+        /// Rows the store returned whose key was not in the requested batch.
+        /// <para>
+        /// An overlay counter, deliberately NOT one of the partition categories: an
+        /// unrequested row is also classified into exactly one category above, so
+        /// folding this into <see cref="Accounted"/> would break the identity it
+        /// exists to make observable. It is exactly the excess,
+        /// <see cref="Accounted"/> minus <see cref="Requested"/>.
+        /// </para>
+        /// </summary>
+        public int Unrequested { get; set; }
+
         /// <summary>The sum of the categories, which must equal <see cref="Requested"/>.</summary>
         public int Accounted
             => Embedded + Contentless + MemoryMarker + Disabled + Unparseable + NotReturned;
 
         /// <summary>
         /// Whether this probe saw something that has no benign reading: a key the
-        /// writer wrote and cannot read back, or a partition that does not add up.
+        /// writer wrote and cannot read back (<see cref="Unparseable"/>), or a row the
+        /// store returned that was never asked for (<see cref="Unrequested"/>).
+        /// <para>
+        /// Both arms are cross-component contract assertions, and neither is reachable
+        /// through a correctly behaving store. That is the intended state rather than
+        /// evidence the test is vacuous. The second arm previously read
+        /// <c>Accounted != Requested</c>, which tests the identical condition but
+        /// states it as an arithmetic identity over this class's own fields, so it
+        /// scanned as a self-check that could not fail and invited deletion on that
+        /// reading. Naming the number it was actually looking for keeps the assertion
+        /// and removes the misreading; see <see cref="Unrequested"/> for why the two
+        /// are equivalent.
+        /// </para>
         /// <para>
         /// <see cref="NotReturned"/> is deliberately NOT part of this test. A source
         /// with no presence flag is exactly a source that has not been embedded, which
@@ -1266,7 +1320,7 @@ internal sealed class RepoContextVectorWriter
         /// DENOMINATOR and the breakdown, not an alarm.
         /// </para>
         /// </summary>
-        public bool IsAnomalous => Unparseable > 0 || Accounted != Requested;
+        public bool IsAnomalous => Unparseable > 0 || Unrequested > 0;
     }
 
     /// <summary>
