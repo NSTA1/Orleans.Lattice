@@ -140,6 +140,19 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// </summary>
     private readonly ConcurrentDictionary<string, IReadOnlySet<string>> _lastGapLanded = new();
 
+    /// <summary>
+    /// The file arm's per-repository cross-pass gap-selection history, kept because
+    /// the ingestor is a singleton. It exists purely to instrument the
+    /// never-converging back-fill of issue #2208: on each pass it measures how this
+    /// pass's gap selection overlaps the previous pass, how the rolling union of
+    /// gap-selected files grows against the walked corpus, and how many files the
+    /// previous pass both selected and LANDED are being re-selected now - the file-arm
+    /// reading of the symbol arm's re-embed-loop signature. It is diagnostic state
+    /// only: nothing here gates, defers, or changes what the arm embeds, so a live
+    /// deployment can be read without altering the very behaviour under measurement.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, FileGapHistory> _fileGapHistory = new();
+
     /// <summary>Creates the embedding vector ingestor.</summary>
     /// <param name="writer">The writer that persists vectors onto the reserved trees. Must not be <see langword="null"/>.</param>
     /// <param name="grainFactory">The grain factory used to enumerate the symbol tree for symbol embedding. Must not be <see langword="null"/>.</param>
@@ -247,11 +260,6 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var toEmbed = coverageProbeFailed
             ? new List<RepoFileEntry>(changedFiles)
             : SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles, out gapsSelected, out gapSelectedFiles);
-        if (gapSelectedFiles.Count > 0)
-        {
-            LogGapSelection(repoId, gapSelectedFiles);
-        }
-
         if (toEmbed.Count == 0)
         {
             return new RepoFileVectorIngestOutcome(0, gapsSelected, !coverageProbeFailed);
@@ -304,8 +312,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             sources.Add(new EmbeddingSource(sourceKey, windows));
         }
 
-        var embedded = await EmbedAndStoreAsync(repoId, sources, onProgress, cancellationToken)
+        var embedOutcome = await EmbedAndStoreReportingLandedAsync(repoId, sources, onProgress, cancellationToken)
             .ConfigureAwait(false);
+        var embedded = embedOutcome.Landed.Count;
 
         // The contentless markers are the file arm's equivalent bookkeeping: losing
         // them costs a redundant re-read of an empty file next pass, never
@@ -344,15 +353,24 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 repoId);
         }
 
-        // Diagnostic read-back: with this pass's vectors and contentless markers now
-        // written, re-probe the coverage of exactly the gap files just embedded. This
-        // is the immediate, in-pass arm of the (a)-versus-(b) discriminator - it says
-        // whether the write is readable now - which the cross-pass set-digest above
-        // then completes over the next quiet pass.
+        // Diagnostic instrumentation for the never-converging back-fill (issue #2208).
+        // With this pass's vectors and contentless markers now written, measure the
+        // shape of the gap selection directly: how it overlaps the previous pass, how
+        // its rolling union grows against the walked corpus, and - the sharpest
+        // signal - how many files the PREVIOUS pass both selected and LANDED are being
+        // re-selected now. That last is the symbol arm's re-embed-loop signature
+        // (DetectStalledGapProgress, issues #2071/#2078): a write that returned
+        // success but is not observable on the next pass. The file arm carries no such
+        // detector; this only measures it, changing neither what is embedded nor the
+        // pass outcome, so a live box can be read without altering what it is doing.
         if (gapSelectedFiles.Count > 0)
         {
-            await LogGapCoverageReadBackAsync(repoId, gapSelectedFiles, cancellationToken)
-                .ConfigureAwait(false);
+            await LogGapDiagnosticsAsync(
+                repoId,
+                gapSelectedFiles,
+                embedOutcome.Landed,
+                walkedFiles: changedFiles.Count + unchangedFiles.Count,
+                cancellationToken).ConfigureAwait(false);
         }
 
         return new RepoFileVectorIngestOutcome(embedded, gapsSelected, !coverageProbeFailed);
@@ -1056,19 +1074,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// still tell a wholly broken arm from a productive one. Surfacing it after a
     /// partial pass would keep a run that genuinely advanced permanently red.
     /// </para>
-    /// </summary>
-    private async Task<int> EmbedAndStoreAsync(
-        string repoId,
-        IReadOnlyList<EmbeddingSource> sources,
-        Func<int, CancellationToken, ValueTask>? onProgress,
-        CancellationToken cancellationToken)
-        => (await EmbedAndStoreReportingLandedAsync(repoId, sources, onProgress, cancellationToken)
-            .ConfigureAwait(false)).Landed.Count;
-
-    /// <summary>
-    /// The variant of <see cref="EmbedAndStoreAsync"/> that reports <b>which</b>
-    /// sources actually landed, rather than only how many.
     /// <para>
+    /// It reports <b>which</b> sources actually landed rather than only how many.
     /// A caller that records a marker per source needs the identities, not a
     /// count: marking a source whose batch failed would assert an embedding that
     /// does not exist. The memory arm's embedded-key marker is exactly that kind
@@ -1383,88 +1390,246 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     }
 
     /// <summary>
-    /// Emits the identity of the unchanged files the back-fill selected as uncovered
-    /// gaps this pass, so two consecutive quiet passes can be compared. The pass log
-    /// already reports the gap <i>count</i>, but a flat count discriminates nothing:
-    /// re-embedding the same files every pass (a broken presence check) and
-    /// re-embedding a different set every pass (ongoing vector loss) both hold the
-    /// count flat. The order-independent set-digest makes the two distinguishable
-    /// from the logs alone, without adding per-file logging to the hot path.
-    /// Diagnostic only; it never changes what is embedded.
+    /// Records this pass's gap selection into the per-repository history and emits the
+    /// shape of the never-converging back-fill (issue #2208) as two structured lines,
+    /// so a live deployment answers what the per-pass count cannot. Diagnostic only -
+    /// it changes neither what is embedded nor the pass outcome - and best-effort: any
+    /// probe failure is logged and swallowed.
+    /// <para>
+    /// The first line is the <b>set shape</b> the field data calls for: the count and
+    /// order-independent digest of this pass's gaps, the overlap with the previous pass
+    /// (with the entered/left fringe), and the rolling union of gap-selected files
+    /// across passes measured against the walked corpus. A union that stays small means
+    /// the churn is confined to a stable-ish subset; a union climbing toward the corpus
+    /// means the store is losing writes across the whole repository.
+    /// </para>
+    /// <para>
+    /// The second line is the <b>durability signal</b>: how many files the previous
+    /// pass both selected AND landed (embedded with membership recorded) are being
+    /// re-selected now, paired with an immediate coverage read-back of this pass's
+    /// gaps. This is the file-arm reading of the symbol arm's re-embed-loop signature
+    /// (<see cref="DetectStalledGapProgress"/>, issues #2071/#2078). A majority
+    /// re-selected while the immediate read-back sees them covered is a write that lands
+    /// but does not stay observable - the WAL-replay-budget loop, which the file arm has
+    /// no backoff for; a low read-back is a write that is not durable.
+    /// </para>
     /// </summary>
-    private void LogGapSelection(string repoId, IReadOnlyList<RepoFileEntry> gapSelectedFiles)
-    {
-        const int SampleSize = 16;
-        var sample = gapSelectedFiles
-            .Select(static file => file.RelativePath)
-            .OrderBy(static path => path, StringComparer.Ordinal)
-            .Take(SampleSize)
-            .ToArray();
-
-        _logger.LogInformation(
-            "Repo {RepoId}: embedding back-fill selected {GapCount} unchanged file(s) as uncovered gaps "
-            + "(order-independent set-digest {GapDigest}; sample of up to {SampleSize}: {GapSample}). "
-            + "A stable digest across consecutive quiet passes means the same files are re-embedded every "
-            + "pass (a broken presence check); a changing digest means a rotating set (ongoing vector loss).",
-            repoId,
-            gapSelectedFiles.Count,
-            GapSetDigest(repoId, gapSelectedFiles).ToString("x16"),
-            SampleSize,
-            string.Join(", ", sample));
-    }
-
-    /// <summary>
-    /// Immediately re-probes the coverage of exactly the files this pass just
-    /// embedded as gaps, asking the same covered-set question the next pass's
-    /// selection asks. If the just-written coverage is already visible here yet the
-    /// next quiet pass still re-selects the same files, the write landed and the
-    /// fault is a stale presence read; if it is <i>not</i> visible on this immediate
-    /// re-probe, the membership write is not durably readable and the re-embedding is
-    /// correct behaviour masking a durability defect. Best-effort and diagnostic: a
-    /// probe failure is logged and swallowed so it can never take a successful pass
-    /// down.
-    /// </summary>
-    private async Task LogGapCoverageReadBackAsync(
-        string repoId, IReadOnlyList<RepoFileEntry> gapSelectedFiles, CancellationToken cancellationToken)
+    private async Task LogGapDiagnosticsAsync(
+        string repoId,
+        IReadOnlyList<RepoFileEntry> gapSelectedFiles,
+        IReadOnlyCollection<string> landedKeys,
+        int walkedFiles,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var keys = new List<string>(gapSelectedFiles.Count);
+            var selectedKeys = new HashSet<string>(StringComparer.Ordinal);
             foreach (var file in gapSelectedFiles)
             {
-                keys.Add(RepoContextKeys.File(repoId, file.RelativePath));
+                selectedKeys.Add(RepoContextKeys.File(repoId, file.RelativePath));
             }
 
-            var covered = await _writer.ProbeCoveredSourceIdsAsync(repoId, keys, cancellationToken)
-                .ConfigureAwait(false);
-
-            var visible = 0;
-            foreach (var key in keys)
+            // Only the gap files that actually landed this pass, mirroring the symbol
+            // arm's rule that the next pass compares against work that reported success.
+            var landedFromGap = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var key in landedKeys)
             {
-                if (covered.Contains(VectorCodec.SourceId(key)))
+                if (selectedKeys.Contains(key))
                 {
-                    visible++;
+                    landedFromGap.Add(key);
                 }
             }
 
+            var history = _fileGapHistory.GetOrAdd(repoId, static _ => new FileGapHistory());
+            var stats = history.Observe(selectedKeys, landedFromGap, walkedFiles);
+
+            const int SampleSize = 16;
+            var sample = gapSelectedFiles
+                .Select(static file => file.RelativePath)
+                .OrderBy(static path => path, StringComparer.Ordinal)
+                .Take(SampleSize)
+                .ToArray();
+
             _logger.LogInformation(
-                "Repo {RepoId}: embedding back-fill coverage read-back: {Visible} of {GapCount} just-embedded "
-                + "gap file(s) are covered on an immediate re-probe. All covered means the write is readable and "
-                + "a persistent next-pass gap is a stale presence check; fewer than all means the just-written "
-                + "coverage is not durably readable (ongoing vector loss).",
+                "Repo {RepoId}: back-fill gap set shape. selected={GapCount} digest={GapDigest}; vs previous "
+                + "selected={PrevCount}: overlap={Overlap} entered={Entered} left={Left}; rolling union={UnionSize} "
+                + "over {Passes} pass(es) against {WalkedFiles} walked file(s){UnionNote}. sample: {GapSample}",
                 repoId,
-                visible,
-                gapSelectedFiles.Count);
+                stats.CurrentCount,
+                GapSetDigest(repoId, gapSelectedFiles).ToString("x16"),
+                stats.PreviousCount,
+                stats.Overlap,
+                stats.Entered,
+                stats.Left,
+                stats.UnionCount,
+                stats.Passes,
+                walkedFiles,
+                stats.UnionSaturated ? " (union tracking saturated)" : string.Empty,
+                string.Join(", ", sample));
+
+            int visibleNow;
+            try
+            {
+                var covered = await _writer
+                    .ProbeCoveredSourceIdsAsync(repoId, selectedKeys.ToList(), cancellationToken)
+                    .ConfigureAwait(false);
+                visibleNow = 0;
+                foreach (var key in selectedKeys)
+                {
+                    if (covered.Contains(VectorCodec.SourceId(key)))
+                    {
+                        visibleNow++;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: back-fill coverage read-back probe failed; the durability signal for this "
+                    + "pass is unavailable but the pass is unaffected.",
+                    repoId);
+                return;
+            }
+
+            _logger.LogInformation(
+                "Repo {RepoId}: back-fill durability signal. of {PrevLanded} file(s) the previous pass embedded "
+                + "AND recorded, {LandedRepeats} are re-selected now; immediate coverage read-back sees "
+                + "{VisibleNow} of {GapCount} of this pass's gaps as covered. A majority re-selected with a high "
+                + "read-back is a write that lands but does not stay observable (the WAL-replay-budget re-embed "
+                + "loop, cf. issues #2071/#2078 on the symbol arm, which the file arm has no backoff for); a low "
+                + "read-back is a write that is not durable.",
+                repoId,
+                stats.PreviousLanded,
+                stats.LandedRepeats,
+                visibleNow,
+                stats.CurrentCount);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(
                 ex,
-                "Repo {RepoId}: embedding back-fill coverage read-back probe failed; it is diagnostic only and "
-                + "does not affect the pass.",
+                "Repo {RepoId}: back-fill gap diagnostics failed; diagnostic only and the pass is unaffected.",
                 repoId);
         }
     }
+
+    /// <summary>
+    /// The file arm's per-repository cross-pass gap-selection history. All access is
+    /// serialized on the instance because, although reconcile passes for one
+    /// repository run one at a time, the ingestor is a singleton and nothing in the
+    /// type system enforces that. Purely diagnostic (issue #2208).
+    /// </summary>
+    internal sealed class FileGapHistory
+    {
+        /// <summary>
+        /// A ceiling on the rolling union so a pathological loss case that keeps
+        /// selecting fresh files cannot grow the set without bound. Well above any
+        /// real corpus, so it never clips a genuine measurement; when exceeded the
+        /// count alone still tells the story and the line is flagged saturated.
+        /// </summary>
+        internal const int MaxUnionTracked = 200_000;
+
+        private readonly object _gate = new();
+        private readonly HashSet<string> _union = new(StringComparer.Ordinal);
+        private HashSet<string> _previousSelected = new(StringComparer.Ordinal);
+        private HashSet<string> _previousLanded = new(StringComparer.Ordinal);
+        private int _passes;
+        private bool _unionSaturated;
+
+        /// <summary>
+        /// Folds one pass's gap selection into the history and returns its shape
+        /// relative to the previous pass and the accumulated union.
+        /// </summary>
+        /// <param name="selectedKeys">The canonical source keys this pass selected as gaps.</param>
+        /// <param name="landedFromGap">The subset of <paramref name="selectedKeys"/> that landed this pass.</param>
+        /// <param name="walkedFiles">The number of files walked this pass, for the union-versus-corpus reading.</param>
+        /// <returns>The measured shape of this pass.</returns>
+        internal FileGapStats Observe(
+            HashSet<string> selectedKeys, HashSet<string> landedFromGap, int walkedFiles)
+        {
+            ArgumentNullException.ThrowIfNull(selectedKeys);
+            ArgumentNullException.ThrowIfNull(landedFromGap);
+
+            lock (_gate)
+            {
+                var overlap = 0;
+                foreach (var key in selectedKeys)
+                {
+                    if (_previousSelected.Contains(key))
+                    {
+                        overlap++;
+                    }
+                }
+
+                var landedRepeats = 0;
+                foreach (var key in _previousLanded)
+                {
+                    if (selectedKeys.Contains(key))
+                    {
+                        landedRepeats++;
+                    }
+                }
+
+                if (!_unionSaturated)
+                {
+                    foreach (var key in selectedKeys)
+                    {
+                        if (_union.Count >= MaxUnionTracked)
+                        {
+                            _unionSaturated = true;
+                            break;
+                        }
+
+                        _union.Add(key);
+                    }
+                }
+
+                _passes++;
+                var stats = new FileGapStats(
+                    CurrentCount: selectedKeys.Count,
+                    PreviousCount: _previousSelected.Count,
+                    Overlap: overlap,
+                    Entered: selectedKeys.Count - overlap,
+                    Left: _previousSelected.Count - overlap,
+                    PreviousLanded: _previousLanded.Count,
+                    LandedRepeats: landedRepeats,
+                    UnionCount: _union.Count,
+                    Passes: _passes,
+                    WalkedFiles: walkedFiles,
+                    UnionSaturated: _unionSaturated);
+
+                _previousSelected = selectedKeys;
+                _previousLanded = landedFromGap;
+                return stats;
+            }
+        }
+    }
+
+    /// <summary>The measured shape of one file-arm gap-selection pass (issue #2208).</summary>
+    /// <param name="CurrentCount">Gap files selected this pass.</param>
+    /// <param name="PreviousCount">Gap files selected the previous pass.</param>
+    /// <param name="Overlap">Files selected both this pass and the previous pass.</param>
+    /// <param name="Entered">Files selected this pass that were not selected the previous pass.</param>
+    /// <param name="Left">Files selected the previous pass that are not selected this pass.</param>
+    /// <param name="PreviousLanded">Files the previous pass both selected and landed.</param>
+    /// <param name="LandedRepeats">Previously-landed files being re-selected this pass - the re-embed-loop signature.</param>
+    /// <param name="UnionCount">Distinct files selected across all observed passes.</param>
+    /// <param name="Passes">Passes observed for this repository.</param>
+    /// <param name="WalkedFiles">Files walked this pass, for reading the union against the corpus.</param>
+    /// <param name="UnionSaturated">Whether the union hit its tracking ceiling.</param>
+    internal readonly record struct FileGapStats(
+        int CurrentCount,
+        int PreviousCount,
+        int Overlap,
+        int Entered,
+        int Left,
+        int PreviousLanded,
+        int LandedRepeats,
+        int UnionCount,
+        int Passes,
+        int WalkedFiles,
+        bool UnionSaturated);
 
     /// <inheritdoc />
     public async Task RetireAsync(
