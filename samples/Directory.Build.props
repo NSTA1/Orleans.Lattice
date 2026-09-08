@@ -1,6 +1,14 @@
 <Project>
 
   <!--
+    Import the root Directory.Build.props first. MSBuild imports only the
+    nearest Directory.Build.props above each project, so without this explicit
+    parent import the repository-wide settings there (WarningsAsErrors) would be
+    shadowed for every project under samples/.
+  -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!--
     Sample code is not the subject of the coverage report, exactly like the
     test tree (see test/Directory.Build.props). The samples under samples/ are
     illustrative host apps and their supporting projects, not the product

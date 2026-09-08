@@ -1,6 +1,14 @@
 <Project>
 
   <!--
+    Import the root Directory.Build.props first. MSBuild imports only the
+    nearest Directory.Build.props above each project, so without this explicit
+    parent import the repository-wide settings there (WarningsAsErrors) would be
+    shadowed for every project under test/.
+  -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!--
     Test code is not the subject of the coverage report: coverlet's "XPlat Code
     Coverage" collector instruments every assembly loaded by the test host,
     including the test projects and the shared Orleans.Lattice.Testing helper
