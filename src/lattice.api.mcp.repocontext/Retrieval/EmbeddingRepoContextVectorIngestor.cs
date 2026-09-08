@@ -450,7 +450,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 coverageProbeFailed ? "failed" : "succeeded");
         }
 
-        return new RepoFileVectorIngestOutcome(embedded, gapsSelected, !coverageProbeFailed);
+        return new RepoFileVectorIngestOutcome(embedded, gapsSelected, !coverageProbeFailed, embedOutcome.Saturated);
     }
 
     /// <inheritdoc />
@@ -1215,6 +1215,50 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var saturated = false;
         Exception? firstBatchFailure = null;
         var pendingMembers = new List<string>();
+
+        // Naming a failed batch's sources is what separates a deterministic write
+        // fault - a key range served by a permanently stalled leaf, say - from
+        // ordinary contention that will drain, and that ambiguity is what left the
+        // never-converging back-fill unattributed for four rounds of investigation
+        // (issue #2208). Both failure paths need it, so both compute it the same way.
+        // Units are contiguous per source, so comparing against the last key
+        // deduplicates without a set.
+        List<string> NameBatchSources(int from, int length)
+        {
+            var batchSources = new List<string>();
+            for (var i = 0; i < length; i++)
+            {
+                var ownerKey = sources[unitOwner[from + i]].SourceKey;
+                if (batchSources.Count == 0 || !string.Equals(batchSources[^1], ownerKey, StringComparison.Ordinal))
+                {
+                    batchSources.Add(ownerKey);
+                }
+            }
+
+            return batchSources;
+        }
+
+        // Consecutive failures mean the vector plane is saturated, not that one batch
+        // was unlucky. Driving the remaining batches into it adds load to a store that
+        // is already failing and lands nothing, so the arm stops here and lets the next
+        // reconcile retry from a quieter store. Whatever already landed is kept, and
+        // every deferred source is simply unmarked, so the next pass picks it up.
+        // The stage word keeps the two failure kinds distinguishable in the log while
+        // rendering the record case exactly as it did before.
+        void ReportSaturationDeferral(int from, int length, string stage)
+        {
+            var deferred = unitTexts.Count - (from + length);
+            _logger.LogWarning(
+                "Repo {RepoId}: {Failures} consecutive {Arm}-arm batches failed to {Stage}; the vector plane "
+                + "looks saturated, so deferring the remaining {Deferred} passage(s) to the next reconcile "
+                + "rather than adding load.",
+                repoId,
+                consecutiveBatchFailures,
+                arm,
+                stage,
+                deferred < 0 ? 0 : deferred);
+        }
+
         for (var start = 0; start < unitTexts.Count; start += EmbedBatchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1226,12 +1270,38 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 .ConfigureAwait(false);
             if (!result.Succeeded || result.Vectors.Count != count)
             {
-                _logger.LogInformation(
-                    "Bootstrap vectorisation for repository {RepoId} ({Arm} arm) skipped a batch of {Count} passage(s): the embedding call did not succeed ({Error}). Those sources fall back to keyword recall.",
+                // An embedding call that fails strands exactly the sources carrying a
+                // unit in this batch: none of them reaches a full slot set, so none
+                // completes, none has its membership recorded, and the always-on gap
+                // sweep re-selects every one of them on every later pass. That is the
+                // same loss a record failure causes, so it is accounted the same way.
+                // Before this it incremented neither counter, so it could not trip the
+                // saturation break however many times it fired, and it was logged at
+                // Information - which made a partial failure silent, since the batches
+                // that did land suppress the arm's "no embedding batch succeeded" line
+                // and leave a healthy-looking outcome behind (issue #2272).
+                var failedSources = NameBatchSources(start, count);
+                failedBatches++;
+                consecutiveBatchFailures++;
+
+                _logger.LogWarning(
+                    "Repo {RepoId}: the {Arm} arm could not embed a batch of {Count} passage(s) spanning "
+                    + "{Sources} source(s): the embedding call did not succeed ({Error}). They stay unmarked "
+                    + "and are retried on the next reconcile. sample: {Sample}",
                     repoId,
                     arm,
                     count,
-                    result.Error ?? "no vectors returned");
+                    failedSources.Count,
+                    result.Error ?? "no vectors returned",
+                    string.Join(", ", failedSources.Take(6)));
+
+                if (consecutiveBatchFailures >= MaxConsecutiveBatchFailures)
+                {
+                    saturated = true;
+                    ReportSaturationDeferral(start, count, "embed");
+                    break;
+                }
+
                 continue;
             }
 
@@ -1297,24 +1367,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 consecutiveBatchFailures++;
                 pendingMembers.Clear();
 
-                // Name the batch's sources. A gap residue that persists across passes
-                // is either the SAME sources failing every time - a deterministic
-                // write fault, such as a key range served by a permanently stalled
-                // leaf - or a different set each pass, which is ordinary contention
-                // that will drain. The passage count alone cannot separate those, and
-                // that ambiguity is exactly what left the never-converging back-fill
-                // unattributed for four rounds of investigation (issue #2208). Units
-                // are contiguous per source, so comparing against the last key
-                // deduplicates without a set.
-                var batchSources = new List<string>();
-                for (var i = 0; i < count; i++)
-                {
-                    var ownerKey = sources[unitOwner[start + i]].SourceKey;
-                    if (batchSources.Count == 0 || !string.Equals(batchSources[^1], ownerKey, StringComparison.Ordinal))
-                    {
-                        batchSources.Add(ownerKey);
-                    }
-                }
+                // Name the batch's sources, so a residue that persists across passes can
+                // be told apart from contention that will drain (see NameBatchSources).
+                var batchSources = NameBatchSources(start, count);
 
                 _logger.LogWarning(
                     ex,
@@ -1327,24 +1382,10 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     batchSources.Count,
                     string.Join(", ", batchSources.Take(6)));
 
-                // Consecutive record failures mean the vector plane is saturated, not
-                // that one batch was unlucky. Driving the remaining batches into it
-                // adds load to a store that is already timing out and lands nothing,
-                // so stop the arm here and let the next reconcile retry from a
-                // quieter store. Whatever already landed is kept, and every deferred
-                // source is simply unmarked, so the next pass picks it up.
                 if (consecutiveBatchFailures >= MaxConsecutiveBatchFailures)
                 {
                     saturated = true;
-                    var deferred = unitTexts.Count - (start + count);
-                    _logger.LogWarning(
-                        "Repo {RepoId}: {Failures} consecutive {Arm}-arm batches failed to record; the vector plane "
-                        + "looks saturated, so deferring the remaining {Deferred} passage(s) to the next reconcile "
-                        + "rather than adding load.",
-                        repoId,
-                        consecutiveBatchFailures,
-                        arm,
-                        deferred < 0 ? 0 : deferred);
+                    ReportSaturationDeferral(start, count, "record");
                     break;
                 }
 
