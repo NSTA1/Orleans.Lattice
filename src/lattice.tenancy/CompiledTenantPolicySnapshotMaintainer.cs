@@ -34,6 +34,10 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     private CompiledTenantPolicy _current = CompiledTenantPolicy.Empty;
     private long _epoch;
 
+    // Consecutive background-rebuild failures since the last successful publish.
+    // Reset to zero by PublishSnapshot.
+    private int _consecutiveRebuildFailures;
+
     // Coalescing state for background rebuilds: 0 idle, 1 running, 2 running with
     // a queued follow-up.
     private int _rebuildState;
@@ -58,6 +62,38 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
 
     /// <summary>The monotonic epoch of the current snapshot; advances on every rebuild.</summary>
     public long CurrentEpoch => Interlocked.Read(ref _epoch);
+
+    /// <summary>
+    /// <c>true</c> when the current snapshot can be trusted as a <em>negative</em>
+    /// answer - that is, when a tenant's absence from it may be taken as evidence
+    /// the tenant does not exist, rather than merely as a not-yet-compiled miss.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A snapshot hit is only as current as the last successful rebuild. Rebuilds
+    /// are driven by observed mutations of the tenant registry tree, so a deletion
+    /// always schedules one - but until that rebuild lands, the deleted tenant is
+    /// still present in the snapshot, and if the rebuild keeps failing
+    /// (<see cref="RunRebuildLoopAsync"/> logs and retains the previous snapshot)
+    /// it stays present indefinitely. A consumer that admits on a snapshot hit
+    /// would go on admitting a revoked tenant for exactly that long.
+    /// </para>
+    /// <para>
+    /// This is deliberately <b>not</b> an age bound. Rebuilds are mutation-driven
+    /// rather than periodic, so on a quiet estate a snapshot hours old is exactly
+    /// correct; an age bound would force every consumer back onto the authoritative
+    /// registry on a system that had simply stopped changing, which is the
+    /// per-request grain call the snapshot exists to remove. The honest signal is
+    /// whether a rebuild is <em>outstanding</em>: pending (a registry mutation has
+    /// been observed and not yet compiled) or failing. In either case the snapshot
+    /// is known to be behind a change it has already been told about, and a
+    /// consumer should fall back to the registry.
+    /// </para>
+    /// </remarks>
+    public bool IsSnapshotAuthoritative =>
+        Interlocked.Read(ref _epoch) > 0
+        && Volatile.Read(ref _rebuildState) == 0
+        && Volatile.Read(ref _consecutiveRebuildFailures) == 0;
 
     /// <summary>
     /// The most recently scheduled background rebuild loop, or a completed task
@@ -185,6 +221,7 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
             }
             catch (Exception ex)
             {
+                Interlocked.Increment(ref _consecutiveRebuildFailures);
                 _logger.LogWarning(ex, "Failed to rebuild the compiled tenant-policy snapshot; the previous snapshot remains in effect.");
             }
 
@@ -238,6 +275,7 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     {
         var compiled = CompiledTenantPolicy.Compile(records);
         Volatile.Write(ref _current, compiled);
+        Volatile.Write(ref _consecutiveRebuildFailures, 0);
         Interlocked.Increment(ref _epoch);
     }
 }

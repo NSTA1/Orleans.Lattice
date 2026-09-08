@@ -20,8 +20,9 @@ public sealed class LatticeTenantAdmissionControllerTests
     private static LatticeTenantAdmissionController Create(
         FakeTenantUsageIndex index,
         TenantEnforcementScope scope,
-        ITenantRateLimiter? rateLimiter = null) =>
-        new(index, new FixedScopeResolver(scope), rateLimiter ?? new AdmitAllRateLimiter());
+        ITenantRateLimiter? rateLimiter = null,
+        ITenantRegistry? registry = null) =>
+        new(index, new FixedScopeResolver(scope), rateLimiter ?? new AdmitAllRateLimiter(), registry);
 
     /// <summary>
     /// A rate limiter that admits every operation, so a quota test exercises the
@@ -201,5 +202,183 @@ public sealed class LatticeTenantAdmissionControllerTests
         var controller = Create(index, TenantEnforcementScope.GlobalConverged);
 
         Assert.That(await controller.IsAdmittedAsync(Acme, Tree), Is.True);
+    }
+    // ---- Tree-count admission at create (security review F2) -------------
+    //
+    // MaxTreeCount was decided from the metered usage sample. That sample is
+    // published on a cadence and is absent entirely for a tenant that has never
+    // been metered, so IsAdmittedAsync fails open for a brand-new tenant and lags
+    // by up to a whole metering interval for an established one - letting a tenant
+    // overshoot its tree ceiling by (rate limit x interval) trees, and letting a
+    // new tenant ignore it altogether. IsTreeCreateAdmittedAsync reads the count
+    // authoritatively at the moment of decision instead.
+
+    /// <summary>
+    /// The headline regression: a tenant with no landed usage sample at all still
+    /// has its tree ceiling enforced. Under the old sample-driven check this
+    /// admitted unconditionally.
+    /// </summary>
+    [Test]
+    public void IsTreeCreateAdmitted_enforces_the_ceiling_for_a_cold_unmetered_tenant()
+    {
+        // Deliberately empty: no view for "acme", so IsAdmittedAsync fails open.
+        var index = new FakeTenantUsageIndex();
+        var registry = RegistryWith(maxTreeCount: 2);
+        var controller = Create(index, TenantEnforcementScope.GlobalConverged, registry: registry);
+
+        Assert.That(
+            async () => await controller.IsTreeCreateAdmittedAsync(Acme, Tree, _ => new ValueTask<long>(2)),
+            Throws.TypeOf<LatticeQuotaExceededException>(),
+            "a tenant already at its ceiling must be refused even with no metered sample");
+    }
+
+    /// <summary>
+    /// The count is read at the decision point, so a stale (or absent) metered
+    /// sample cannot admit a create that the live count refuses.
+    /// </summary>
+    [Test]
+    public void IsTreeCreateAdmitted_refuses_when_the_live_count_is_at_the_ceiling()
+    {
+        var index = IndexWith(
+            new TenantQuotas { MaxTreeCount = 3 },
+            // A stale sample claiming the tenant owns nothing.
+            global: Sample(0, 0, 0, 0),
+            local: LocalUsageSample.Empty);
+        var registry = RegistryWith(maxTreeCount: 3);
+        var controller = Create(index, TenantEnforcementScope.GlobalConverged, registry: registry);
+
+        Assert.That(
+            async () => await controller.IsTreeCreateAdmittedAsync(Acme, Tree, _ => new ValueTask<long>(3)),
+            Throws.TypeOf<LatticeQuotaExceededException>());
+    }
+
+    [Test]
+    public async Task IsTreeCreateAdmitted_admits_below_the_ceiling()
+    {
+        var index = new FakeTenantUsageIndex();
+        var registry = RegistryWith(maxTreeCount: 5);
+        var controller = Create(index, TenantEnforcementScope.GlobalConverged, registry: registry);
+
+        Assert.That(await controller.IsTreeCreateAdmittedAsync(Acme, Tree, _ => new ValueTask<long>(4)), Is.True);
+    }
+
+    /// <summary>
+    /// The count callback costs a registry round trip, so it must not be invoked
+    /// for a tenant that has no tree ceiling to enforce - the common case.
+    /// </summary>
+    [Test]
+    public async Task IsTreeCreateAdmitted_does_not_count_when_the_tenant_is_unbounded()
+    {
+        var counted = 0;
+        var registry = RegistryWith(maxTreeCount: null);
+        var controller = Create(new FakeTenantUsageIndex(), TenantEnforcementScope.GlobalConverged, registry: registry);
+
+        var admitted = await controller.IsTreeCreateAdmittedAsync(
+            Acme,
+            Tree,
+            _ =>
+            {
+                counted++;
+                return new ValueTask<long>(0);
+            });
+
+        Assert.That(admitted, Is.True);
+        Assert.That(counted, Is.Zero, "an unbounded tenant must not pay for a registry count");
+    }
+
+    /// <summary>The reserved default tenant is unbounded and is never counted.</summary>
+    [Test]
+    public async Task IsTreeCreateAdmitted_does_not_count_the_default_tenant()
+    {
+        var counted = 0;
+        var controller = Create(
+            new FakeTenantUsageIndex(),
+            TenantEnforcementScope.GlobalConverged,
+            registry: RegistryWith(maxTreeCount: 1));
+
+        var admitted = await controller.IsTreeCreateAdmittedAsync(
+            TenantId.Default,
+            Tree,
+            _ =>
+            {
+                counted++;
+                return new ValueTask<long>(long.MaxValue);
+            });
+
+        Assert.That(admitted, Is.True);
+        Assert.That(counted, Is.Zero);
+    }
+
+    /// <summary>
+    /// Rate admission is charged first, so a create refused for rate never reaches
+    /// the registry read - a refused caller cannot drive registry load.
+    /// </summary>
+    [Test]
+    public void IsTreeCreateAdmitted_charges_rate_before_counting()
+    {
+        var counted = 0;
+        var controller = Create(
+            new FakeTenantUsageIndex(),
+            TenantEnforcementScope.GlobalConverged,
+            new RefuseAllRateLimiter(),
+            RegistryWith(maxTreeCount: 1));
+
+        Assert.That(
+            async () => await controller.IsTreeCreateAdmittedAsync(
+                Acme,
+                Tree,
+                _ =>
+                {
+                    counted++;
+                    return new ValueTask<long>(0);
+                }),
+            Throws.TypeOf<LatticeQuotaExceededException>());
+
+        Assert.That(counted, Is.Zero, "a rate-refused create must not reach the registry");
+    }
+
+    /// <summary>
+    /// Constructed without a registry the controller keeps the pre-existing
+    /// sample-driven behaviour rather than failing, so the dimension is additive.
+    /// </summary>
+    [Test]
+    public async Task IsTreeCreateAdmitted_without_a_registry_falls_back_to_sample_admission()
+    {
+        var controller = Create(new FakeTenantUsageIndex(), TenantEnforcementScope.GlobalConverged);
+
+        Assert.That(
+            await controller.IsTreeCreateAdmittedAsync(Acme, Tree, _ => new ValueTask<long>(long.MaxValue)),
+            Is.True);
+    }
+
+    [Test]
+    public void IsTreeCreateAdmitted_null_tree_id_throws()
+    {
+        var controller = Create(new FakeTenantUsageIndex(), TenantEnforcementScope.GlobalConverged);
+        Assert.That(
+            async () => await controller.IsTreeCreateAdmittedAsync(Acme, null!, _ => new ValueTask<long>(0)),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void IsTreeCreateAdmitted_null_counter_throws()
+    {
+        var controller = Create(new FakeTenantUsageIndex(), TenantEnforcementScope.GlobalConverged);
+        Assert.That(
+            async () => await controller.IsTreeCreateAdmittedAsync(Acme, Tree, null!),
+            Throws.ArgumentNullException);
+    }
+
+    private static TenantPolicyTestData.FakeTenantRegistry RegistryWith(long? maxTreeCount)
+    {
+        var registry = new TenantPolicyTestData.FakeTenantRegistry();
+        registry.Records.Add(TenantRecord.Create(
+            Acme,
+            TenantStatus.Active,
+            new TenantQuotas { MaxTreeCount = maxTreeCount },
+            TenantPlacement.Shared,
+            TestClocks.Clock(1),
+            "test"));
+        return registry;
     }
 }

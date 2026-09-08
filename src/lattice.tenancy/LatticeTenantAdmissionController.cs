@@ -28,13 +28,20 @@ namespace Orleans.Lattice.Tenancy;
 internal sealed class LatticeTenantAdmissionController(
     ITenantUsageIndex index,
     ITenantEnforcementScopeResolver scopeResolver,
-    ITenantRateLimiter rateLimiter) : ITenantAdmissionController
+    ITenantRateLimiter rateLimiter,
+    ITenantRegistry? registry = null) : ITenantAdmissionController
 {
     private readonly ITenantUsageIndex _index = index ?? throw new ArgumentNullException(nameof(index));
     private readonly ITenantEnforcementScopeResolver _scopeResolver =
         scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
     private readonly ITenantRateLimiter _rateLimiter =
         rateLimiter ?? throw new ArgumentNullException(nameof(rateLimiter));
+    // Optional so that the tree-count dimension is additive: a host or test that
+    // constructs the controller without a registry keeps the pre-existing
+    // metered-sample behaviour instead of failing to construct. AddLatticeTenancy
+    // always registers ITenantRegistry, so the authoritative path is always taken
+    // in production.
+    private readonly ITenantRegistry? _registry = registry;
 
     /// <inheritdoc />
     /// <remarks>Always active: registering the tenancy package turns quota enforcement on.</remarks>
@@ -95,5 +102,112 @@ internal sealed class LatticeTenantAdmissionController(
         // returns normally when every bounded dimension is within its ceiling.
         TenantQuotaEvaluator.Admit(tenant, view.Quotas, usage, treeId);
         return new ValueTask<bool>(true);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// Applies the sustained request-rate ceiling (<c>MaxOpsPerSecond</c>) to reads,
+    /// and nothing else. Before this, the limiter was consulted only from the
+    /// write-mutation sites, so the dimension its own quota documents as a
+    /// "cluster-wide ops/sec ceiling" silently governed writes alone: a tenant
+    /// could issue unbounded reads - including whole-keyspace counts and scans -
+    /// with no budget and no fairness against its neighbours.
+    /// </para>
+    /// <para>
+    /// The footprint dimensions are deliberately not evaluated here. They bound
+    /// stored volume, which a read does not increase, and refusing reads on a
+    /// storage breach would trap an over-quota tenant: it could no longer read its
+    /// own data back in order to delete it and get under the cap. Storage pressure
+    /// is answered by refusing writes.
+    /// </para>
+    /// <para>
+    /// Synchronous and allocation-free on the admit path (a lock-free token
+    /// acquisition), because this runs on the read hot path. Only a refusal
+    /// allocates.
+    /// </para>
+    /// </remarks>
+    public bool IsReadAdmitted(TenantId tenant, string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        if (!_rateLimiter.TryAcquire(tenant))
+        {
+            throw new LatticeQuotaExceededException(
+                $"Tenant '{tenant}' exceeded its sustained request-rate budget reading from tree '{treeId}'. "
+                + "This is a transient back-off signal: the budget refills continuously, so retry after a short backoff.",
+                treeId,
+                LatticeQuotaExceededException.OpsPerSecondDimension,
+                current: 0,
+                limit: 0,
+                tenantId: tenant.Value ?? string.Empty);
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// Applies the same rate and footprint admission every operation gets, then
+    /// enforces <c>MaxTreeCount</c> against an <b>authoritative</b> count obtained
+    /// from <paramref name="countTenantTrees"/> rather than against the metered
+    /// usage sample.
+    /// </para>
+    /// <para>
+    /// That distinction is the whole point of the override. The usage sample this
+    /// controller admits everything else against is published on a metering
+    /// cadence and is deliberately fail-open until it lands - correct for the
+    /// footprint dimensions, which are bounded quantities a late sample merely
+    /// lags, but wrong for tree count, which is the dimension a tenant can drive
+    /// deliberately. Against the sample alone a brand-new tenant had no ceiling at
+    /// all (no view, so admitted unconditionally), and an established one could
+    /// exceed it by however many creates fitted inside one metering interval,
+    /// since every concurrent create observed the same stale count. Reading the
+    /// count at the moment of decision narrows that window from a metering
+    /// interval to a single registry round-trip.
+    /// </para>
+    /// <para>
+    /// The count is read only when the tenant actually has a tree-count ceiling,
+    /// so an unbounded tenant - the common case, and always the reserved default
+    /// tenant - pays nothing beyond the registry record read.
+    /// </para>
+    /// <para>
+    /// A residual race remains: two creates that both read the count before either
+    /// registers can still both be admitted, so a tenant can exceed its cap by at
+    /// most the number of creates in flight. Closing that completely needs a
+    /// reservation counter shared across silos, which is a heavier mechanism than
+    /// the ceiling warrants; the metered footprint dimensions catch a sustained
+    /// breach on the next tick regardless.
+    /// </para>
+    /// </remarks>
+    public async ValueTask<bool> IsTreeCreateAdmittedAsync(
+        TenantId tenant,
+        string treeId,
+        Func<CancellationToken, ValueTask<long>> countTenantTrees,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(countTenantTrees);
+
+        // Rate and footprint admission, exactly as for any other operation. Throws
+        // LatticeQuotaExceededException on a breach.
+        await IsAdmittedAsync(tenant, treeId, cancellationToken).ConfigureAwait(false);
+
+        // The reserved default tenant is unbounded and cannot be given quotas.
+        if (tenant.IsDefault || tenant.Value is null || _registry is null)
+        {
+            return true;
+        }
+
+        var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false);
+        if (record is null || record.Quotas.MaxTreeCount is null)
+        {
+            return true;
+        }
+
+        var current = await countTenantTrees(cancellationToken).ConfigureAwait(false);
+        TenantQuotaEvaluator.AdmitTreeCreate(tenant, treeId, current, record.Quotas);
+        return true;
     }
 }

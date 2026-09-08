@@ -53,6 +53,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     private readonly IViewCatalog? _viewCatalog;
     private readonly ILatticeViewFactory? _viewFactory;
     private readonly ILatticeTagIndexFactory? _tagIndexFactory;
+    private readonly ITenantAdmissionController? _admission;
 
     /// <summary>Initializes a new <see cref="LatticeTreeAdmin"/>.</summary>
     /// <param name="schemaControl">
@@ -106,7 +107,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         ILatticeBackupRestoreService? restoreService = null,
         IViewCatalog? viewCatalog = null,
         ILatticeViewFactory? viewFactory = null,
-        ILatticeTagIndexFactory? tagIndexFactory = null)
+        ILatticeTagIndexFactory? tagIndexFactory = null,
+        ITenantAdmissionController? admission = null)
     {
         ArgumentNullException.ThrowIfNull(schemaControl);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -122,6 +124,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         _viewCatalog = viewCatalog;
         _viewFactory = viewFactory;
         _tagIndexFactory = tagIndexFactory;
+        _admission = admission;
     }
 
     /// <summary>
@@ -154,6 +157,66 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // this facade's own parameter rather than the helper's 'treeName'.
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         return _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Consults the registered <see cref="ITenantAdmissionController"/> for the
+    /// caller's active tenant and refuses a create the tenant's quota does not
+    /// admit. Completely inert unless the tenancy add-on is registered: with no
+    /// controller in DI, or an inactive one, this is a single null / bool read and
+    /// allocates nothing, so a non-tenancy host is unaffected.
+    /// </summary>
+    /// <remarks>
+    /// Must be called only after the tree-admin authorizer has admitted the call.
+    /// The active tenant is a client-supplied assertion, and charging a quota to a
+    /// tenant the caller has not been shown to belong to would let an unauthorized
+    /// caller drain a victim's budget and read its usage back out of the refusal.
+    /// </remarks>
+    /// <param name="effectiveTreeId">The composed, tenant-scoped tree id being created.</param>
+    /// <param name="cancellationToken">Cancels the admission evaluation.</param>
+    /// <exception cref="LatticeTenantAccessDeniedException">The tenant's quota does not admit the create.</exception>
+    private async ValueTask AdmitTenantCreateAsync(string effectiveTreeId, CancellationToken cancellationToken)
+    {
+        var admission = _admission;
+        if (admission is not { IsActive: true } || LatticeAccessGateContext.IsSystemOrigin)
+        {
+            return;
+        }
+
+        var tenant = LatticeActiveTenantContext.Current ?? TenantId.Default;
+
+        // The real controller throws LatticeQuotaExceededException on a breach; a
+        // plain refusal is treated as fail-closed, matching the tenant-scoped facade.
+        //
+        // The controller is handed a callback rather than a count so that the
+        // authoritative read happens only if it has a tree-count ceiling to
+        // enforce. Counting from the registry - rather than from the tenant's
+        // metered usage sample - is what makes MaxTreeCount actually bind: the
+        // sample is published on a cadence and is absent entirely for a tenant that
+        // has never been metered, so a controller deciding on it alone admits a new
+        // tenant's creates without limit and lets an established tenant overshoot
+        // by a whole metering interval's worth of concurrent creates.
+        if (!await admission
+                .IsTreeCreateAdmittedAsync(tenant, effectiveTreeId, CountTenantTreesAsync, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            throw new LatticeTenantAccessDeniedException(
+                $"Tenant '{tenant}' is not admitted to create tree '{effectiveTreeId}': the tenant's quota would be exceeded.");
+        }
+
+        async ValueTask<long> CountTenantTreesAsync(CancellationToken ct)
+        {
+            // The registry is reserved infrastructure, so the count is read under a
+            // system-origin scope exactly as the tenancy layer's own metering pass
+            // reads it. Prefix-scoped to the tenant's own contiguous key range
+            // rather than enumerating the whole cluster catalog.
+            using var origin = LatticeAccessGateContext.EnterSystemOrigin();
+            var ids = await _grainFactory
+                .GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+                .GetAllTreeIdsAsync(LatticeTenantTrees.ComposePrefix(tenant))
+                .ConfigureAwait(false);
+            return ids.Count;
+        }
     }
 
     /// <summary>
@@ -504,6 +567,22 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(mic);
         }
         await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
+
+        // Count the create against the tenant's quota - MaxTreeCount in particular -
+        // before it is applied. This is the narrowest seam every create funnels
+        // through: the tenant-scoped facade delegates here, and this facade is
+        // itself tenant-aware (EffectiveTreeIdAsync composed the caller's active
+        // tenant into the id above), so a tenant reaching it directly was creating
+        // trees inside its own namespace with no ceiling at all - the one quota
+        // dimension whose whole purpose is to bound tree creation did not bind at
+        // the point of creation.
+        //
+        // Strictly after authorization, never before: the tenant comes from the
+        // ambient active-tenant assertion, which is client-supplied and validated
+        // only by the authorizer above, so charging first would let an unauthorized
+        // caller consume a named victim's quota and rate budget and read its usage
+        // and ceiling back out of the resulting quota exception.
+        await AdmitTenantCreateAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 

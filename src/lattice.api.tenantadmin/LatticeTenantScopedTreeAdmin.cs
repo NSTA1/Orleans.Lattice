@@ -25,32 +25,35 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// confinement is structural rather than filter-based.
 /// </para>
 /// <para>
-/// <b>Quota.</b> Tree creation consults the <see cref="ITenantAdmissionController"/>
-/// (the tenancy quota seam) against the active tenant and composed id before the
-/// tree is registered; the controller throws <see cref="LatticeQuotaExceededException"/>
-/// on a breach, and its refusal is additionally treated as fail-closed here.
+/// <b>Quota.</b> Tree creation is subject to the tenant's quota - <c>MaxTreeCount</c>
+/// in particular - but that ceiling is <em>not</em> applied at this layer. It is
+/// enforced by the delegated <see cref="ILatticeTreeAdmin.CreateTreeAsync"/>, which
+/// is the single seam every create funnels through. Applying it here as well would
+/// double-charge a single create, because admission is stateful: it consumes a
+/// request-rate token. See the comment on <see cref="CreateTreeAsync"/>.
 /// </para>
 /// <para>
-/// <b>Authorize before accounting.</b> The quota consultation is deliberately
-/// sequenced <em>after</em> a whole-tree <see cref="LatticeOperation.Admin"/>
-/// authorization of the composed id. The tenant it accounts against is derived
-/// from the ambient <see cref="LatticeActiveTenantContext"/>, which is a
-/// client-supplied assertion that only the access gate validates. Consulting the
-/// controller first would let an unauthorized caller nominate any tenant and have
-/// a stateful, quota-consuming, rate-limiting evaluation charged to that victim -
-/// and read the victim's current usage and ceiling back out of the resulting
-/// quota exception. The pre-check mirrors the authorization the delegated
-/// <see cref="ILatticeTreeAdmin.CreateTreeAsync"/> performs on the same id, so an
-/// authorized caller sees no behavioural change, while an unauthorized one is
-/// refused before any tenant state is read or mutated. The core no-op gate
-/// short-circuits to allow at zero cost, so an auth-off host is unaffected.
+/// <b>Authorize before accounting.</b> The whole-tree
+/// <see cref="LatticeOperation.Admin"/> authorization of the composed id performed
+/// here is deliberately sequenced <em>before</em> the delegated create, whose own
+/// quota consultation follows its own authorization check. The tenant quota is
+/// accounted against is derived from the ambient
+/// <see cref="LatticeActiveTenantContext"/>, which is a client-supplied assertion
+/// that only the access gate validates. Accounting first would let an unauthorized
+/// caller nominate any tenant and have a stateful, quota-consuming, rate-limiting
+/// evaluation charged to that victim - and read the victim's current usage and
+/// ceiling back out of the resulting quota exception. The pre-check mirrors the
+/// authorization the delegated <see cref="ILatticeTreeAdmin.CreateTreeAsync"/>
+/// performs on the same id, so an authorized caller sees no behavioural change,
+/// while an unauthorized one is refused before any tenant state is read or mutated.
+/// The core no-op gate short-circuits to allow at zero cost, so an auth-off host is
+/// unaffected.
 /// </para>
 /// </remarks>
 internal sealed class LatticeTenantScopedTreeAdmin : ILatticeTenantScopedTreeAdmin
 {
     private readonly ILatticeTreeAdmin _treeAdmin;
     private readonly ILatticeSchemaAdmin _schemaAdmin;
-    private readonly ITenantAdmissionController _admission;
     private readonly ILatticeAccessGate _gate;
     private readonly ILatticeMembershipContext? _membership;
 
@@ -59,10 +62,9 @@ internal sealed class LatticeTenantScopedTreeAdmin : ILatticeTenantScopedTreeAdm
     /// </summary>
     /// <param name="treeAdmin">The whole-tree lifecycle facade to delegate to.</param>
     /// <param name="schemaAdmin">The per-tree schema-policy facade to delegate to.</param>
-    /// <param name="admission">The tenant admission / quota controller consulted on create.</param>
     /// <param name="gate">
-    /// The registered core access gate consulted before the admission controller,
-    /// so quota accounting can never precede authorization. In a host with no
+    /// The registered core access gate, consulted before delegating so accounting
+    /// performed downstream can never precede authorization. In a host with no
     /// authorization add-on this is the no-op gate, so the check short-circuits to
     /// allow at zero cost.
     /// </param>
@@ -74,18 +76,15 @@ internal sealed class LatticeTenantScopedTreeAdmin : ILatticeTenantScopedTreeAdm
     public LatticeTenantScopedTreeAdmin(
         ILatticeTreeAdmin treeAdmin,
         ILatticeSchemaAdmin schemaAdmin,
-        ITenantAdmissionController admission,
         ILatticeAccessGate gate,
         ILatticeMembershipContext? membership = null)
     {
         ArgumentNullException.ThrowIfNull(treeAdmin);
         ArgumentNullException.ThrowIfNull(schemaAdmin);
-        ArgumentNullException.ThrowIfNull(admission);
         ArgumentNullException.ThrowIfNull(gate);
 
         _treeAdmin = treeAdmin;
         _schemaAdmin = schemaAdmin;
-        _admission = admission;
         _gate = gate;
         _membership = membership;
     }
@@ -98,10 +97,10 @@ internal sealed class LatticeTenantScopedTreeAdmin : ILatticeTenantScopedTreeAdm
         int? maxInternalChildren = null,
         CancellationToken cancellationToken = default)
     {
-        var (tenant, treeId) = ResolveScope(name);
+        var (_, treeId) = ResolveScope(name);
 
-        // Authorization strictly precedes quota accounting. The tenant resolved
-        // above comes from the ambient active-tenant assertion, which is
+        // Authorization strictly precedes quota accounting. The tenant resolved by
+        // ResolveScope comes from the ambient active-tenant assertion, which is
         // client-supplied and validated only by the gate, so consulting the
         // admission controller first would let an unauthorized caller charge a
         // named victim tenant's quota and rate budget and read its usage and
@@ -112,17 +111,14 @@ internal sealed class LatticeTenantScopedTreeAdmin : ILatticeTenantScopedTreeAdm
             .EnforceWholeTreeAsync(_gate, _membership, treeId, LatticeOperation.Admin, cancellationToken)
             .ConfigureAwait(false);
 
-        // Count the create against the tenant's quota before it is applied. The
-        // real controller throws LatticeQuotaExceededException on a breach; a
-        // plain refusal is treated as fail-closed here. The IsActive short-circuit
-        // keeps a tenancy-off cluster allocation-free on this path.
-        if (_admission.IsActive
-            && !await _admission.IsAdmittedAsync(tenant, treeId, cancellationToken).ConfigureAwait(false))
-        {
-            throw new LatticeTenantAccessDeniedException(
-                $"Tenant '{tenant.Value}' is not admitted to create tree '{treeId}': the tenant's quota would be exceeded.");
-        }
-
+        // Quota admission - MaxTreeCount in particular - is enforced by the
+        // delegated CreateTreeAsync below, on the same composed id and strictly
+        // after its own authorization check. It deliberately is not repeated here:
+        // admission is stateful (it consumes a request-rate token), so evaluating
+        // it at both layers would charge a single create twice, and enforcing it
+        // only at the outer layer was the defect - the inner facade is itself
+        // tenant-aware and reachable directly, so a ceiling applied only here did
+        // not bind on every path that creates a tenant tree.
         return await _treeAdmin
             .CreateTreeAsync(treeId, shardCount, maxLeafKeys, maxInternalChildren, cancellationToken)
             .ConfigureAwait(false);
