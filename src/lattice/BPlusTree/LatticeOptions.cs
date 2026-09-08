@@ -1401,6 +1401,19 @@ public class LatticeOptions
     /// and by <see cref="WalMaterialiserMaxConcurrentReplays"/>.
     /// </para>
     /// <para>
+    /// <b>This budget is per leaf and counted after the per-leaf range
+    /// filter</b> (<c>ShouldApplyDuringReplay</c>), which is what makes it
+    /// comparable to the seam it is named after. The classifier's cheap
+    /// pre-check compares the <i>partition-wide</i> WAL gap against it, and
+    /// that gap is shared by every leaf pinned to the partition; it is a sound
+    /// upper bound (a leaf can never apply more than the gap) but it can
+    /// overstate a single leaf's work by the partition's leaf fan-out, so it
+    /// only nominates a candidate. The warning and the counter are emitted on
+    /// the exact per-leaf count taken during the replay, not on that candidate
+    /// (issue #2149). Raising this value to quieten warnings that the
+    /// pre-check alone produced is therefore the wrong remedy.
+    /// </para>
+    /// <para>
     /// Before issue #1738 an overrun was fatal: it surfaced
     /// <see cref="LeafProjectionStaleException"/> and left the tree
     /// permanently un-activatable even though its data was fully intact. A
@@ -1415,6 +1428,41 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="MaxLeafReplayEntries"/> (10 000).</summary>
     public const int DefaultMaxLeafReplayEntries = 10_000;
+
+    /// <summary>
+    /// Maximum number of unresolved replay-work records
+    /// (<c>UnresolvedReplayWorkEntry</c>) a leaf will carry in its durable
+    /// state so its incremental flush ceiling may advance past them
+    /// (issue #2165).
+    /// <para>
+    /// A leaf's flush ceiling is clamped below every unresolved saga prepare
+    /// and every undrained deferred terminal, because neither survives an
+    /// activation teardown in memory. Recording that work durably removes the
+    /// need to re-read it, which is what lets a partition that never wins the
+    /// single pass-1 drain slot bank forward progress instead of replaying the
+    /// identical range on every activation. The records are struck off as the
+    /// work resolves, so in the steady state the list is empty and this bound
+    /// is never approached.
+    /// </para>
+    /// <para>
+    /// The bound exists for the pathological case only: a stream of sagas
+    /// whose terminals never arrive would otherwise grow the persisted leaf
+    /// row without limit. Past the bound the leaf simply stops recording and
+    /// the ceiling falls back to the pre-#2165 clamping behaviour, which is
+    /// slow but never unsafe - it is the behaviour that shipped for every
+    /// release before this one.
+    /// </para>
+    /// <para>
+    /// Setting this to zero disables the mechanism, restoring the pre-#2165
+    /// behaviour in which the clamp is the only thing keeping unresolved work
+    /// alive across a teardown. That path still ships - it is what runs once
+    /// the bound is reached - so it is guarded independently.
+    /// </para>
+    /// </summary>
+    public int MaxDurableUnresolvedReplayWork { get; set; } = DefaultMaxDurableUnresolvedReplayWork;
+
+    /// <summary>Default value for <see cref="MaxDurableUnresolvedReplayWork"/> (1 024).</summary>
+    public const int DefaultMaxDurableUnresolvedReplayWork = 1_024;
 
     /// <summary>
     /// Maximum interval between durable persistences of a leaf grain's
@@ -1533,9 +1581,11 @@ public class LatticeOptions
     /// within <see cref="LeafSnapshotMargin"/> of the WAL tail.
     /// <para>
     /// Set to <c>0</c> to disable the periodic re-classification
-    /// entirely; only the once-per-activation capture (driven by the
-    /// activation-time advisory) will fire. The activation-time
-    /// capture itself is not affected by this option.
+    /// entirely; only the activation-scoped captures (the
+    /// once-per-activation capture driven by the activation-time
+    /// advisory, and the one-shot snapshot-coverage-deficit escape that
+    /// breaks the frozen-leaf rehydrate livelock) will fire. Those
+    /// activation-scoped captures are not affected by this option.
     /// </para>
     /// </summary>
     public int LeafSnapshotReClassifyEveryNCheckpoints { get; set; } = DefaultLeafSnapshotReClassifyEveryNCheckpoints;

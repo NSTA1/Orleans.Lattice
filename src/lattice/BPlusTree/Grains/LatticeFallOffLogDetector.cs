@@ -9,9 +9,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// tail offsets and the resolved options for the configured triggers.
 /// <para>
 /// Three triggers can elect a recovery path: (1) the WAL has been
-/// trimmed past the leaf''s persisted checkpoint
-/// (<c>tail &gt; checkpoint</c>); (2) the offset gap exceeds
-/// <see cref="LatticeOptions.MaxLeafReplayEntries"/>; or
+/// trimmed past the leaf's persisted checkpoint
+/// (<c>tail &gt; checkpoint</c>); (2) the partition-wide offset gap
+/// exceeds <see cref="LatticeOptions.MaxLeafReplayEntries"/> - a
+/// sound upper bound on this leaf's own work, so a CANDIDATE that
+/// the leaf confirms against the exact post-filter count (issue
+/// #2149); or
 /// (3) the persisted checkpoint is older than
 /// <see cref="LatticeOptions.LeafProjectionRetention"/>. When a
 /// trigger fires the configured
@@ -60,7 +63,7 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         var head = await reader.GetHeadOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
         var tail = await reader.GetTailOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
 
-        // Trigger 1: WAL trimmed past the leaf''s persisted checkpoint.
+        // Trigger 1: WAL trimmed past the leaf's persisted checkpoint.
         //
         // The loss boundary is tail > checkpoint + 1, NOT the looser
         // tail > checkpoint. checkpoint is the last-APPLIED offset, so the
@@ -82,7 +85,39 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         // needed offset itself fell off) is still tail > checkpoint + 1.
         var walTrimmedPastCheckpoint = checkpointOffset > 0 && tail > checkpointOffset + 1;
 
-        // Trigger 2: replay budget exceeded.
+        // Trigger 2: replay budget CANDIDATE.
+        //
+        // Units (issue #2149). `head` is per (treeId, shardIndex) - per WAL
+        // PARTITION, shared by every leaf pinned to it - and the gap is
+        // therefore a partition-wide, PRE-filter extent. MaxLeafReplayEntries
+        // is a PER-LEAF, POST-filter budget: "the number of entries a leaf
+        // grain expects to replay through its projection rebuild seam
+        // (ILeafProjection.Apply)". Those are different units, so
+        // `gap > MaxLeafReplayEntries` is NOT a measurement of this leaf's
+        // work and must never be reported as one. Doing so produced 19,639
+        // warnings in 6.26 hours on a deployed box whose real per-leaf work
+        // was one to two orders of magnitude BELOW budget, at a measured
+        // fan-out of ~1,350 leaves per partition.
+        //
+        // What the comparison IS, and why it is kept: every entry this leaf
+        // applies is one of the entries in (checkpoint, head], so
+        //
+        //     appliedByThisLeaf <= gap
+        //
+        // always holds. The gap is therefore a SOUND UPPER BOUND on the
+        // per-leaf work, which makes the cheap negative valid - gap <= budget
+        // proves the leaf is under budget without reading a single entry -
+        // while the positive proves nothing at all. So this trigger elects a
+        // CANDIDATE, and the verdict is taken downstream in the documented
+        // unit: BPlusLeafGrain.ReplayPartitionAsync counts the entries that
+        // actually pass ShouldApplyDuringReplay during the replay it is
+        // performing anyway (one increment per applied entry, no extra read)
+        // and warns only when that exact count crosses the budget.
+        //
+        // Confirming here instead would mean scanning (checkpoint, head]
+        // before the replay - the same read the replay then repeats, and the
+        // read whose 30 s overrun is the livelock of issue #2165. A pre-check
+        // that costs as much as the work it is checking is not a pre-check.
         //
         // The "nothing applied" sentinel (-1) skips this trigger: a
         // freshly-created leaf has no in-memory projection state to
@@ -90,18 +125,21 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         // actual work by the full WAL contribution of every sibling
         // leaf in the same shard partition. The per-leaf range filter
         // inside the materialiser (see ShouldApplyDuringReplay) drops
-        // every WAL entry that does not fall in this leaf''s
+        // every WAL entry that does not fall in this leaf's
         // [LowKeyInclusive, HighKeyExclusive) range on iteration, so
         // the cost of a tail-replay against a populated WAL is
-        // bounded by the leaf''s own range, not by the WAL head.
+        // bounded by the leaf's own range, not by the WAL head.
         //
-        // Without this guard, a sibling created mid-run by a split
-        // (whose donor''s SetCheckpointOffsetHintAsync may race the
-        // sibling''s own OnActivateAsync) reads checkpoint = -1,
-        // computes gap = head + 1 against a sibling-populated WAL,
-        // trips the budget, and throws LeafProjectionStaleException
-        // even though there is nothing to recover. This is the c2-vi
-        // production scenario (silo log 20260526-201857Z).
+        // That reasoning is fully general and is exactly what the units
+        // correction above generalises it to; the sentinel guard remains
+        // because it is also load-bearing for a second reason. Without it, a
+        // sibling created mid-run by a split (whose donor's
+        // SetCheckpointOffsetHintAsync may race the sibling's own
+        // OnActivateAsync) reads checkpoint = -1, computes gap = head + 1
+        // against a sibling-populated WAL, trips the budget, and throws
+        // LeafProjectionStaleException even though there is nothing to
+        // recover. This is the c2-vi production scenario (silo log
+        // 20260526-201857Z).
         var gap = head - checkpointOffset;
         var budgetExceeded = checkpointOffset >= 0 && gap > options.MaxLeafReplayEntries;
 

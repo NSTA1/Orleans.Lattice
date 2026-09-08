@@ -73,7 +73,8 @@ public sealed class RepoContextRetrievalWarmupTests
     public async Task An_empty_store_is_ready_with_nothing_to_serve()
     {
         // A fresh box must not wedge: blocking readiness before its first repository is
-        // onboarded would stop the very traffic that onboards one.
+        // onboarded would stop the very traffic that onboards one. It reports having
+        // nothing to serve rather than having served, because no query ran (issue #2188).
         var tree = Substitute.For<ILattice>();
         tree.EntriesAsync().ReturnsForAnyArgs(_ => Empty());
         var grainFactory = Substitute.For<IGrainFactory>();
@@ -89,7 +90,8 @@ public sealed class RepoContextRetrievalWarmupTests
         Assert.Multiple(() =>
         {
             Assert.That(ready, Is.True);
-            Assert.That(readiness.Phase, Is.EqualTo(RepoContextRetrievalReadinessPhase.Serving));
+            Assert.That(readiness.Phase, Is.EqualTo(RepoContextRetrievalReadinessPhase.NothingRegistered));
+            Assert.That(readiness.IsReady, Is.True);
         });
     }
 

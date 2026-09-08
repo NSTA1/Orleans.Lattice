@@ -122,6 +122,53 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
     }
 
     [Test]
+    public async Task Ingest_selects_uncovered_unchanged_files_as_gaps_whose_coverage_is_immediately_readable()
+    {
+        var root = NewRepo();
+        var a = Write(root, "a.cs", "class A {}");
+        var b = Write(root, "b.cs", "class B {}");
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var ingestor = Ingestor(harness, new FakeEmbeddingProvider());
+
+        // Offer two files that have never been embedded as *unchanged*: they are the
+        // uncovered gaps the always-on back-fill selects, which is the exact shape of
+        // the live symptom (a quiet pass selecting unchanged files as gaps).
+        var outcome = await ingestor.IngestAsync(
+            RepoId, root, Array.Empty<RepoFileEntry>(), new[] { a, b }, onProgress: null, Ct);
+
+        // Immediately re-probe the coverage of those same gap files through the very
+        // method the in-pass read-back diagnostic uses. This pins the discriminator's
+        // in-harness arm: with a real in-memory store the just-written membership *is*
+        // readable, so an in-harness re-offer would converge. It is the control that
+        // makes the live box's contrary behaviour (the same gaps re-selected every
+        // quiet pass) meaningful rather than ambiguous.
+        var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+        var keys = new List<string>
+        {
+            RepoContextKeys.File(RepoId, "a.cs"),
+            RepoContextKeys.File(RepoId, "b.cs"),
+        };
+        var covered = await writer.ProbeCoveredSourceIdsAsync(RepoId, keys, Ct);
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(outcome.GapsSelected, Is.EqualTo(2), "Both never-embedded unchanged files are gap-selected.");
+            Assert.That(outcome.FilesEmbedded, Is.EqualTo(2), "Both gap files land a real embedding.");
+            Assert.That(
+                covered.Contains(VectorCodec.SourceId(RepoContextKeys.File(RepoId, "a.cs"))),
+                Is.True,
+                "The just-embedded gap file's coverage is readable on an immediate re-probe.");
+            Assert.That(
+                covered.Contains(VectorCodec.SourceId(RepoContextKeys.File(RepoId, "b.cs"))),
+                Is.True,
+                "The just-embedded gap file's coverage is readable on an immediate re-probe.");
+            await Task.CompletedTask;
+        });
+    }
+
+    [Test]
     public async Task Ingest_back_fills_only_the_unchanged_file_that_has_no_embedding()
     {
         var root = NewRepo();

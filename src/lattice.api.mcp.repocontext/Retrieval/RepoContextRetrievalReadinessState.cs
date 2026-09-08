@@ -25,8 +25,13 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </para>
 /// <para>
 /// <b>It does not deadlock.</b> A host with no embedding provider bound reports
-/// <see cref="RepoContextRetrievalReadinessPhase.KeywordOnly"/>, which is ready: there
-/// is no vector plane to wait for.
+/// <see cref="RepoContextRetrievalReadinessPhase.KeywordOnly"/>, and a host with
+/// nothing onboarded yet reports
+/// <see cref="RepoContextRetrievalReadinessPhase.NothingRegistered"/>. Both are ready:
+/// there is no vector plane to wait for, and nothing registered to retrieve from. Both
+/// are kept distinct from <see cref="RepoContextRetrievalReadinessPhase.Serving"/> on
+/// purpose, because only <see cref="MarkServing"/> may assert that a semantic
+/// retrieval actually succeeded.
 /// </para>
 /// </summary>
 public sealed class RepoContextRetrievalReadinessState : IDisposable
@@ -53,6 +58,9 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     /// <summary>Phase tag value recorded when the host first reported <see cref="RepoContextRetrievalReadinessPhase.KeywordOnly"/>.</summary>
     internal const string PhaseKeywordOnlyTag = "keyword_only";
 
+    /// <summary>Phase tag value recorded when the host first reported <see cref="RepoContextRetrievalReadinessPhase.NothingRegistered"/>.</summary>
+    internal const string PhaseNothingRegisteredTag = "nothing_registered";
+
     /// <summary>
     /// The cause a readiness probe supplies to <see cref="MarkUnavailable(string?)"/>
     /// when it, rather than a real query, observed the plane unable to serve.
@@ -71,6 +79,7 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     private const int BuildingRaw = (int)RepoContextRetrievalReadinessPhase.Building;
     private const int ServingRaw = (int)RepoContextRetrievalReadinessPhase.Serving;
     private const int KeywordOnlyRaw = (int)RepoContextRetrievalReadinessPhase.KeywordOnly;
+    private const int NothingRegisteredRaw = (int)RepoContextRetrievalReadinessPhase.NothingRegistered;
     private const long NoFault = long.MinValue;
     private const long NotReady = -1L;
 
@@ -196,8 +205,22 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
 
     /// <summary>
     /// Records that the vector plane demonstrably served semantic retrieval. Clears any
-    /// outstanding fault episode, and promotes a keyword-only host that has acquired a
-    /// working plane. Idempotent.
+    /// outstanding fault episode, and promotes a keyword-only or nothing-registered host
+    /// that has acquired a working plane. Idempotent.
+    /// <para>
+    /// <b>Invariant: call this only where a semantic retrieval actually succeeded.</b>
+    /// This is the one transition that asserts <i>demonstrated</i> capability, and three
+    /// consumers reason from that assertion: <see cref="MarkKeywordOnly"/> refuses to
+    /// demote a proven plane, <see cref="StampReady"/> tags the once-per-process
+    /// time-to-ready figure <c>serving</c>, and the <see cref="Phase"/> getter grants a
+    /// proven plane - and only a proven plane - the <see cref="FaultHoldDown"/> grace
+    /// before readiness is revoked. Calling it to satisfy readiness for some other
+    /// reason silently corrupts all three, and nothing ever returns
+    /// <see cref="_phase"/> to <see cref="RepoContextRetrievalReadinessPhase.Building"/>
+    /// from here, so the corruption never self-heals. Use
+    /// <see cref="MarkNothingRegistered"/> or <see cref="MarkKeywordOnly"/> to report a
+    /// host that is ready without having served.
+    /// </para>
     /// </summary>
     public void MarkServing()
     {
@@ -223,9 +246,49 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     /// <summary>
     /// Records that no embedding provider is bound, so keyword recall is the intended
     /// steady state and the host is ready. Ignored once the plane has been proven
-    /// serving, so a stale observation can never demote a working plane. Idempotent.
+    /// serving, so a stale observation can never demote a working plane - but <b>not</b>
+    /// ignored in <see cref="RepoContextRetrievalReadinessPhase.NothingRegistered"/>, which
+    /// asserts no such proof and must never lock a host out of the phase that actually
+    /// describes it. Idempotent.
     /// </summary>
     public void MarkKeywordOnly()
+    {
+        if (IsProvenOrKeywordOnly(Volatile.Read(ref _phase)))
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (IsProvenOrKeywordOnly(_phase))
+            {
+                return;
+            }
+
+            Volatile.Write(ref _faultSinceTicks, NoFault);
+            Volatile.Write(ref _phase, KeywordOnlyRaw);
+
+            // Single-shot by design: a host that first reported ready as
+            // nothing-registered keeps that tag, because that is what it truthfully
+            // reached first.
+            StampReady(PhaseKeywordOnlyTag);
+        }
+    }
+
+    /// <summary>
+    /// Records that no repository is registered, so there is nothing this host could be
+    /// asked to retrieve from and readiness must not block: refusing to report ready
+    /// here would wedge a fresh box before its first repository could ever be onboarded.
+    /// <para>
+    /// This is deliberately <b>not</b> <see cref="MarkServing"/>. It asserts only "there
+    /// is nothing to serve", never "the plane has been proven to serve", so it earns no
+    /// fault hold-down grace, does not block a later
+    /// <see cref="RepoContextRetrievalReadinessPhase.KeywordOnly"/> observation, and is
+    /// undone by the first real query that reports the plane unavailable. Ignored once
+    /// the host has reached any other phase, so it can never demote one.
+    /// </para>
+    /// </summary>
+    public void MarkNothingRegistered()
     {
         if (Volatile.Read(ref _phase) != BuildingRaw)
         {
@@ -239,11 +302,23 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
                 return;
             }
 
+            // An empty store cannot have produced a genuine vector-plane fault, so a
+            // concurrent probe's episode is cleared rather than left to revoke a
+            // readiness the store's own emptiness justifies.
             Volatile.Write(ref _faultSinceTicks, NoFault);
-            Volatile.Write(ref _phase, KeywordOnlyRaw);
-            StampReady(PhaseKeywordOnlyTag);
+            Volatile.Write(ref _phase, NothingRegisteredRaw);
+            StampReady(PhaseNothingRegisteredTag);
         }
     }
+
+    /// <summary>
+    /// Whether the phase records a state <see cref="MarkKeywordOnly"/> must not
+    /// overwrite: a plane proven serving, or a host already keyword-only.
+    /// <see cref="RepoContextRetrievalReadinessPhase.NothingRegistered"/> is deliberately
+    /// absent - it is a startup premise, not evidence.
+    /// </summary>
+    private static bool IsProvenOrKeywordOnly(int raw)
+        => raw == ServingRaw || raw == KeywordOnlyRaw;
 
     /// <summary>
     /// Records that the vector plane could not serve semantic retrieval. The first
@@ -252,6 +327,16 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     /// retrieval, so a transient fault does not make readiness oscillate. Ignored in
     /// <see cref="RepoContextRetrievalReadinessPhase.KeywordOnly"/>, where there is no
     /// vector plane to be unavailable.
+    /// <para>
+    /// In <see cref="RepoContextRetrievalReadinessPhase.NothingRegistered"/> it does the
+    /// opposite of ignoring: a real query reporting the plane unavailable proves
+    /// something <i>is</i> indexed and cannot be served, which falsifies that phase's
+    /// premise outright, so the host returns to
+    /// <see cref="RepoContextRetrievalReadinessPhase.Building"/> and loses readiness at
+    /// once. The hold-down grace is earned by serving, and only a plane that reached
+    /// <see cref="RepoContextRetrievalReadinessPhase.Serving"/> through
+    /// <see cref="MarkServing"/> receives it.
+    /// </para>
     /// </summary>
     /// <param name="cause">Why the plane could not serve - a <see cref="RepoContextRetrievalPath"/> keyword value or <see cref="ProbeCause"/>. Any other value is metered as <c>"unknown"</c> so an unbounded tag can never reach the meter.</param>
     public void MarkUnavailable(string? cause = null)
@@ -277,6 +362,10 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
             if (opened)
             {
                 Volatile.Write(ref _faultSinceTicks, now);
+                if (_phase == NothingRegisteredRaw)
+                {
+                    Volatile.Write(ref _phase, BuildingRaw);
+                }
             }
         }
 

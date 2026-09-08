@@ -141,6 +141,90 @@ coverage, so no per-type same-silo test is needed.
 - Use `ISiloBuilder.ConfigureLattice(...)` for global or per-tree options.
 - Options are resolved via `IOptionsMonitor<LatticeOptions>.Get(treeName)`.
 
+## Metrics
+
+Instruments are published on a `Meter` owned by a per-package `*Metrics` class
+(`LatticeMetrics`, `BackupMetrics`, `LatticeAuthMetrics`, ...). A class that
+publishes onto another class's meter does not need a `Meter` field of its own -
+it inherits that meter's guarantees.
+
+### Declare the `Meter` field above every instrument
+
+In a metrics class that declares both a `Meter` field and instrument fields, the
+`Meter` field must be declared **above every instrument**, and every instrument
+must be constructed **from that field**.
+
+`MeterListener.Start()` replays the instruments that already exist and raises
+`InstrumentPublished` for that snapshot *outside* the lock that registers the
+listener. A listener callback that holds the first reference in the process to a
+metrics class therefore runs that class's static initialiser **during instrument
+publication**, re-entrantly. Static field initialisers execute in declaration
+order, so any field declared below the instrument being published is still
+`null` at that moment.
+
+Dozens of fixtures select instruments with a callback shaped like
+`ReferenceEquals(instrument.Meter, LatticeMetrics.Meter)`. Were the `Meter` field
+declared below an instrument, that comparison would run as
+`ReferenceEquals(someMeter, null)` while the instrument is published: the
+instrument is never enabled, the fixture records zero measurements, and nothing
+throws. It surfaces as `Expected: 1, But was: 0`, which reads as a missing
+*production* emission rather than a broken harness, and it is order-dependent,
+so it presents as a flake.
+
+Constructing every instrument from the class's own `Meter` field is the second
+half of the rule, and it is what keeps a violation **loud**. With
+
+```csharp
+public static readonly Meter Meter = new(MeterName);
+public static readonly Counter<long> ShardReads = Meter.CreateCounter<long>(...);
+```
+
+moving `Meter` below `ShardReads` throws `TypeInitializationException` (inner
+`NullReferenceException`) the first time the class is touched, so it cannot
+ship.
+
+**Loudness is a property of which reference the initialiser reads, not of the
+class.** Construct the instrument from the matched field and a reordering
+throws. Construct it from *any other reference to the same meter* - a private
+backing field, or another type's meter such as `LatticeMetrics.Meter` - and the
+instrument is built perfectly, merely published early, so the reordering fails
+**silently** in the manner above. Do not shorten this to "a metrics class fails
+loudly anyway": that reading is the argument for deleting the guard, and it is
+wrong. The guard compares declaration positions and never inspects which
+reference is used, which is precisely why it catches both shapes.
+
+The silent shape is one field away, not hypothetical. Six sites in `src/`
+(`TagIndexReconcileGrain`, `WalSaturationSignal`) already create instruments
+through `LatticeMetrics.Meter` from another type, so the cross-type form is
+idiomatic here; they are safe only because those classes declare no `Meter`
+field of their own, leaving nothing to match and nothing to be null. Adding one
+for subscriber convenience would introduce the silent shape. `GrainIndexMetrics`
+is the standing candidate, being the only production class whose `Meter` is an
+alias (`= LatticeMetrics.Meter`), so both `Meter.CreateCounter(...)` and
+`LatticeMetrics.Meter.CreateCounter(...)` read naturally there and only the
+first is safe above the field.
+
+Every metrics class in `src/` takes the loud shape **today**, which is why the
+fixtures that depend on the ordering pass. That is a fact about the current
+source, not a guarantee.
+
+`MeterFieldDeclarationOrderTests` enforces the ordering across `src/` and fails
+loudly if its own scan matches nothing, so it cannot go vacuous. It scans the
+classes that declare **both** a `Meter` field and an instrument field. Nine
+classes in `src/` declare a `Meter`; the two that declare no instrument
+(`LatticeTenantMetrics`, `LatticeScalingMetrics`) are outside that set, and the
+guard's silence on them is **correct, not a gap** - there is no ordering to
+check until an instrument exists, and it begins covering them the moment one is
+added. Both declare their `Meter` as the last line of the file, so the natural
+place to add a first instrument is below it; add it above.
+`MeterListeningTests` is the executable demonstration of both orderings, and its
+`MeterDeclaredLateProbeMetrics` probe is the silent shape, structurally
+isomorphic to the `GrainIndexMetrics` alias case. In new
+fixtures prefer the `Orleans.Lattice.Testing.MeterListening` helpers
+(`StartForMeter`, `StartForInstrument`): they take the meter or instrument as a
+parameter, so the owning initialiser has necessarily completed before the
+listener exists and the unsafe ordering is not expressible.
+
 ## Documentation
 
 Documentation rules - where docs live and the `csharp verify` snippet requirement - live in the **documentation** skill (`.github/skills/documentation/SKILL.md`).
@@ -262,6 +346,46 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     independent items is better served by ordinary pull requests straight into
     `main`. The epic branch earns its overhead only once the fan-out is wide
     enough that mutually-invalidating pull requests would dominate wall-clock.
+- **Concurrently-dispatched independent items are folded into one integration
+  bucket, not raised straight at `main`.** The epic rules above assume work that
+  was *decomposed from a parent*. Work that was never decomposed - a project
+  manager deploying workers directly against unrelated defect issues - has no
+  parent to group it, so each pull request targets `main` and they serialise
+  against each other. That reintroduces by the back door the exact `O(N^2)` cost
+  the epic branch exists to remove: `main` is strict-protected, so every merge
+  invalidates every other open pull request, which must then update and re-run
+  the full suite. **N such pull requests cost `N(N+1)/2` CI cycles; bucketed,
+  they cost `N+1`.** At six concurrent items that is 21 runs against 7.
+  - **A bucket is an ordinary epic branch and reuses the `epic` segment:
+    `<type>/epic/<bucket-slug>`.** Do **not** invent a `bucket` segment. This is
+    not a semantic compromise, it is what makes the branch validated at all:
+    `ci.yml` triggers on `branches: [main, '*/epic/**', 'release/**']`, so a
+    `fix/bucket/...` base matches none of the three and pull requests into it
+    would run **zero** CI - no build, no tests, no hygiene gates - while
+    displaying as unblocked rather than as an error. Read `epic` here as
+    "integration branch". Everything above applies unchanged: no branch
+    protection on the bucket, the hyphen separator for member branches
+    (`<type>/epic/<bucket-slug>-<item-slug>`), the owner keeps it current with
+    `main`, and review happens on the member pull requests.
+  - **Closing keywords in a member pull request DO NOTHING. The bucket's pull
+    request must carry every `Closes #N` itself.** GitHub honours a closing
+    keyword only when the pull request targets the **default branch**, so a
+    `Closes #N` in a pull request based on a bucket is silently inert - it
+    merges, it looks right, and the issue stays open. Verify with
+    `gh pr view <n> --json closingIssuesReferences`, never by reading the body.
+    This is the single most likely way bucketing goes wrong, because nothing
+    reports it: the cost of forgetting is a set of completed items left open
+    with no signal anywhere that they were meant to close.
+  - **Retarget, do not rename.** An already-raised pull request joins a bucket by
+    changing its base (`gh pr edit <n> --base <bucket>`); its head branch keeps
+    whatever name it has. The `<bucket-slug>-<item-slug>` head naming is for work
+    started after the bucket exists, and renaming in-flight branches to obtain it
+    is churn with no benefit.
+  - **Do not apply this ceremonially either.** One or two items in flight are
+    better served by ordinary pull requests straight into `main` - a bucket costs
+    one extra gated merge, which only pays for itself once concurrent items would
+    otherwise invalidate each other. The trigger is **concurrency, not count**:
+    six items raised a week apart never contend and need no bucket.
 - When a PR fully implements an issue, add a `Closes XXX` line to the PR body.
 - Never push directly to main. All changes must go through a branch and pull request.
 - The main branch has branch protection enabled with a required 'build-and-test' status check.

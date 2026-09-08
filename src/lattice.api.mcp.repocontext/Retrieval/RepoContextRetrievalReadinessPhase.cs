@@ -29,4 +29,20 @@ public enum RepoContextRetrievalReadinessPhase
     /// deployment from deadlocking on a readiness signal it can never satisfy.
     /// </summary>
     KeywordOnly = 2,
+
+    /// <summary>
+    /// No repository is registered at all, so there is nothing this host could be asked
+    /// to retrieve from. The host is legitimately <b>ready</b> - blocking here would
+    /// wedge a fresh box before its first repository could ever be onboarded - but
+    /// nothing has been <b>demonstrated</b>, which is exactly why this is a phase of its
+    /// own rather than <see cref="Serving"/>.
+    /// <para>
+    /// It is a startup premise, not evidence, so it is <b>not sticky</b>: it does not
+    /// earn the fault hold-down grace <see cref="Serving"/> earns, it does not block a
+    /// later <see cref="KeywordOnly"/> observation, and the first real query reporting
+    /// the plane unavailable falsifies the premise and returns the host to
+    /// <see cref="Building"/>.
+    /// </para>
+    /// </summary>
+    NothingRegistered = 3,
 }
