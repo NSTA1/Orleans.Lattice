@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests;
 
@@ -88,6 +89,25 @@ public sealed class LatticeWalGcOffsetFloorTests
         return sc.BuildServiceProvider();
     }
 
+    private static IServiceProvider ServicesWithThrowingOffsetRead(
+        IWalStorageProvider provider,
+        IReadOnlyDictionary<string, HybridLogicalClock> durablePins)
+    {
+        var sc = new ServiceCollection();
+        sc.AddSingleton(provider);
+
+        var pinGrain = Substitute.For<IWalMaterialiserPinGrain>();
+        pinGrain.GetPinsAsync().Returns(Task.FromResult(durablePins));
+        pinGrain.GetPinOffsetsAsync().Returns<Task<IReadOnlyDictionary<string, long>>>(
+            _ => throw new InvalidOperationException("pin store unreachable"));
+
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<IWalMaterialiserPinGrain>(Arg.Any<string>()).Returns(pinGrain);
+        sc.AddSingleton(factory);
+
+        return sc.BuildServiceProvider();
+    }
+
     private static async Task<List<long>> SurvivingOffsetsAsync(IWalStorageProvider provider)
     {
         var survivors = new List<long>();
@@ -158,5 +178,85 @@ public sealed class LatticeWalGcOffsetFloorTests
 
         var survivors = await SurvivingOffsetsAsync(provider);
         Assert.That(survivors, Is.Empty);
+    }
+
+    [Test]
+    public async Task RunOnceAsync_pin_store_unreachable_increments_offset_floor_unavailable_counter()
+    {
+        // Positive control for the issue #2314 instrument: force the durable
+        // pin-offset read to throw (a persistently unreachable pin store) and
+        // observe the counter move. Absent a forced fault this counter reads a
+        // structural zero, so a test that never faults the store would assert
+        // nothing about it.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+
+        var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = Hlc(20),
+        };
+        var sut = new LatticeWalGc(
+            ServicesWithThrowingOffsetRead(provider, durablePins), registry, Monitor());
+
+        long observed = 0;
+        string? observedTree = null;
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.WalGcOffsetFloorUnavailable,
+            l => l.SetMeasurementEventCallback<long>((_, measurement, tags, _) =>
+            {
+                observed += measurement;
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == LatticeMetrics.TagTree)
+                    {
+                        observedTree = tag.Value as string;
+                    }
+                }
+            }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(observed, Is.EqualTo(1),
+            "The swallowed pin-store failure must tick the offset-floor-unavailable counter exactly once per pass.");
+        Assert.That(observedTree, Is.EqualTo(Tree), "The measurement must be tagged with the tree.");
+
+        // Behaviour is preserved: the pass still completes on the HLC floor
+        // alone (no offset floor), trimming exactly as the null-offset control.
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(4));
+    }
+
+    [Test]
+    public async Task RunOnceAsync_healthy_offset_read_leaves_counter_flat()
+    {
+        // Denominator companion: a pass that reads offsets successfully must NOT
+        // tick the counter. This is what makes a non-zero reading mean
+        // "unreachable" rather than merely "a pass ran".
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+
+        var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = Hlc(20),
+        };
+        var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = 1,
+        };
+        var sut = new LatticeWalGc(
+            Services(provider, durablePins, durableOffsets), registry, Monitor());
+
+        long observed = 0;
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.WalGcOffsetFloorUnavailable,
+            l => l.SetMeasurementEventCallback<long>((_, measurement, _, _) => observed += measurement));
+
+        await sut.RunOnceAsync(Tree);
+
+        Assert.That(observed, Is.EqualTo(0),
+            "A successful offset read must not tick the unavailable counter.");
     }
 }
