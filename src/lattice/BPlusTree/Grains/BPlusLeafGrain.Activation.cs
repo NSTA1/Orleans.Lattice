@@ -2721,7 +2721,7 @@ internal sealed partial class BPlusLeafGrain
                             if (RecordUnresolvedPreparesBeyondCap && maxDurableUnresolvedWork > 0)
                             {
                                 EnsureUnresolvedPrepareRecorded(
-                                    partition, entry.Offset, entry.Mutation);
+                                    partition, entry.Offset, entry.Mutation, maxDurableUnresolvedWork);
                             }
                             else
                             {
