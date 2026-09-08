@@ -129,13 +129,22 @@ public sealed class ShardMap
             return _physicalShards;
         }
 
-        // First pass: find the max physical index referenced. Physical
-        // indices are non-negative; the bitmap is sized to max+1.
+        // First pass: find the range of physical indices referenced. The
+        // bitmap dedup path below is sized to max+1 and indexes the bitmap by
+        // the slot value, so it is only valid when every slot is non-negative.
+        // Production maps always are (CreateDefault emits i % physicalShardCount
+        // and split logic emits small non-negative indices), but a negative slot
+        // is reachable through the public Slots setter or a corrupt/hand-built
+        // map deserialised off the wire, so it is routed to the general HashSet
+        // fallback below (which dedups arbitrary ints safely) rather than
+        // indexing the bitmap out of bounds.
         var max = -1;
+        var min = int.MaxValue;
         for (var i = 0; i < slots.Length; i++)
         {
             var v = slots[i];
             if (v > max) max = v;
+            if (v < min) min = v;
         }
 
         // For pathologically large indices (only possible if a future
@@ -144,10 +153,11 @@ public sealed class ShardMap
         // indices), fall back to a HashSet sized to the max+1 sparsity
         // bound rather than to the virtual slot count. This still
         // dominates the prior `new HashSet<int>(Slots.Length)` shape
-        // when max+1 < Slots.Length.
+        // when max+1 < Slots.Length. A negative slot takes the same
+        // fallback, since the bitmap cannot be indexed by a negative value.
         const int StackBitmapThreshold = 256;
         const int HeapBitmapThreshold = 1 << 20; // 1 MiB worth of bytes
-        if (max + 1 <= HeapBitmapThreshold)
+        if (min >= 0 && max + 1 <= HeapBitmapThreshold)
         {
             // Bool-bitmap dedup. The scan-low-to-high copy-out
             // produces a pre-sorted result, so the trailing Array.Sort
