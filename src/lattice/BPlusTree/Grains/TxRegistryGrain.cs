@@ -88,15 +88,7 @@ internal sealed class TxRegistryGrain(
         // call is therefore a new authoritative outcome. Clear the
         // tombstone AND the stale decision so the conflict-detection
         // guard below cannot block re-marking with an opposite outcome.
-        if (state.State.ForgottenAt.Remove(txid))
-        {
-            state.State.Decisions.Remove(txid);
-        }
-
-        // A locally-recorded decision supersedes any cross-tree delegation:
-        // this sub-saga's finalize is the authoritative outcome for this tree.
-        state.State.ExternalAuthorities.Remove(txid);
-        state.State.ReceiverDecisionAuthorities.Remove(txid);
+        var tombstoneClear = ClearTombstone(txid);
 
         // Write-once terminal guard through the shared, dependency-free
         // TerminalDecisionGuard so the "never both commit and abort" invariant is
@@ -110,6 +102,17 @@ internal sealed class TxRegistryGrain(
                 throw new InvalidOperationException(
                     $"Cannot mark saga {txid:N} as committed: it was previously recorded as aborted.");
         }
+
+        // A locally-recorded decision supersedes any cross-tree delegation:
+        // this sub-saga's finalize is the authoritative outcome for this tree.
+        //
+        // The drop sits BELOW the write-once guard deliberately. Above it, the
+        // Idempotent and Conflict exits return without ever reaching a
+        // WriteStateAsync, so the rows were gone from memory on a path that
+        // persists nothing at all - an unconditional mutation on a no-failure
+        // path. Below the guard, every path that reaches the drop also reaches
+        // the write, so the drop is either persisted or unwound by the catch.
+        var delegations = DropDelegations(txid);
 
         // Snapshot prior in-memory state so a failing WriteStateAsync
         // can be unwound. Without this, the in-memory dictionary records
@@ -127,6 +130,14 @@ internal sealed class TxRegistryGrain(
         {
             core.Rollback(mutation);
             state.State.DecisionsRevision = core.Revision;
+            // Restore EVERY map this call mutated, not just the decision and
+            // its revision. A partial unwind leaves the delegation maps ahead
+            // of disk, which aliases a still-preparing cross-tree saga as a
+            // completed one for the snapshot export, the backup drain gate,
+            // and the backup post-capture fence, and destroys the only
+            // coordinator pointer GetStatusAsync has to resolve it with.
+            RestoreDelegations(txid, delegations);
+            RestoreTombstone(txid, tombstoneClear);
             throw;
         }
     }
@@ -134,14 +145,7 @@ internal sealed class TxRegistryGrain(
     /// <inheritdoc />
     public async Task MarkAbortedAsync(Guid txid)
     {
-        if (state.State.ForgottenAt.Remove(txid))
-        {
-            state.State.Decisions.Remove(txid);
-        }
-
-        // A locally-recorded decision supersedes any cross-tree delegation.
-        state.State.ExternalAuthorities.Remove(txid);
-        state.State.ReceiverDecisionAuthorities.Remove(txid);
+        var tombstoneClear = ClearTombstone(txid);
 
         var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
         switch (TerminalDecisionGuard.Classify(hasExisting, existing, incomingCommitted: false))
@@ -152,6 +156,12 @@ internal sealed class TxRegistryGrain(
                 throw new InvalidOperationException(
                     $"Cannot mark saga {txid:N} as aborted: it was previously recorded as committed.");
         }
+
+        // A locally-recorded decision supersedes any cross-tree delegation.
+        // Dropped below the write-once guard for the reason spelled out in
+        // MarkCommittedAsync: the defect is a pair, and a remedy applied only
+        // to the committed path leaves the abort path defective.
+        var delegations = DropDelegations(txid);
 
         // Snapshot prior in-memory state so a failing WriteStateAsync
         // can be unwound (see MarkCommittedAsync for the same rationale).
@@ -166,7 +176,101 @@ internal sealed class TxRegistryGrain(
         {
             core.Rollback(mutation);
             state.State.DecisionsRevision = core.Revision;
+            RestoreDelegations(txid, delegations);
+            RestoreTombstone(txid, tombstoneClear);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Undo token for the tombstone-clearing prologue the <c>Mark*</c> paths run
+    /// before their write-once guard. Captures whether the clear actually removed
+    /// a <see cref="TxRegistryState.ForgottenAt"/> row and a
+    /// <see cref="TxRegistryState.Decisions"/> row, plus the values to put back,
+    /// so a failing <c>WriteStateAsync</c> restores both rather than leaving the
+    /// in-memory maps ahead of the persisted ones.
+    /// </summary>
+    private readonly record struct TombstoneClear(
+        bool ClearedTombstone,
+        DateTimeOffset PreviousForgottenAt,
+        bool ClearedDecision,
+        TxStatus PreviousDecision);
+
+    /// <summary>
+    /// Undo token for the cross-tree delegation drop the <c>Mark*</c> paths run
+    /// once their write-once guard has admitted the call. Captures each dropped
+    /// row's prior coordinator key so a failing <c>WriteStateAsync</c> can put it
+    /// back.
+    /// </summary>
+    private readonly record struct DelegationDrop(
+        bool DroppedExternal,
+        string? PreviousExternal,
+        bool DroppedReceiver,
+        string? PreviousReceiver);
+
+    /// <summary>
+    /// Clears a tombstone and its stale decision, returning the undo token that
+    /// <see cref="RestoreTombstone(Guid, TombstoneClear)"/> consumes.
+    /// </summary>
+    private TombstoneClear ClearTombstone(Guid txid)
+    {
+        // Remove(key, out value) is a single hash probe, where a TryGetValue
+        // followed by Remove is two. This runs once per saga terminal, so the
+        // saving is small, but the shape is the one the rest of the file uses.
+        if (!state.State.ForgottenAt.Remove(txid, out var forgottenAt))
+        {
+            return default;
+        }
+
+        var clearedDecision = state.State.Decisions.Remove(txid, out var previousDecision);
+        return new TombstoneClear(true, forgottenAt, clearedDecision, previousDecision);
+    }
+
+    /// <summary>
+    /// Restores the rows a <see cref="ClearTombstone(Guid)"/> prologue removed.
+    /// Must run <b>after</b> the decision core's own rollback, which restores the
+    /// decision map to its post-clear state.
+    /// </summary>
+    private void RestoreTombstone(Guid txid, in TombstoneClear clear)
+    {
+        if (!clear.ClearedTombstone)
+        {
+            return;
+        }
+
+        state.State.ForgottenAt[txid] = clear.PreviousForgottenAt;
+        if (clear.ClearedDecision)
+        {
+            state.State.Decisions[txid] = clear.PreviousDecision;
+        }
+    }
+
+    /// <summary>
+    /// Drops both cross-tree delegation rows for <paramref name="txid"/>,
+    /// returning the undo token that
+    /// <see cref="RestoreDelegations(Guid, DelegationDrop)"/> consumes.
+    /// </summary>
+    private DelegationDrop DropDelegations(Guid txid)
+    {
+        var hadExternal = state.State.ExternalAuthorities.Remove(txid, out var previousExternal);
+        var hadReceiver = state.State.ReceiverDecisionAuthorities.Remove(txid, out var previousReceiver);
+        return new DelegationDrop(hadExternal, previousExternal, hadReceiver, previousReceiver);
+    }
+
+    /// <summary>
+    /// Restores the delegation rows a <see cref="DropDelegations(Guid)"/> removed,
+    /// following the save-and-restore-or-remove precedent already used by
+    /// <see cref="RegisterExternalDecisionAuthorityAsync(Guid, string)"/>.
+    /// </summary>
+    private void RestoreDelegations(Guid txid, in DelegationDrop drop)
+    {
+        if (drop.DroppedExternal && drop.PreviousExternal is not null)
+        {
+            state.State.ExternalAuthorities[txid] = drop.PreviousExternal;
+        }
+        if (drop.DroppedReceiver && drop.PreviousReceiver is not null)
+        {
+            state.State.ReceiverDecisionAuthorities[txid] = drop.PreviousReceiver;
         }
     }
 

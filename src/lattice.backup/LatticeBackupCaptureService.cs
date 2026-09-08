@@ -407,6 +407,27 @@ internal sealed class LatticeBackupCaptureService(
             // Step 3: re-observe. The window is stable iff no cross-tree saga
             // registered on any set tree during the capture (epoch unchanged) and
             // nothing is in-flight now.
+            //
+            // Both clauses observe a PROXY for cross-tree quiescence, not
+            // quiescence itself, and the two clauses cover different populations:
+            //
+            //  * The epoch clause covers exactly the sagas that REGISTERED a
+            //    cross-tree delegation on this tree during the capture window.
+            //    It is a monotonic counter compared as a delta across the window,
+            //    so a saga that registered and finalized entirely inside the
+            //    window is still caught (the counter does not decrement), but a
+            //    saga that registered BEFORE the window is not covered by it at
+            //    all - that population is the drain gate's job (step 1).
+            //  * The in-flight clause covers the delegation rows live at the
+            //    instant of the re-observation. It is an absolute count, not a
+            //    delta, so it is sensitive to a row that is present now for any
+            //    reason - including a row stranded by a failed persist.
+            //
+            // The asymmetry matters: because the epoch is compared as a delta and
+            // the count absolutely, a spurious epoch bump is absorbed into the
+            // baseline and would be invisible here, whereas a spurious row is
+            // not. That is why TxRegistryGrain unwinds a failed Mark* persist by
+            // restoring the delegation rows rather than by bumping the epoch.
             var stable = true;
             for (var i = 0; i < registries.Length; i++)
             {
