@@ -57,11 +57,13 @@ public abstract class DeletionMandateHygieneTestsBase
         var repoRoot = HygieneRepository.FindRepoRoot();
 
         var violations = new List<string>();
+        var scanned = 0;
         foreach (var file in HygieneRepository.EnumerateSliceFiles(repoRoot, Scope, "*.cs"))
         {
             var full = Path.GetFullPath(file);
             if (Path.GetFileName(full).Equals("DeletionMandateHygieneTestsBase.cs", StringComparison.OrdinalIgnoreCase)) continue;
 
+            scanned++;
             var lines = File.ReadAllLines(full);
             for (int i = 0; i < lines.Length; i++)
             {
@@ -75,6 +77,12 @@ public abstract class DeletionMandateHygieneTestsBase
                 }
             }
         }
+
+        // Anti-vacuity control (issue #2275). This gate only ever scans slice
+        // roots, never the repo-level remainder, so a renamed package
+        // directory would reduce it to a no-op with no other symptom.
+        HygieneDenominator.RequireExamined(
+            scanned, nameof(DeletionMandateHygieneTestsBase), "C# files", HygieneDenominator.Describe(Scope));
 
         Assert.That(violations, Is.Empty,
             "Retired apply-mode / staging-buffer identifiers must not appear in source or test code. "
