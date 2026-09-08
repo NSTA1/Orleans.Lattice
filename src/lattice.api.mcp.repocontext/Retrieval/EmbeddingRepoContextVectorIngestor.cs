@@ -312,7 +312,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             sources.Add(new EmbeddingSource(sourceKey, windows));
         }
 
-        var embedOutcome = await EmbedAndStoreReportingLandedAsync(repoId, sources, onProgress, cancellationToken)
+        var embedOutcome = await EmbedAndStoreReportingLandedAsync(repoId, sources, "file", onProgress, cancellationToken)
             .ConfigureAwait(false);
         var embedded = embedOutcome.Landed.Count;
 
@@ -529,7 +529,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         EmbedOutcome outcome;
         try
         {
-            outcome = await EmbedAndStoreReportingLandedAsync(repoId, sources, onProgress: null, cancellationToken)
+            outcome = await EmbedAndStoreReportingLandedAsync(repoId, sources, "symbol", onProgress: null, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -921,7 +921,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 .ConfigureAwait(false);
         }
 
-        var landed = (await EmbedAndStoreReportingLandedAsync(repoId, sources, onProgress: null, cancellationToken)
+        var landed = (await EmbedAndStoreReportingLandedAsync(repoId, sources, "memory", onProgress: null, cancellationToken)
             .ConfigureAwait(false)).Landed;
 
         // Record only what actually landed. Marking every source the pass intended
@@ -1085,12 +1085,17 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// </summary>
     /// <param name="repoId">The repository being embedded.</param>
     /// <param name="sources">The sources to embed.</param>
+    /// <param name="arm">Which embedding arm is driving this call, so the shared
+    /// per-batch failure warning identifies its caller. Three arms call this helper
+    /// (file, symbol, and memory) and a warning that names none of them cannot be
+    /// attributed from the logs alone, which cost real time on issue #2208.</param>
     /// <param name="onProgress">Optional incremental progress callback.</param>
     /// <param name="cancellationToken">Cancels the pass.</param>
     /// <returns>The source keys whose vectors were stored and whose membership was recorded, and whether the vector plane looked saturated.</returns>
     private async Task<EmbedOutcome> EmbedAndStoreReportingLandedAsync(
         string repoId,
         IReadOnlyList<EmbeddingSource> sources,
+        string arm,
         Func<int, CancellationToken, ValueTask>? onProgress,
         CancellationToken cancellationToken)
     {
@@ -1140,9 +1145,10 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             if (!result.Succeeded || result.Vectors.Count != count)
             {
                 _logger.LogInformation(
-                    "Bootstrap vectorisation for repository {RepoId} skipped a batch of {Count} passage(s): the embedding call did not succeed ({Error}). Those sources fall back to keyword recall.",
+                    "Bootstrap vectorisation for repository {RepoId} skipped a batch of {Count} passage(s) on the {Arm} arm: the embedding call did not succeed ({Error}). Those sources fall back to keyword recall.",
                     repoId,
                     count,
+                    arm,
                     result.Error ?? "no vectors returned");
                 continue;
             }
@@ -1210,9 +1216,10 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 pendingMembers.Clear();
                 _logger.LogWarning(
                     ex,
-                    "Repo {RepoId}: a batch of {Count} passage(s) could not be recorded; its sources stay unmarked "
-                    + "and are retried on the next reconcile. Continuing with the remaining batches.",
+                    "Repo {RepoId}: the {Arm} arm could not record a batch of {Count} passage(s); its sources stay "
+                    + "unmarked and are retried on the next reconcile. Continuing with the remaining batches.",
                     repoId,
+                    arm,
                     count);
 
                 // Consecutive record failures mean the vector plane is saturated, not
@@ -1226,11 +1233,12 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     saturated = true;
                     var deferred = unitTexts.Count - (start + count);
                     _logger.LogWarning(
-                        "Repo {RepoId}: {Failures} consecutive batches failed to record; the vector plane looks "
-                        + "saturated, so deferring the remaining {Deferred} passage(s) to the next reconcile "
-                        + "rather than adding load.",
+                        "Repo {RepoId}: {Failures} consecutive batches failed to record on the {Arm} arm; the vector "
+                        + "plane looks saturated, so deferring the remaining {Deferred} passage(s) to the next "
+                        + "reconcile rather than adding load.",
                         repoId,
                         consecutiveBatchFailures,
+                        arm,
                         deferred < 0 ? 0 : deferred);
                     break;
                 }
