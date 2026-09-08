@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -304,10 +305,7 @@ internal sealed class LatticeStateQuery(
         var report = await tree.DiagnoseAsync(deep, cancellationToken).ConfigureAwait(false);
         var shards = report.Shards.IsDefault
             ? Array.Empty<ShardStateSummary>()
-            : report.Shards
-                .OrderBy(s => s.ShardIndex)
-                .Select(MapShard)
-                .ToArray();
+            : MapShardsByIndex(report.Shards);
 
         return ShardSummariesResult.Found(treeId, shards);
     }
@@ -508,17 +506,30 @@ internal sealed class LatticeStateQuery(
         // unchanged at zero cost, so the catalog is byte-for-byte identical.
         allIds = FilterTreeIdsByActiveTenant(allIds);
 
-        // Single-pass filter into one exact-upper-bound list, then an in-place
-        // ordinal sort. The prior LINQ chain allocated a closure display class,
-        // three predicate delegates, the fused Where iterator and an
-        // OrderedEnumerable, and then - on enumeration - buffered the source,
-        // materialised a parallel key array and an index map before yielding a
-        // single page. The list below is the only allocation, its capacity is the
-        // exact upper bound on how many ids can survive the filter, and
-        // List<T>.Sort with the ordinal comparer produces the identical order.
+        // Single-pass filter, then ordering. The prior LINQ chain allocated a
+        // closure display class, three predicate delegates, the fused Where
+        // iterator and an OrderedEnumerable, and then - on enumeration - buffered
+        // the source, materialised a parallel key array and an index map before
+        // yielding a single page.
+        //
+        // A page emits at most pageSize ids, so buffering and fully sorting every
+        // survivor is O(n) allocation and an O(n log n) sort to serve O(page)
+        // results. When no filter downstream of the ordering can thin the set -
+        // that is, when visibility is disabled - a bounded selection of the
+        // smallest (pageSize + 1) ids is equivalent and costs O(page) allocation
+        // and an O(n log page) scan. The lookahead entry is what decides the
+        // next-page token, exactly as the (pageSize + 1)-th element of a full sort
+        // does below. With visibility on, the per-entry probe can drop an
+        // arbitrary number of the selected ids, so a page's worth of candidates is
+        // no longer enough to fill a page and the full ordering is required.
         var pageToken = request.PageToken;
         var includeSystemTrees = request.IncludeSystemTrees;
-        var ordered = new List<string>(allIds.Count);
+        var pageSize = request.EffectivePageSize;
+        var selector = subject is null
+            ? new CatalogTopSelector(Math.Min(pageSize + 1, allIds.Count))
+            : null;
+        var buffered = selector is null ? new List<string>(allIds.Count) : null;
+
         for (var i = 0; i < allIds.Count; i++)
         {
             var candidate = allIds[i];
@@ -537,12 +548,27 @@ internal sealed class LatticeStateQuery(
                 continue;
             }
 
-            ordered.Add(candidate);
+            if (selector is not null)
+            {
+                selector.Offer(candidate);
+            }
+            else
+            {
+                buffered!.Add(candidate);
+            }
         }
 
-        ordered.Sort(StringComparer.Ordinal);
+        IReadOnlyList<string> ordered;
+        if (selector is not null)
+        {
+            ordered = selector.ToOrderedArray();
+        }
+        else
+        {
+            buffered!.Sort(StringComparer.Ordinal);
+            ordered = buffered;
+        }
 
-        var pageSize = request.EffectivePageSize;
         var pageIds = new List<string>(pageSize);
         string? nextToken = null;
 
@@ -550,9 +576,12 @@ internal sealed class LatticeStateQuery(
         // exactly the semantics the per-entry shape had. The visibility check
         // MUST stay here and must run before anything is read: it thins the
         // candidate set, so a page's worth of ids is not enough to fill a page,
-        // and batching ahead of it would read entries this filter drops.
-        foreach (var id in ordered)
+        // and batching ahead of it would read entries this filter drops. The walk
+        // is indexed rather than a foreach because `ordered` is an interface
+        // reference here, and enumerating one of those allocates an enumerator.
+        for (var i = 0; i < ordered.Count; i++)
         {
+            var id = ordered[i];
             cancellationToken.ThrowIfCancellationRequested();
             if (pageIds.Count == pageSize)
             {
@@ -816,12 +845,28 @@ internal sealed class LatticeStateQuery(
         // entirely, so a tenant caller enumerating tag indexes saw every tenant's.
         allIds = FilterTreeIdsByActiveTenant(allIds);
 
-        // Single-pass filter into one exact-upper-bound list, then an in-place
-        // ordinal sort, exactly as ListTreesAsync does. The registry read above
-        // already pushed the tag-index prefix down, so essentially every id
-        // survives the first test and the list capacity is a tight bound.
+        // The source-tree filter needs a factory; auth-backed visibility also needs
+        // one to resolve each index's covered trees. Resolve it when either is in
+        // play. When visibility is on but no factory is registered we cannot prove
+        // readability, so the catalog is fail-closed to empty below.
+        var needsFactory = request.SourceTreeId is not null || subject is not null;
+        var tagFactory = needsFactory ? _services.GetService<ILatticeTagIndexFactory>() : null;
+        var pageSize = request.EffectivePageSize;
+
+        // Single-pass filter, then ordering, exactly as ListTreesAsync does. The
+        // registry read above already pushed the tag-index prefix down, so
+        // essentially every id survives the first test. When neither the
+        // source-tree filter nor auth-backed visibility is in play, nothing
+        // downstream of the ordering can thin the set, so the page is served by a
+        // bounded selection of the smallest (pageSize + 1) ids instead of
+        // buffering and fully sorting every survivor.
         var tagPageToken = request.PageToken;
-        var ordered = new List<string>(allIds.Count);
+        var boundedSelection = subject is null && request.SourceTreeId is null;
+        var selector = boundedSelection
+            ? new CatalogTopSelector(Math.Min(pageSize + 1, allIds.Count))
+            : null;
+        var buffered = selector is null ? new List<string>(allIds.Count) : null;
+
         for (var i = 0; i < allIds.Count; i++)
         {
             var candidate = allIds[i];
@@ -835,18 +880,27 @@ internal sealed class LatticeStateQuery(
                 continue;
             }
 
-            ordered.Add(candidate);
+            if (selector is not null)
+            {
+                selector.Offer(candidate);
+            }
+            else
+            {
+                buffered!.Add(candidate);
+            }
         }
 
-        ordered.Sort(StringComparer.Ordinal);
+        IReadOnlyList<string> ordered;
+        if (selector is not null)
+        {
+            ordered = selector.ToOrderedArray();
+        }
+        else
+        {
+            buffered!.Sort(StringComparer.Ordinal);
+            ordered = buffered;
+        }
 
-        // The source-tree filter needs a factory; auth-backed visibility also needs
-        // one to resolve each index's covered trees. Resolve it when either is in
-        // play. When visibility is on but no factory is registered we cannot prove
-        // readability, so the catalog is fail-closed to empty below.
-        var needsFactory = request.SourceTreeId is not null || subject is not null;
-        var tagFactory = needsFactory ? _services.GetService<ILatticeTagIndexFactory>() : null;
-        var pageSize = request.EffectivePageSize;
         var pageIds = new List<string>(pageSize);
         var pageIndexNames = new List<string>(pageSize);
         string? nextToken = null;
@@ -854,9 +908,11 @@ internal sealed class LatticeStateQuery(
         // Pass 1 - filter, one index at a time, in exactly the position and with
         // exactly the semantics the per-entry shape had. Coverage resolution feeds
         // both filters, so it stays per index; only the registry read that follows
-        // every filter is batchable.
-        foreach (var id in ordered)
+        // every filter is batchable. The walk is indexed because `ordered` is an
+        // interface reference, and enumerating one of those allocates.
+        for (var i = 0; i < ordered.Count; i++)
         {
+            var id = ordered[i];
             cancellationToken.ThrowIfCancellationRequested();
             if (pageIds.Count == pageSize)
             {
@@ -1038,17 +1094,57 @@ internal sealed class LatticeStateQuery(
         // auth gate was registered.
         covered = FilterTreeIdsByActiveTenant(covered);
 
-        var entries = new List<string>(Math.Min(pageSize, covered.Count));
-        string? nextToken = null;
+        // Single-pass page-token filter, then ordering - the same treatment the
+        // other three catalog endpoints already carry, applied to the last one
+        // that still ran a LINQ OrderBy. Enumerating the sequence through
+        // OrderBy buffered the whole covered set, materialised a parallel key
+        // array and an index map, and allocated the key-selector delegate and the
+        // OrderedEnumerable, all to yield one page. When visibility is disabled
+        // nothing downstream of the ordering can thin the set, so the page is
+        // served by a bounded selection of the smallest (pageSize + 1) ids.
+        var coveredPageToken = request.PageToken;
+        var selector = subject is null
+            ? new CatalogTopSelector(Math.Min(pageSize + 1, covered.Count))
+            : null;
+        var buffered = selector is null ? new List<string>(covered.Count) : null;
 
-        // CoveredTreesAsync already yields ordinal-sorted ids; the explicit sort
-        // keeps the page contract independent of that implementation detail.
-        foreach (var treeId in covered.OrderBy(id => id, StringComparer.Ordinal))
+        foreach (var candidate in covered)
         {
-            if (request.PageToken is not null && string.CompareOrdinal(treeId, request.PageToken) <= 0)
+            if (coveredPageToken is not null && string.CompareOrdinal(candidate, coveredPageToken) <= 0)
             {
                 continue;
             }
+
+            if (selector is not null)
+            {
+                selector.Offer(candidate);
+            }
+            else
+            {
+                buffered!.Add(candidate);
+            }
+        }
+
+        IReadOnlyList<string> ordered;
+        if (selector is not null)
+        {
+            ordered = selector.ToOrderedArray();
+        }
+        else
+        {
+            buffered!.Sort(StringComparer.Ordinal);
+            ordered = buffered;
+        }
+
+        var entries = new List<string>(Math.Min(pageSize, ordered.Count));
+        string? nextToken = null;
+
+        // CoveredTreesAsync already yields ordinal-sorted ids; the explicit
+        // ordering above keeps the page contract independent of that
+        // implementation detail.
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var treeId = ordered[i];
 
             // Omit any covered tree the subject may not read (an anonymous subject
             // sees none), so the covered-tree list does not leak unreadable trees.
@@ -2723,6 +2819,76 @@ internal sealed class LatticeStateQuery(
         OpsPerSecond = shard.OpsPerSecond,
         SplitInProgress = shard.SplitInProgress,
     };
+
+    /// <summary>
+    /// Projects a diagnostic report's shard rows into shard-index order, in one
+    /// exact-width array.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This runs once per tree on every tick of the shared metrics sampler, so
+    /// the ordering shape is paid continuously by any live dashboard
+    /// subscription. The prior <c>OrderBy(...).Select(...).ToArray()</c> chain
+    /// boxed the source <see cref="ImmutableArray{T}"/> into its
+    /// <c>IEnumerable&lt;T&gt;</c> parameter, buffered a full copy of the wide
+    /// <see cref="ShardDiagnosticReport"/> structs, materialised a parallel key
+    /// array and an index map, allocated an ordered enumerable and a projection
+    /// iterator, and then grew a second buffer through its doubling chain before
+    /// copying out. The array below is the only allocation, and the source is
+    /// bound to a local per row so the wide struct is copied once rather than
+    /// once per member read.
+    /// </para>
+    /// <para>
+    /// Reports arrive in ascending shard order, so the ordering pass normally
+    /// does nothing at all; the sort exists only to keep the result contract
+    /// independent of that implementation detail, exactly as the prior
+    /// <c>OrderBy</c> did. It is a stable insertion sort over the physical shard
+    /// count - a small, bounded, and in practice already-ordered input - which
+    /// keeps rows carrying an equal index in source order, so the emitted
+    /// sequence matches the prior chain's for every input rather than only for
+    /// distinct indices.
+    /// </para>
+    /// </remarks>
+    /// <param name="shards">The report's shard rows.</param>
+    /// <returns>The mapped summaries, ascending by shard index.</returns>
+    internal static ShardStateSummary[] MapShardsByIndex(ImmutableArray<ShardDiagnosticReport> shards)
+    {
+        if (shards.Length == 0)
+        {
+            return [];
+        }
+
+        var mapped = new ShardStateSummary[shards.Length];
+        var ascending = true;
+        var previousIndex = int.MinValue;
+        for (var i = 0; i < shards.Length; i++)
+        {
+            var shard = shards[i];
+            mapped[i] = MapShard(shard);
+            ascending &= shard.ShardIndex >= previousIndex;
+            previousIndex = shard.ShardIndex;
+        }
+
+        if (ascending)
+        {
+            return mapped;
+        }
+
+        for (var i = 1; i < mapped.Length; i++)
+        {
+            var row = mapped[i];
+            var j = i - 1;
+            while (j >= 0 && mapped[j].ShardIndex > row.ShardIndex)
+            {
+                mapped[j + 1] = mapped[j];
+                j--;
+            }
+
+            mapped[j + 1] = row;
+        }
+
+        return mapped;
+    }
 
     /// <summary>
     /// Ordinal comparison of two <see cref="ViewListing"/> records by
