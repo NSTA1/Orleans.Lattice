@@ -3762,6 +3762,12 @@ internal sealed partial class LatticeGrain(
         var monitor = grainFactory.GetGrain<IHotShardMonitorGrain>(TreeId);
         try
         {
+            // EnsureRunningAsync is [AlwaysInterleave] by contract (#2218): the
+            // monitor's own sampling pass can be the caller that births this
+            // activation (its status-verb call on a quiet tree), so the monitor
+            // may be mid-turn when we arm it here. Without interleaving this
+            // await and that sampling turn deadlock until the 30s response
+            // timeout.
             await monitor.EnsureRunningAsync();
         }
         catch (Exception ex) when (ReminderServiceReadiness.IsStillInitializing(ex))
@@ -3797,6 +3803,10 @@ internal sealed partial class LatticeGrain(
         var orchestrator = grainFactory.GetGrain<IShardHealingOrchestratorGrain>(TreeId);
         try
         {
+            // EnsureRunningAsync is [AlwaysInterleave] by contract (#2218), for
+            // the same reason as the hot-shard monitor: an over-split tree's
+            // healing sweep can be the caller that births this activation, so the
+            // orchestrator may be mid-sweep when we arm it here.
             await orchestrator.EnsureRunningAsync();
         }
         catch (Exception ex) when (ReminderServiceReadiness.IsStillInitializing(ex))
