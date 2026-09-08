@@ -48,7 +48,7 @@ internal sealed class CachingReplicationSecretProvider(
 
         var fresh = await _source.GetOutboundSecretAsync(peerClusterId, cancellationToken).ConfigureAwait(false);
         var refresh = _options.CurrentValue.SecretRefreshInterval;
-        var newEntry = new OutboundEntry(fresh, nowTicks + refresh.Ticks);
+        var newEntry = new OutboundEntry(fresh, SaturatingExpiresAtTicks(nowTicks, refresh));
         _outbound[peerClusterId] = newEntry;
         return fresh;
     }
@@ -76,7 +76,7 @@ internal sealed class CachingReplicationSecretProvider(
             var fresh = await _source.GetAcceptedSecretsAsync(cancellationToken).ConfigureAwait(false);
             var refresh = _options.CurrentValue.SecretRefreshInterval;
             _acceptedSnapshot = fresh;
-            Volatile.Write(ref _acceptedExpiresAtTicks, nowTicks + refresh.Ticks);
+            Volatile.Write(ref _acceptedExpiresAtTicks, SaturatingExpiresAtTicks(nowTicks, refresh));
             return fresh;
         }
         finally
@@ -104,6 +104,22 @@ internal sealed class CachingReplicationSecretProvider(
             matched |= LatticeReplicationSharedSecret.FixedTimeEquals(presented, snapshot.Secrets[i]);
         }
         return matched;
+    }
+
+    /// <summary>
+    /// Computes the absolute expiry tick for a cache entry, saturating at
+    /// <c>DateTimeOffset.MaxValue.UtcTicks</c> so an extreme
+    /// <see cref="LatticeReplicationSecurityOptions.SecretRefreshInterval"/> cannot
+    /// overflow the UTC tick sum and wrap to a past instant - which would make every
+    /// cached entry read as already expired, defeating the cache and hitting the
+    /// secret source on every call (the inverse of the interval's intent).
+    /// </summary>
+    internal static long SaturatingExpiresAtTicks(long nowTicks, TimeSpan refresh)
+    {
+        var refreshTicks = refresh.Ticks;
+        return refreshTicks > DateTimeOffset.MaxValue.UtcTicks - nowTicks
+            ? DateTimeOffset.MaxValue.UtcTicks
+            : nowTicks + refreshTicks;
     }
 
     private readonly record struct OutboundEntry(string? Value, long ExpiresAtTicks);
