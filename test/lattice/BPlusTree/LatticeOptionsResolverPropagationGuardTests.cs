@@ -75,254 +75,6 @@ public class LatticeOptionsResolverPropagationGuardTests
             ["CompactionLeafBatchSize"] = new(input => input),
         };
 
-    /// <summary>
-    /// Properties NOT exposed by <see cref="ResolvedLatticeOptions"/>
-    /// despite living on <see cref="LatticeOptions"/>. Each is consumed
-    /// downstream directly via <c>IOptionsMonitor&lt;LatticeOptions&gt;.Get(treeId)</c>
-    /// (e.g. WAL options consumed inside <c>WalShardGrain</c>) rather
-    /// than via the resolver, so the propagation guard does not
-    /// fail-build for these - but it does require the operator to
-    /// confirm that intentionally-bypassed properties are listed here
-    /// so adding a new property without thinking about propagation is
-    /// caught by the test.
-    /// </summary>
-    private static readonly HashSet<string> IntentionallyBypassedProperties =
-        new(StringComparer.Ordinal)
-        {
-            // WAL configuration: WalShardGrain reads these directly from
-            // IOptionsMonitor at activation time; the resolver is not
-            // on the WAL hot path. WalPartitions is the exception -
-            // it is pinned per-tree in TreeRegistryEntry.WalPartitions
-            // and surfaced through the resolver so the foreground
-            // commit-log writer and the activation-time materialiser
-            // always agree on the partition fan-out shape for the
-            // lifetime of the tree; the propagation guard exercises
-            // its pass-through behaviour when the registry entry
-            // carries a null pin.
-            "WalMaxBatchEntries",
-            "WalMaxBatchBytes",
-            "WalMaxPendingBatches",
-            "WalFlushTimeout",
-            // Per-tree-registry-driven gates with their own resolver
-            // logic outside LatticeOptionsResolver.
-            "PublishEvents",                // PublishEventsGate consults registry entry
-            "EventStreamProviderName",      // LatticeEventPublisher reads via IOptionsMonitor
-            // Per-tree saga / cursor / snapshot retention that downstream
-            // grains read via their own IOptionsMonitor activation cache.
-            "TxDecisionRetention",
-            "MaxCursorSnapshotPinTtl",
-            "MaxPinnedSagaDecisions",
-            "MaxSnapshotReplayEntries",
-            "SnapshotLeafIdleTtl",
-            "SnapshotBaselineTtl",
-            "PrefetchEntriesScan",
-            // WAL saturation back-pressure surface: the silo-scoped
-            // WalSaturationSampler reads these directly from
-            // IOptionsMonitor.Get(string.Empty) on every tick. They are
-            // process-wide / silo-wide cadence + threshold knobs, not
-            // per-tree gates - a single sampler classifies every tree
-            // on a shared interval, so a per-tree override would not
-            // change its behaviour. Bypassing the resolver is therefore
-            // intentional; the sampler never goes through the per-call
-            // ResolvedLatticeOptions path.
-            "WalSaturationSampleInterval",
-            "WalSaturationThrottledRatio",
-            "WalSaturationDispatchTimeoutThreshold",
-            "WalSaturationProviderFailureRateThreshold",
-            "WalSaturationRecoveryWindow",
-            "WalSaturationFlushLatencyThreshold",
-            "WalSaturationFlushLatencySampleWindows",
-            "WalSaturationMaterialiserLagThreshold",
-            "WalSaturationMaterialiserLagSampleWindows",
-            // Durable pin-latency input (issue #2015): read alongside the rest
-            // of the saturation family from the silo-wide unkeyed options in
-            // WalSaturationSampler.SampleOnceAsync, and (for the threshold)
-            // in LeafCursorReporter.ResolvePinLatencyThresholdMs.
-            "WalSaturationMaterialiserPinLatencyThreshold",
-            "WalSaturationMaterialiserPinLatencySampleWindows",
-            // Durable leaf-materialiser pin store knobs: the pin grain and the
-            // LeafCursorReporter read these directly via
-            // IOptionsMonitor.Get(...) (the flush cadence is a silo-wide grain
-            // timer interval; the shard count is a cluster-wide structural
-            // fan-out, and the bucket count is a cluster-wide durable-state
-            // layout that every activation of a shard must agree on). None is a
-            // per-tree gate routed through the ResolvedLatticeOptions hot path.
-            "WalMaterialiserPinShards",
-            "WalMaterialiserPinBuckets",
-            "WalMaterialiserPinFlushIntervalMs",
-            // Distributed-lock lease knobs (issue #1608): LatticeLockGrain reads
-            // these directly from IOptionsMonitor<LatticeOptions>.CurrentValue when
-            // it clamps a requested lease duration. The lock grain is keyed by lock
-            // name, not by tree id, and never flows through the per-tree
-            // ResolvedLatticeOptions hot path, so bypassing the resolver is
-            // intentional.
-            "DefaultLockLeaseDuration",
-            "MaxLockLeaseDuration",
-
-            // Atomic-action (saga / TCC) coordinator knobs (issue #1609):
-            // AtomicActionGrain reads these directly from
-            // IOptionsMonitor<LatticeOptions>.CurrentValue. The coordinator is keyed
-            // by operation id, not by tree id, and never flows through the per-tree
-            // ResolvedLatticeOptions hot path, so bypassing the resolver is
-            // intentional.
-            "AtomicActionRetention",
-            "MaxAtomicActionSteps",
-            "MaxAtomicActionArgsBytes",
-
-            // Cluster storage-usage roll-up tree fan-out bound (issue #1728):
-            // LatticeAdminGrain reads this directly from
-            // IOptionsMonitor<LatticeOptions>.Get(Options.DefaultName). The admin
-            // grain is a cluster singleton that bounds how many *trees* a roll-up
-            // samples at once, so it is not keyed by tree id and has no per-tree
-            // meaning - a "which tree's value wins" question with no sensible
-            // answer. The inner, genuinely per-tree half of the same fan-out
-            // (MaxConcurrentStorageUsageSurfaces) does flow through the resolver,
-            // exactly like MaxConcurrentSnapshotCaptures.
-            "MaxConcurrentStorageUsageTrees",
-
-            // StorageUsageRollupBudget is cluster-scoped for the same reason:
-            // it bounds the wall-clock time one cluster-wide roll-up may spend
-            // sampling trees, and that roll-up is driven by the same admin
-            // singleton, so there is no tree whose override could sensibly win.
-            "StorageUsageRollupBudget",
-
-            // Leaf-cache pre-warm knobs (issue #332): ShardRootGrain resolves
-            // these through the dedicated synchronous
-            // LatticeOptionsResolver.GetLeafAccessTrackingSettings(treeId) seam,
-            // which reads IOptionsMonitor.Get(treeId) directly. They are
-            // deliberately kept off the ResolvedLatticeOptions path because the
-            // first consumer is the read hot path, which cannot await the
-            // registry round trip ResolveAsync performs; and because they are
-            // silo-local operational tuning (how much startup work this silo
-            // does) rather than tree-shape configuration that every replica of
-            // the tree must agree on.
-            "LeafCachePreWarmCount",
-            "LeafAccessModelFlushIntervalMs",
-
-            // Snapshot baseline fold fan-out (issue #1961): ShardRootGrain
-            // resolves this through the dedicated synchronous
-            // LatticeOptionsResolver.GetSnapshotBaselineFoldConcurrency(treeId)
-            // seam, which reads IOptionsMonitor.Get(treeId) directly. It is
-            // deliberately kept off the ResolvedLatticeOptions path because the
-            // consumer is CaptureSnapshotBaselineAsync, a scan-page-bounded
-            // entry point that must not await before its stall budget is armed
-            // (issues #1992, #2002) - the registry round trip ResolveAsync
-            // performs is exactly the await that would leave the ceiling
-            // unarmed. It is also pure dispatch scheduling: the captured
-            // baseline is byte-identical under any value, so no replica of the
-            // tree has to agree on it.
-            "MaxConcurrentSnapshotBaselineFolds",
-
-            // --- Audited under issue #2182 -------------------------------
-            // Before #2182 this guard silently skipped every property whose
-            // type it could not sentinel (nullable value types, Func<,>,
-            // interfaces), so the entries below were never checked and their
-            // bypass status was never a decision anybody recorded. Making the
-            // guard total surfaced all eleven at once. Each was traced to its
-            // consumer and confirmed to read the option directly from
-            // IOptionsMonitor rather than off a ResolvedLatticeOptions
-            // instance, so none is a live propagation defect - but the bypass
-            // is now explicit rather than an accident of the sentinel table.
-
-            // Queue capacity: LatticeQueueGrain reads
-            // optionsMonitor.Get(_queueName).QueueCapacity at enqueue time.
-            // The queue grain is keyed by queue name, not by tree id, so it
-            // never flows through the per-tree ResolvedLatticeOptions path.
-            "QueueCapacity",
-
-            // Write-size bounds: LatticeGrain.ValidateWriteSize reads them off
-            // its own `Options => optionsMonitor.Get(TreeId)` accessor at the
-            // public write boundary, which is a synchronous guard that must not
-            // await the registry round trip ResolveAsync performs.
-            "MaxKeyLength",
-            "MaxValueSizeBytes",
-
-            // Cluster-wide in-flight auto-split ceiling: HotShardMonitorGrain
-            // reads it off its own IOptionsMonitor-backed Options accessor.
-            // Cluster-scoped like MaxConcurrentStorageUsageTrees - it bounds
-            // the aggregate across all trees, so "which tree's override wins"
-            // has no sensible answer.
-            "MaxClusterConcurrentAutoSplits",
-
-            // Legacy per-tree WAL provider factory: the resolver consumes this
-            // itself inside ResolveWalProvider, via its own
-            // optionsMonitor.Get(treeId).WalStorageProvider read, as the
-            // fallback for trees with no placement pin. It is a delegate, so
-            // it is also not sentinel-testable.
-            "WalStorageProvider",
-
-            // WAL wall-clock retention: LatticeWalGc reads it from its own
-            // optionsMonitor.Get(treeName) snapshot (the local named `resolved`
-            // there is a plain LatticeOptions, not a ResolvedLatticeOptions),
-            // and ViewMaintainerGrain reads it via latticeOptions.Get(treeId).
-            "WalRetention",
-
-            // Idempotency retry policy: LatticeGrain.Idempotency reads
-            // Options.RetryPolicy off the same synchronous monitor-backed
-            // accessor. It is an interface instance, so it is also not
-            // sentinel-testable.
-            "RetryPolicy",
-        };
-
-    /// <summary>
-    /// Properties the resolver does NOT copy and which a consumer nevertheless
-    /// reads off a <c>ResolvedLatticeOptions</c> instance. These are LIVE
-    /// DEFECTS, not intentional bypasses, and they are deliberately held in a
-    /// separate set so nothing here reads as endorsed.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Each entry silently substitutes the compiled default for whatever the
-    /// operator configured. They are recorded rather than fixed because making
-    /// an inert knob suddenly live is a behaviour change that needs its own
-    /// review; the audit that found them is issue #2182.
-    /// </para>
-    /// <para>
-    /// This list cannot rot. <see
-    /// cref="Known_unpropagated_live_defects_are_still_unpropagated"/> asserts
-    /// every entry is genuinely still dropped, so the moment the resolver is
-    /// taught to copy one, that test fails and forces its removal from here.
-    /// An entry can therefore never outlive the defect it documents.
-    /// </para>
-    /// </remarks>
-    private static readonly HashSet<string> KnownUnpropagatedLiveDefects =
-        new(StringComparer.Ordinal)
-        {
-            // Read at BPlusLeafGrain.Activation.cs:154 off the instance bound
-            // by `var options = await GetOptionsAsync();` at :153, which
-            // returns a ResolvedLatticeOptions. Non-nullable, default 0, so
-            // ResolveReplayConcurrencyGate takes its `max <= 0` branch and
-            // sizes the gate to Environment.ProcessorCount regardless of the
-            // configured value. The gate is a process-wide static latched on
-            // first use, so the wrong bound persists for the process lifetime.
-            "WalMaterialiserMaxConcurrentReplays",
-
-            // Read at BPlusLeafGrain.Activation.cs:737 off the instance bound
-            // by `var resolvedOptions = await GetOptionsAsync();` at :487.
-            // Non-nullable, default 256, so a configured per-turn replay
-            // budget is silently replaced by 256.
-            "WalReplayMaxRecordsPerTurn",
-
-            // Read at LatticeStorageUsageGrain.cs:90-93. The instance is
-            // resolved at :37 and passed into PublishToMetrics, whose
-            // parameter is declared as the BASE type LatticeOptions - which is
-            // what disguises the defect at the call site. All four are
-            // nullable with a null default, so they fail silently OPEN:
-            // LatticeAdmissionMetrics.cs:220 early-returns and never publishes
-            // the over-advisory gauge, and :254/:264 compute a null ceiling so
-            // the utilisation gauges are never emitted.
-            //
-            // Admission ENFORCEMENT is NOT affected and these are not a
-            // security defect: LatticeGrain.cs:211 binds `var options =
-            // Options`, and Options is `optionsMonitor.Get(TreeId)` (:137), a
-            // plain LatticeOptions. Caps are enforced; only their
-            // observability is dead.
-            "MaxLiveKeys",
-            "MaxEstimatedBytes",
-            "AdmissionAdvisoryLiveKeys",
-            "AdmissionAdvisoryBytes",
-        };
-
     private sealed record TransformExpectation(Func<object?, object?> Expected);
 
     [Test]
@@ -343,35 +95,20 @@ public class LatticeOptionsResolverPropagationGuardTests
             // That inheritance is precisely why an omission is silent, and
             // why this guard asserts on the observed VALUE rather than on
             // member presence.
-            if (IntentionallyBypassedProperties.Contains(prop.Name))
-            {
-                continue;
-            }
-
-            // Known live defects are excluded from the main assertion but are
-            // NOT endorsed: they are asserted to still be broken by
-            // Known_unpropagated_live_defects_are_still_unpropagated, which
-            // fails the moment one is fixed.
-            if (KnownUnpropagatedLiveDefects.Contains(prop.Name))
-            {
-                continue;
-            }
-
             if (!TryPickSentinel(prop, out var sentinel))
             {
                 // The guard cannot synthesise a distinguishable value for this
                 // property's type, so it cannot prove the resolver copies it.
                 // That is a FAILURE, not a skip: silently ignoring a property
                 // the guard cannot check is the very hole issue #2182 closed.
-                // Resolve it by teaching TryPickSentinel the type, or by adding
-                // the property to IntentionallyBypassedProperties with a comment
-                // naming the consumer that reads it off IOptionsMonitor instead.
+                // Resolve it by teaching TryPickSentinel the type so the guard
+                // can synthesise a distinguishable value for it. Every
+                // configurable option must round-trip; there is no bypass list.
                 failures.Add(
                     $"  LatticeOptions.{prop.Name} ({prop.PropertyType}) cannot be sentinel-tested by this guard,\n" +
-                    "    so its propagation through LatticeOptionsResolver is UNVERIFIED. Either add a sentinel\n" +
-                    "    branch for this type to TryPickSentinel, or add the property to\n" +
-                    "    IntentionallyBypassedProperties with a comment naming its direct\n" +
-                    "    IOptionsMonitor consumer.");
+                    "    so its propagation through LatticeOptionsResolver is UNVERIFIED. Add a sentinel\n" +
+                    "    branch for this type to TryPickSentinel so the guard can prove the resolver\n" +
+                    "    copies it. Every configurable option must round-trip; there is no bypass list.");
                 continue;
             }
 
@@ -411,155 +148,11 @@ public class LatticeOptionsResolverPropagationGuardTests
             "LatticeOptionsResolver propagation guard failed; the resolver dropped one or more " +
             "LatticeOptions properties on the floor, so downstream consumers of " +
             "ResolvedLatticeOptions observe the LatticeOptions default instead of the operator's " +
-            "configured value. Add the missing assignment(s) to ResolveAsync's return-object " +
-            "construction block (or, if the property is deliberately consumed via " +
-            "IOptionsMonitor.Get(treeId) directly, add it to IntentionallyBypassedProperties " +
-            "with a comment explaining the downstream consumer).\n" +
+            "configured value. The resolver copies every configurable LatticeOptions property " +
+            "onto ResolvedLatticeOptions by reflection (CopyConfigurableBaseOptionsFrom); a " +
+            "failure here means that copy was bypassed or a derived override clobbered the " +
+            "configured value. Restore the round-trip in ResolveAsync.\n" +
             string.Join("\n", failures));
-    }
-
-    /// <summary>
-    /// Keeps <see cref="IntentionallyBypassedProperties"/> honest in the
-    /// "still bypassed" direction: a property listed there must genuinely NOT
-    /// be propagated by the resolver. If someone adds a property to the
-    /// resolver's copy block but leaves it on the allow-list, the main guard
-    /// would skip it forever - reintroducing exactly the silent hole issue
-    /// #2182 closed, only one level up.
-    /// </summary>
-    [Test]
-    public async Task Intentionally_bypassed_properties_are_not_silently_propagated()
-    {
-        var failures = new List<string>();
-
-        var bypassed = typeof(LatticeOptions)
-            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(p => p.GetSetMethod(nonPublic: false) is not null)
-            .Where(p => IntentionallyBypassedProperties.Contains(p.Name));
-
-        foreach (var prop in bypassed)
-        {
-            if (!TryPickSentinel(prop, out var sentinel))
-            {
-                // Not observable either way; the allow-list comment is the
-                // only available evidence and the main guard already requires
-                // one to exist.
-                continue;
-            }
-
-            var baseOptions = new LatticeOptions();
-            prop.SetValue(baseOptions, sentinel);
-            var resolver = BuildResolverFor(baseOptions);
-
-            var resolved = await resolver.ResolveAsync("user-tree-bypass-audit");
-
-            if (Equals(prop.GetValue(resolved), sentinel))
-            {
-                failures.Add(
-                    $"  LatticeOptions.{prop.Name} is listed in IntentionallyBypassedProperties, " +
-                    "but ResolveAsync does propagate it.");
-            }
-        }
-
-        Assert.That(failures, Is.Empty,
-            "IntentionallyBypassedProperties is stale. The resolver now propagates the property/properties " +
-            "below, so the allow-list entry suppresses a check that would otherwise hold. Remove the entry " +
-            "so the main propagation guard covers it again.\n" +
-            string.Join("\n", failures));
-    }
-
-    /// <summary>
-    /// Keeps <see cref="IntentionallyBypassedProperties"/> honest in the
-    /// "still exists" direction: every allow-list entry must name a real
-    /// public settable <see cref="LatticeOptions"/> property. A dead entry
-    /// left behind by a rename is a latent trap - a future property reusing
-    /// that name would be silently exempted from the guard without anyone
-    /// deciding so.
-    /// </summary>
-    [Test]
-    public void Intentionally_bypassed_properties_all_name_a_real_option()
-    {
-        var actual = typeof(LatticeOptions)
-            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(p => p.GetSetMethod(nonPublic: false) is not null)
-            .Select(p => p.Name)
-            .ToHashSet(StringComparer.Ordinal);
-
-        var dead = IntentionallyBypassedProperties
-            .Where(name => !actual.Contains(name))
-            .OrderBy(name => name, StringComparer.Ordinal)
-            .ToList();
-
-        Assert.That(dead, Is.Empty,
-            "IntentionallyBypassedProperties names one or more properties that no longer exist on " +
-            "LatticeOptions. Remove the stale entry: if a future option reuses the name it would be " +
-            "exempted from the propagation guard silently.");
-    }
-
-    /// <summary>
-    /// Keeps <see cref="KnownUnpropagatedLiveDefects"/> honest, and is the
-    /// reason that list cannot rot into a permanent exemption.
-    /// </summary>
-    /// <remarks>
-    /// Every entry is asserted to be GENUINELY STILL DROPPED by the resolver.
-    /// The moment someone teaches the resolver to copy one, this test fails
-    /// and forces the entry out of the list and into the main guard's scope.
-    /// Without this, a "known defect" entry would behave exactly like the
-    /// silent skip that issue #2182 was filed to remove.
-    /// </remarks>
-    [Test]
-    public async Task Known_unpropagated_live_defects_are_still_unpropagated()
-    {
-        var fixedUp = new List<string>();
-
-        foreach (var name in KnownUnpropagatedLiveDefects.OrderBy(n => n, StringComparer.Ordinal))
-        {
-            var prop = typeof(LatticeOptions).GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
-            Assert.That(prop, Is.Not.Null,
-                $"KnownUnpropagatedLiveDefects names '{name}', which is not a LatticeOptions property. " +
-                "Remove the stale entry.");
-
-            if (!TryPickSentinel(prop!, out var sentinel))
-            {
-                continue;
-            }
-
-            var baseOptions = new LatticeOptions();
-            prop!.SetValue(baseOptions, sentinel);
-            var resolver = BuildResolverFor(baseOptions);
-
-            var resolved = await resolver.ResolveAsync("user-tree-known-defect-guard");
-
-            if (Equals(prop.GetValue(resolved), sentinel))
-            {
-                fixedUp.Add(
-                    $"  LatticeOptions.{name} is now propagated by LatticeOptionsResolver.");
-            }
-        }
-
-        Assert.That(fixedUp, Is.Empty,
-            "One or more entries in KnownUnpropagatedLiveDefects are no longer defects:\n" +
-            string.Join("\n", fixedUp) +
-            "\nRemove them from KnownUnpropagatedLiveDefects so the main propagation guard " +
-            "covers them from now on. Leaving a fixed property listed there would exempt it " +
-            "from the guard permanently, which is the silent-skip hazard issue #2182 removed.");
-    }
-
-    /// <summary>
-    /// The two exemption lists must be disjoint. An entry in both would be
-    /// ambiguous about whether the omission is endorsed or merely tolerated,
-    /// and would survive the removal of either list.
-    /// </summary>
-    [Test]
-    public void Exemption_lists_are_disjoint()
-    {
-        var both = IntentionallyBypassedProperties
-            .Intersect(KnownUnpropagatedLiveDefects, StringComparer.Ordinal)
-            .OrderBy(name => name, StringComparer.Ordinal)
-            .ToList();
-
-        Assert.That(both, Is.Empty,
-            "A property appears in both IntentionallyBypassedProperties and " +
-            "KnownUnpropagatedLiveDefects. An omission is either deliberate or a defect, not both.");
     }
 
     /// <summary>
@@ -686,10 +279,23 @@ public class LatticeOptionsResolverPropagationGuardTests
                 return false;
             }
         }
+        else if (t.IsInterface || typeof(Delegate).IsAssignableFrom(t))
+        {
+            // Reference-typed options: an interface policy
+            // (ILatticeRetryPolicy) or a factory delegate
+            // (Func<string, IWalStorageProvider>). The guard cannot
+            // synthesise a "value" for these, but it can mint a distinct
+            // instance and prove the resolver copies the *reference*
+            // through. NSubstitute produces a proxy for both interfaces and
+            // delegate types; reference equality is all this guard needs,
+            // and the compiled default (null) is trivially distinct from it.
+            sentinel = Substitute.For(new[] { t }, null);
+        }
         else
         {
-            // Func<,>, interfaces, and any other reference type we cannot
-            // synthesise a comparable value for. The caller fails the build.
+            // Any other reference type we cannot synthesise a comparable
+            // value for. The caller fails the build rather than skipping:
+            // an unaudited property is the exact hole issue #2182 closed.
             return false;
         }
 
