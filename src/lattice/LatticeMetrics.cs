@@ -1376,9 +1376,21 @@ public static class LatticeMetrics
     /// sentinel and
     /// <see cref="Orleans.Lattice.BPlusTree.ILeafProjection.SetCheckpointOffsetAsync(long, CancellationToken)"/>
     /// enforces strict monotonicity, so a cold activation cannot bank anything
-    /// at all until its applied offset passes the checkpoint it started above.
-    /// Progress below that mark is not discarded, it is UNREPRESENTABLE. Read a
-    /// zero as "did not pass the existing mark", never as "did no work".
+    /// at all until its scanned-through offset passes the checkpoint it started
+    /// above. Progress below that mark is not discarded, it is UNREPRESENTABLE.
+    /// Read a zero as "did not pass the existing mark", never as "did no work".
+    /// </para>
+    /// <para>
+    /// The offsets counted here are SCANNED-THROUGH, not applied-through
+    /// (issue #2270): replay advances the checkpoint over entries it skips as
+    /// another leaf's work, deliberately, because the WAL retention floor is
+    /// the MINIMUM of these offsets and a leaf that owns no key in a partition
+    /// would otherwise pin truncation for the whole tree. A non-zero delta here
+    /// is therefore durable forward progress through the log, which is the
+    /// quantity issue #2280 is about, and NOT a count of mutations this leaf
+    /// applied. For that, read the <c>entriesApplied</c> field on the
+    /// accompanying log line, which is taken at the
+    /// <c>ILeafProjection.Apply</c> seam.
     /// </para>
     /// </summary>
     public static readonly Histogram<long> LeafDeactivationCheckpointDelta =
@@ -1427,8 +1439,10 @@ public static class LatticeMetrics
     /// This exists for a PROVIDER-DEPENDENT hazard, not for the deployment this
     /// repository runs. A resident prepare must never be dropped (dropping it
     /// pins the flush ceiling forever - the #2183 livelock), so past the cap it
-    /// is recorded unconditionally and the row is allowed to grow while the
-    /// #2208 saga-terminal leak is unfixed. On the default <c>local</c>
+    /// is recorded unconditionally and the row is allowed to grow for as long
+    /// as a saga leaves a prepare unresolved (registry status InFlight: the
+    /// residual population after issue #2190's self-terminalisation, whose
+    /// orphan source is tracked as issue #2304). On the default <c>local</c>
     /// durability profile that row is backed by SQLite (~1GB BLOB), so the
     /// growth is a write-amplification cost, not a correctness one. On an
     /// <c>Orleans.Lattice.Storage.AzureTable</c> deployment the 1MB entity cap
