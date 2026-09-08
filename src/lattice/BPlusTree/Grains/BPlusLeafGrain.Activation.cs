@@ -1042,7 +1042,7 @@ internal sealed partial class BPlusLeafGrain
     /// Growth is bounded by the number of distinct (tree, leaf, partition)
     /// triples that trip the budget within one backed-off interval, not by the
     /// leaf count and not by the attempt count, because
-    /// <see cref="ShouldLogOverBudgetReplay(string, string, int, out bool)"/>
+    /// <see cref="ShouldLogOverBudgetReplay(string, string, int)"/>
     /// sweeps entries whose interval has elapsed once the map reaches
     /// <see cref="OverBudgetLogStampCapacity"/>.
     /// </para>

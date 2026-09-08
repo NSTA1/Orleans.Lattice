@@ -152,6 +152,68 @@ public sealed class LatticeStateMetricsObserverTests
     }
 
     /// <summary>
+    /// The diff baseline is now retained and refilled in place across ticks
+    /// rather than rebuilt from scratch on each one, so a stale or half-refilled
+    /// baseline would not show up on a single delta - it would show up on the
+    /// tick after. This walks three consecutive deltas over an appearing and
+    /// then vanishing tree and asserts each is reported exactly once.
+    /// </summary>
+    [Test]
+    public async Task ObserveAsync_refreshes_its_baseline_across_consecutive_deltas()
+    {
+        var (observer, query) = Create();
+        query.SetTrees(TreeA);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var deltas = new List<TreeMetricsSnapshot>();
+        var step = 0;
+
+        await foreach (var snapshot in observer.ObserveAsync(Request(), timeout.Token))
+        {
+            if (snapshot.IsInitial)
+            {
+                query.SetTrees(TreeA, TreeB);
+                continue;
+            }
+
+            // Skip the quiescent ticks the sampler may emit between changes; the
+            // assertions below care only about the ticks that carry movement.
+            if (snapshot.Trees.Count == 0 && snapshot.RemovedTreeIds.Count == 0)
+            {
+                continue;
+            }
+
+            deltas.Add(snapshot);
+            step++;
+            if (step == 1)
+            {
+                query.SetTrees(TreeA);
+                continue;
+            }
+
+            break;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(deltas, Has.Count.EqualTo(2));
+            Assert.That(
+                deltas[0].Trees.Select(t => t.TreeId),
+                Is.EqualTo(new[] { TreeB }),
+                "The appearing tree is absent from the baseline, so it must be reported once.");
+            Assert.That(deltas[0].RemovedTreeIds, Is.Empty);
+            Assert.That(
+                deltas[1].RemovedTreeIds,
+                Is.EqualTo(new[] { TreeB }),
+                "The baseline must have absorbed the appearing tree, or its later removal is invisible.");
+            Assert.That(
+                deltas[1].Trees,
+                Is.Empty,
+                "TreeA never moved, so a correctly refilled baseline must not re-send it.");
+        });
+    }
+
+    /// <summary>
     /// Reads the initial snapshot, applies <paramref name="afterFirst"/>, then
     /// reads until a delta snapshot arrives.
     /// </summary>

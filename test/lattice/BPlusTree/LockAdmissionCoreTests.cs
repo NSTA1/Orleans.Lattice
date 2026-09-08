@@ -77,6 +77,43 @@ public sealed class LockAdmissionCoreTests
             Throws.InstanceOf<ArgumentOutOfRangeException>());
     }
 
+    [Test]
+    public void Grant_saturates_an_overflowing_lease_instead_of_wrapping_negative()
+    {
+        // A large-but-permitted MaxLockLeaseDuration (the options validator only
+        // rejects non-positive durations) can drive leaseTicks so high that
+        // nowTicks + leaseTicks overflows long. It must saturate at
+        // DateTime.MaxValue.Ticks, never wrap to a negative tick that would read
+        // as an already-expired fresh lease (breaking mutual exclusion) and that
+        // the grain cannot materialise as a DateTimeOffset.
+        var state = new LockCoreState();
+        var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
+
+        LockAdmissionCore.Grant(ref state, nowTicks, long.MaxValue);
+
+        Assert.That(state.LeaseExpiresAtTicks, Is.EqualTo(DateTime.MaxValue.Ticks));
+        Assert.That(state.LeaseExpiresAtTicks, Is.GreaterThan(nowTicks));
+        // The safety property: a freshly granted lease is not immediately expired.
+        Assert.That(LockAdmissionCore.IsLeaseExpired(state, nowTicks), Is.False);
+        // The saturated tick is materialisable as a DateTimeOffset (BuildLease).
+        Assert.That(() => new DateTimeOffset(state.LeaseExpiresAtTicks, TimeSpan.Zero),
+            Throws.Nothing);
+    }
+
+    [Test]
+    public void Renew_saturates_an_overflowing_lease_instead_of_wrapping_negative()
+    {
+        var state = new LockCoreState();
+        var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
+        var token = LockAdmissionCore.Grant(ref state, nowTicks, Lease);
+
+        var renewed = LockAdmissionCore.Renew(ref state, token, nowTicks, long.MaxValue);
+
+        Assert.That(renewed, Is.True);
+        Assert.That(state.LeaseExpiresAtTicks, Is.EqualTo(DateTime.MaxValue.Ticks));
+        Assert.That(LockAdmissionCore.IsLeaseExpired(state, nowTicks), Is.False);
+    }
+
     // --- IsLeaseExpired ---
 
     [Test]
