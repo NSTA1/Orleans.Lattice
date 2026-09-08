@@ -1252,6 +1252,44 @@ public static class LatticeMetrics
             description: "Activation-time leaf replays whose own post-range-filter applied-entry count exceeded the configured replay budget with an intact WAL, tagged by tree and WAL partition.");
 
     /// <summary>
+    /// Counter of activation-time leaf replays that re-entered from a persisted
+    /// checkpoint which had <b>not advanced</b> since the same leaf partition's
+    /// previous replay on this silo, emitted by <c>BPlusLeafGrain</c>'s
+    /// stalled-replay check (issue #2285). A non-zero value means the previous
+    /// activation banked no durable forward progress at all for that leaf
+    /// partition.
+    /// <para>
+    /// This is the <b>fault</b> arm, and it is a different condition from
+    /// <see cref="LeafActivationOverBudgetReplays"/>, which is a capacity
+    /// signal. An over-budget replay converges, just slowly; a non-advancing
+    /// replay has not converged at all. Before this counter existed the fault
+    /// arm was reported <b>only</b> by a warning log, which is throttled to one
+    /// line per (tree, leaf, partition) per minute, so the observable rate was
+    /// the throttle's rate and not the condition's. This counter records every
+    /// occurrence and is the exact census; the log is a bounded sample of it.
+    /// </para>
+    /// <para>
+    /// <b>Read it as a rate over time, not as a level.</b> The condition is
+    /// transient whenever an activation is torn down mid-replay - a burst of
+    /// cancellations or timeouts produces a cluster of these and then stops -
+    /// and it is persistent only when the same leaf partition keeps reporting
+    /// across many minutes. The two are indistinguishable in a single sample
+    /// and were conflated in issue #2285, where a 70-second burst of 47
+    /// occurrences was read as a permanent convergence defect. Alert on the
+    /// condition <i>continuing</i>, not on its appearance.
+    /// </para>
+    /// <para>
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// Deliberately <b>not</b> tagged by leaf: leaf count is unbounded, so it
+    /// cannot be a time-series dimension. The accompanying warning names the
+    /// leaf.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafActivationStalledReplays =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.activation_stalled_replays", unit: "{replay}",
+            description: "Activation-time leaf replays that re-entered from a persisted checkpoint that had not advanced since the previous replay, tagged by tree and WAL partition.");
+
+    /// <summary>
     /// Counter of activation-time eager cursor-publish failures, emitted by
     /// <c>BPlusLeafGrain.OnActivateAsync</c> when the post-replay cursor report
     /// throws (a non-fatal failure the next foreground flush recovers from).
