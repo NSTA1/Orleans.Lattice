@@ -98,6 +98,33 @@ services:
       # retained, so setting this back to "1" and restarting is a safe rollback
       # that over-retains WAL rather than over-trimming it.
       LATTICE_WAL_PIN_BUCKETS: "8"
+      # Per-silo ceiling on concurrent activation-time leaf WAL replays. Left
+      # UNSET here deliberately, so this sample behaves identically on every
+      # host: unset defers to the library, which sizes the gate from
+      # Environment.ProcessorCount.
+      #
+      # Set it when this container runs under a CPU limit (issue #2279).
+      # Environment.ProcessorCount is cgroup-aware only while
+      # DOTNET_PROCESSOR_COUNT does not override it, and an override wins
+      # silently - so a box granted 6 CPUs whose environment says 16 sizes this
+      # gate to 16 and oversubscribes a CPU-bound path 2.67x. Each permit admits
+      # one whole-readable-window WAL replay, which is exactly the expensive path
+      # a reactivation storm multiplies.
+      #
+      #   LATTICE_WAL_MAX_CONCURRENT_REPLAYS: "<this container's CPU limit>"
+      #
+      # The placeholder is deliberate: copying a literal from someone else's
+      # deployment is the failure this setting exists to prevent, so there is no
+      # number here to copy. An unparseable value is refused at startup with a
+      # message naming the variable, which is the safe way to get it wrong.
+      #
+      # Set it TOGETHER WITH the CPU limit it is derived from, in the same file,
+      # and keep the two adjacent. A ceiling pinned somewhere the quota is not
+      # declared is a second claim about that quota which nothing can check - the
+      # hazard that produced #2279 to begin with, relocated rather than removed.
+      # Verify what actually bound: the silo logs the resolved ceiling once at
+      # startup, alongside the configured option and Environment.ProcessorCount,
+      # so a value that was ignored is visible rather than merely assumed.
       # The read-only workspace root. Repositories are registered at runtime by
       # the client through the repocontext_add_repo tool, and every added path
       # must resolve under this root - a path escaping it (via `..` or a symlink)
