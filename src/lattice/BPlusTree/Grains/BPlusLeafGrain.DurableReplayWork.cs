@@ -131,6 +131,58 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Test seam for the issue #2183 regression control arm. Production always
+    /// records a resident unresolved prepare unconditionally (see
+    /// <see cref="EnsureUnresolvedPrepareRecorded"/>); flipping this to
+    /// <see langword="false"/> reproduces the pre-fix behaviour - the prepare
+    /// is recorded through the capped path and DROPPED once the ledger is full,
+    /// which pins the ceiling permanently - on the same build, so the two arms
+    /// differ only in the fix and not in configuration.
+    /// </summary>
+    internal bool RecordUnresolvedPreparesBeyondCap { get; set; } = true;
+
+    /// <summary>
+    /// Records a resident unresolved saga prepare durably, ALWAYS, bypassing
+    /// the <c>MaxDurableUnresolvedReplayWork</c> cap that bounds deferred
+    /// terminals (issue #2183).
+    /// <para>
+    /// The cap is a safe bound for a deferred TERMINAL: dropping one at the cap
+    /// falls back to the in-memory clamp, and pass 2 still drains it, so the
+    /// clamp is transient. It is NOT a safe bound for an unresolved PREPARE:
+    /// nothing drains a prepare whose saga never terminates, so a dropped
+    /// prepare pins the flush ceiling at (prepare - 1) forever and the leaf
+    /// banks no durable forward progress at all - the livelock issue #2183
+    /// reproduces once a long-lived leaf's ledger has saturated with
+    /// never-resolving orphan prepares. Dropping a prepare is also unsafe for
+    /// the aged-out-commit reason #2190 documents: a prepare whose commit
+    /// terminal has truncated on another partition reads InFlight yet
+    /// committed, so it must be preserved, not discarded.
+    /// </para>
+    /// <para>
+    /// Preserving every resident unresolved prepare lets the persisted row grow
+    /// while a saga-terminal leak (the parked issue #2208 orphan source) is
+    /// unfixed, but that growth is bounded by the count of genuinely
+    /// unresolved prepares, is observable, and resolves the instant each saga
+    /// terminates through <see cref="ResolveUnresolvedReplayWorkForTransaction"/>.
+    /// That is strictly preferable to the alternative it replaces, which is
+    /// silent permanent write loss.
+    /// </para>
+    /// <para>
+    /// Idempotent: a prepare already recorded at (partition, offset) is left
+    /// untouched, so a restore-then-re-read cannot double it.
+    /// </para>
+    /// </summary>
+    private void EnsureUnresolvedPrepareRecorded(int partition, long offset, in LatticeMutation mutation)
+    {
+        var index = DurableReplayWorkIndex();
+        if (!index.Add((partition, offset)))
+            return;
+
+        (state.State.UnresolvedReplayWork ??= []).Add(
+            new UnresolvedReplayWorkEntry(partition, offset, mutation));
+    }
+
+    /// <summary>
     /// Strikes the record for (<paramref name="partition"/>,
     /// <paramref name="offset"/>) off the ledger once its work has actually
     /// been applied - a deferred terminal draining in pass 2. Ignores an

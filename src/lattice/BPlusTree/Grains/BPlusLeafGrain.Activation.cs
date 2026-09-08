@@ -2687,10 +2687,47 @@ internal sealed partial class BPlusLeafGrain
                         // durably lifts that clamp too - see
                         // MinUnresolvedPrepareOffsetForPartition, which skips
                         // every recorded offset.
+                        //
+                        // Issue #2183. The prepare and the deferred terminal
+                        // are NOT symmetric at the cap, though. A deferred
+                        // terminal that cannot be recorded (ledger full) is
+                        // safe to drop back onto the in-memory clamp: pass 2
+                        // still drains it, so the clamp is released within the
+                        // activation and the partition banks progress on the
+                        // next one - the "slow but safe" degradation the cap
+                        // was designed for. An unresolved prepare has no
+                        // terminal to drain: nothing releases its clamp until
+                        // its saga terminates, which for a genuinely orphaned
+                        // prepare (registry InFlight forever) is never. So a
+                        // prepare that is dropped at the cap pins the ceiling
+                        // at (prepare - 1) PERMANENTLY, and the leaf banks zero
+                        // forward progress across every future activation - the
+                        // livelock this issue reproduces on the deployed box,
+                        // where a long-lived leaf's ledger has saturated with
+                        // never-resolving orphan prepares.
+                        //
+                        // A resident prepare must therefore be recorded
+                        // unconditionally whenever the ledger is enabled: it is
+                        // never safe to drop, because dropping it also risks
+                        // losing an aged-out commit whose terminal truncated on
+                        // another partition (the hazard #2190 preserves InFlight
+                        // prepares for). The cap continues to bound the deferred
+                        // terminals that CAN be safely re-read. When the ledger
+                        // is disabled (cap <= 0) the in-memory clamp is the only
+                        // protection and the prepare pins the ceiling exactly as
+                        // before, which the no-ledger degradation tests assert.
                         if (entry.Mutation.IsPrepared)
                         {
-                            TryRecordUnresolvedReplayWork(
-                                partition, entry.Offset, entry.Mutation, maxDurableUnresolvedWork);
+                            if (RecordUnresolvedPreparesBeyondCap && maxDurableUnresolvedWork > 0)
+                            {
+                                EnsureUnresolvedPrepareRecorded(
+                                    partition, entry.Offset, entry.Mutation);
+                            }
+                            else
+                            {
+                                TryRecordUnresolvedReplayWork(
+                                    partition, entry.Offset, entry.Mutation, maxDurableUnresolvedWork);
+                            }
                         }
                     }
                 }
