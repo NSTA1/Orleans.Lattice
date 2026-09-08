@@ -31,9 +31,20 @@ internal static class HistoryRetentionShaper
         HistoryRetentionPolicy policy,
         long drainNowTicks)
     {
-        var expiresAtTicks = policy.Window > TimeSpan.Zero
-            ? drainNowTicks + policy.Window.Ticks
-            : 0L;
+        // Saturate rather than overflow: a window so large that the absolute
+        // expiry would exceed DateTime.MaxValue is stamped at the maximum
+        // representable tick (effectively never expiring), preserving the
+        // retain-nearly-forever intent instead of wrapping to a negative tick
+        // that the next TTL sweep would treat as already-expired and drop.
+        // drainNowTicks and Window.Ticks are both non-negative here.
+        long expiresAtTicks = 0L;
+        if (policy.Window > TimeSpan.Zero)
+        {
+            var windowTicks = policy.Window.Ticks;
+            expiresAtTicks = windowTicks > DateTime.MaxValue.Ticks - drainNowTicks
+                ? DateTime.MaxValue.Ticks
+                : drainNowTicks + windowTicks;
+        }
 
         // Only an LWW Set row carries value bytes that the mode can strip. CRDT
         // deltas, deletes and range-tombstone markers keep their (delta / empty)

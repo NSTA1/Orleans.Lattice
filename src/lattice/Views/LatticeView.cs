@@ -56,7 +56,7 @@ internal sealed class LatticeView(
         lock (_gate)
         {
             _cachedTree = tree;
-            _cacheExpiresUtc = DateTime.UtcNow + readHandleCacheTtl;
+            _cacheExpiresUtc = ComputeCacheExpiry(DateTime.UtcNow, readHandleCacheTtl);
         }
 
         return tree;
@@ -71,6 +71,20 @@ internal sealed class LatticeView(
             _cacheExpiresUtc = DateTime.MinValue;
         }
     }
+
+    /// <summary>
+    /// The read-handle cache expiry, <paramref name="nowUtc"/> +
+    /// <paramref name="ttl"/>, saturated at <see cref="DateTime.MaxValue"/>
+    /// instead of overflowing. <see cref="LatticeViewOptions.ReadHandleCacheTtl"/>
+    /// is validated only as strictly positive, so an extreme-but-permitted value
+    /// would otherwise overflow the <c>DateTime + TimeSpan</c> operator and throw
+    /// <see cref="ArgumentOutOfRangeException"/> on every view read; saturating
+    /// keeps the cached handle valid ("cache effectively forever").
+    /// </summary>
+    internal static DateTime ComputeCacheExpiry(DateTime nowUtc, TimeSpan ttl)
+        => ttl > DateTime.MaxValue - nowUtc
+            ? new DateTime(DateTime.MaxValue.Ticks, DateTimeKind.Utc)
+            : nowUtc + ttl;
 
     /// <inheritdoc />
     public async Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
