@@ -49,9 +49,23 @@ internal sealed partial class BPlusLeafGrain(
     /// does not lose an unflushed checkpoint that the materialiser has
     /// already issued. Crash deactivations bypass this hook by design -
     /// the persisted offset bounds replay cost in that case.
+    /// <para>
+    /// Also records the once-per-deactivation checkpoint observation
+    /// (<see cref="LatticeMetrics.LeafDeactivationCheckpointDelta"/>, issue
+    /// #2280). Because crash teardowns bypass this hook, and because Orleans
+    /// does not run it at all when <c>OnActivateAsync</c> throws, that
+    /// observation is a LOWER BOUND and is documented as one on the
+    /// instrument itself.
+    /// </para>
     /// </summary>
     async Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
+        // Sampled BEFORE any flush below so the pair brackets exactly the work
+        // this hook performs (issue #2280). Read from the per-partition state
+        // array rather than resolved options so the observation adds no await
+        // and no new failure mode to the teardown path.
+        var checkpointAtEntry = SumPersistedCheckpointsAcrossPartitions();
+
         try
         {
             // c2-xxviii: drain any pending coalesced digest publish
@@ -105,6 +119,10 @@ internal sealed partial class BPlusLeafGrain(
         }
         finally
         {
+            // Once per deactivation, before the teardown bookkeeping below, so
+            // a throw from either of those cannot suppress the observation.
+            RecordDeactivationCheckpointDelta(reason, checkpointAtEntry);
+
             DisposeProjectionHasher();
 
             // Remove this activation's same-silo revision cookie so the
@@ -125,6 +143,112 @@ internal sealed partial class BPlusLeafGrain(
     }
 
     private static readonly Dictionary<string, LwwValue<byte[]>> EmptyEntries = new();
+
+    /// <summary>
+    /// Sums this leaf's <b>persisted</b> per-partition projection checkpoints,
+    /// clamping the <c>-1</c> "nothing applied yet" sentinel to zero so the
+    /// total is a monotone, non-negative quantity that can be differenced
+    /// across the deactivation hook. Partition count comes from the persisted
+    /// per-partition array (falling back to the legacy single-partition shape),
+    /// so this stays synchronous and cannot fail.
+    /// <para>
+    /// It reads the <b>persisted</b> mark deliberately, not
+    /// <c>GetCurrentCheckpointForPartition</c>. That accessor returns
+    /// <c>max(persisted, pending)</c>, so an offset advanced in memory but not
+    /// yet flushed is already included on entry to the hook - which is exactly
+    /// the state a leaf with unflushed progress is in when it starts
+    /// deactivating. Differencing it would report zero for every deactivation
+    /// at every rate of occurrence, making the instrument a structural zero
+    /// rather than a weak measurement. The durable mark is also the quantity
+    /// the field evidence in issue #2280 is stated in.
+    /// </para>
+    /// </summary>
+    private long SumPersistedCheckpointsAcrossPartitions()
+    {
+        var partitioned = state.State.ProjectionCheckpointOffsetsByPartition;
+        var partitionCount = partitioned is { Length: > 0 } ? partitioned.Length : 1;
+
+        long total = 0;
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            var checkpoint = GetPersistedCheckpointForPartition(partition);
+            if (checkpoint > 0)
+                total += checkpoint;
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// Records the once-per-deactivation checkpoint observation for issue
+    /// #2280: how many projection-checkpoint offsets this activation banked
+    /// while tearing down, tagged by tree, deactivation reason and activation
+    /// temperature. Per-leaf detail goes to the accompanying debug log line -
+    /// never to a tag, because the leaf population is unbounded.
+    /// <para>
+    /// Never throws. It runs first in the hook's <c>finally</c>, so a fault
+    /// here would otherwise suppress the projection-hasher disposal and the
+    /// revision-cookie removal that follow it.
+    /// </para>
+    /// </summary>
+    private void RecordDeactivationCheckpointDelta(DeactivationReason reason, long checkpointAtEntry)
+    {
+        try
+        {
+            if (state.State.TreeId is not { Length: > 0 } treeId)
+                return;
+
+            var checkpointAtExit = SumPersistedCheckpointsAcrossPartitions();
+            var delta = checkpointAtExit - checkpointAtEntry;
+            if (delta < 0)
+                delta = 0;
+
+            var temperature = _activationWasCold
+                ? LatticeMetrics.ActivationTemperatureCold
+                : LatticeMetrics.ActivationTemperatureWarm;
+
+            LatticeMetrics.LeafDeactivationCheckpointDelta.Record(
+                delta,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagDeactivationReason, reason.ReasonCode.ToString()),
+                temperature,
+                LatticeTenantLabel.ForTree(treeId));
+
+            var logger = ResolveLogger();
+            if (logger is null || !logger.IsEnabled(LogLevel.Debug))
+                return;
+
+            // Debug rather than Information: this fires once per leaf
+            // deactivation and the live-leaf population is unbounded, so a
+            // reactivation storm would otherwise flood the log with exactly
+            // the lines an operator is least able to read.
+            logger.LogDebug(
+                "Leaf {GrainId} (tree '{TreeId}') deactivating: reason {Reason}, {Temperature} activation, "
+                + "checkpoint total {CheckpointAtEntry} -> {CheckpointAtExit} (banked {Delta}), "
+                + "{EntriesApplied} entries applied through the projection seam this activation. "
+                + "A ZERO delta on a COLD activation is expected and is not by itself a fault: a cold replay "
+                + "restarts from the -1 sentinel and the checkpoint is strictly monotonic, so nothing can be "
+                + "banked until the applied offset passes the mark this activation started above. Progress "
+                + "below that mark is not discarded, it is unrepresentable - read EntriesApplied to tell a "
+                + "leaf that did no work from one that did a great deal below its existing mark. This line, "
+                + "and the metric beside it, are a LOWER BOUND on deactivations: crash teardowns bypass this "
+                + "hook by design, and an activation that THREW never reaches it at all (that population is "
+                + "counted by the leaf activation-failure counter instead).",
+                context.GrainId,
+                treeId,
+                reason.ReasonCode,
+                _activationWasCold ? "cold" : "warm",
+                checkpointAtEntry,
+                checkpointAtExit,
+                delta,
+                _replayEntriesAppliedThisActivation);
+        }
+        catch
+        {
+            // Observation must never break deactivation, and must never
+            // suppress the teardown steps sequenced after it.
+        }
+    }
 
     /// <summary>
     /// Process-wide singleton returned by <see cref="GetDeltaSinceAsync"/>
