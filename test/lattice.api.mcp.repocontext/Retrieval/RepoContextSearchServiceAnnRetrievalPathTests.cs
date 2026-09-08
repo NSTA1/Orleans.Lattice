@@ -139,6 +139,7 @@ public sealed class RepoContextSearchServiceAnnRetrievalPathTests
             exact,
             RepoContextExactScanBudgets.Unbounded(),
             new RepoContextExactScanBreaker(),
+            new RepoContextRetrievalGuardReporter(),
             NullLogger<AnnRepoContextSemanticIndex>.Instance);
 
     [Test]
