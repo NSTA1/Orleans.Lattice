@@ -468,11 +468,23 @@ public sealed class LatticeWalGc(
 
     /// <summary>
     /// Computes the offset-space retention floor for <paramref name="treeName"/>:
-    /// the lowest durably-applied leaf-materialiser checkpoint offset across every
-    /// pin shard. The WAL GC must never trim an entry at or above this offset,
-    /// because a leaf whose applied checkpoint sits there has not yet consumed the
-    /// entries above it - including a low-HLC / high-offset tombstone-compaction
-    /// reap that the HLC floor alone would wrongly consider trim-eligible.
+    /// the lowest leaf-materialiser checkpoint offset across every pin shard. The
+    /// WAL GC must never trim an entry at or above this offset, because a leaf
+    /// whose checkpoint sits there has not yet consumed the entries above it -
+    /// including a low-HLC / high-offset tombstone-compaction reap that the HLC
+    /// floor alone would wrongly consider trim-eligible.
+    /// <para>
+    /// Note the reported checkpoints are SCANNED-through, not applied-through
+    /// (issue #2270): a leaf advances its checkpoint over entries it skips as
+    /// another leaf's work. That is safe HERE, and only because this is a
+    /// MINIMUM. Skipping inflates the checkpoint of leaves that do not own the
+    /// entry, while the one leaf that does own it cannot skip it and so holds the
+    /// minimum below that offset until it truly applies. Do not re-derive this
+    /// floor from any per-leaf quantity that is not minimised over the owning
+    /// population, and do not "tighten" the leaf-side advance to applied-only:
+    /// a leaf owning nothing in a partition would then never advance and would
+    /// pin this floor permanently.
+    /// </para>
     /// Returns <see langword="null"/> when the durable pin store is unavailable,
     /// carries no offsets (state predating this field, or a host that never
     /// reports offsets), so the GC degrades cleanly to the pre-existing HLC-only
@@ -506,7 +518,7 @@ public sealed class LatticeWalGc(
                 // entirely) or a split sibling that received its data via an
                 // in-memory handoff rather than WAL replay. Letting a -1 collapse
                 // the floor would wedge the trim for the whole tree; only real
-                // applied checkpoints (offset >= 0) constrain the offset floor.
+                // checkpoints (offset >= 0) constrain the offset floor.
                 if (offset < 0)
                 {
                     continue;

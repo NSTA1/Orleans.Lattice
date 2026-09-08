@@ -2618,6 +2618,20 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var fromExclusive = checkpoint;
+
+        // NAMING (issue #2270): this tracks the highest offset SCANNED, not
+        // applied. It is bumped below for every entry the loop reads,
+        // including entries ShouldApplyDuringReplay rejects as another
+        // leaf's work. The name is a known misnomer, retained here only to
+        // keep this change off the merge path of concurrent work in this
+        // file; the semantics it feeds (ProjectionCheckpointOffset) are
+        // documented on BPlusLeafGrain.ProjectionAdmin.cs and pinned by
+        // BPlusLeafGrainTests.CheckpointScanSemantics. Do NOT "correct" the
+        // behaviour to match the name: advancing only over applied entries
+        // would strand a leaf that owns nothing in this partition at its old
+        // checkpoint forever and pin the WAL GC retention floor
+        // (LatticeWalGc.ComputeMaterialiserOffsetFloorAsync) for the whole
+        // tree.
         long maxApplied = checkpoint;
 
         // Exact, POST-filter count of the entries THIS leaf takes through the
@@ -2966,6 +2980,13 @@ internal sealed partial class BPlusLeafGrain
                 }
 #endif
 
+                // SCANNED-through advance (issue #2270). Deliberately OUTSIDE
+                // the ShouldApplyDuringReplay block above: an entry this leaf
+                // skipped as another leaf's work still moves the checkpoint,
+                // because the checkpoint records how far this leaf has READ
+                // the partition, not how much of it was its own. Moving this
+                // inside the filter is a severe regression, not a tightening -
+                // see the declaration of maxApplied above.
                 if (entry.Offset > maxApplied)
                     maxApplied = entry.Offset;
 
