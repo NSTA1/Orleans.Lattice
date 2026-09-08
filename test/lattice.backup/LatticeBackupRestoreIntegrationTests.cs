@@ -360,6 +360,74 @@ public sealed class LatticeBackupRestoreIntegrationTests
     }
 
     [Test]
+    public async Task RestoreAsync_shadow_cutover_of_an_incremental_chain_folds_the_delta_over_the_base()
+    {
+        // Regression: BuildShadowCoreAsync used to call BulkLoadRawAsync
+        // unconditionally, but that bottom-up load requires globally ascending,
+        // duplicate-free input. A base-plus-increment chain streams base-first then
+        // the increment, so its concatenation is non-monotonic and repeats any key
+        // the increment rewrote. Loaded across more than one leaf the tree gains
+        // non-increasing separators and mis-routes reads, silently losing data. The
+        // fix routes any multi-manifest chain through the HLC-converging merge path,
+        // exactly as the in-place restore already does.
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("k1", Bytes("v1"));
+        await source.SetAsync("k2", Bytes("v2"));
+        await source.SetAsync("k3", Bytes("v3"));
+
+        var baseBackup = await _fixture.Capture.CaptureAsync(
+            new LatticeBackupCaptureRequest("shadow-inc-base", BackupScopeSelector.WholeTree(Source)));
+
+        // Writes after the base cut: an overwrite, a new key, and a delete.
+        await source.SetAsync("k1", Bytes("v1-updated"));
+        await source.SetAsync("k4", Bytes("v4"));
+        await source.DeleteAsync("k2");
+
+        var increment = await _fixture.Incremental.CaptureIncrementalAsync(
+            new LatticeBackupIncrementalCaptureRequest(
+                "shadow-inc", BackupScopeSelector.WholeTree(Source), baseBackup.BackupId));
+        Assert.That(increment.Manifest.Kind, Is.EqualTo(BackupKind.Incremental));
+
+        const string target = "orders-shadow-chain";
+        var request = new LatticeRestoreRequest(
+            increment.BackupId, target,
+            mode: LatticeRestoreMode.ShadowCutover,
+            operationId: "shadow-inc-regression");
+
+        // Pin the shadow tree to a single shard with a tiny leaf fan-out so the
+        // restored chain (base k1,k2,k3 then increment k1,k2-tombstone,k4) spans
+        // more than one leaf - the shape under which the old bulk-load path derives
+        // a non-monotonic separator and corrupts the tree (a single leaf would
+        // accidentally de-duplicate correctly and hide the defect). The target is
+        // pinned to the same topology so that after the alias cutover reads route to
+        // the same single shard the shadow was built into. RegisterAsync is
+        // idempotent, so the engine's own provenance registration is a no-op that
+        // preserves this pinned topology.
+        var shadowTreeId = ((ILatticeCoordinatedRestoreEngine)_fixture.Restore).ResolveShadowTreeId(request);
+        var registry = _fixture.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(
+            target,
+            new TreeRegistryEntry { ShardCount = 1, MaxLeafKeys = 4 });
+        await registry.RegisterAsync(
+            shadowTreeId,
+            new TreeRegistryEntry { RestoreShadowOfTreeId = target, ShardCount = 1, MaxLeafKeys = 4 });
+
+        var result = await _fixture.Restore.RestoreAsync(request);
+
+        var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(result.Mode, Is.EqualTo(LatticeRestoreMode.ShadowCutover));
+            Assert.That(Str((await restored.GetAsync("k1"))!), Is.EqualTo("v1-updated"), "overwrite folded");
+            Assert.That(await restored.GetAsync("k2"), Is.Null, "delete folded");
+            Assert.That(await restored.GetAsync("k3"), Is.Not.Null, "untouched base entry must not be lost");
+            Assert.That(Str((await restored.GetAsync("k3"))!), Is.EqualTo("v3"), "untouched base entry survives");
+            Assert.That(Str((await restored.GetAsync("k4"))!), Is.EqualTo("v4"), "new key folded");
+        });
+    }
+
+    [Test]
     public async Task RevertRestoreAsync_rejects_a_non_shadow_result()
     {
         await _fixture.InitializeAsync();
