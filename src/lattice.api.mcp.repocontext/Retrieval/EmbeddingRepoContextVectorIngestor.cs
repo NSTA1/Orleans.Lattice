@@ -1390,6 +1390,49 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     }
 
     /// <summary>
+    /// Which arm of the built-in perturbation control a pass's symptom count belongs
+    /// to, determined by whether the <i>previous</i> pass ran the coverage read-back.
+    /// The read-back is the only store touch the instrumentation adds, so bucketing
+    /// each pass's gap count by whether it was preceded by a read-back measures the
+    /// read-back's own effect on the next pass rather than assuming it away (issue
+    /// #2208).
+    /// </summary>
+    internal enum GapReadBackArm
+    {
+        /// <summary>The first observed pass: it has no predecessor, so it labels neither arm.</summary>
+        Seed,
+
+        /// <summary>Arm A - the previous pass ran the read-back, so this pass's probe met a warmed grain.</summary>
+        PriorReadBackRan,
+
+        /// <summary>Arm B - the previous pass skipped the read-back, so this pass's probe met whatever state the inter-pass gap left.</summary>
+        PriorReadBackSkipped,
+    }
+
+    /// <summary>
+    /// The parity rule for the alternating coverage read-back: it runs on
+    /// even-numbered passes (2nd, 4th, ...) and is skipped on odd ones. Alternating it
+    /// turns the instrument into its own two-arm control - a pass preceded by a
+    /// read-back versus one that was not - so the read-back's effect on the next pass's
+    /// observability is measured, not argued. A pure function of the 1-based pass
+    /// ordinal so it is deterministic and unit-testable.
+    /// </summary>
+    internal static bool GapReadBackRunsOnPass(int passOrdinal) => (passOrdinal % 2) == 0;
+
+    /// <summary>
+    /// Classifies a pass's symptom count into the perturbation-control arm defined by
+    /// whether its <i>predecessor</i> ran the read-back, following
+    /// <see cref="GapReadBackRunsOnPass"/>. The first pass has no predecessor and is
+    /// <see cref="GapReadBackArm.Seed"/>. A pure function of the 1-based pass ordinal.
+    /// </summary>
+    internal static GapReadBackArm ClassifyGapReadBackArm(int passOrdinal)
+        => passOrdinal < 2
+            ? GapReadBackArm.Seed
+            : GapReadBackRunsOnPass(passOrdinal - 1)
+                ? GapReadBackArm.PriorReadBackRan
+                : GapReadBackArm.PriorReadBackSkipped;
+
+    /// <summary>
     /// Records this pass's gap selection into the per-repository history and emits the
     /// shape of the never-converging back-fill (issue #2208) as two structured lines,
     /// so a live deployment answers what the per-pass count cannot. Diagnostic only -
@@ -1407,11 +1450,16 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// The second line is the <b>durability signal</b>: how many files the previous
     /// pass both selected AND landed (embedded with membership recorded) are being
     /// re-selected now, paired with an immediate coverage read-back of this pass's
-    /// gaps. This is the file-arm reading of the symbol arm's re-embed-loop signature
-    /// (<see cref="DetectStalledGapProgress"/>, issues #2071/#2078). A majority
-    /// re-selected while the immediate read-back sees them covered is a write that lands
-    /// but does not stay observable - the WAL-replay-budget loop, which the file arm has
-    /// no backoff for; a low read-back is a write that is not durable.
+    /// gaps. The read-back is the only store touch this instrumentation adds, so it
+    /// runs on <b>alternate passes</b> (see <see cref="GapReadBackRunsOnPass"/>): the
+    /// gap counts then split into a pass-preceded-by-a-read-back arm and a not arm, so
+    /// the read-back's own effect on the next pass's observability is measured rather
+    /// than assumed away. This is the file-arm reading of the symbol arm's
+    /// re-embed-loop signature (<see cref="DetectStalledGapProgress"/>, issues
+    /// #2071/#2078). A majority re-selected while the immediate read-back sees them
+    /// covered is a write that lands but does not stay observable - the
+    /// WAL-replay-budget loop, which the file arm has no backoff for; a low read-back
+    /// is a write that is not durable.
     /// </para>
     /// </summary>
     private async Task LogGapDiagnosticsAsync(
@@ -1443,6 +1491,15 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             var history = _fileGapHistory.GetOrAdd(repoId, static _ => new FileGapHistory());
             var stats = history.Observe(selectedKeys, landedFromGap, walkedFiles);
 
+            // The read-back is the only store touch this instrumentation adds, so run
+            // it on alternate passes: a pass preceded by a read-back (arm A) versus one
+            // that was not (arm B) then measures the read-back's own effect on the next
+            // pass's observability instead of assuming it away (issue #2208). The arm
+            // label and parity rule are logged so the two buckets can be split without
+            // guessing which pass ran the probe.
+            var runReadBack = GapReadBackRunsOnPass(stats.Passes);
+            var arm = ClassifyGapReadBackArm(stats.Passes);
+
             const int SampleSize = 16;
             var sample = gapSelectedFiles
                 .Select(static file => file.RelativePath)
@@ -1453,7 +1510,10 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             _logger.LogInformation(
                 "Repo {RepoId}: back-fill gap set shape. selected={GapCount} digest={GapDigest}; vs previous "
                 + "selected={PrevCount}: overlap={Overlap} entered={Entered} left={Left}; rolling union={UnionSize} "
-                + "over {Passes} pass(es) against {WalkedFiles} walked file(s){UnionNote}. sample: {GapSample}",
+                + "over {Passes} pass(es) against {WalkedFiles} walked file(s){UnionNote}. "
+                + "readBackThisPass={RunReadBack} (rule: runs on even pass ordinals); "
+                + "controlArm={Arm} (this selected count's bucket: PriorReadBackRan=A, PriorReadBackSkipped=B, "
+                + "Seed=first pass). sample: {GapSample}",
                 repoId,
                 stats.CurrentCount,
                 GapSetDigest(repoId, gapSelectedFiles).ToString("x16"),
@@ -1465,7 +1525,16 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 stats.Passes,
                 walkedFiles,
                 stats.UnionSaturated ? " (union tracking saturated)" : string.Empty,
+                runReadBack,
+                arm,
                 string.Join(", ", sample));
+
+            if (!runReadBack)
+            {
+                // Arm-B pass: deliberately no read-back, so the next pass's coverage
+                // probe meets the store untouched by this instrumentation.
+                return;
+            }
 
             int visibleNow;
             try
@@ -1493,13 +1562,14 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             }
 
             _logger.LogInformation(
-                "Repo {RepoId}: back-fill durability signal. of {PrevLanded} file(s) the previous pass embedded "
-                + "AND recorded, {LandedRepeats} are re-selected now; immediate coverage read-back sees "
-                + "{VisibleNow} of {GapCount} of this pass's gaps as covered. A majority re-selected with a high "
-                + "read-back is a write that lands but does not stay observable (the WAL-replay-budget re-embed "
-                + "loop, cf. issues #2071/#2078 on the symbol arm, which the file arm has no backoff for); a low "
-                + "read-back is a write that is not durable.",
+                "Repo {RepoId}: back-fill durability signal (pass {Passes}, readBackThisPass=true). of {PrevLanded} "
+                + "file(s) the previous pass embedded AND recorded, {LandedRepeats} are re-selected now; immediate "
+                + "coverage read-back sees {VisibleNow} of {GapCount} of this pass's gaps as covered. A majority "
+                + "re-selected with a high read-back is a write that lands but does not stay observable (the "
+                + "WAL-replay-budget re-embed loop, cf. issues #2071/#2078 on the symbol arm, which the file arm "
+                + "has no backoff for); a low read-back is a write that is not durable.",
                 repoId,
+                stats.Passes,
                 stats.PreviousLanded,
                 stats.LandedRepeats,
                 visibleNow,
