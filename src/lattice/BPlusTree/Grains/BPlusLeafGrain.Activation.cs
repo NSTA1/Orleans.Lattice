@@ -2020,7 +2020,42 @@ internal sealed partial class BPlusLeafGrain
     /// map performs it in the process instead.
     /// </para>
     /// </summary>
-    private static readonly ConcurrentDictionary<(string TreeId, string LeafId, int Partition), long> ReplayCheckpointObservations = new();
+    private static readonly ConcurrentDictionary<(string TreeId, string LeafId, int Partition), ReplayCheckpointObservation> ReplayCheckpointObservations = new();
+
+    /// <summary>
+    /// One leaf partition's most recent replay-checkpoint observation: the
+    /// checkpoint itself, when this silo first saw that value for this leaf
+    /// partition, and how many consecutive replays have re-entered from it
+    /// without it moving.
+    /// </summary>
+    /// <param name="Checkpoint">The persisted checkpoint last observed.</param>
+    /// <param name="FirstObservedAt">
+    /// <see cref="Stopwatch.GetTimestamp"/> at the first observation of this
+    /// checkpoint value, which is where the current stall run starts.
+    /// </param>
+    /// <param name="Repeats">
+    /// Consecutive re-entries from an unchanged checkpoint. Zero on the first
+    /// observation, which is not yet evidence of anything.
+    /// </param>
+    private readonly record struct ReplayCheckpointObservation(long Checkpoint, long FirstObservedAt, int Repeats);
+
+    /// <summary>
+    /// The verdict on one replay-checkpoint observation: whether the leaf
+    /// partition re-entered replay from an unchanged checkpoint, and if so how
+    /// many consecutive times and over what span.
+    /// <para>
+    /// <see cref="Repeats"/> and <see cref="Span"/> exist because a single
+    /// repeat and a permanent freeze are the same event in isolation and must
+    /// not read the same (issue #2285). An activation torn down mid-replay by a
+    /// cancellation or a timeout produces a short burst that then stops; a leaf
+    /// that genuinely cannot converge keeps reporting with a rising count over
+    /// a widening span.
+    /// </para>
+    /// </summary>
+    /// <param name="IsStall">Whether the checkpoint was unchanged on a repeat.</param>
+    /// <param name="Repeats">Consecutive unchanged re-entries, 1 on the first stall.</param>
+    /// <param name="Span">Elapsed time since this checkpoint was first observed.</param>
+    internal readonly record struct ReplayStallObservation(bool IsStall, int Repeats, TimeSpan Span);
 
     /// <summary>
     /// Soft cap on <see cref="ReplayCheckpointObservations"/>. Unlike the log
@@ -2044,22 +2079,37 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="partition">The WAL partition ordinal being replayed.</param>
     /// <param name="checkpoint">The persisted checkpoint this replay starts from.</param>
     /// <returns>
+    /// A <see cref="ReplayStallObservation"/> whose <c>IsStall</c> is
     /// <see langword="true"/> when a previous observation exists for this leaf
-    /// partition and its checkpoint is identical, so the leaf is stalled.
-    /// <see langword="false"/> on the first observation (nothing to compare
-    /// against) and whenever the checkpoint has advanced.
+    /// partition and its checkpoint is identical, carrying the consecutive
+    /// repeat count and the span since that checkpoint was first seen.
+    /// <c>IsStall</c> is <see langword="false"/> on the first observation
+    /// (nothing to compare against) and whenever the checkpoint has advanced.
     /// </returns>
-    internal static bool NoteReplayCheckpointObservation(string treeId, string leafId, int partition, long checkpoint)
+    internal static ReplayStallObservation NoteReplayCheckpointObservation(string treeId, string leafId, int partition, long checkpoint)
     {
         var key = (treeId, leafId, partition);
-        var stalled = ReplayCheckpointObservations.TryGetValue(key, out var previous) && previous == checkpoint;
-        if (!stalled && ReplayCheckpointObservations.Count >= ReplayCheckpointObservationCapacity)
+        var now = Stopwatch.GetTimestamp();
+        var stalled = ReplayCheckpointObservations.TryGetValue(key, out var previous)
+            && previous.Checkpoint == checkpoint;
+
+        if (!stalled)
         {
-            ReplayCheckpointObservations.Clear();
+            if (ReplayCheckpointObservations.Count >= ReplayCheckpointObservationCapacity)
+            {
+                ReplayCheckpointObservations.Clear();
+            }
+
+            ReplayCheckpointObservations[key] = new ReplayCheckpointObservation(checkpoint, now, 0);
+            return default;
         }
 
-        ReplayCheckpointObservations[key] = checkpoint;
-        return stalled;
+        var repeats = previous.Repeats + 1;
+        ReplayCheckpointObservations[key] = previous with { Repeats = repeats };
+        return new ReplayStallObservation(
+            true,
+            repeats,
+            Stopwatch.GetElapsedTime(previous.FirstObservedAt, now));
     }
 
     /// <summary>
@@ -2490,9 +2540,16 @@ internal sealed partial class BPlusLeafGrain
         // work (issue #2149) - every sibling leaf pinned to this WAL partition
         // contributes to it, ~1,350 of them on the measured deployment - but it
         // IS a sound upper bound on it, and it is the quantity the detector
-        // compared against MaxLeafReplayEntries. Both warnings below report it
-        // alongside the quantity actually compared so the two can never again
-        // be conflated from the log alone.
+        // compared against MaxLeafReplayEntries. The OVER-BUDGET warning below
+        // reports it alongside the quantity actually compared so the two can
+        // never again be conflated from the log alone. The STALL warning does
+        // NOT print the budget at all (issue #2285): that warning is not about
+        // the budget, the budget is advisory and does not bound replay, and
+        // printing the two side by side manufactured exactly the comparison
+        // its own trailing disclaimer forbade - which is how #2285 came to be
+        // filed, by a reader who quoted the line and truncated the disclaimer.
+        // A disclaimer that must survive quotation to work is not a control;
+        // omitting the quantity is.
         var gap = head - checkpoint;
 
         // STALL (FAULT) CHECK - issue #2149, fault shape of issue #2165.
@@ -2512,8 +2569,23 @@ internal sealed partial class BPlusLeafGrain
         // operator to evaluate by hand: the checkpoint does not advance across
         // repeats for the SAME leaf and partition. n >= 2 by construction, so
         // a single cold activation never trips it.
-        if (NoteReplayCheckpointObservation(treeId, ReplicaId, partition, checkpoint) && overBudgetCandidate)
+        if (NoteReplayCheckpointObservation(treeId, ReplicaId, partition, checkpoint) is { IsStall: true } stall
+            && overBudgetCandidate)
         {
+            // Counted BEFORE the log throttle, and outside it, so the counter is
+            // the exact census of the condition while the warning below stays a
+            // bounded sample of it (issue #2285). Inside the throttle this would
+            // have measured the throttle's rate - one per (tree, leaf, partition)
+            // per minute - and a burst would have been indistinguishable from a
+            // steady trickle, which is the distinction the counter exists to
+            // make. The leaf is deliberately not a tag: leaf count is unbounded,
+            // so per-leaf detail belongs in the warning, not in a time series.
+            LatticeMetrics.LeafActivationStalledReplays.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+                LatticeTenantLabel.ForTree(treeId));
+
             var stalledLogger = ResolveLogger();
             if (stalledLogger is not null
                 && stalledLogger.IsEnabled(LogLevel.Warning)
@@ -2522,20 +2594,26 @@ internal sealed partial class BPlusLeafGrain
                 stalledLogger.LogWarning(
                     "Leaf projection for tree '{TreeId}' leaf '{Leaf}' WAL partition {Partition} re-entered "
                     + "replay WITHOUT its persisted checkpoint having advanced (persistedCheckpoint "
-                    + "{Checkpoint}, unchanged since this leaf partition's previous replay on this silo; WAL "
-                    + "partition head {Head}, partition gap {Gap} entries, MaxLeafReplayEntries {Budget}). "
-                    + "This is a FAULT, not a slow replay: the previous activation banked no durable forward "
-                    + "progress at all, so this leaf is not converging and writes routed to it are being lost "
-                    + "for as long as it repeats. Note the gap is the whole PARTITION's extent, shared with "
-                    + "every sibling leaf pinned to it, so it is an upper bound on this leaf's work and not a "
-                    + "measurement of it.",
+                    + "{Checkpoint}, unchanged across {Repeats} consecutive replay(s) of this leaf partition "
+                    + "on this silo, spanning {Span}; WAL partition head {Head}, partition gap {Gap} "
+                    + "entries). The previous activation banked no durable forward progress at all for this "
+                    + "partition. Judge it by the repeat count and the span, NOT by this line's existence: a "
+                    + "short run of repeats over a few seconds is commonly transient, an activation torn down "
+                    + "mid-replay by a cancellation or a timeout, and stops on its own; a leaf that cannot "
+                    + "converge keeps reporting with a rising count over a widening span, and for as long as "
+                    + "that continues writes routed to it are being lost. Note the gap is the whole "
+                    + "PARTITION's extent, shared with every sibling leaf pinned to it, so it is an upper "
+                    + "bound on this leaf's work and not a measurement of it. This line is throttled and is "
+                    + "therefore a SAMPLE; the exact census of the condition is the counter "
+                    + "orleans.lattice.leaf.activation_stalled_replays.",
                     treeId,
                     ReplicaId,
                     partition,
                     checkpoint,
+                    stall.Repeats,
+                    stall.Span,
                     head,
-                    gap,
-                    maxLeafReplayEntries);
+                    gap);
             }
         }
 

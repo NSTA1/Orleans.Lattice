@@ -201,7 +201,7 @@ public partial class BPlusLeafGrainTests
     public async Task Replay_leaf_below_budget_on_busy_shared_partition_does_not_warn_or_meter()
     {
         BPlusLeafGrain.ResetReplayWarningStateForTests();
-        using var metrics = new OverBudgetReplayMetricRecorder();
+        using var metrics = new LeafReplayMetricRecorder();
         var logs = new RecordingLoggerFactory();
 
         var entries = BuildSharedPartitionEntries(siblingEntries: 40, ownEntries: 3);
@@ -229,7 +229,7 @@ public partial class BPlusLeafGrainTests
     public async Task Replay_leaf_over_its_own_budget_still_warns_and_meters()
     {
         BPlusLeafGrain.ResetReplayWarningStateForTests();
-        using var metrics = new OverBudgetReplayMetricRecorder();
+        using var metrics = new LeafReplayMetricRecorder();
         var logs = new RecordingLoggerFactory();
 
         var entries = BuildSharedPartitionEntries(siblingEntries: 40, ownEntries: 8);
@@ -334,6 +334,174 @@ public partial class BPlusLeafGrainTests
     }
 
     /// <summary>
+    /// DISCRIMINATOR for issue #2285, and the reason the counter exists at all.
+    /// <para>
+    /// The fault warning is throttled to one line per (tree, leaf, partition)
+    /// per minute, so the rate an operator can observe from the log is the
+    /// THROTTLE's rate, not the condition's. Issue #2285 was filed by counting
+    /// those log lines and reading the total as the number of occurrences. The
+    /// counter must therefore record EVERY occurrence, which means it must be
+    /// incremented outside the throttle.
+    /// </para>
+    /// <para>
+    /// Three activations from the same unchanged checkpoint produce two stalls
+    /// (the first activation has nothing to compare against). Both stalls fall
+    /// inside one throttle interval, so exactly one warning is emitted. A
+    /// counter placed inside the throttle would report 1 and would be a second
+    /// copy of the log; placed outside it reports 2, which is the census.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Replay_stall_fault_is_metered_on_every_occurrence_even_when_the_warning_is_throttled()
+    {
+        BPlusLeafGrain.ResetReplayWarningStateForTests();
+        using var metrics = new LeafReplayMetricRecorder(LatticeMetrics.LeafActivationStalledReplays.Name);
+        var logs = new RecordingLoggerFactory();
+
+        var entries = BuildSharedPartitionEntries(siblingEntries: 40, ownEntries: 3);
+
+        for (var activation = 0; activation < 3; activation++)
+        {
+            var coord = BuildBudgetUnitsCoordinator(head: 5_000, entries);
+            var (grain, _) = CreateBudgetUnitsLeaf(
+                coord, logs, partitionHead: 5_000, persistedCheckpoint: 100, maxLeafReplayEntries: 5);
+            await ActivateAsync(grain);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(StalledWarnings(logs), Has.Count.EqualTo(1),
+                "The fault warning is throttled per leaf partition, so two stalls inside one interval log once.");
+            Assert.That(metrics.Count(BudgetUnitsTreeId), Is.EqualTo(2),
+                "The counter must be the exact census of the condition. Reporting 1 here means it was "
+                + "incremented inside the log throttle, which makes it measure the throttle and not the fault.");
+        });
+    }
+
+    /// <summary>
+    /// GUARD against the counter becoming noise, mirroring the guard on the
+    /// warning. A leaf whose checkpoint advances between activations is
+    /// converging - slowly, perhaps, but converging - and must not be metered
+    /// as a stall. Without this, "always increment" would pass the test above.
+    /// </summary>
+    [Test]
+    public async Task Replay_that_advances_its_checkpoint_is_not_metered_as_a_stall()
+    {
+        BPlusLeafGrain.ResetReplayWarningStateForTests();
+        using var metrics = new LeafReplayMetricRecorder(LatticeMetrics.LeafActivationStalledReplays.Name);
+        var logs = new RecordingLoggerFactory();
+
+        var entries = BuildSharedPartitionEntries(siblingEntries: 40, ownEntries: 3);
+
+        var firstCoord = BuildBudgetUnitsCoordinator(head: 5_000, entries);
+        var (first, _) = CreateBudgetUnitsLeaf(
+            firstCoord, logs, partitionHead: 5_000, persistedCheckpoint: 100, maxLeafReplayEntries: 5);
+        await ActivateAsync(first);
+
+        // Same leaf, but its checkpoint has moved on: this is a slow replay,
+        // not a leaf that banked nothing.
+        var secondCoord = BuildBudgetUnitsCoordinator(head: 5_000, entries);
+        var (second, _) = CreateBudgetUnitsLeaf(
+            secondCoord, logs, partitionHead: 5_000, persistedCheckpoint: 400, maxLeafReplayEntries: 5);
+        await ActivateAsync(second);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(StalledWarnings(logs), Is.Empty,
+                "An advancing checkpoint is not a stall.");
+            Assert.That(metrics.Count(BudgetUnitsTreeId), Is.Zero,
+                "The stalled-replay counter must fire on the fault only, or it cannot be alerted on.");
+        });
+    }
+
+    /// <summary>
+    /// PM-ruled requirement 1 of issue #2285: the fault line must let a reader
+    /// tell a BURST from a FREEZE from the text alone. Before this change the
+    /// line asserted permanence ("this leaf is not converging and writes routed
+    /// to it are being lost") on the FIRST repeat and carried no recurrence
+    /// information at all, so a 70-second incident and a permanent livelock were
+    /// textually identical. That is how #2285 came to be filed as a permanent
+    /// convergence defect from a burst that had already stopped.
+    /// <para>
+    /// PM-ruled requirement 2: the advisory <c>MaxLeafReplayEntries</c> must not
+    /// appear on this line. The budget does not bound replay, so printing it
+    /// beside the partition gap manufactures a comparison that cannot mean
+    /// anything - and the trailing disclaimer demonstrably does not prevent a
+    /// reader making it, because the reader can quote the line and truncate the
+    /// disclaimer. Omitting the quantity is the control; the disclaimer is not.
+    /// </para>
+    /// <para>
+    /// FAILS FIRST on both halves: the old template had no <c>Repeats</c> and no
+    /// <c>Span</c> placeholder, and did carry <c>MaxLeafReplayEntries {Budget}</c>.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Replay_stall_warning_reports_recurrence_and_omits_the_advisory_budget()
+    {
+        BPlusLeafGrain.ResetReplayWarningStateForTests();
+        var logs = new RecordingLoggerFactory();
+
+        var entries = BuildSharedPartitionEntries(siblingEntries: 40, ownEntries: 3);
+
+        var firstCoord = BuildBudgetUnitsCoordinator(head: 5_000, entries);
+        var (first, _) = CreateBudgetUnitsLeaf(firstCoord, logs, partitionHead: 5_000, persistedCheckpoint: 100, maxLeafReplayEntries: 5);
+        await ActivateAsync(first);
+
+        var secondCoord = BuildBudgetUnitsCoordinator(head: 5_000, entries);
+        var (second, _) = CreateBudgetUnitsLeaf(secondCoord, logs, partitionHead: 5_000, persistedCheckpoint: 100, maxLeafReplayEntries: 5);
+        await ActivateAsync(second);
+
+        var stalled = StalledWarnings(logs).Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(stalled.Value("Repeats"), Is.EqualTo(1),
+                "The first stall is repeat 1 and must say so, so a reader can see it is not yet evidence of a freeze.");
+            Assert.That(stalled.Value("Span"), Is.InstanceOf<TimeSpan>(),
+                "The span the repeats cover is what separates a burst from a freeze and must be on the line.");
+            Assert.That(stalled.Value("Budget"), Is.Null,
+                "The advisory budget must not be a structured value on the fault line (issue #2285).");
+            Assert.That(stalled.Message, Does.Not.Contain("MaxLeafReplayEntries"),
+                "The advisory budget must not appear in the fault line's text either: it does not bound replay, "
+                + "so printing it beside the partition gap invites exactly the comparison #2285 was filed on.");
+            Assert.That(stalled.Message, Does.Not.Contain("writes routed to it are being lost for as long as it repeats"),
+                "The line must stop asserting permanence on the first repeat.");
+        });
+    }
+
+    /// <summary>
+    /// The census behind the text: consecutive re-entries from an unchanged
+    /// checkpoint are COUNTED, and the count resets the moment the checkpoint
+    /// advances. This is what makes the repeat number on the warning meaningful
+    /// across a throttled sample - a suppressed run still shows up as a jump in
+    /// the count rather than as silence.
+    /// <para>
+    /// FAILS FIRST: the observation tracker previously returned a bare
+    /// <c>bool</c> and kept no count, so "repeat 1" and "repeat 40" were the
+    /// same observation.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void NoteReplayCheckpointObservation_counts_consecutive_repeats_and_resets_on_advance()
+    {
+        BPlusLeafGrain.ResetReplayWarningStateForTests();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-c", 0, 100).Repeats, Is.EqualTo(0),
+                "The first observation is not a repeat of anything.");
+            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-c", 0, 100).Repeats, Is.EqualTo(1),
+                "The first stall is repeat 1.");
+            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-c", 0, 100).Repeats, Is.EqualTo(2),
+                "A leaf that keeps re-entering from the same checkpoint must show a RISING count, "
+                + "because that rise is the only thing separating a freeze from a burst.");
+            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-c", 0, 220).Repeats, Is.EqualTo(0),
+                "Forward progress ends the stall run, so the count must reset rather than accumulate for the leaf's lifetime.");
+            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-c", 0, 220).Repeats, Is.EqualTo(1),
+                "A later stall at the NEW checkpoint starts a fresh run at repeat 1.");
+        });
+    }
+
+    /// <summary>
     /// GUARD: a leaf that DOES advance its checkpoint between activations is not
     /// stalled and must stay silent, so the fault line cannot become the new
     /// source of noise.
@@ -345,15 +513,15 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-a", 0, 100), Is.False,
+            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-a", 0, 100).IsStall, Is.False,
                 "The first observation has nothing to compare against.");
-            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-a", 0, 100), Is.True,
+            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-a", 0, 100).IsStall, Is.True,
                 "An unchanged checkpoint on a repeat is the stall.");
-            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-a", 0, 220), Is.False,
+            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-a", 0, 220).IsStall, Is.False,
                 "An advancing checkpoint is a slow replay, not a stall.");
-            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-b", 0, 100), Is.False,
+            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-b", 0, 100).IsStall, Is.False,
                 "Observations are per leaf: a sibling at the same checkpoint is a different leaf.");
-            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-a", 1, 220), Is.False,
+            Assert.That(BPlusLeafGrain.NoteReplayCheckpointObservation("t", "leaf-a", 1, 220).IsStall, Is.False,
                 "Observations are per WAL partition as well as per leaf.");
         });
     }
@@ -382,16 +550,22 @@ public partial class BPlusLeafGrainTests
     }
 
     /// <summary>
-    /// Counts <c>LeafActivationOverBudgetReplays</c> emissions per tree.
+    /// Counts leaf-replay counter emissions per tree, for whichever
+    /// <c>LatticeMetrics</c> counter it is pointed at.
     /// </summary>
-    private sealed class OverBudgetReplayMetricRecorder : IDisposable
+    private sealed class LeafReplayMetricRecorder : IDisposable
     {
         private readonly MeterListener _listener;
         private readonly List<(string Tree, long Value)> _records = new();
         private readonly object _lock = new();
         private readonly string _treeTag;
 
-        public OverBudgetReplayMetricRecorder()
+        public LeafReplayMetricRecorder()
+            : this(LatticeMetrics.LeafActivationOverBudgetReplays.Name)
+        {
+        }
+
+        public LeafReplayMetricRecorder(string counterName)
         {
             // Resolve every LatticeMetrics static before the listener starts. The
             // InstrumentPublished callback runs synchronously from inside Counter
@@ -399,7 +573,6 @@ public partial class BPlusLeafGrainTests
             // the class mid-initialisation (null statics), and the resulting
             // TypeInitializationException is cached for the process lifetime.
             var meter = LatticeMetrics.Meter;
-            var counterName = LatticeMetrics.LeafActivationOverBudgetReplays.Name;
             _treeTag = LatticeMetrics.TagTree;
 
             _listener = new MeterListener
