@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
@@ -40,6 +41,15 @@ internal enum RepoContextExactScanBudgetDecision
 /// </summary>
 /// <param name="Searches">Semantic searches this index served for the repository.</param>
 /// <param name="PlaneServed">Searches the approximate plane answered, so neither guard was consulted.</param>
+/// <param name="PlaneExhaustive">
+/// Of <paramref name="PlaneServed"/>, those answered by exhaustive scan of the vectors the
+/// plane holds, because it has no trained partitioning yet.
+/// </param>
+/// <param name="PlaneApproximate">
+/// Of <paramref name="PlaneServed"/>, those answered from the plane's trained partitioning.
+/// This is the only counter that rises when the approximate index is doing the job it
+/// exists to do, and issue #2252 was filed because nothing reported it.
+/// </param>
 /// <param name="BudgetUnbounded">Budget evaluations that found no bound configured.</param>
 /// <param name="BudgetCorpusUnknown">Budget evaluations that declined because the corpus was uncounted.</param>
 /// <param name="BudgetWithinBudget">Budget evaluations that cleared a counted corpus.</param>
@@ -52,6 +62,8 @@ internal enum RepoContextExactScanBudgetDecision
 internal readonly record struct RepoContextRetrievalGuardSnapshot(
     long Searches,
     long PlaneServed,
+    long PlaneExhaustive,
+    long PlaneApproximate,
     long BudgetUnbounded,
     long BudgetCorpusUnknown,
     long BudgetWithinBudget,
@@ -115,9 +127,55 @@ internal readonly record struct RepoContextRetrievalGuardSnapshot(
 /// one line rather than by correlating a window against an uptime. Consecutive
 /// summaries differ to give the rate.
 /// </para>
+/// <para>
+/// <b>The plane's own answer is partitioned, not merely counted.</b> Issue #2252
+/// asks a question the aggregate <see cref="RepoContextRetrievalGuardSnapshot.PlaneServed"/>
+/// cannot answer: the approximate plane serving at all
+/// (<see cref="RepoContextAnnServingState.Exhaustive"/>) and the approximate plane
+/// serving <i>from its trained partitioning</i>
+/// (<see cref="RepoContextAnnServingState.Approximate"/>) are different facts, and
+/// only the second means the index is doing the job it exists to do. The state was
+/// computed per query and then discarded one frame up, which made the trained path
+/// unobservable - and an unobservable path is indistinguishable from a dead one.
+/// Every plane outcome is now counted under its own state and published on
+/// <see cref="AnnSearchInstrumentName"/>.
+/// </para>
+/// <para>
+/// <b>Why a zero on that instrument is evidence rather than silence.</b> A counter
+/// that only rose when the trained path served would read a structural zero at the
+/// highest rate of the very hazard it is meant to catch, which manufactures false
+/// reassurance rather than removing it. This instrument instead <b>partitions every
+/// plane outcome</b>, <see cref="RepoContextAnnServingState.Bootstrapping"/>
+/// included, so the total is independently non-zero whenever queries are arriving.
+/// A reading of <c>state=bootstrapping</c> climbing while <c>state=approximate</c>
+/// stays at zero is therefore a positive statement - "queries are being served and
+/// none of them by the trained plane" - and is loudest exactly when the hazard is
+/// occurring. The one state it cannot distinguish is no traffic at all, where every
+/// series is legitimately zero; the readiness probe on
+/// <see cref="RepoContextRetrievalReadinessState"/> covers that case, because it
+/// converges without waiting for a query.
+/// </para>
 /// </summary>
-internal sealed class RepoContextRetrievalGuardReporter
+internal sealed class RepoContextRetrievalGuardReporter : IDisposable
 {
+    /// <summary>
+    /// The counter name partitioning every approximate-plane outcome by the state
+    /// that answered it. Tagged by <see cref="StateTagKey"/>.
+    /// </summary>
+    internal const string AnnSearchInstrumentName = "repocontext.retrieval.ann.search";
+
+    /// <summary>The low-cardinality tag key carrying the serving state that answered a query.</summary>
+    internal const string StateTagKey = "state";
+
+    /// <summary>Tag value for a query the plane could not answer, so the fallback ladder ran.</summary>
+    internal const string StateBootstrappingTag = "bootstrapping";
+
+    /// <summary>Tag value for a query the plane answered by exhaustive scan of the vectors it holds.</summary>
+    internal const string StateExhaustiveTag = "exhaustive";
+
+    /// <summary>Tag value for a query the plane answered from its trained partitioning.</summary>
+    internal const string StateApproximateTag = "approximate";
+
     /// <summary>
     /// How often a repository's summary may be emitted. One line per minute per
     /// repository is small against the query volume that produces it, and is
@@ -130,6 +188,13 @@ internal sealed class RepoContextRetrievalGuardReporter
         new(StringComparer.Ordinal);
 
     private readonly TimeProvider _time;
+
+    // Declared above the instrument it constructs, and the instrument is built from
+    // this field, so reordering the two throws at type-initialisation rather than
+    // publishing an instrument against a null meter. See the metrics conventions in
+    // .github/copilot-instructions.md.
+    private readonly Meter _meter;
+    private readonly Counter<long> _annSearches;
 
     /// <summary>Creates the reporter.</summary>
     /// <param name="timeProvider">
@@ -147,6 +212,19 @@ internal sealed class RepoContextRetrievalGuardReporter
         _time = timeProvider ?? TimeProvider.System;
         var interval = summaryInterval ?? DefaultSummaryInterval;
         SummaryInterval = interval < TimeSpan.Zero ? TimeSpan.Zero : interval;
+
+        // Published under the same meter name as the rest of the repocontext surface
+        // so a single scraper subscription covers it.
+        _meter = new Meter(RepoContextUsageRecorder.MeterName);
+        _annSearches = _meter.CreateCounter<long>(
+            AnnSearchInstrumentName,
+            unit: "{query}",
+            description:
+                "Semantic searches partitioned by the approximate-plane state that answered them: "
+                + "'bootstrapping' (the plane could not answer and the fallback ladder ran), 'exhaustive' "
+                + "(the plane answered by scanning the vectors it holds), or 'approximate' (the plane "
+                + "answered from its trained partitioning). Because every outcome is counted, a zero on one "
+                + "state alongside a non-zero total is a measured absence rather than an absent measurement.");
     }
 
     /// <summary>The minimum spacing between summaries for one repository.</summary>
@@ -158,13 +236,42 @@ internal sealed class RepoContextRetrievalGuardReporter
     public void RecordSearch(string repoId) => Counters(repoId).Searches();
 
     /// <summary>
-    /// Records that the approximate plane answered, so neither guard was consulted.
-    /// This is what preserves the distinction between a guard that declined and a
-    /// guard that was never asked.
+    /// Records which state the approximate plane answered a query from, for every
+    /// query including the ones it could not answer. Recording the whole partition
+    /// rather than only the serving half is what makes a zero on any one state
+    /// readable: it is denominated by a total that rises with traffic.
     /// </summary>
     /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>
+    /// <param name="state">The state that answered.</param>
+    /// <returns>
+    /// <see langword="true"/> when this repository has not reached this state before,
+    /// so the caller announces it once at an operator-visible level. The first
+    /// <see cref="RepoContextAnnServingState.Approximate"/> outcome is the transition
+    /// issue #2252 exists to make visible.
+    /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
-    public void RecordPlaneServed(string repoId) => Counters(repoId).PlaneServed();
+    public bool RecordPlaneOutcome(string repoId, RepoContextAnnServingState state)
+    {
+        var first = Counters(repoId).PlaneOutcome(state);
+        _annSearches.Add(
+            1,
+            new KeyValuePair<string, object?>(StateTagKey, DescribeState(state)),
+            LatticeTenantLabel.Platform);
+        return first;
+    }
+
+    /// <summary>
+    /// The bounded tag value for a serving state. Resolved against a closed set so an
+    /// unrecognised value can never reach the meter as unbounded-cardinality text.
+    /// </summary>
+    /// <param name="state">The state to describe.</param>
+    /// <returns>The tag value.</returns>
+    internal static string DescribeState(RepoContextAnnServingState state) => state switch
+    {
+        RepoContextAnnServingState.Approximate => StateApproximateTag,
+        RepoContextAnnServingState.Exhaustive => StateExhaustiveTag,
+        _ => StateBootstrappingTag,
+    };
 
     /// <summary>Records one exact-scan budget evaluation.</summary>
     /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>
@@ -245,6 +352,9 @@ internal sealed class RepoContextRetrievalGuardReporter
         return !snapshot.IsEmpty;
     }
 
+    /// <summary>Disposes the underlying meter.</summary>
+    public void Dispose() => _meter.Dispose();
+
     private RepoCounters Counters(string repoId)
     {
         ArgumentNullException.ThrowIfNull(repoId);
@@ -261,6 +371,8 @@ internal sealed class RepoContextRetrievalGuardReporter
     {
         private long _searches;
         private long _planeServed;
+        private long _planeExhaustive;
+        private long _planeApproximate;
         private long _budgetUnbounded;
         private long _budgetCorpusUnknown;
         private long _budgetWithinBudget;
@@ -282,7 +394,30 @@ internal sealed class RepoContextRetrievalGuardReporter
 
         public void Searches() => Interlocked.Increment(ref _searches);
 
-        public void PlaneServed() => Interlocked.Increment(ref _planeServed);
+        public bool PlaneOutcome(RepoContextAnnServingState state)
+        {
+            switch (state)
+            {
+                case RepoContextAnnServingState.Approximate:
+                    Interlocked.Increment(ref _planeApproximate);
+                    Interlocked.Increment(ref _planeServed);
+                    break;
+                case RepoContextAnnServingState.Exhaustive:
+                    Interlocked.Increment(ref _planeExhaustive);
+                    Interlocked.Increment(ref _planeServed);
+                    break;
+                default:
+                    // Bootstrapping is counted on the instrument but not into
+                    // PlaneServed: the plane did not answer, so the fallback ladder
+                    // ran and the snapshot's Bootstrapping figure must keep meaning
+                    // "reached the guards".
+                    break;
+            }
+
+            // Bits 16-18, clear of the budget decisions (0-3) and the breaker
+            // repeat-skip (8) that already use this mask.
+            return Announce(1 << (16 + (int)state));
+        }
 
         public bool Budget(RepoContextExactScanBudgetDecision decision, int corpus, int affordable)
         {
@@ -320,6 +455,8 @@ internal sealed class RepoContextRetrievalGuardReporter
         public RepoContextRetrievalGuardSnapshot Read() => new(
             Interlocked.Read(ref _searches),
             Interlocked.Read(ref _planeServed),
+            Interlocked.Read(ref _planeExhaustive),
+            Interlocked.Read(ref _planeApproximate),
             Interlocked.Read(ref _budgetUnbounded),
             Interlocked.Read(ref _budgetCorpusUnknown),
             Interlocked.Read(ref _budgetWithinBudget),
