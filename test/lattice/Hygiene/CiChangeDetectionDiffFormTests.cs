@@ -49,6 +49,27 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// a script - shrinking its own denominator without failing, which is the
 /// failure mode the denominator assertion exists to prevent.
 /// </para>
+/// <para>
+/// Two things about the denominator assertion, so it is not over-read. It is a
+/// NON-VACUITY guard: its job is to prove the diff pattern still matches how the
+/// diffs are spelled, so that the three-dot assertion cannot pass by matching
+/// nothing. It is not a site-count tripwire, and counting the explanatory
+/// comment on the checkout step among its matches is harmless for that purpose -
+/// a matching comment still proves the pattern is live. It would not serve as a
+/// tripwire anyway: consolidating two diff sites removes one match and still
+/// clears the threshold, and the count is inflatable by prose.
+/// </para>
+/// <para>
+/// KNOWN CONSTRAINT: <see cref="Every_base_to_head_diff_uses_the_three_dot_form"/>
+/// scans every match of <see cref="BaseHeadDiff"/>, comments included, so this
+/// fixture forbids writing the two-dot form down anywhere in the scanned files -
+/// including in a comment explaining why that form is wrong. Doing so fails the
+/// suite with a message that calls the offending comment a "step", which is loud
+/// but misdescribes its own cause. That is accepted deliberately rather than
+/// fixed by stripping comments here: a loud, slightly confusing failure beats
+/// adding another mechanism to a guard that is otherwise simple and correct.
+/// The checkout step in <c>ci.yml</c> carries a matching warning.
+/// </para>
 /// </summary>
 [TestFixture]
 public sealed class CiChangeDetectionDiffFormTests

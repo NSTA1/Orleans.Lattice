@@ -68,6 +68,13 @@ jobs:
           # than quietly narrowing, which is the failure mode we want - but it
           # is still a broken CI run, so do not reduce this depth.
           # `CiChangeDetectionDiffFormTests` guards both halves.
+          #
+          # WARNING - do not spell the two-dot form out anywhere in this file,
+          # not even in a comment like this one explaining why it is wrong. That
+          # guard scans every match of its diff pattern, comments included, so
+          # writing the bad form down turns the suite red, and its message
+          # reports the offender as a "step" - which is confusing when the
+          # offender is prose. Describe it in words instead, as here.
           fetch-depth: 0
 
       # Fail fast on the two repository conventions that are cheap to check and
