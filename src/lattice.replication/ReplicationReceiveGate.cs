@@ -25,6 +25,23 @@ internal sealed class ReplicationReceiveGate(IGrainFactory grainFactory) : IRepl
 
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The maximum number of per-tree entries retained. Entries carry an expiry but
+    /// were never removed, so the map grew by one permanent entry per distinct tree
+    /// id ever applied - including trees since deleted - and a peer shipping an
+    /// unlimited stream of distinct tree ids could grow it without bound (CWE-770).
+    /// At the cap the expired entries are swept first; a still-full map skips the
+    /// insert, which only costs an extra grain call because a miss re-reads the
+    /// authoritative fence.
+    /// </summary>
+    internal const int MaxCachedTrees = 4096;
+
+    /// <summary>
+    /// The number of per-tree entries currently cached. Exposed for unit testing
+    /// that the cache honours <see cref="MaxCachedTrees"/>.
+    /// </summary>
+    internal int CachedTreeCount => _cache.Count;
+
     /// <inheritdoc />
     public async ValueTask<bool> IsReceivePausedAsync(string treeId, CancellationToken cancellationToken = default)
     {
@@ -40,8 +57,41 @@ internal sealed class ReplicationReceiveGate(IGrainFactory grainFactory) : IRepl
         var paused = await _grainFactory.GetGrain<ITreeReceiveFenceGrain>(treeId)
             .IsPausedAsync().ConfigureAwait(false);
 
-        _cache[treeId] = new CacheEntry(paused, now.Add(CacheWindow));
+        StoreBounded(treeId, new CacheEntry(paused, now.Add(CacheWindow)), now);
         return paused;
+    }
+
+    /// <summary>
+    /// Caches <paramref name="entry"/> without letting the map grow without bound.
+    /// Refreshing a key already present never grows it, so that always proceeds; a
+    /// new key at the cap first sweeps entries whose window has closed, and is
+    /// dropped only when the map is still full of live entries.
+    /// </summary>
+    private void StoreBounded(string treeId, CacheEntry entry, DateTime now)
+    {
+        if (_cache.ContainsKey(treeId))
+        {
+            _cache[treeId] = entry;
+            return;
+        }
+
+        if (_cache.Count >= MaxCachedTrees)
+        {
+            foreach (var pair in _cache)
+            {
+                if (now >= pair.Value.ExpiresAtUtc)
+                {
+                    _cache.TryRemove(pair.Key, out _);
+                }
+            }
+
+            if (_cache.Count >= MaxCachedTrees)
+            {
+                return;
+            }
+        }
+
+        _cache[treeId] = entry;
     }
 
     private readonly record struct CacheEntry(bool Paused, DateTime ExpiresAtUtc);

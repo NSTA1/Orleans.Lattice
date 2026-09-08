@@ -34,6 +34,47 @@ public sealed class LatticeSchemaVersionProviderTests
     }
 
     [Test]
+    public async Task GetConfigAsync_distinct_tree_ids_do_not_grow_cache_without_bound()
+    {
+        var store = Substitute.For<ILatticeSchemaVersionStore>();
+        store.GetConfigAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns((LatticeSchemaVersionConfig?)null);
+        var provider = CreateProvider(store);
+
+        // Every miss caches a null sentinel keyed by a caller-supplied tree id, so
+        // an unbounded cache let a caller grow silo memory without limit (CWE-770).
+        for (var i = 0; i < LatticeSchemaVersionProvider.MaxCachedTrees + 500; i++)
+        {
+            Assert.That(await provider.GetConfigAsync("tree-" + i), Is.Null);
+        }
+
+        Assert.That(
+            provider.CachedTreeCount,
+            Is.LessThanOrEqualTo(LatticeSchemaVersionProvider.MaxCachedTrees));
+    }
+
+    [Test]
+    public async Task GetConfigAsync_still_resolves_correctly_once_the_cache_is_full()
+    {
+        var store = Substitute.For<ILatticeSchemaVersionStore>();
+        store.GetConfigAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns((LatticeSchemaVersionConfig?)null);
+        store.GetConfigAsync("orders", Arg.Any<CancellationToken>()).Returns(Config());
+        var provider = CreateProvider(store);
+
+        for (var i = 0; i < LatticeSchemaVersionProvider.MaxCachedTrees + 10; i++)
+        {
+            _ = await provider.GetConfigAsync("filler-" + i);
+        }
+
+        // The bound must never change an answer, only cost an extra round-trip.
+        var config = await provider.GetConfigAsync("orders");
+
+        Assert.That(config, Is.Not.Null);
+        Assert.That(config!.Value.SchemaId, Is.EqualTo(1u));
+    }
+
+    [Test]
     public async Task GetConfigAsync_unversioned_tree_returns_null()
     {
         var store = Substitute.For<ILatticeSchemaVersionStore>();
