@@ -41,9 +41,10 @@ public sealed class RepoContextRetrievalGuardReporterTests
         var reachedAndDeclined = new RepoContextRetrievalGuardReporter();
 
         neverReached.RecordSearch(RepoId);
-        neverReached.RecordPlaneServed(RepoId);
+        neverReached.RecordPlaneOutcome(RepoId, RepoContextAnnServingState.Approximate);
 
         reachedAndDeclined.RecordSearch(RepoId);
+        reachedAndDeclined.RecordPlaneOutcome(RepoId, RepoContextAnnServingState.Bootstrapping);
         reachedAndDeclined.RecordBudgetDecision(
             RepoId, RepoContextExactScanBudgetDecision.CorpusUnknown, corpus: 0, affordable: 1_280);
 
@@ -208,7 +209,9 @@ public sealed class RepoContextRetrievalGuardReporterTests
         Assert.Multiple(() =>
         {
             Assert.That(() => reporter.RecordSearch(null!), Throws.ArgumentNullException);
-            Assert.That(() => reporter.RecordPlaneServed(null!), Throws.ArgumentNullException);
+            Assert.That(
+                () => reporter.RecordPlaneOutcome(null!, RepoContextAnnServingState.Approximate),
+                Throws.ArgumentNullException);
             Assert.That(
                 () => reporter.RecordBudgetDecision(
                     null!, RepoContextExactScanBudgetDecision.Unbounded, 0, 0),

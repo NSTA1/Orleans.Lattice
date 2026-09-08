@@ -165,13 +165,36 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             .SearchAsync(repoId, query, querySpace, k, cancellationToken)
             .ConfigureAwait(false);
 
+        // Recorded for every outcome, Bootstrapping included, so the instrument
+        // partitions the whole query population rather than only its serving half.
+        // A zero on one state is then denominated by a total that rises with
+        // traffic, which is what makes it a measured absence.
+        if (_guards.RecordPlaneOutcome(repoId, outcome.State)
+            && outcome.State != RepoContextAnnServingState.Bootstrapping)
+        {
+            // The first time this repository is served by the plane at all, and
+            // again the first time it is served from a trained partitioning. The
+            // second of those is the transition issue #2252 says has never been
+            // observed in any deployment, so it is stated rather than left to be
+            // inferred from a search response the container never sees.
+            _logger.LogInformation(
+                "Repository-context approximate plane served {RepoId} in space {ModelId}/{Dimension} from state "
+                + "{State} for the first time in this process: {Meaning} Further outcomes of the same kind are "
+                + "counted into the periodic retrieval-ladder guard summary and onto the "
+                + "repocontext.retrieval.ann.search instrument rather than logged per query.",
+                repoId,
+                querySpace.ModelId,
+                querySpace.Dimension,
+                outcome.State,
+                DescribeServingState(outcome.State));
+        }
+
         if (outcome.State != RepoContextAnnServingState.Bootstrapping)
         {
             // The plane answered for itself, so the build that a stalled gather was
             // competing with is no longer holding the tree. Restoring the fallback
             // here is what keeps a trip from outliving its cause: no cooldown to
             // wait out, and a later rebuild re-arms the breaker on its own evidence.
-            _guards.RecordPlaneServed(repoId);
             if (_exactScanBreaker.Reset(repoId))
             {
                 // Rare by construction - once per trip - and the transition issue
@@ -337,7 +360,10 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         _logger.LogInformation(
             "Repository-context retrieval-ladder guards for {RepoId}, cumulative since process start: {Searches} "
             + "search(es), of which the approximate plane answered {PlaneServed} so neither guard was consulted and "
-            + "{Bootstrapping} reached the fallback. Exact-scan budget: {BudgetEvaluations} evaluation(s) - "
+            + "{Bootstrapping} reached the fallback. Of the plane's answers, {PlaneApproximate} came from a trained "
+            + "partitioning and {PlaneExhaustive} from an exhaustive scan of the vectors it holds, so a zero in the "
+            + "first against a non-zero search count is a measured absence of approximate retrieval rather than an "
+            + "absent measurement. Exact-scan budget: {BudgetEvaluations} evaluation(s) - "
             + "{BudgetUnbounded} with no bound configured, {BudgetCorpusUnknown} declined for an uncounted corpus, "
             + "{BudgetWithinBudget} cleared as affordable, {BudgetExceeded} skipped as unaffordable; last read "
             + "corpus {Corpus} against an affordable {Affordable}. Exact-scan breaker: currently {BreakerState}, "
@@ -348,6 +374,8 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             guards.Searches,
             guards.PlaneServed,
             guards.Bootstrapping,
+            guards.PlaneApproximate,
+            guards.PlaneExhaustive,
             guards.BudgetEvaluations,
             guards.BudgetUnbounded,
             guards.BudgetCorpusUnknown,
@@ -360,6 +388,28 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             guards.BreakerRepeatSkips,
             guards.BreakerResets);
     }
+
+    /// <summary>
+    /// What a serving state means in the operator's terms. Kept beside the state
+    /// rather than in the log template so every emission carries the same
+    /// explanation, and so the distinction issue #2252 turns on - a plane that
+    /// answers at all against a plane that answers from a trained partitioning - is
+    /// stated in words rather than left to an enumeration name.
+    /// </summary>
+    /// <param name="state">The state to describe.</param>
+    /// <returns>A sentence ending in a full stop.</returns>
+    internal static string DescribeServingState(RepoContextAnnServingState state) => state switch
+    {
+        RepoContextAnnServingState.Approximate =>
+            "the index answered from its trained partitioning, so recall is bounded by the published target and "
+            + "query cost is sub-linear in the corpus. This is the steady state the plane exists to reach.",
+        RepoContextAnnServingState.Exhaustive =>
+            "the index answered by exhaustive scan of the vectors it holds, because its corpus is below the "
+            + "training threshold or training has not run yet. Recall over the indexed corpus is complete; the "
+            + "index is warming up, not degraded.",
+        _ =>
+            "no usable index exists for this repository and embedding space yet, so the fallback ladder ran.",
+    };
 
     /// <summary>
     /// Why a budget decision came out the way it did, in the operator's terms. Kept

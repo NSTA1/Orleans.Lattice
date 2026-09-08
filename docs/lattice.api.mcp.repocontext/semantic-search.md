@@ -134,6 +134,56 @@ A declined or abandoned gather is reported as `keyword.vector_plane_unavailable`
 
 Below the corpus bound nothing changes and the exact gather still answers with complete recall, which is the regime a small repository sits in permanently. Because the derived threshold lands above `RepoContextAnnOptions.MinimumTrainingCount`, a corpus too small to train a partitioning is answered exhaustively by the plane itself and never reaches the fallback at all.
 
+## Observing which path actually answered
+
+The plane's own state is reported per query, because a path nobody can observe is
+indistinguishable from one that is dead - and that is not hypothetical here. Issue
+#2252 was filed after four deployments in which semantic retrieval had never been
+*seen* serving from the approximate plane, and the reason it could not be seen is
+that the serving state was computed per query and then discarded: the caller tested
+only "did the plane answer at all", which collapses a plane warming up and a plane
+in its steady state into one count.
+
+Three states are kept apart, and the distinction between the last two is the one
+that matters:
+
+- **`bootstrapping`** - no usable index exists for this repository and embedding
+  space yet, so the fallback ladder ran.
+- **`exhaustive`** - the plane answered, but by scanning the vectors it holds,
+  because its corpus is below `MinimumTrainingCount` or training has not run.
+  Recall over the indexed corpus is complete; the index is warming, not degraded.
+- **`approximate`** - the plane answered from its trained partitioning. This is the
+  steady state the index exists to reach, and the only one of the three that means
+  the acceleration is delivering.
+
+They surface three ways:
+
+- **`repocontext.retrieval.ann.search`**, a counter tagged `state` with those three
+  values. It counts **every** outcome, not only the serving ones, and that is
+  deliberate: a counter that rose only when the trained path served would read zero
+  at the highest rate of the very hazard it exists to catch, which manufactures
+  reassurance rather than removing it. Counting the whole partition means a zero on
+  `state=approximate` alongside a climbing `state=bootstrapping` is a *measured
+  absence* - "queries are being served and none of them by the trained plane" -
+  rather than an absent measurement. The one case it cannot distinguish is no
+  traffic at all, where every series is legitimately zero; `/health/ready` covers
+  that, because the readiness probe converges without waiting for a query.
+- **An information-level line the first time each state is reached** for a
+  repository, carrying what the state means. The first `approximate` answer is the
+  transition #2252 says has never been observed, so it is announced rather than left
+  to be inferred. Repetitions are counted, not logged.
+- **The periodic retrieval-ladder guard summary**, which reports the trained and
+  exhaustive answers apart from each other and from the total.
+
+**`index_status` does not answer this question and never did.** It reports the
+*ingest* job - files scanned, embedded, and committed - which is a different
+subsystem from the approximate plane, built by a different coordinator. A host can
+therefore report `status: Completed` while every query is answered by keyword
+recall, with neither signal wrong about what it measures. For "can this host serve
+semantic retrieval", read `retrievalPath` on the search response, the
+`repocontext.retrieval.ann.search` instrument, or `/health/ready` - all three of
+which derive from what retrieval actually did.
+
 ## How a superseded index is retired
 
 There are three distinct transitions, and all three are now handled.
