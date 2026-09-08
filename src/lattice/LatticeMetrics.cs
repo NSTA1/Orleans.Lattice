@@ -1116,6 +1116,38 @@ public static class LatticeMetrics
         Meter.CreateHistogram<long>("orleans.lattice.wal.gc.backlog_bytes", unit: "By",
             description: "Retained WAL bytes remaining after a garbage-collection pass, tagged by tree.");
 
+    /// <summary>
+    /// Counter of WAL garbage-collection passes for which the durable
+    /// leaf-materialiser <em>offset</em> floor could not be computed because the
+    /// pin store was unreachable, tagged with <see cref="TagTree"/>. Emitted from
+    /// <see cref="LatticeWalGc"/> whenever the offset-floor read
+    /// (<c>IWalMaterialiserPinGrain.GetPinOffsetsAsync</c>) throws and the GC
+    /// falls back to no offset floor for that pass.
+    /// <para>
+    /// The fallback is safe for that pass (the HLC floor still constrains the
+    /// trim), but it was previously <b>completely silent</b>: a persistently
+    /// unreachable pin store removed the offset floor on <em>every</em> pass with
+    /// no signal, indistinguishable from a tree that legitimately has no offset
+    /// floor to apply. The healthy "no offset floor" outcomes - a host that never
+    /// wired the durable pin store, or a store that is reachable but reports no
+    /// offsets - do <b>not</b> reach the swallowing catch and so do <b>not</b>
+    /// increment this counter, which is what makes "no floor because unreachable"
+    /// separable from "no floor because none needed" (issue #2314).
+    /// </para>
+    /// <para>
+    /// A <b>transient</b> tick is expected and benign - the next pass retries once
+    /// the store is reachable - and this counter also ticks during a rolling
+    /// upgrade where an older pin grain has no <c>GetPinOffsetsAsync</c>. A
+    /// <em>sustained</em> non-zero rate is the operational signal: the offset
+    /// floor is not being applied and the low-HLC/high-offset reap class it exists
+    /// to retain (see <see cref="WalGcPasses"/>) is protected only by the HLC
+    /// floor until the store recovers.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcOffsetFloorUnavailable =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.offset_floor_unavailable", unit: "{pass}",
+            description: "WAL GC passes that could not compute the durable offset floor because the pin store was unreachable, tagged by tree.");
+
     /// <summary><see cref="TagOutcome"/> = <c>reclaimed</c> (a WAL GC pass that trimmed at least one entry).</summary>
     public static readonly KeyValuePair<string, object?> OutcomeReclaimed = new(TagOutcome, "reclaimed");
 

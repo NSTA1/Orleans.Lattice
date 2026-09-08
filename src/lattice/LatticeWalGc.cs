@@ -538,6 +538,34 @@ public sealed class LatticeWalGc(
             // pin grain without GetPinOffsetsAsync during a rolling upgrade):
             // fall back to no offset floor. The HLC floor still constrains the
             // trim, and the next pass retries once the store is reachable.
+            //
+            // This fallback was previously completely silent (issue #2314): a
+            // persistently unreachable pin store removes the offset floor on
+            // EVERY pass indefinitely, with no signal, indistinguishable from a
+            // tree that legitimately has no offset floor to apply. The counter
+            // makes "no floor because unreachable" (this catch) separable from
+            // "no floor because none needed" (factory null / empty offsets,
+            // which return null WITHOUT reaching here). It changes no trim
+            // behaviour - it only makes the swallowed failure observable.
+            //
+            // Note the deeper population caveat this counter deliberately does
+            // NOT try to fix (also #2314): the floor below is a minimum over the
+            // leaves that REPORTED an offset, not over the leaves that OWE
+            // entries. A leaf absent from the pin set does not constrain the
+            // floor at all, and absence is NOT the same state as a reported -1:
+            // a reported -1 always arrives paired with a Zero HLC block pin that
+            // disables the cursor trim (ResolveDurablePinForPartition guarantees
+            // it), whereas an absent leaf - one whose birth block-pin seed was
+            // swallowed, or that predates the durable pin store being wired -
+            // carries no such HLC cover. Making absence constrain the floor
+            // conservatively (e.g. treating absence as offset 0) would pin the
+            // WAL forever for any permanently-departed leaf, so it is NOT done
+            // here; distinguishing absent from reported -1 needs an independent
+            // owner census this seam does not have.
+            LatticeMetrics.WalGcOffsetFloorUnavailable.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
+                LatticeTenantLabel.ForTree(treeName));
             return null;
         }
     }
