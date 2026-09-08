@@ -1313,8 +1313,10 @@ public static class LatticeMetrics
     /// This exists for a PROVIDER-DEPENDENT hazard, not for the deployment this
     /// repository runs. A resident prepare must never be dropped (dropping it
     /// pins the flush ceiling forever - the #2183 livelock), so past the cap it
-    /// is recorded unconditionally and the row is allowed to grow while the
-    /// #2208 saga-terminal leak is unfixed. On the default <c>local</c>
+    /// is recorded unconditionally and the row is allowed to grow for as long
+    /// as a saga leaves a prepare unresolved (registry status InFlight: the
+    /// residual population after issue #2190's self-terminalisation, whose
+    /// orphan source is tracked as issue #2304). On the default <c>local</c>
     /// durability profile that row is backed by SQLite (~1GB BLOB), so the
     /// growth is a write-amplification cost, not a correctness one. On an
     /// <c>Orleans.Lattice.Storage.AzureTable</c> deployment the 1MB entity cap
