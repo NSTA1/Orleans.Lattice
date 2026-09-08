@@ -412,11 +412,21 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 repoId,
                 gapSelectedFiles,
                 embedOutcome.Landed,
+                coverage,
+                changedFileCount: changedFiles.Count,
                 walkedFiles: changedFiles.Count + unchangedFiles.Count,
                 cancellationToken).ConfigureAwait(false);
         }
         else
         {
+            // This pass measured no gap shape, so it advances no history. Record that
+            // it happened, or the next measured pass compares itself against a pass
+            // that is not the preceding one while reporting it as "previous" - and an
+            // entrant measured across an unknown number of unmeasured passes is not
+            // alarmable, because anything could have happened in the interval
+            // (issue #2292).
+            _fileGapHistory.GetOrAdd(repoId, static _ => new FileGapHistory()).NoteUnmeasuredPass();
+
             // An empty selection has two OPPOSITE causes, and the guard above was
             // silent for both: either the coverage probe failed, so no gap sweep was
             // attempted at all and the back-fill made no progress it could have made,
@@ -1565,11 +1575,30 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// WAL-replay-budget loop, which the file arm has no backoff for; a low read-back
     /// is a write that is not durable.
     /// </para>
+    /// <para>
+    /// The set shape also carries the <b>entrant partition</b> (issue #2292). This
+    /// pass's gaps are split three ways against the previous measured pass, summing
+    /// exactly to the gap count: <i>persisted</i> (a gap then and a gap now - the
+    /// non-converging residue), <i>regressed</i> (positively observed <b>covered</b>
+    /// then and a gap now), and <i>noPriorCoverage</i> (neither - a file the previous
+    /// pass did not walk, or one it embedded as changed without ever observing it
+    /// covered). The distinction is load-bearing: the fringe this line reported before
+    /// was a set-difference of <i>gap sets</i>, and absence from a gap set conflates
+    /// "was observed covered" with "was never considered", so it could be non-zero
+    /// with no coverage lost at all. Only <i>regressed</i> is a coverage regression,
+    /// and it is the discrimination the probe seam is structurally unable to make,
+    /// because that seam sees one batch and cannot know what was covered last pass.
+    /// The prior covered set is taken from the coverage probe the pass already
+    /// performs, so this adds no store read: the covered side was computed every pass
+    /// and thrown away.
+    /// </para>
     /// </summary>
     private async Task LogGapDiagnosticsAsync(
         string repoId,
         IReadOnlyList<RepoFileEntry> gapSelectedFiles,
         IReadOnlyCollection<string> landedKeys,
+        RepoContextEmbeddingCoverage coverage,
+        int changedFileCount,
         int walkedFiles,
         CancellationToken cancellationToken)
     {
@@ -1593,7 +1622,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             }
 
             var history = _fileGapHistory.GetOrAdd(repoId, static _ => new FileGapHistory());
-            var stats = history.Observe(selectedKeys, landedFromGap, walkedFiles);
+            var stats = history.Observe(selectedKeys, landedFromGap, coverage, changedFileCount, walkedFiles);
 
             // The read-back is the only store touch this instrumentation adds, so run
             // it on alternate passes: a pass preceded by a read-back (arm A) versus one
@@ -1613,7 +1642,12 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
             _logger.LogInformation(
                 "Repo {RepoId}: back-fill gap set shape. selected={GapCount} digest={GapDigest}; vs previous "
-                + "selected={PrevCount}: overlap={Overlap} entered={Entered} left={Left}; rolling union={UnionSize} "
+                + "selected={PrevCount}: overlap={Overlap} entered={Entered} left={Left}; entered splits "
+                + "regressed={Regressed} + noPriorCoverage={NoPriorCoverage} (regressed was positively observed "
+                + "COVERED on the previous measured pass, so only it is a coverage regression; noPriorCoverage was "
+                + "neither a gap nor observed covered then, which a new or changed file is benignly). "
+                + "unmeasuredPassesSincePrevious={Unmeasured} prevChanged={PrevChanged}{CoveredNote}; "
+                + "rolling union={UnionSize} "
                 + "over {Passes} pass(es) against {WalkedFiles} walked file(s){UnionNote}. "
                 + "readBackThisPass={RunReadBack} (rule: runs on even pass ordinals); "
                 + "controlArm={Arm} (this selected count's bucket: PriorReadBackRan=A, PriorReadBackSkipped=B, "
@@ -1625,6 +1659,13 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 stats.Overlap,
                 stats.Entered,
                 stats.Left,
+                stats.Regressed,
+                stats.NoPriorCoverage,
+                stats.UnmeasuredPassesSincePrevious,
+                stats.PreviousChangedFileCount,
+                stats.PreviousCoveredSaturated
+                    ? " (prior coverage tracking saturated, so regressed is a floor)"
+                    : string.Empty,
                 stats.UnionCount,
                 stats.Passes,
                 walkedFiles,
@@ -1632,6 +1673,37 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 runReadBack,
                 arm,
                 string.Join(", ", sample));
+
+            if (stats.RegressionIsUnexplained)
+            {
+                // The one arm of this instrumentation that is worth waking somebody
+                // for. Every benign covered-to-uncovered transition in the file arm
+                // requires a content change: the only path that clears coverage
+                // short of retirement is the contentless unmark, which fires when a
+                // contentless-marked file GAINS content and is therefore a changed
+                // file, and a removed file is not walked so it cannot be a gap. With
+                // both passes reporting nothing changed and no unmeasured pass
+                // between them, this arm has no benign reading left.
+                //
+                // Deliberately narrower than the raw entrant count, for the reason
+                // #2287 established: a warning that can fire benignly fires
+                // constantly, is muted, and takes the real signal with it.
+                _logger.LogWarning(
+                    "Repo {RepoId}: {Regressed} file(s) that the previous measured pass observed as COVERED are "
+                    + "gaps again, over an input in which neither pass changed a file and with no unmeasured pass "
+                    + "between them. A gap means the coverage probe positively observed the source as uncovered, "
+                    + "and file membership is enable-wins and retires down one path that no unchanged pass takes, "
+                    + "so the flag cannot have been cleared: either the read did not return it or the covered set "
+                    + "is computed differently between passes. Both are read-path instabilities (issues "
+                    + "#2208/#2292). gapTotal={GapCount} = persisted={Overlap} + regressed + "
+                    + "noPriorCoverage={NoPriorCoverage}; sample: {RegressedSample}",
+                    repoId,
+                    stats.Regressed,
+                    stats.CurrentCount,
+                    stats.Overlap,
+                    stats.NoPriorCoverage,
+                    string.Join(", ", stats.RegressedSample));
+            }
 
             if (!runReadBack)
             {
@@ -1704,12 +1776,43 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         /// </summary>
         internal const int MaxUnionTracked = 200_000;
 
+        /// <summary>
+        /// A ceiling on the retained prior covered set, mirroring
+        /// <see cref="MaxUnionTracked"/>. Truncation can only cause a covered source
+        /// to be missed, never invented, so a saturated set can only <b>under</b>-report
+        /// the regressed arm - the direction that keeps the warning sound, since a
+        /// false alarm is the failure mode that would get it muted (issue #2292).
+        /// </summary>
+        internal const int MaxCoveredTracked = 200_000;
+
+        /// <summary>How many regressed keys the warning names, following the bounded-sample rule.</summary>
+        internal const int RegressedSampleSize = 16;
+
         private readonly object _gate = new();
         private readonly HashSet<string> _union = new(StringComparer.Ordinal);
         private HashSet<string> _previousSelected = new(StringComparer.Ordinal);
         private HashSet<string> _previousLanded = new(StringComparer.Ordinal);
+        private HashSet<string> _previousCovered = new(StringComparer.Ordinal);
+        private int _previousChangedFileCount;
+        private bool _previousCoveredSaturated;
+        private int _unmeasuredSincePrevious;
         private int _passes;
         private bool _unionSaturated;
+
+        /// <summary>
+        /// Records that a reconcile pass produced no gap-shape measurement, so it
+        /// advanced no history. Without this the next measured pass would compare
+        /// itself against a pass that is not the preceding one while reporting it as
+        /// "previous", and a regression measured across an unmeasured interval is not
+        /// alarmable because anything could have happened in it (issue #2292).
+        /// </summary>
+        internal void NoteUnmeasuredPass()
+        {
+            lock (_gate)
+            {
+                _unmeasuredSincePrevious++;
+            }
+        }
 
         /// <summary>
         /// Folds one pass's gap selection into the history and returns its shape
@@ -1718,9 +1821,15 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         /// <param name="selectedKeys">The canonical source keys this pass selected as gaps.</param>
         /// <param name="landedFromGap">The subset of <paramref name="selectedKeys"/> that landed this pass.</param>
         /// <param name="walkedFiles">The number of files walked this pass, for the union-versus-corpus reading.</param>
+        /// <param name="coverage">This pass's observed coverage, retained so the next pass can tell a regression from a file it never observed covered.</param>
+        /// <param name="changedFileCount">Files the reconcile changed this pass, retained so the regression warning can require that neither pass changed anything.</param>
         /// <returns>The measured shape of this pass.</returns>
         internal FileGapStats Observe(
-            HashSet<string> selectedKeys, HashSet<string> landedFromGap, int walkedFiles)
+            HashSet<string> selectedKeys,
+            HashSet<string> landedFromGap,
+            RepoContextEmbeddingCoverage coverage,
+            int changedFileCount,
+            int walkedFiles)
         {
             ArgumentNullException.ThrowIfNull(selectedKeys);
             ArgumentNullException.ThrowIfNull(landedFromGap);
@@ -1728,13 +1837,37 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             lock (_gate)
             {
                 var overlap = 0;
+                List<string>? regressedKeys = null;
                 foreach (var key in selectedKeys)
                 {
                     if (_previousSelected.Contains(key))
                     {
                         overlap++;
+                        continue;
+                    }
+
+                    // Not a gap last pass. That is NOT the same as having been covered
+                    // last pass, which is the conflation this partition exists to
+                    // remove: a file is absent from a gap set both when it was
+                    // observed covered and when it was never considered at all. Only
+                    // the first is a coverage regression (issue #2292).
+                    if (_previousCovered.Contains(VectorCodec.SourceId(key)))
+                    {
+                        (regressedKeys ??= new List<string>()).Add(key);
                     }
                 }
+
+                var regressed = regressedKeys?.Count ?? 0;
+
+                // Ordered before truncation, so the sample is a deterministic prefix
+                // of the regressed set rather than an arbitrary subset of it: two
+                // passes reporting the same files report the same sample.
+                var regressedSample = regressedKeys is null
+                    ? Array.Empty<string>()
+                    : regressedKeys
+                        .OrderBy(static key => key, StringComparer.Ordinal)
+                        .Take(RegressedSampleSize)
+                        .ToArray();
 
                 var landedRepeats = 0;
                 foreach (var key in _previousLanded)
@@ -1766,6 +1899,13 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     Overlap: overlap,
                     Entered: selectedKeys.Count - overlap,
                     Left: _previousSelected.Count - overlap,
+                    Regressed: regressed,
+                    NoPriorCoverage: selectedKeys.Count - overlap - regressed,
+                    PreviousChangedFileCount: _previousChangedFileCount,
+                    UnmeasuredPassesSincePrevious: _unmeasuredSincePrevious,
+                    PreviousCoveredSaturated: _previousCoveredSaturated,
+                    ChangedFileCount: changedFileCount,
+                    RegressedSample: regressedSample,
                     PreviousLanded: _previousLanded.Count,
                     LandedRepeats: landedRepeats,
                     UnionCount: _union.Count,
@@ -1775,8 +1915,38 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
                 _previousSelected = selectedKeys;
                 _previousLanded = landedFromGap;
+                (_previousCovered, _previousCoveredSaturated) = SnapshotCoverage(coverage);
+                _previousChangedFileCount = changedFileCount;
+                _unmeasuredSincePrevious = 0;
                 return stats;
             }
+        }
+
+        /// <summary>
+        /// Copies this pass's observed covered source identifiers, bounded by
+        /// <see cref="MaxCoveredTracked"/>. The identifiers are what the coverage
+        /// probe already returned, so nothing is read from the store to build this.
+        /// </summary>
+        private static (HashSet<string> Covered, bool Saturated) SnapshotCoverage(
+            RepoContextEmbeddingCoverage coverage)
+        {
+            var covered = new HashSet<string>(StringComparer.Ordinal);
+            var saturated = false;
+            foreach (var set in new[] { coverage.Embedded, coverage.Contentless })
+            {
+                foreach (var sourceId in set)
+                {
+                    if (covered.Count >= MaxCoveredTracked)
+                    {
+                        saturated = true;
+                        return (covered, saturated);
+                    }
+
+                    covered.Add(sourceId);
+                }
+            }
+
+            return (covered, saturated);
         }
     }
 
@@ -1784,8 +1954,15 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// <param name="CurrentCount">Gap files selected this pass.</param>
     /// <param name="PreviousCount">Gap files selected the previous pass.</param>
     /// <param name="Overlap">Files selected both this pass and the previous pass.</param>
-    /// <param name="Entered">Files selected this pass that were not selected the previous pass.</param>
+    /// <param name="Entered">Files selected this pass that were not selected the previous pass. Kept for continuity with the pass log, but it is <b>not</b> a coverage-regression count: it is the sum of <paramref name="Regressed"/> and <paramref name="NoPriorCoverage"/>.</param>
     /// <param name="Left">Files selected the previous pass that are not selected this pass.</param>
+    /// <param name="Regressed">Files selected this pass that the previous measured pass positively observed as COVERED. The only arm of the entrant fringe that is a coverage regression, and the discrimination the per-batch probe seam cannot make.</param>
+    /// <param name="NoPriorCoverage">Files selected this pass that the previous measured pass neither selected as a gap nor observed as covered: a file it did not walk, or one it embedded as changed without observing coverage. Benign.</param>
+    /// <param name="PreviousChangedFileCount">Files the reconcile changed on the previous measured pass.</param>
+    /// <param name="UnmeasuredPassesSincePrevious">Reconcile passes since the previous measured pass that produced no gap shape, so "previous" is not the preceding pass when this is non-zero.</param>
+    /// <param name="PreviousCoveredSaturated">Whether the retained prior covered set hit its ceiling, in which case <paramref name="Regressed"/> is a floor.</param>
+    /// <param name="ChangedFileCount">Files the reconcile changed this pass.</param>
+    /// <param name="RegressedSample">A bounded sample of the regressed keys, for the warning.</param>
     /// <param name="PreviousLanded">Files the previous pass both selected and landed.</param>
     /// <param name="LandedRepeats">Previously-landed files being re-selected this pass - the re-embed-loop signature.</param>
     /// <param name="UnionCount">Distinct files selected across all observed passes.</param>
@@ -1798,12 +1975,47 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         int Overlap,
         int Entered,
         int Left,
+        int Regressed,
+        int NoPriorCoverage,
+        int PreviousChangedFileCount,
+        int UnmeasuredPassesSincePrevious,
+        bool PreviousCoveredSaturated,
+        int ChangedFileCount,
+        IReadOnlyList<string> RegressedSample,
         int PreviousLanded,
         int LandedRepeats,
         int UnionCount,
         int Passes,
         int WalkedFiles,
-        bool UnionSaturated);
+        bool UnionSaturated)
+    {
+        /// <summary>
+        /// Whether this pass's regressed arm has no benign explanation, which is the
+        /// only condition worth warning on (issue #2292).
+        /// <para>
+        /// Every covered-to-uncovered transition the file arm can produce legitimately
+        /// requires a content change. The single path that clears coverage short of
+        /// retirement is the contentless unmark, which fires when a contentless-marked
+        /// file gains content and is therefore a changed file; a removed file is not
+        /// walked, so it cannot appear as a gap at all. Requiring that neither the
+        /// current nor the previous measured pass changed a file therefore removes
+        /// every benign reading, and requiring that no unmeasured pass sits between
+        /// them keeps the comparison anchored to the pass it names.
+        /// </para>
+        /// <para>
+        /// Deliberately much narrower than <see cref="Entered"/>. A warning that can
+        /// fire benignly fires on nearly every pass, is muted, and takes the real
+        /// signal with it - the reason the membership probe's accounting counts a
+        /// short read rather than alarming on it (issue #2287).
+        /// </para>
+        /// </summary>
+        public bool RegressionIsUnexplained =>
+            Regressed > 0
+            && Passes > 1
+            && ChangedFileCount == 0
+            && PreviousChangedFileCount == 0
+            && UnmeasuredPassesSincePrevious == 0;
+    }
 
     /// <inheritdoc />
     public async Task RetireAsync(
