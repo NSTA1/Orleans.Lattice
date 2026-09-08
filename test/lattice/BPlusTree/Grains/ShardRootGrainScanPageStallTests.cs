@@ -114,6 +114,91 @@ public class ShardRootGrainScanPageStallTests
         };
     }
 
+    /// <summary>
+    /// Builds a shard whose descent never reaches a leaf: the root is an
+    /// internal node whose routing-table fetch parks forever, so the ceiling
+    /// fires with no leaf read ever issued.
+    /// </summary>
+    private static ShardRootGrain CreateParkedDescent(TimeSpan stallDuration)
+    {
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("shard", ShardKey));
+
+        var state = new FakePersistentState<ShardRootState>();
+        var rootId = GrainId.Create("internal", "root");
+        state.State.RootNodeId = rootId;
+        state.State.RootIsLeaf = false;
+
+        var factory = Substitute.For<IGrainFactory>();
+        var root = Substitute.For<IBPlusInternalGrain>();
+        root.GetRoutingTableAsync().Returns(
+            _ => new TaskCompletionSource<RoutingTableSnapshot>(
+                TaskCreationOptions.RunContinuationsAsynchronously).Task);
+        factory.GetGrain<IBPlusInternalGrain>(rootId).Returns(root);
+
+        var optionsResolver = TestOptionsResolver.Create(
+            baseOptions: new LatticeOptions
+            {
+                MaxLeavesPerScanPage = 64,
+                MaxScanPageDuration = TimeSpan.Zero,
+                MaxScanPageStallDuration = stallDuration,
+            },
+            shardCount: 1,
+            factory: factory);
+
+        return new ShardRootGrain(context, state, factory, optionsResolver,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance,
+            TestMutationObservers.NoObservers());
+    }
+
+    /// <summary>
+    /// Builds a shard whose first leaf answers normally but whose sibling hop
+    /// parks, so the ceiling fires while the walk is <em>between</em> leaf
+    /// reads rather than during one.
+    /// </summary>
+    private static ShardRootGrain CreateParkedSibling(TimeSpan stallDuration)
+    {
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("shard", ShardKey));
+
+        var state = new FakePersistentState<ShardRootState>();
+        var leafId = GrainId.Create("leaf", "leaf0");
+        state.State.RootNodeId = leafId;
+        state.State.RootIsLeaf = true;
+
+        var factory = Substitute.For<IGrainFactory>();
+        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var entries = new List<KeyValuePair<string, byte[]>> { new("k0000", [1]) };
+
+        leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
+            .Returns(_ => Task.FromResult(entries.ToList()));
+        leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        {
+            LowKeyInclusive = null,
+            HighKeyExclusive = null,
+        }));
+        leaf.GetPrevSiblingAsync().Returns(Task.FromResult((GrainId?)null));
+        leaf.GetNextSiblingAsync().Returns(
+            _ => new TaskCompletionSource<GrainId?>(
+                TaskCreationOptions.RunContinuationsAsynchronously).Task);
+        factory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leaf);
+
+        var optionsResolver = TestOptionsResolver.Create(
+            baseOptions: new LatticeOptions
+            {
+                MaxLeavesPerScanPage = 64,
+                MaxScanPageDuration = TimeSpan.Zero,
+                MaxScanPageStallDuration = stallDuration,
+            },
+            shardCount: 1,
+            factory: factory);
+
+        return new ShardRootGrain(context, state, factory, optionsResolver,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance,
+            TestMutationObservers.NoObservers());
+    }
+
     [Test]
     public async Task A_leaf_read_that_never_returns_is_faulted_by_the_hard_ceiling()
     {
@@ -248,6 +333,121 @@ public class ShardRootGrainScanPageStallTests
     /// remains tracked as issue 1961.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Issue 2278. A leaf-walk stall reported only the leaf's <em>ordinal</em>
+    /// ("the read in flight was leaf 1"), which cannot be joined to anything
+    /// else recorded about that leaf - so a recurrence was attributable to a
+    /// shard but not to a cause. The deployed evidence behind the issue is a
+    /// set of page fills that abandoned having read zero leaves, whose
+    /// candidate causes (a whole-WAL-window replay from cold, an activation
+    /// queued behind another call, a contended storage read) are separable
+    /// only by looking at what that specific leaf was doing.
+    /// <para>
+    /// The wrapped <see cref="OperationCanceledException"/> cannot supply it:
+    /// the guard raises that itself when the ceiling fires, so it names the
+    /// ceiling rather than the cause.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_stalled_read_names_the_leaf_it_was_waiting_on()
+    {
+        var harness = CreateParkedChain(TimeSpan.FromMilliseconds(250), parkAtLeaf: 0);
+
+        var ex = Assert.ThrowsAsync<ScanPageStalledException>(async () =>
+            await harness.Grain.GetSortedEntriesBatchAsync(
+                startInclusive: null, endExclusive: null, pageSize: 10, continuationToken: null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.LeavesVisited, Is.Zero);
+            Assert.That(ex.LeafInFlight, Is.EqualTo(GrainId.Create("leaf", "leaf0").ToString()),
+                "the stall must name the leaf whose read was outstanding");
+            Assert.That(ex.Message, Does.Contain(GrainId.Create("leaf", "leaf0").ToString()),
+                "and the message must carry it too - the deployed evidence for this issue is "
+                + "log text, not a typed slot a log reader can query");
+        });
+
+        harness.Parked.SetResult([]);
+        await Task.Yield();
+    }
+
+    /// <summary>
+    /// The discriminating case: the named leaf must be the one actually
+    /// outstanding, not merely the first in the chain. A field that always
+    /// named leaf one would pass the test above while being useless on exactly
+    /// the stalls that read some leaves before parking.
+    /// </summary>
+    [Test]
+    public async Task The_named_leaf_is_the_outstanding_one_not_the_first_in_the_chain()
+    {
+        var harness = CreateParkedChain(TimeSpan.FromMilliseconds(250), parkAtLeaf: 1);
+
+        var ex = Assert.ThrowsAsync<ScanPageStalledException>(async () =>
+            await harness.Grain.GetSortedEntriesBatchAsync(
+                startInclusive: null, endExclusive: null, pageSize: 10, continuationToken: null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.LeavesVisited, Is.EqualTo(1),
+                "the first leaf answered, so exactly one read completed");
+            Assert.That(ex.LeafInFlight, Is.EqualTo(GrainId.Create("leaf", "leaf1").ToString()),
+                "the stall must name the second leaf, which is the read still outstanding");
+        });
+
+        harness.Parked.SetResult([]);
+        await Task.Yield();
+    }
+
+    /// <summary>
+    /// The negative half of the contract, and the reason the identity is
+    /// recorded with the leaf ordinal beside it. A page fill that never issues
+    /// a leaf read must name no leaf: the ceiling can fire in the prologue or
+    /// the descent, and a slot that named one there would attribute a stall to
+    /// a leaf that was never asked for anything.
+    /// </summary>
+    [Test]
+    public void A_stall_before_any_leaf_read_names_no_leaf()
+    {
+        var harness = CreateParkedDescent(TimeSpan.FromMilliseconds(250));
+
+        var ex = Assert.ThrowsAsync<ScanPageStalledException>(async () =>
+            await harness.GetSortedEntriesBatchAsync(
+                startInclusive: null, endExclusive: null, pageSize: 10, continuationToken: null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Phase, Is.Not.EqualTo("leaf-walk"));
+            Assert.That(ex.LeavesVisited, Is.Zero);
+            Assert.That(ex.LeafInFlight, Is.Null,
+                "no leaf read was ever issued, so naming one would be a fabrication");
+        });
+    }
+
+    /// <summary>
+    /// The ordinal guard's other branch, and the reason the slot is not a plain
+    /// "last leaf touched" field. Here the leaf read completes and the walk
+    /// parks on the sibling hop instead, so a read is no longer outstanding:
+    /// the stall must name no leaf, because the one it last read is not what it
+    /// is waiting on. Drop the ordinal comparison and this test fails.
+    /// </summary>
+    [Test]
+    public void A_stall_between_leaf_reads_names_no_leaf()
+    {
+        var harness = CreateParkedSibling(TimeSpan.FromMilliseconds(250));
+
+        var ex = Assert.ThrowsAsync<ScanPageStalledException>(async () =>
+            await harness.GetSortedEntriesBatchAsync(
+                startInclusive: null, endExclusive: null, pageSize: 10, continuationToken: null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.LeavesVisited, Is.EqualTo(1),
+                "the first leaf read completed, so the walk is between reads");
+            Assert.That(ex.LeafInFlight, Is.Null,
+                "the completed leaf is not what the walk is blocked on");
+        });
+    }
+
     [Test]
     public void Every_scan_page_entry_point_arms_its_budget_before_any_await()
     {

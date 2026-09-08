@@ -60,6 +60,39 @@ internal sealed partial class ShardRootGrain
         /// <summary>The hard ceiling in force, or <see cref="Timeout.InfiniteTimeSpan"/>.</summary>
         internal TimeSpan StallDuration = Timeout.InfiniteTimeSpan;
 
+        /// <summary>
+        /// The leaf whose read this walk most recently issued, or
+        /// <see langword="null"/> before the walk has issued one.
+        /// </summary>
+        internal GrainId? LeafInFlightId;
+
+        /// <summary>
+        /// <see cref="LeafWalkBudget.LeavesVisited"/> as it stood when
+        /// <see cref="LeafInFlightId"/> was recorded, so a stall can tell a
+        /// read that is genuinely outstanding from one that has since
+        /// completed. See <see cref="LeafInFlight"/>.
+        /// </summary>
+        internal int LeafInFlightOrdinal;
+
+        /// <summary>
+        /// The leaf whose read is genuinely still outstanding, or
+        /// <see langword="null"/> when the walk is between reads.
+        /// <para>
+        /// A leaf read is outstanding exactly when no completion has been
+        /// recorded since it was issued, which is why the ordinal is captured
+        /// alongside the identity: every leaf-walk site records its visit
+        /// immediately after the await returns, so an unchanged
+        /// <see cref="LeafWalkBudget.LeavesVisited"/> is precisely the
+        /// condition "the read we issued has not come back". Without that
+        /// comparison the identity would be ambiguous - the ceiling can fire
+        /// either while a read is parked (the case this exists to attribute)
+        /// or at the stand-down between two reads, and in the second the last
+        /// identity recorded names a leaf that already answered.
+        /// </para>
+        /// </summary>
+        internal GrainId? LeafInFlight =>
+            LeafInFlightId is { } id && LeafInFlightOrdinal == Budget.LeavesVisited ? id : null;
+
         private CancellationTokenSource? _deadline;
 
         /// <summary>Whether the hard stall ceiling is armed for this call.</summary>
@@ -84,6 +117,8 @@ internal sealed partial class ShardRootGrain
             Phase = ScanPagePhase.Prologue;
             Operation = operation;
             StallDuration = bounds.StallDuration;
+            LeafInFlightId = null;
+            LeafInFlightOrdinal = 0;
             if (!bounds.IsStallGuarded)
             {
                 return;
@@ -111,6 +146,8 @@ internal sealed partial class ShardRootGrain
             Phase = ScanPagePhase.Prologue;
             Operation = string.Empty;
             StallDuration = Timeout.InfiniteTimeSpan;
+            LeafInFlightId = null;
+            LeafInFlightOrdinal = 0;
             return true;
         }
     }
@@ -280,6 +317,34 @@ internal sealed partial class ShardRootGrain
         scan.DeadlineToken.ThrowIfCancellationRequested();
 
     /// <summary>
+    /// The same stand-down, additionally recording the leaf whose read the
+    /// walk is about to issue so that a stall names it (issue 2278).
+    /// <para>
+    /// Before this, a leaf-walk stall reported only an <em>ordinal</em> - "the
+    /// read in flight was leaf 1" - which cannot be joined to anything else in
+    /// the log. That is the difference between knowing a page fill stopped and
+    /// being able to ask why: a stall at zero leaves has several candidate
+    /// causes (the leaf is replaying its whole WAL window from cold, its
+    /// activation is queued behind another call, its storage read is
+    /// contended), and every one of them is distinguishable from the others
+    /// only by looking at what that specific leaf was doing. The wrapped
+    /// <see cref="OperationCanceledException"/> cannot help: the guard raises
+    /// it itself when the ceiling fires, so it reports the ceiling rather than
+    /// the cause.
+    /// </para>
+    /// <para>
+    /// The identity is recorded <em>after</em> the stand-down, never before,
+    /// so a walk that stands down here does not name a leaf it never read.
+    /// </para>
+    /// </summary>
+    private static void StandDownIfCeilingFired(ScanPageWalk scan, GrainId leafId)
+    {
+        scan.DeadlineToken.ThrowIfCancellationRequested();
+        scan.LeafInFlightId = leafId;
+        scan.LeafInFlightOrdinal = scan.Budget.LeavesVisited;
+    }
+
+    /// <summary>
     /// Observes the outcome of a page fill the ceiling has abandoned, so that
     /// the stand-down it is about to take cannot surface as an unobserved task
     /// exception.
@@ -313,12 +378,18 @@ internal sealed partial class ShardRootGrain
     {
         var phase = walk.Phase;
         var leaves = walk.Budget.LeavesVisited;
+        var leafInFlight = walk.LeafInFlight;
         LatticeMetrics.ScanPageStalls.Add(
             1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
             PhaseTag(phase),
             LatticeTenantLabel.ForTree(TreeId));
+
+        // Deliberately in the message and the typed slot only, never a metric
+        // tag: leaf identity is unbounded cardinality, and the counter above is
+        // already attributable by tree, shard and phase.
+        var which = leafInFlight is { } id ? $", leaf {id}" : string.Empty;
 
         var where = phase switch
         {
@@ -329,7 +400,8 @@ internal sealed partial class ShardRootGrain
             ScanPagePhase.BaselineFold =>
                 $"while folding the frozen leaves' WAL tails, over a chain of {leaves} leaf/leaves; "
                 + "the fold pass is fanned out, so several leaf folds may have been in flight",
-            _ => $"while reading the leaf chain, after {leaves} leaf/leaves; the read in flight was leaf {leaves + 1}",
+            _ => $"while reading the leaf chain, after {leaves} leaf/leaves; the read in flight was "
+                + $"leaf {leaves + 1}{which}",
         };
 
         return new ScanPageStalledException(
@@ -346,6 +418,7 @@ internal sealed partial class ShardRootGrain
             Operation = walk.Operation,
             Phase = PhaseLabel(phase),
             LeavesVisited = leaves,
+            LeafInFlight = leafInFlight?.ToString(),
             TimeoutSeconds = walk.StallDuration.TotalSeconds,
         };
     }

@@ -426,7 +426,8 @@ internal sealed partial class BPlusLeafGrain
                 // (issue #2148). Observe unconditionally - before any logger or
                 // level check - so the totals account for every permitted replay
                 // whether or not a line is emitted for it.
-                var temperatureSample = ObserveLeafActivationReplay(replayTreeId, cold, Stopwatch.GetTimestamp());
+                var temperatureSample = ObserveLeafActivationReplay(
+                    replayTreeId, cold, this.GetGrainId(), Stopwatch.GetTimestamp());
                 if (temperatureSample is { } totals)
                 {
                     // Gate on IsEnabled as the over-budget warning does: the
@@ -438,14 +439,25 @@ internal sealed partial class BPlusLeafGrain
                         temperatureLogger.LogInformation(
                             "Leaf activation replays for tree '{TreeId}' since this silo started: {ColdReplays} cold "
                             + "(no snapshot rehydrate and an empty entry cache, so the whole readable WAL window is "
-                            + "replayed) and {WarmReplays} warm (resumed above a snapshot or cache anchor). These are "
+                            + "replayed) across {DistinctColdQualifier}{DistinctColdLeaves} distinct leaves, and "
+                            + "{WarmReplays} warm (resumed above a snapshot or cache anchor). These are "
                             + "CUMULATIVE process-wide totals, not a count since the previous line: the line is "
                             + "rate-limited to one per tree per {IntervalSeconds}s, so any single line yields the "
                             + "cold:warm ratio and any two yield the rate between them. Activations of a leaf with no "
-                            + "tree id bound take no replay permit and are counted on neither arm. Informational: a "
+                            + "tree id bound take no replay permit and are counted on neither arm. Compare the cold "
+                            + "total against the distinct count to read the arm's SHAPE: roughly equal means a "
+                            + "one-time first-activation cost spread broadly, whereas a cold total far above the "
+                            + "distinct count means the same few leaves are going cold repeatedly, which is a "
+                            + "snapshot or rehydrate defect rather than an expected cost. Informational: a "
                             + "cold replay is correct, just more expensive than a warm one.",
                             replayTreeId,
                             totals.Cold,
+                            // "at least" is load-bearing: past the cap the
+                            // distinct count is a floor, and a reader who took
+                            // it as exact would compute a cold:distinct ratio
+                            // that is too high and read a broad arm as a loop.
+                            totals.DistinctColdLeavesSaturated ? "at least " : string.Empty,
+                            totals.DistinctColdLeaves,
                             totals.Warm,
                             (long)ActivationTemperatureLogInterval.TotalSeconds);
                     }
@@ -1926,6 +1938,27 @@ internal sealed partial class BPlusLeafGrain
     private const int ActivationTemperatureLogStampCapacity = 4096;
 
     /// <summary>
+    /// Hard cap on the per-tree distinct-cold-leaf set. Reaching it stops the
+    /// set growing and latches the reported count as a floor, so the memory a
+    /// pathological tree can cost is fixed rather than one entry per leaf.
+    /// <para>
+    /// 512 is chosen so the distinction the count exists to draw survives at
+    /// realistic sizes: the deployed cold arm that prompted issue #2278 was 254
+    /// replays on one tree, which resolves exactly here instead of saturating
+    /// and collapsing to "at least N". A cap below the arm being diagnosed
+    /// would report a floor in precisely the case the reader cares about, which
+    /// is the one shape that cannot distinguish a broad arm from a loop.
+    /// </para>
+    /// <para>
+    /// Deliberately not a metric dimension. The distinct population is
+    /// unbounded in principle and leaf identity is high-cardinality, so it is
+    /// carried in the sample line only - which is also where it is useful,
+    /// since the deployed host exposes no metrics endpoint (issue #2148).
+    /// </para>
+    /// </summary>
+    private const int DistinctColdLeafCapacity = 512;
+
+    /// <summary>
     /// Last-emitted timestamps for the activation-temperature sample line,
     /// keyed by <b>tree only</b>. Static for the same reason as
     /// <see cref="OverBudgetLogStamps"/> - the point is to suppress across
@@ -1965,27 +1998,86 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private sealed class ActivationTemperatureTotals
     {
+        private readonly HashSet<GrainId> _coldLeaves = [];
         private long _cold;
         private long _warm;
+        private bool _coldLeavesSaturated;
 
         /// <summary>
         /// Records one replay on the arm selected by <paramref name="cold"/>
         /// and returns the totals as observed immediately afterwards.
         /// </summary>
-        public (long Cold, long Warm) Add(bool cold)
+        /// <param name="cold">Whether this replay was a cold one.</param>
+        /// <param name="leafId">
+        /// The activating leaf, used to accumulate the distinct-cold-leaf
+        /// population. Only consulted on the cold arm.
+        /// </param>
+        public ActivationTemperatureSample Add(bool cold, GrainId leafId)
         {
-            if (cold)
+            long coldTotal;
+            long warmTotal;
+            int distinctCold;
+            bool saturated;
+
+            // The distinct set is not lock-free, so the whole update is taken
+            // under one lock rather than mixing Interlocked with a guarded set
+            // and reading a torn combination out the other side. This runs once
+            // per permitted activation replay, which is orders of magnitude
+            // rarer than a read.
+            lock (_coldLeaves)
             {
-                Interlocked.Increment(ref _cold);
-            }
-            else
-            {
-                Interlocked.Increment(ref _warm);
+                if (cold)
+                {
+                    _cold++;
+
+                    // Bounded on purpose (see the field's capacity constant):
+                    // once saturated the set stops growing and the count is
+                    // reported as a floor, so a pathological tree costs a fixed
+                    // amount of memory rather than one entry per leaf.
+                    if (!_coldLeavesSaturated)
+                    {
+                        _coldLeaves.Add(leafId);
+                        if (_coldLeaves.Count >= DistinctColdLeafCapacity)
+                        {
+                            _coldLeavesSaturated = true;
+                        }
+                    }
+                }
+                else
+                {
+                    _warm++;
+                }
+
+                coldTotal = _cold;
+                warmTotal = _warm;
+                distinctCold = _coldLeaves.Count;
+                saturated = _coldLeavesSaturated;
             }
 
-            return (Interlocked.Read(ref _cold), Interlocked.Read(ref _warm));
+            return new ActivationTemperatureSample(coldTotal, warmTotal, distinctCold, saturated);
         }
     }
+
+    /// <summary>
+    /// A tree's cumulative activation-replay totals, plus the shape of its cold
+    /// arm.
+    /// </summary>
+    /// <param name="Cold">Cumulative cold replays for the tree.</param>
+    /// <param name="Warm">Cumulative warm replays for the tree.</param>
+    /// <param name="DistinctColdLeaves">
+    /// How many <em>distinct</em> leaves make up <paramref name="Cold"/>, capped
+    /// at <see cref="DistinctColdLeafCapacity"/>.
+    /// </param>
+    /// <param name="DistinctColdLeavesSaturated">
+    /// <see langword="true"/> when the cap was reached, so
+    /// <paramref name="DistinctColdLeaves"/> is a floor rather than an exact
+    /// count.
+    /// </param>
+    internal readonly record struct ActivationTemperatureSample(
+        long Cold,
+        long Warm,
+        int DistinctColdLeaves,
+        bool DistinctColdLeavesSaturated);
 
     /// <summary>
     /// Records one permitted activation replay against its tree's cumulative
@@ -2024,11 +2116,12 @@ internal sealed partial class BPlusLeafGrain
     /// The tree's cumulative <c>(cold, warm)</c> totals when a line is due,
     /// otherwise <see langword="null"/>.
     /// </returns>
-    internal static (long Cold, long Warm)? ObserveLeafActivationReplay(string treeId, bool cold, long now)
+    internal static ActivationTemperatureSample? ObserveLeafActivationReplay(
+        string treeId, bool cold, GrainId leafId, long now)
     {
         var totals = ActivationTemperatureTotalsByTree
             .GetOrAdd(treeId, static _ => new ActivationTemperatureTotals())
-            .Add(cold);
+            .Add(cold, leafId);
 
         return ShouldLogActivationTemperature(treeId, now) ? totals : null;
     }

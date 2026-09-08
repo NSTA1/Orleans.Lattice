@@ -51,6 +51,22 @@ public class ShardRootGrainScanPageStandDownCoverageTests
         @"Phase\s*=\s*ScanPagePhase\.(LeafWalk|BaselineFold)\s*;",
         RegexOptions.Compiled);
 
+    /// <summary>
+    /// Matches a stand-down on the walk in hand, in either overload:
+    /// <c>StandDownIfCeilingFired(scan)</c> or the leaf-naming
+    /// <c>StandDownIfCeilingFired(scan, someLeafId)</c> (issue 2278).
+    /// <para>
+    /// Anchored on <c>scan</c> followed by a close-paren or a comma rather than
+    /// on the method name alone, so a call that stood down on some
+    /// <em>other</em> walk object is still an offender. A bare
+    /// <c>Contains("StandDownIfCeilingFired")</c> would accept it and the guard
+    /// would pass on a walk that never consults its own ceiling.
+    /// </para>
+    /// </summary>
+    private static readonly Regex StandDown = new(
+        @"StandDownIfCeilingFired\(\s*scan\s*[),]",
+        RegexOptions.Compiled);
+
     [Test]
     public void Every_leaf_walk_loop_stands_down_before_it_awaits_again()
     {
@@ -190,7 +206,7 @@ public class ShardRootGrainScanPageStandDownCoverageTests
             var text = lines[i].Trim();
             if (text.StartsWith("//", StringComparison.Ordinal)) continue;
 
-            if (text.Contains("StandDownIfCeilingFired(scan)", StringComparison.Ordinal))
+            if (StandDown.IsMatch(text))
             {
                 return true;
             }
