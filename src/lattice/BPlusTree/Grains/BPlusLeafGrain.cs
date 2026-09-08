@@ -668,6 +668,23 @@ internal sealed partial class BPlusLeafGrain(
             return recovered;
         }
 
+        // Declared-span admission (see BPlusLeafGrain.SpanAdmission.cs).
+        // Routing can still name this leaf for a key its declared range no
+        // longer covers - most sharply between a split narrowing this leaf's
+        // high bound and the shard root installing the separator that redirects
+        // the key. Committing here would produce a row this leaf's own replay
+        // filter refuses to reinstate, leaving durability to depend on where
+        // the declaring leaf's checkpoint happens to sit. Forward instead.
+        if (TryResolveSpanForwardTarget(key, out var spanTarget))
+        {
+            // The sibling publishes its own mutation notification after
+            // persist, so none is published here. Its SplitResult is discarded
+            // for the reason given in ForwardOutOfSpanMergeAsync.
+            await grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget)
+                .SetAsync(key, value, expiresAtTicks);
+            return null;
+        }
+
         return await CommitSetAsync(key, value, expiresAtTicks);
     }
 
@@ -899,8 +916,14 @@ internal sealed partial class BPlusLeafGrain(
         // the per-key SetAsync loop keeps every LWW write observable. Zero-cost
         // when inactive (cached flag) - the batched fast path is unchanged on
         // the default null-observer path.
+        // A batch carrying a key outside this leaf's declared range also routes
+        // per key: CommitSetManyAsync commits wholesale with no per-key
+        // admission step, so only the per-key loop (which forwards inside
+        // SetCoreAsync) can place each entry on the leaf that declares it. The
+        // scan is skipped entirely on a leaf with no declared bounds, which is
+        // the common shape. See BPlusLeafGrain.SpanAdmission.cs.
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
-        if (splitInProgress || MergeObserverActive)
+        if (splitInProgress || MergeObserverActive || ContainsOutOfSpanKey(entries))
         {
             SplitResult? lastSplit = null;
             foreach (var entry in entries)
@@ -963,7 +986,12 @@ internal sealed partial class BPlusLeafGrain(
 
         SplitResult? split;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
-        if (splitInProgress || MergeObserverActive)
+        // The matched set is drawn from this leaf's own cache, so an out-of-span
+        // entry can only appear here if a row was orphaned before this rule
+        // existed. Routing it per key keeps the guard uniform across every
+        // batched write path and stops such a row being re-committed out of
+        // span. See BPlusLeafGrain.SpanAdmission.cs.
+        if (splitInProgress || MergeObserverActive || ContainsOutOfSpanKey(matched))
         {
             // Mirror SetManyAsync's split-in-progress fallback: the split
             // recovery in SetCoreAsync forwards mid-batch entries across two
@@ -1382,6 +1410,17 @@ internal sealed partial class BPlusLeafGrain(
         EnsureInternalOrigin(LatticeOperation.Delete);
         using var _mutationScope = EnterMutationScope();
         var isPrepared = LatticePreparedContext.Current;
+
+        // Declared-span admission (see BPlusLeafGrain.SpanAdmission.cs). This
+        // runs ahead of the absent-row short-circuit below: the row this delete
+        // targets lives on the leaf that declares the key, so short-circuiting
+        // here would report "nothing to delete" while leaving the row live, and
+        // committing here would append a tombstone this leaf's own replay filter
+        // drops. Forwarding is the only answer that makes the returned bool true.
+        if (TryResolveSpanForwardTarget(key, out var spanTarget))
+        {
+            return await grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget).DeleteAsync(key);
+        }
 
         // For non-prepared deletes, the absent / tombstoned short-circuit
         // saves an HLC tick and a WAL append. For prepared deletes the
@@ -2901,6 +2940,22 @@ internal sealed partial class BPlusLeafGrain(
         if (entries.Count == 0)
         {
             return null;
+        }
+
+        // Declared-span admission (see BPlusLeafGrain.SpanAdmission.cs). A
+        // cross-shard migration import is exempt: it is a topology-seeding
+        // operation whose coordinator places rows deliberately and sets the
+        // destination's range as a separate step, so its keys are legitimately
+        // outside the range at the moment they arrive. That is the same reason
+        // MergeEntriesAsync - the primitive CompleteSplitAsync and bulk load
+        // use to seed a leaf - carries no span guard either.
+        if (!isCrossShardMigration && ContainsOutOfSpanKey(entries))
+        {
+            entries = await ForwardOutOfSpanMergeAsync(entries, isCrossShardMigration);
+            if (entries.Count == 0)
+            {
+                return null;
+            }
         }
 
         await MergeIntoStateAsync(entries, isCrossShardMigration);

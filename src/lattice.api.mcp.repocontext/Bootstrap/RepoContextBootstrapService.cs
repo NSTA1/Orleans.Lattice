@@ -637,17 +637,25 @@ internal sealed class RepoContextBootstrapService
             {
                 var converged = armFailure is null && fileIngest.Converged;
                 updatedSnapshot = updatedSnapshot with { CoverageConverged = converged };
-                if (converged != coverageConverged)
-                {
-                    _logger.LogInformation(
-                        converged
-                            ? "Repo {RepoId}: embedding coverage is complete; the gap scan now runs every "
-                              + "{Passes} pass(es) unless a gap is detected out of band."
-                            : "Repo {RepoId}: embedding coverage is incomplete; the gap scan runs on every pass "
-                              + "until it is clean (cadence would otherwise be {Passes} pass(es)).",
-                        repoId,
-                        _options.PassesPerEmbeddingGapScan);
-                }
+
+                // Report the verdict on EVERY pass that measured it, not only when it
+                // changes. Gating it on the transition is the same defect the plan line
+                // above already had fixed for it (#2088), reappearing one branch later:
+                // a verdict that never latches produces no line at all, so a repository
+                // that converged on its first pass and one permanently stuck at
+                // incomplete are both silent, and "no log" has to be argued about
+                // rather than read. The line is emitted only when the scan actually
+                // ran, so a converged repository still logs at its slower cadence
+                // rather than on every pass.
+                _logger.LogInformation(
+                    converged
+                        ? "Repo {RepoId}: embedding coverage is complete ({Transition}); the gap scan runs every "
+                          + "{Passes} pass(es) unless a gap is detected out of band."
+                        : "Repo {RepoId}: embedding coverage is incomplete ({Transition}); the gap scan runs on "
+                          + "every pass until it is clean (cadence would otherwise be {Passes} pass(es)).",
+                    repoId,
+                    converged == coverageConverged ? "unchanged since the previous scan" : "changed this scan",
+                    _options.PassesPerEmbeddingGapScan);
             }
 
             await ReportAsync(progress, new RepoIndexProgressUpdate { FilesEmbedded = embedded }, cancellationToken)

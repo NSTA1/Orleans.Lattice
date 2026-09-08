@@ -739,37 +739,41 @@ public class LeafReclaimConcurrencyIntegrationTests
 
     /// <summary>
     /// The loss primitive that every silent-data-loss defect in this area
-    /// reduces to: a leaf accepts a write for a key its own declared span
-    /// excludes, acknowledges it, serves it from cache, and the tree drops it
-    /// the moment projections are rebuilt.
+    /// reduces to, now inverted: a leaf must refuse to admit a write for a key
+    /// its own declared span excludes, and the row must land on the leaf that
+    /// does declare it.
     /// <para>
-    /// The two admission rules disagree by construction. The write path
-    /// admits by <i>routing</i> - the commit path performs no span check at
-    /// all, because the shard root is supposed to have resolved the owning
-    /// leaf already. Replay admits by <i>declared span</i>, gating each
-    /// replayed row on the leaf owning the key. Any interval in which routing
-    /// resolves a key to a leaf that does not declare it is therefore a silent
-    /// loss window, and the loss is invisible until a restart.
+    /// This test previously asserted the defect. The two admission rules
+    /// disagreed by construction: the write path admitted by <i>routing</i>,
+    /// performing no span check at all because the shard root was supposed to
+    /// have resolved the owning leaf already, while replay admitted by
+    /// <i>declared span</i>. Any interval in which routing resolved a key to a
+    /// leaf that did not declare it was therefore a loss window, and the loss
+    /// was invisible until a restart. The original body carried an explicit
+    /// instruction to rewrite it as a refusal assertion if the write path ever
+    /// started validating spans; issue #2137 made it do so, so this is that
+    /// rewrite.
     /// </para>
     /// <para>
     /// This test races nothing. It writes one key directly to a leaf whose
-    /// span excludes it, which is precisely what a stale routing entry causes,
-    /// and then asks whether the tree still holds it. Stating the invariant
-    /// deterministically here means the fixture no longer depends on a
-    /// low-probability interleaving to notice that it has been violated.
+    /// span excludes it, which is precisely what a stale routing entry causes.
+    /// The refusal is asserted at the point of admission rather than after a
+    /// rebuild, because a rebuild cannot distinguish the two mechanisms:
+    /// <c>RebuildEveryProjectionAsync</c> replays from offset zero, so the
+    /// declaring leaf re-materialises an orphaned row whether or not the write
+    /// path validated the span. Admission is the property under test; survival
+    /// is asserted afterwards as the end-to-end consequence.
     /// </para>
     /// <para>
-    /// The end-to-end assertion is the one that matters and is the one made:
-    /// an acknowledged write must be readable through the router after a
-    /// rebuild. Whether the row also survives <i>on the leaf that wrongly
-    /// accepted it</i>, and whether the leaf that legitimately declares the
-    /// key re-materialises it from the log instead, are reported rather than
-    /// asserted - they diagnose which of the two mechanisms is in play without
-    /// pinning behaviour this test has no business fixing.
+    /// The end-to-end assertion the original made is kept and now holds for a
+    /// stronger reason. Before, an acknowledged write survived a rebuild only
+    /// if the declaring leaf's checkpoint happened to sit behind the offset the
+    /// orphan occupied. Now the row is written to the declaring leaf in the
+    /// first place, so its survival does not depend on a checkpoint accident.
     /// </para>
     /// </summary>
     [Test]
-    public async Task A_write_outside_a_leafs_declared_span_survives_a_projection_rebuild()
+    public async Task A_write_outside_a_leafs_declared_span_is_refused_and_lands_on_the_declaring_leaf()
     {
         var treeName = $"span-admission-{Guid.NewGuid():N}";
         var (router, shard) = await CreateSingleShardTreeAsync(treeName);
@@ -795,57 +799,56 @@ public class LeafReclaimConcurrencyIntegrationTests
         Assert.That(await router.GetAsync(orphanKey), Is.Null,
             "precondition: the probe key must not already exist anywhere in the tree");
 
+        var declaringIndex = chain.FindIndex(l => l.Covers(orphanKey));
+        Assert.That(declaringIndex, Is.GreaterThanOrEqualTo(0),
+            $"precondition: some leaf in the chain must declare '{orphanKey}'. Chain: " + DescribeChain(chain));
+        var declaringLeaf = chain[declaringIndex];
+        Assert.That(declaringLeaf.Id, Is.Not.EqualTo(donor.Id),
+            "precondition: the declaring leaf must not be the donor, or there is no out-of-span write to make");
+
         var donorGrain = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(donor.Id);
+        var declaringGrain = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(declaringLeaf.Id);
         await donorGrain.SetAsync(orphanKey, Encoding.UTF8.GetBytes("out-of-span"));
 
-        // The write path took it without complaint, which is the first half of
-        // the defect: no span check stands between routing and the log.
-        var acceptedOnDonor = await donorGrain.GetAsync(orphanKey);
-        Assert.That(acceptedOnDonor, Is.Not.Null,
-            $"precondition: leaf {donor.Id} declaring {donor.Span} was expected to accept the out-of-span "
-            + $"key '{orphanKey}' without a span check. If it refused, the write path now validates spans "
-            + "and this whole class of loss window is already closed - which would be good news, and this "
-            + "test should be rewritten to assert the refusal instead.");
-
-        await RebuildEveryProjectionAsync(shard);
-
-        var onDonorAfter = await donorGrain.GetAsync(orphanKey);
-        var throughRouterAfter = await router.GetAsync(orphanKey);
-
-        var declaringIndex = chain.FindIndex(l => l.Covers(orphanKey));
-        ChainLeaf? declaringLeaf = declaringIndex >= 0 ? chain[declaringIndex] : null;
-        byte[]? onDeclaringLeafAfter = null;
-        if (declaringLeaf is { } declaring)
-        {
-            onDeclaringLeafAfter = await _cluster.GrainFactory
-                .GetGrain<IBPlusLeafGrain>(declaring.Id).GetAsync(orphanKey);
-        }
+        var onDonor = await donorGrain.GetAsync(orphanKey);
+        var onDeclaring = await declaringGrain.GetAsync(orphanKey);
+        var throughRouter = await router.GetAsync(orphanKey);
 
         TestContext.Out.WriteLine(
             $"wrote '{orphanKey}' directly to {donor.Id} declaring {donor.Span}"
             + Environment.NewLine
-            + $"  leaf that declares the key: "
-            + (declaringLeaf is { } d1 ? $"{d1.Id} {d1.Span}" : "NONE IN CHAIN")
+            + $"  leaf that declares the key: {declaringLeaf.Id} {declaringLeaf.Span}"
             + Environment.NewLine
-            + $"  after rebuild - on the accepting leaf: {(onDonorAfter is null ? "GONE" : "present")}"
+            + $"  on the addressed leaf: {(onDonor is null ? "refused" : "ADMITTED")}"
             + Environment.NewLine
-            + $"  after rebuild - on the declaring leaf: "
-            + (declaringLeaf is null ? "n/a" : (onDeclaringLeafAfter is null ? "GONE" : "present"))
+            + $"  on the declaring leaf: {(onDeclaring is null ? "ABSENT" : "present")}"
             + Environment.NewLine
-            + $"  after rebuild - through the router: {(throughRouterAfter is null ? "GONE" : "present")}"            + Environment.NewLine
             + "  chain: " + DescribeChain(chain));
 
-        Assert.That(throughRouterAfter, Is.Not.Null,
-            $"an acknowledged write of '{orphanKey}' was lost by rebuilding projections from the log. "
-            + $"It was accepted by leaf {donor.Id}, whose declared span {donor.Span} excludes the key, "
-            + "because the commit path admits by routing and performs no span check, while replay admits "
-            + "by declared span. Nothing re-materialised it: "
-            + (declaringLeaf is { } d2
-                ? $"leaf {d2.Id} declares {d2.Span} and so should own it, but its "
-                  + "projection checkpoint is past the offset the row occupies, so its replay never reaches it."
-                : "no leaf in the chain declares the key at all.")
-            + " This is the mechanism, isolated from any race: any window in which routing resolves a key "
-            + "to a leaf that does not declare it loses acknowledged writes silently and permanently.");
+        Assert.That(onDonor, Is.Null,
+            $"leaf {donor.Id} declaring {donor.Span} admitted the out-of-span key '{orphanKey}'. "
+            + "The commit path must check its declared range and forward a key it does not declare to "
+            + "the leaf that does. Admitting it produces a row this leaf's own replay filter refuses to "
+            + "reinstate, so the row's durability comes to rest on where an unrelated leaf's projection "
+            + "checkpoint happens to sit.");
+
+        Assert.That(onDeclaring, Is.Not.Null,
+            $"the out-of-span write of '{orphanKey}' was refused by {donor.Id} but did not arrive at "
+            + $"{declaringLeaf.Id}, which declares {declaringLeaf.Span}. A refusal that drops the write is "
+            + "worse than the defect it replaces: the write path must forward, not discard.");
+
+        Assert.That(throughRouter, Is.Not.Null,
+            $"'{orphanKey}' was accepted by the tree but is not readable through the router.");
+
+        // The original end-to-end invariant, kept: it now holds because the row
+        // sits on the leaf whose replay filter admits it, rather than because a
+        // checkpoint happened to fall on the right side of the orphan's offset.
+        await RebuildEveryProjectionAsync(shard);
+
+        Assert.That(await router.GetAsync(orphanKey), Is.Not.Null,
+            $"an acknowledged write of '{orphanKey}' was lost by rebuilding projections from the log, "
+            + $"even though it was placed on {declaringLeaf.Id}, which declares {declaringLeaf.Span} and "
+            + "whose replay filter therefore admits it.");
     }
     // --- the whole path, under concurrent load ---
 

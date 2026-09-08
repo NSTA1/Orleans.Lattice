@@ -171,6 +171,15 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddSingleton<ExactKnnSemanticIndex>();
         services.TryAddSingleton<RepoContextExactScanBudget>();
         services.TryAddSingleton<RepoContextExactScanBreaker>();
+
+        // Both guards above suppress work, and neither could be verified from a
+        // deployed container before this: the budget logged only when it skipped,
+        // and the breaker's repeat-skip logged at debug, so an unreached guard and
+        // a guard that declined every query produced the same silence (issue
+        // #2253). The reporter counts what each one actually did and paces one
+        // information-level summary per repository.
+        services.TryAddSingleton(
+            sp => new RepoContextRetrievalGuardReporter(sp.GetRequiredService<TimeProvider>()));
         services.TryAddSingleton<RepoContextAnnOptions>();
         services.TryAddSingleton<IRepoContextAnnBackingFactory, LatticeRepoContextAnnBackingFactory>();
         services.TryAddSingleton<RepoContextAnnIndexRegistry>();
@@ -211,6 +220,7 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                     exact,
                     sp.GetRequiredService<RepoContextExactScanBudget>(),
                     sp.GetRequiredService<RepoContextExactScanBreaker>(),
+                    sp.GetRequiredService<RepoContextRetrievalGuardReporter>(),
                     sp.GetRequiredService<ILogger<AnnRepoContextSemanticIndex>>());
         });
 

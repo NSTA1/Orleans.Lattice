@@ -1075,7 +1075,59 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     Task AbortSplitAsync();
 
-    /// <summary>Returns <c>true</c> if this shard is currently participating in an adaptive split as source.</summary>
+    /// <summary>
+    /// Returns <c>true</c> if this shard is currently participating in an adaptive split as source.
+    /// <para>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> because the implementation is a
+    /// pure synchronous read of the single <c>state.State.SplitInProgress</c>
+    /// reference wrapped in <see cref="Task.FromResult{TResult}(TResult)"/> with
+    /// zero awaits and zero state mutation - it cannot race any other in-flight
+    /// turn. This completes the interleaved set that the split and healing
+    /// coordinators fan out per shard and then await together:
+    /// <c>HotShardMonitorGrain.RunSamplingPassAsync</c> and
+    /// <c>ShardHealingOrchestratorGrain.ObserveLoadAsync</c> each dispatch
+    /// <see cref="GetHotnessAsync"/>, <see cref="HasPendingBulkOperationAsync"/>,
+    /// and this probe across every shard, awaiting each set with a separate
+    /// <c>Task.WhenAll</c>. While this member alone lacked the attribute it
+    /// queued behind long non-reentrant turns on a busy shard until the 30s
+    /// response timeout fired, and because the fan-out is awaited with
+    /// <c>Task.WhenAll</c> that one shard's timeout aborted sampling for the
+    /// whole tree - so hot-shard detection stopped exactly when load was
+    /// highest, and splitting never ran to relieve it (see issue 2262).
+    /// </para>
+    /// <para>
+    /// Interleaving is safe here for a reason that does <em>not</em> extend to
+    /// <c>GetAsync</c>, <c>ExistsAsync</c>, or <c>GetManyAsync</c>, which are
+    /// deliberately NOT interleaved. The hazard documented on those members is
+    /// that read traversal performs <em>multiple non-atomic reads</em> of
+    /// shard-root routing state <em>across awaits</em>, so an interleaved
+    /// promotion or move-away publish can land between two of them and yield a
+    /// self-inconsistent view. This member has no "between": it is one read of
+    /// one reference field, and a reference read is atomic, so an interleaved
+    /// caller observes either the old record or the new one and never a
+    /// partially-published one. That distinction - read shape, not which state
+    /// is touched - is the same one that already licenses
+    /// <see cref="GetRootNodeRefAsync"/> to interleave a read of the very
+    /// routing slots <c>GetAsync</c> is protected for.
+    /// </para>
+    /// <para>
+    /// Interleaving does narrow a staleness window: a caller can observe a
+    /// <c>SplitInProgress</c> transition up to one <c>WriteShardStateAsync</c>
+    /// earlier than a queued caller would, because each assignment in
+    /// <c>ShardRootGrain.Split</c> precedes its persisting await. No caller
+    /// depends on the wider window. Every consumer treats this probe as
+    /// advisory: the two monitors above and <c>TreeReshardGrain</c> use it as a
+    /// heuristic in-flight count, and the two mutual-exclusion callers
+    /// (<c>TreeShardSplitGrain</c> and <c>TreeShardConsolidationGrain</c>) say
+    /// so in source and re-validate atomically inside
+    /// <see cref="BeginSplitAsync"/>, which is non-reentrant precisely so that
+    /// the check and the write happen in one turn and no caller-side
+    /// check-then-act window can slip between them. The mutual-exclusion
+    /// invariant never rested on this read, so interleaving it cannot weaken
+    /// the invariant.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
     Task<bool> IsSplittingAsync();
 
     /// <summary>
@@ -1087,9 +1139,10 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// pure synchronous read of <c>state.State.PendingBulkGraft</c> wrapped in
     /// <see cref="Task.FromResult{TResult}(TResult)"/> with zero awaits and zero
     /// state mutation - it cannot race any other in-flight turn. Paired with
-    /// <see cref="GetHotnessAsync"/> so the hot-shard monitor's per-tick
-    /// fan-out (which awaits both) is not gated on producer
-    /// <see cref="SetManyAsync"/> work (see U9d).
+    /// <see cref="GetHotnessAsync"/> and <see cref="IsSplittingAsync"/> so the
+    /// hot-shard monitor's per-tick fan-out (which awaits all three) is not
+    /// gated on producer <see cref="SetManyAsync"/> work (see U9d, and issue
+    /// 2262 for the third probe).
     /// </para>
     /// </summary>
     [AlwaysInterleave]
