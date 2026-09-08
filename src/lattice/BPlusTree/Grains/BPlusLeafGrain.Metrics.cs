@@ -152,18 +152,53 @@ internal sealed partial class BPlusLeafGrain
     /// does not fail the user-visible mutation; the next publish (or the
     /// operator-driven <c>RefreshLeafByteFootprintsAsync</c>) re-anchors
     /// the totals.
+    /// <para>
+    /// No path out of this method throws, which its only two call sites
+    /// rely on (issue #2264): both piggyback it on work that has already
+    /// committed, so an escaping exception aborts the caller after its
+    /// real work succeeded. The activation-validity guard below covers
+    /// the <c>state.State</c> and <c>Cache</c> reads; the <c>catch</c>
+    /// further down covers the shard-root hop. They are deliberately
+    /// separate - see the comment on the guard.
+    /// </para>
     /// </summary>
     private async Task TryPublishByteFootprintAsync()
     {
-        var treeId = state.State.TreeId;
-        if (treeId is null || state.State.ShardIndex is not int shardIndex)
+        string? treeId;
+        int shardIndex;
+        long stateBytes;
+        long snapshotBytes;
+        long liveKeys;
+        try
         {
+            treeId = state.State.TreeId;
+            if (treeId is null || state.State.ShardIndex is not int resolvedShardIndex)
+            {
+                return;
+            }
+
+            shardIndex = resolvedShardIndex;
+            stateBytes = Cache.StateBytes;
+            snapshotBytes = _lastCapturedSnapshotBytes;
+            liveKeys = Cache.LiveCount;
+        }
+        catch (InvalidOperationException)
+        {
+            // Issue #2264: the activation was invalidated while an await
+            // in the caller was in flight - reachably, the parent hop
+            // inside PublishCurrentDigestAsync, which is the only call
+            // site with an await between its own state reads and this
+            // one - so state.State now throws "Attempt to access an
+            // invalid activation". Deliberately NOT folded into the
+            // publish catch below: an invalid activation is a lifecycle
+            // condition, not a transient shard-root fault, and
+            // conflating the two would swallow genuine publish failures
+            // the existing catch is careful to keep re-publishable. The
+            // footprint is best-effort and re-anchors on the next
+            // activation's first publish.
             return;
         }
 
-        var stateBytes = Cache.StateBytes;
-        var snapshotBytes = _lastCapturedSnapshotBytes;
-        var liveKeys = Cache.LiveCount;
         if (stateBytes == _lastPublishedStateBytes
             && snapshotBytes == _lastPublishedSnapshotBytes
             && liveKeys == _lastPublishedLiveKeys)

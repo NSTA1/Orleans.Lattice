@@ -12,7 +12,22 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     private int _writersInFlight;
     private readonly TaskCompletionSource _rendezvousSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public T State { get; set; } = new();
+    public T State { get => ThrowOnStateAccess is { } ex ? throw ex : _state; set => _state = value; }
+
+    private T _state = new();
+
+    /// <summary>
+    /// When set, every read of <see cref="State"/> throws this exception
+    /// instead of returning the state. Models an Orleans activation that
+    /// has transitioned to <c>Invalid</c>, where the runtime's
+    /// <c>CheckRuntimeContext</c> guard throws
+    /// <see cref="InvalidOperationException"/> ("Attempt to access an
+    /// invalid activation") out of the state accessor - the issue #2264
+    /// mechanism. Assignment is deliberately left unguarded so a test can
+    /// clear the fault and then inspect the persisted row, modelling the
+    /// durable state surviving the activation that owned it.
+    /// </summary>
+    public Exception? ThrowOnStateAccess { get; set; }
     public string Etag => SimulateEtagChecks ? _currentEtag.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty;
 
     /// <summary>
