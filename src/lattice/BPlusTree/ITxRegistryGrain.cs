@@ -150,10 +150,10 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// Cheap monotonic-revision probe paired with
     /// <see cref="SnapshotAsync"/>. The returned <see cref="long"/>
     /// changes (strictly increases, by an unspecified amount) on every
-    /// mutation of the registry's recorded-decisions map; two probe
-    /// values <c>v1</c> and <c>v2</c> taken before and after an
+    /// change to the registry's <em>readable decision surface</em>; two
+    /// probe values <c>v1</c> and <c>v2</c> taken before and after an
     /// arbitrary work window with <c>v1 == v2</c> are sufficient
-    /// evidence that <em>no</em> decision mutation occurred during
+    /// evidence that <em>no</em> such change occurred during
     /// the window. Reader-side fast paths in <c>LatticeGrain</c>
     /// (e.g. the double-checked retry in
     /// <c>GetManyAsyncCore</c> / <c>CountAsync</c>) use this to replace
@@ -162,9 +162,27 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// is provably still authoritative and the second dictionary
     /// serialization is elided.
     /// <para>
-    /// Multi-silo safety: the revision is persisted as part of the
+    /// The readable surface is <em>not</em> the recorded-decisions map
+    /// alone. <see cref="SnapshotAsync"/> masks any decision whose
+    /// tombstone has outlived <c>TxDecisionRetention</c>, so a row
+    /// leaves the surface purely because the clock advanced, with no
+    /// mutation anywhere to hang a counter bump on. The returned value
+    /// is therefore a <em>composite</em>: the persisted
+    /// decisions counter, plus the number of tombstones currently past
+    /// their retention boundary, plus a persisted count of tombstones
+    /// already retired from that live set. The first two terms track the
+    /// surface; the third exists so the sum can never fall when a batch
+    /// prune moves several rows from the second term into physical
+    /// removal, which would otherwise let the probe revisit a value it
+    /// previously carried under a different surface. Callers must treat
+    /// the value as an opaque comparison token and must not read
+    /// arithmetic meaning into the size of a step.
+    /// </para>
+    /// <para>
+    /// Multi-silo safety: every persisted term is part of the
     /// registry's grain state and is observed atomically with each
-    /// decision mutation under the registry's single-turn token, so a
+    /// decision mutation under the registry's single-turn token, and the
+    /// clock-derived term is evaluated inside the same call, so a
     /// reader on any silo issuing this probe gets the same authoritative
     /// view (the probe is still a grain RPC to the single-activation
     /// registry; the saving is the elided dictionary payload, not the
@@ -179,13 +197,13 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// state-write await; without interleave the probe queues behind
     /// every in-flight saga decision, defeating the whole point of the
     /// cheap-probe optimisation. Interleave is safe because the writer
-    /// performs the in-memory Decisions mutation AND the revision bump
-    /// synchronously before its first await
-    /// (<c>state.WriteStateAsync()</c>), so a probe that observes the
-    /// post-bump revision necessarily also observes the post-mutation
-    /// in-memory dictionary; conversely a probe that interleaves
+    /// performs every in-memory mutation - the Decisions map, the
+    /// tombstone map, and both counters - synchronously before its first
+    /// await (<c>state.WriteStateAsync()</c>), so a probe that observes
+    /// a post-bump term necessarily also observes the post-mutation
+    /// in-memory maps; conversely a probe that interleaves
     /// before the writer started its turn observes both the pre-bump
-    /// revision and the pre-mutation dict. There is no observable
+    /// terms and the pre-mutation maps. There is no observable
     /// window where the two diverge. Aligned <see cref="long"/> reads
     /// are JIT-atomic on every supported runtime architecture and the
     /// surrounding Task continuation establishes the memory barrier

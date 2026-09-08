@@ -175,6 +175,20 @@ internal sealed class TxRegistryState
     /// snap2, which already filters to Committed transitions).
     /// </para>
     /// <para>
+    /// <b>This counter is not on its own the token readers compare.</b> It
+    /// tracks <see cref="Decisions"/>, but the readable surface is
+    /// <see cref="Decisions"/> <i>masked by</i> <see cref="ForgottenAt"/> at
+    /// the current instant, and a tombstone crossing its retention boundary
+    /// changes that surface with no write anywhere to hang a bump on. The
+    /// registry therefore exposes the composite
+    /// <c>DecisionsRevision + TombstoneRetirementEpoch + liveExpiredTombstones(now)</c>
+    /// from <c>GetDecisionsRevisionAsync</c> and stamps the same value onto
+    /// <c>SnapshotWithRevisionAsync</c>; see
+    /// <see cref="TombstoneRetirementEpoch"/> for why the third term needs the
+    /// second. This field remains the <see cref="Decisions"/> component of that
+    /// sum and is the value <c>TxRegistryDecisionCore</c> owns.
+    /// </para>
+    /// <para>
     /// Wire-compatibility: legacy persisted state with no Id-6 slot
     /// decodes to <c>0L</c>. A reactivated grain whose persisted
     /// <see cref="Decisions"/> is non-empty but whose persisted
@@ -267,4 +281,45 @@ internal sealed class TxRegistryState
     /// </para>
     /// </summary>
     [Id(9)] public long CrossTreeRegistrationEpoch { get; set; }
+
+    /// <summary>
+    /// Monotonically non-decreasing count of tombstones that were <b>already
+    /// expired</b> at the instant they were physically removed from
+    /// <see cref="ForgottenAt"/> - by the inline prune inside
+    /// <c>ForgetAsync</c>, or by the tombstone-clearing prologue of
+    /// <c>MarkCommittedAsync</c> / <c>MarkAbortedAsync</c>. It exists solely to
+    /// keep the registry's <i>effective</i> revision (the token readers compare
+    /// across a fan-out) non-decreasing.
+    /// <para>
+    /// <see cref="DecisionsRevision"/> alone is a function of
+    /// <see cref="Decisions"/>, but the surface a reader can observe is a
+    /// function of <c>(Decisions, ForgottenAt, retention, now)</c>: the read
+    /// paths mask a decision whose tombstone has outlived the retention window.
+    /// The registry therefore exposes
+    /// <c>DecisionsRevision + TombstoneRetirementEpoch + liveExpiredTombstones(now)</c>,
+    /// where the last term counts the tombstone rows still present in
+    /// <see cref="ForgottenAt"/> that are already masked at <c>now</c>. That sum
+    /// rises when a tombstone crosses its expiry instant (the count goes up with
+    /// no write anywhere), which is the change the bare counter could not
+    /// announce.
+    /// </para>
+    /// <para>
+    /// Removing an expired tombstone drops the count by one, so without this
+    /// field the sum could fall - and a falling token can revisit a value it
+    /// previously carried under a different surface, which is exactly the
+    /// aliasing a revision exists to prevent. Incrementing here by the same
+    /// amount the count loses makes the sum non-decreasing by construction. A
+    /// failing <c>WriteStateAsync</c> unwinds this field in lockstep with the
+    /// map it accounts for, so the (state, token) pair is always mutually
+    /// consistent.
+    /// </para>
+    /// <para>
+    /// Wire-compatibility: legacy persisted state with no Id-10 slot decodes to
+    /// <c>0L</c>. That is safe rather than merely tolerable - the token is
+    /// opaque and compared only for equality between two observations taken from
+    /// the same activation lineage, so a one-time step at upgrade costs at most
+    /// one extra reader re-validation and never a missed one.
+    /// </para>
+    /// </summary>
+    [Id(10)] public long TombstoneRetirementEpoch { get; set; }
 }

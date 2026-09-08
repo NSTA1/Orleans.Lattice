@@ -83,25 +83,39 @@ internal sealed class TxRegistryGrain(
     /// <inheritdoc />
     public async Task MarkCommittedAsync(Guid txid)
     {
-        // A tombstoned decision is treated as absent: the saga has
-        // already completed its post-fan-out cleanup, and a fresh Mark
-        // call is therefore a new authoritative outcome. Clear the
-        // tombstone AND the stale decision so the conflict-detection
-        // guard below cannot block re-marking with an opposite outcome.
-        var tombstoneClear = ClearTombstone(txid);
-
         // Write-once terminal guard through the shared, dependency-free
         // TerminalDecisionGuard so the "never both commit and abort" invariant is
         // one model-checked rule rather than a hand-copied inline branch.
+        //
+        // Evaluated against the maps as they stand, BEFORE the tombstone-clearing
+        // prologue below. Clearing first hides the existing row from Classify, so
+        // a same-outcome repeat is classified Record rather than Idempotent: it
+        // resurrects a decision this tree had already forgotten, restarts its
+        // retention window, and bumps the revision for a surface change that the
+        // caller was promised would not happen. A duplicate terminal is the
+        // ordinary case on the cross-cluster path (a replicated terminal can
+        // arrive after the origin's own cleanup has tombstoned the saga), so the
+        // ordering here is load-bearing, not a tidy-up.
         var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
+        var tombstoned = state.State.ForgottenAt.ContainsKey(txid);
         switch (TerminalDecisionGuard.Classify(hasExisting, existing, incomingCommitted: true))
         {
             case TerminalRecordAction.Idempotent:
                 return;
-            case TerminalRecordAction.Conflict:
+            case TerminalRecordAction.Conflict when !tombstoned:
                 throw new InvalidOperationException(
                     $"Cannot mark saga {txid:N} as committed: it was previously recorded as aborted.");
         }
+
+        // A tombstoned decision is treated as absent for the CONFLICTING-outcome
+        // case: the saga has already completed its post-fan-out cleanup, so a
+        // fresh Mark carrying a different verdict is a new authoritative outcome
+        // rather than a write-once violation. Clear the tombstone AND the stale
+        // decision so the record below is unobstructed. (A same-outcome repeat
+        // never reaches here - it returned Idempotent above and leaves the
+        // tombstone in place, which is what makes the no-op a real no-op.)
+        var now = TimeProvider.GetUtcNow();
+        var tombstoneClear = ClearTombstone(txid, now, Retention);
 
         // A locally-recorded decision supersedes any cross-tree delegation:
         // this sub-saga's finalize is the authoritative outcome for this tree.
@@ -145,22 +159,26 @@ internal sealed class TxRegistryGrain(
     /// <inheritdoc />
     public async Task MarkAbortedAsync(Guid txid)
     {
-        var tombstoneClear = ClearTombstone(txid);
-
+        // Guard first, clear second - see MarkCommittedAsync for why the
+        // ordering is load-bearing. The defect is a pair, and a remedy applied
+        // only to the committed path leaves the abort path defective.
         var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
+        var tombstoned = state.State.ForgottenAt.ContainsKey(txid);
         switch (TerminalDecisionGuard.Classify(hasExisting, existing, incomingCommitted: false))
         {
             case TerminalRecordAction.Idempotent:
                 return;
-            case TerminalRecordAction.Conflict:
+            case TerminalRecordAction.Conflict when !tombstoned:
                 throw new InvalidOperationException(
                     $"Cannot mark saga {txid:N} as aborted: it was previously recorded as committed.");
         }
 
+        var now = TimeProvider.GetUtcNow();
+        var tombstoneClear = ClearTombstone(txid, now, Retention);
+
         // A locally-recorded decision supersedes any cross-tree delegation.
         // Dropped below the write-once guard for the reason spelled out in
-        // MarkCommittedAsync: the defect is a pair, and a remedy applied only
-        // to the committed path leaves the abort path defective.
+        // MarkCommittedAsync.
         var delegations = DropDelegations(txid);
 
         // Snapshot prior in-memory state so a failing WriteStateAsync
@@ -194,7 +212,8 @@ internal sealed class TxRegistryGrain(
         bool ClearedTombstone,
         DateTimeOffset PreviousForgottenAt,
         bool ClearedDecision,
-        TxStatus PreviousDecision);
+        TxStatus PreviousDecision,
+        bool RetiredExpired);
 
     /// <summary>
     /// Undo token for the cross-tree delegation drop the <c>Mark*</c> paths run
@@ -210,10 +229,19 @@ internal sealed class TxRegistryGrain(
 
     /// <summary>
     /// Clears a tombstone and its stale decision, returning the undo token that
-    /// <see cref="RestoreTombstone(Guid, TombstoneClear)"/> consumes.
+    /// <see cref="RestoreTombstone(Guid, TombstoneClear)"/> consumes. When the
+    /// tombstone was already masked from readers at <paramref name="now"/>, the
+    /// removal is also accounted into
+    /// <see cref="TxRegistryState.TombstoneRetirementEpoch"/> so the effective
+    /// revision does not fall as the live-expired count drops.
     /// </summary>
-    private TombstoneClear ClearTombstone(Guid txid)
+    private TombstoneClear ClearTombstone(Guid txid, DateTimeOffset now, TimeSpan retention)
     {
+        // Read the expiry verdict BEFORE the removal, while the row is still
+        // present - IsTombstoneExpiredAt answers false for an absent txid, so
+        // probing afterwards would silently under-count every retirement.
+        var wasExpired = IsTombstoneExpiredAt(txid, now, retention);
+
         // Remove(key, out value) is a single hash probe, where a TryGetValue
         // followed by Remove is two. This runs once per saga terminal, so the
         // saving is small, but the shape is the one the rest of the file uses.
@@ -222,13 +250,20 @@ internal sealed class TxRegistryGrain(
             return default;
         }
 
+        InvalidateExpiryMemo();
+        if (wasExpired)
+        {
+            state.State.TombstoneRetirementEpoch++;
+        }
+
         var clearedDecision = state.State.Decisions.Remove(txid, out var previousDecision);
-        return new TombstoneClear(true, forgottenAt, clearedDecision, previousDecision);
+        return new TombstoneClear(true, forgottenAt, clearedDecision, previousDecision, wasExpired);
     }
 
     /// <summary>
-    /// Restores the rows a <see cref="ClearTombstone(Guid)"/> prologue removed.
-    /// Must run <b>after</b> the decision core's own rollback, which restores the
+    /// Restores the rows a <see cref="ClearTombstone(Guid, DateTimeOffset, TimeSpan)"/>
+    /// prologue removed, including the retirement accounting. Must run
+    /// <b>after</b> the decision core's own rollback, which restores the
     /// decision map to its post-clear state.
     /// </summary>
     private void RestoreTombstone(Guid txid, in TombstoneClear clear)
@@ -239,6 +274,16 @@ internal sealed class TxRegistryGrain(
         }
 
         state.State.ForgottenAt[txid] = clear.PreviousForgottenAt;
+        InvalidateExpiryMemo();
+        if (clear.RetiredExpired)
+        {
+            // Puts the row back into the live-expired population, so the
+            // matching increment has to come back out. Non-decreasing is a
+            // property of the token across *observable* states; an unwound
+            // write leaves no observable state behind it, and restoring the
+            // pair (map, epoch) together is what keeps the two consistent.
+            state.State.TombstoneRetirementEpoch--;
+        }
         if (clear.ClearedDecision)
         {
             state.State.Decisions[txid] = clear.PreviousDecision;
@@ -639,7 +684,12 @@ internal sealed class TxRegistryGrain(
         return new TxRegistrySnapshot
         {
             Decisions = dict,
-            Revision = state.State.DecisionsRevision,
+            // Stamped from the SAME `now` and `retention` the mask above used.
+            // The token's third term counts the rows that mask filtered out, so
+            // taking a second clock reading here could stamp a revision that
+            // reflects one more expiry than the dictionary does - a snapshot
+            // whose own token already disagrees with it.
+            Revision = EffectiveDecisionsRevision(now, retention),
         };
     }
 
@@ -660,7 +710,14 @@ internal sealed class TxRegistryGrain(
         // supported runtime architecture; the surrounding Task
         // continuation establishes the memory barrier needed to see
         // the most recent committed write.
-        return Task.FromResult(state.State.DecisionsRevision);
+        //
+        // The value is the composite token, not the bare counter - see
+        // EffectiveDecisionsRevision. The interleaving argument above is
+        // unchanged by that: the two extra terms are likewise read
+        // synchronously inside this turn, and the expiry term is a pure
+        // function of ForgottenAt and the clock, which the writers mutate in
+        // the same pre-await block as the decision map.
+        return Task.FromResult(EffectiveDecisionsRevision(TimeProvider.GetUtcNow(), Retention));
     }
 
     /// <inheritdoc />
@@ -700,6 +757,7 @@ internal sealed class TxRegistryGrain(
                 // depends on this short-circuit.
                 state.State.ForgottenAt[txid] = now;
                 addedForgottenAt = true;
+                InvalidateExpiryMemo();
             }
         }
 
@@ -738,6 +796,16 @@ internal sealed class TxRegistryGrain(
         // WriteStateAsync can restore them in lockstep.
         var pruned = PruneExpired(now, retention);
 
+        // Every row PruneExpired removes was already masked from readers at
+        // `now` (it prunes on exactly the IsTombstoneExpiredAt predicate, and
+        // the zero-retention flush path masks unconditionally), so retiring
+        // them drops the effective revision's live-expired term by the same
+        // count. Account for it here so the token stays non-decreasing: the
+        // revision advance below fires once per batch, not once per row, so
+        // for a batch of k > 1 the counter alone cannot cover the loss.
+        var retired = pruned.Tombstones?.Count ?? 0;
+        state.State.TombstoneRetirementEpoch += retired;
+
         var changed = droppedDecision || addedForgottenAt || droppedParticipants
             || droppedArrivals || droppedExpected || droppedAuthority
             || droppedReceiverAuthority
@@ -747,12 +815,20 @@ internal sealed class TxRegistryGrain(
         {
             // Bump the decisions revision whenever the Decisions map
             // itself mutated (legacy zero-retention drop OR a physical
-            // tombstone prune). Other deltas in this method (pure
-            // Participants/Arrivals/Expected removals or a
-            // first-tombstone insert into ForgottenAt) do not change
-            // the readable Decisions surface and do not need to invalidate
-            // the reader-side snap1. The local also feeds the catch
-            // block's rollback.
+            // tombstone prune). Pure Participants/Arrivals/Expected removals
+            // are invisible to readers and need no bump. The local also feeds
+            // the catch block's rollback.
+            //
+            // A first-tombstone insert into ForgottenAt needs none either, but
+            // NOT for the reason this comment used to give. It is not that the
+            // insert leaves the readable surface unchanged and the matter ends
+            // there: the insert is precisely what ARMS a later unannounced
+            // change, because the row it adds will silently drop out of the
+            // readable surface the instant it crosses its retention boundary,
+            // with no write anywhere to bump a counter. That transition is
+            // covered by the live-expired term of the effective revision (see
+            // EffectiveDecisionsRevision), which is why no bump is needed here
+            // - the insert is accounted for continuously rather than once.
             var revisionBumped = droppedDecision
                 || (pruned.Tombstones is { Count: > 0 });
             // The core is the sole revision authority: the intricate map
@@ -776,7 +852,11 @@ internal sealed class TxRegistryGrain(
             catch
             {
                 if (droppedDecision) state.State.Decisions[txid] = prevStatus;
-                if (addedForgottenAt) state.State.ForgottenAt.Remove(txid);
+                if (addedForgottenAt)
+                {
+                    state.State.ForgottenAt.Remove(txid);
+                    InvalidateExpiryMemo();
+                }
                 if (droppedParticipants && prevParticipants is not null)
                 {
                     state.State.Participants[txid] = prevParticipants;
@@ -812,6 +892,11 @@ internal sealed class TxRegistryGrain(
                             state.State.Decisions[entry.Txid] = entry.Decision;
                         state.State.ForgottenAt[entry.Txid] = entry.ForgottenAt;
                     }
+
+                    // The rows are back in the live-expired population, so the
+                    // matching retirement accounting has to come back out.
+                    state.State.TombstoneRetirementEpoch -= retired;
+                    InvalidateExpiryMemo();
                 }
                 if (pruned.ExpiredPins is { } evicted)
                 {
@@ -1258,6 +1343,153 @@ internal sealed class TxRegistryGrain(
     }
 
     /// <summary>
+    /// Cached result of the last <see cref="CountExpiredTombstones"/> scan: the
+    /// retention it was computed under, the first tick at which the answer could
+    /// change, and the count itself. Purely an in-memory accelerator - the value
+    /// it caches is a pure function of persisted state and the clock, so a lost
+    /// cache (reactivation, invalidation) only costs a rescan and can never
+    /// change an answer.
+    /// </summary>
+    private TimeSpan _expiryMemoRetention = TimeSpan.MinValue;
+    private long _expiryMemoValidBeforeTicks;
+    private int _expiryMemoCount;
+
+    /// <summary>
+    /// Drops the memoised expiry scan. Called from every site that mutates
+    /// <see cref="TxRegistryState.ForgottenAt"/>, because the cached count and
+    /// its validity horizon are both derived from that map's contents.
+    /// </summary>
+    private void InvalidateExpiryMemo() => _expiryMemoRetention = TimeSpan.MinValue;
+
+    /// <summary>
+    /// Number of <see cref="TxRegistryState.ForgottenAt"/> rows that are already
+    /// masked from readers at <paramref name="now"/> under
+    /// <paramref name="retention"/>. Uses exactly the predicate
+    /// <see cref="IsTombstoneExpiredAt"/> applies, so the count and the mask can
+    /// never disagree.
+    /// <para>
+    /// Memoised on the reader hot path: a full scan is O(|ForgottenAt|) and this
+    /// runs on every revision probe, so the scan also records the earliest tick
+    /// at which any still-live tombstone becomes expired. Until the clock
+    /// reaches that tick the cached count is provably still correct and the
+    /// probe costs two comparisons. Any mutation of the map invalidates the
+    /// memo through <see cref="InvalidateExpiryMemo"/>.
+    /// </para>
+    /// </summary>
+    private int CountExpiredTombstones(DateTimeOffset now, TimeSpan retention)
+    {
+        if (retention == _expiryMemoRetention && now.UtcTicks < _expiryMemoValidBeforeTicks)
+        {
+            return _expiryMemoCount;
+        }
+
+        var forgotten = state.State.ForgottenAt;
+        int expired;
+        long validBefore;
+        if (forgotten.Count == 0)
+        {
+            expired = 0;
+            // Nothing can expire out of an empty map; the next insert
+            // invalidates the memo, so an unbounded horizon is safe.
+            validBefore = long.MaxValue;
+        }
+        else if (retention == TimeSpan.Zero)
+        {
+            // Every row is masked the instant it is observed, and no clock
+            // advance can change that, so the horizon is unbounded too.
+            expired = forgotten.Count;
+            validBefore = long.MaxValue;
+        }
+        else
+        {
+            expired = 0;
+            validBefore = long.MaxValue;
+            foreach (var ts in forgotten.Values)
+            {
+                if (now - ts > retention)
+                {
+                    expired++;
+                    continue;
+                }
+
+                // First tick at which `now - ts > retention` turns true.
+                // Saturating, because a caller-supplied retention can be large
+                // enough to overflow the sum and a throwing probe on the reader
+                // path would be a far worse outcome than a conservative horizon.
+                var expiresAtTicks = SaturatingAddTicks(ts.UtcTicks, retention.Ticks);
+                var becomesExpiredAt = expiresAtTicks == long.MaxValue
+                    ? long.MaxValue
+                    : expiresAtTicks + 1;
+                if (becomesExpiredAt < validBefore)
+                {
+                    validBefore = becomesExpiredAt;
+                }
+            }
+        }
+
+        _expiryMemoRetention = retention;
+        _expiryMemoValidBeforeTicks = validBefore;
+        _expiryMemoCount = expired;
+        return expired;
+    }
+
+    /// <summary>
+    /// <c>a + b</c> in ticks, clamped to <see cref="long.MaxValue"/> /
+    /// <see cref="long.MinValue"/> instead of wrapping.
+    /// </summary>
+    private static long SaturatingAddTicks(long a, long b)
+    {
+        var sum = unchecked(a + b);
+        // Overflow iff the operands share a sign that the result does not.
+        if (((a ^ sum) & (b ^ sum)) < 0)
+        {
+            return b < 0 ? long.MinValue : long.MaxValue;
+        }
+        return sum;
+    }
+
+    /// <summary>
+    /// The token readers compare across a fan-out:
+    /// <c>DecisionsRevision + TombstoneRetirementEpoch + liveExpiredTombstones(now)</c>.
+    /// <para>
+    /// <see cref="TxRegistryState.DecisionsRevision"/> alone tracks the
+    /// <see cref="TxRegistryState.Decisions"/> map, but the surface a reader can
+    /// observe is that map <i>masked by</i>
+    /// <see cref="TxRegistryState.ForgottenAt"/> at the current instant. A
+    /// tombstone crossing its retention boundary removes a row from the readable
+    /// surface with no write anywhere to hang a bump on, so the bare counter
+    /// reports "unchanged" across a real change and the reader-side fast path
+    /// (which short-circuits on revision equality and never consults
+    /// <c>IsSnapshotStable</c>) accepts a stale view. Folding the live-expired
+    /// count into the token makes that transition announce itself.
+    /// </para>
+    /// <para>
+    /// The sum is non-decreasing because each of the three terms only ever loses
+    /// value to another: physically retiring an expired tombstone drops the
+    /// count by one and raises
+    /// <see cref="TxRegistryState.TombstoneRetirementEpoch"/> by one, and the
+    /// decision row that leaves with it bumps
+    /// <see cref="TxRegistryState.DecisionsRevision"/>. Without the epoch term a
+    /// batch prune of <c>k &gt; 1</c> tombstones would drop the sum by
+    /// <c>k - 1</c> (the prune advances the revision once per batch, not once
+    /// per row), letting the token revisit a value it previously carried under a
+    /// different surface.
+    /// </para>
+    /// <para>
+    /// It stays a <see cref="long"/> deliberately.
+    /// <c>GetDecisionsRevisionAsync</c> and <c>TxRegistrySnapshot.Revision</c>
+    /// keep their existing signatures, so a mixed-version cluster mid-rolling-
+    /// upgrade exchanges the same wire shape it always did; the token is opaque
+    /// and compared only for equality, so a peer that predates this change reads
+    /// the composite value correctly without knowing it is composite.
+    /// </para>
+    /// </summary>
+    private long EffectiveDecisionsRevision(DateTimeOffset now, TimeSpan retention)
+        => state.State.DecisionsRevision
+            + state.State.TombstoneRetirementEpoch
+            + CountExpiredTombstones(now, retention);
+
+    /// <summary>
     /// Physically drops every decision whose tombstone has elapsed,
     /// plus its <see cref="TxRegistryState.ForgottenAt"/> entry. Returns
     /// the list of pruned entries (or <see langword="null"/> when
@@ -1327,6 +1559,7 @@ internal sealed class TxRegistryGrain(
                 state.State.Decisions.Remove(entry.Txid);
                 state.State.ForgottenAt.Remove(entry.Txid);
             }
+            if (flushed.Count > 0) InvalidateExpiryMemo();
             return new PruneResult(flushed.Count == 0 ? null : flushed, expiredPins);
         }
 
@@ -1349,6 +1582,7 @@ internal sealed class TxRegistryGrain(
             state.State.Decisions.Remove(entry.Txid);
             state.State.ForgottenAt.Remove(entry.Txid);
         }
+        InvalidateExpiryMemo();
         return new PruneResult(expired, expiredPins);
     }
 

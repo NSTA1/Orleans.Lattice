@@ -619,7 +619,39 @@ public partial class TxRegistryGrainTests
     }
 
     [Test]
-    public async Task MarkCommittedAsync_clears_tombstone_and_records_fresh_decision()
+    public async Task MarkCommittedAsync_same_outcome_repeat_leaves_a_tombstone_intact()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (grain, state) = CreateGrain(
+            retention: TimeSpan.FromMinutes(1),
+            timeProvider: clock);
+        var txid = Guid.NewGuid();
+        await grain.MarkCommittedAsync(txid);
+        await grain.ForgetAsync(txid);
+        var stampedAt = state.State.ForgottenAt[txid];
+        var writesBefore = state.WriteCount;
+
+        // Re-marking with the SAME outcome is the documented no-op. Clearing
+        // the tombstone here would resurrect a decision this tree had already
+        // forgotten and restart its retention window - a state change on the
+        // path that promises none. The opposite-outcome case still clears (see
+        // MarkAbortedAsync_conflicting_outcome_after_forget_clears_the_tombstone).
+        await grain.MarkCommittedAsync(txid);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ForgottenAt, Does.ContainKey(txid),
+                "A same-outcome repeat must not resurrect a forgotten decision.");
+            Assert.That(state.State.ForgottenAt[txid], Is.EqualTo(stampedAt),
+                "A same-outcome repeat must not restart the retention window.");
+            Assert.That(state.State.Decisions[txid], Is.EqualTo(TxStatus.Committed));
+            Assert.That(state.WriteCount, Is.EqualTo(writesBefore),
+                "A no-op must not persist.");
+        });
+    }
+
+    [Test]
+    public async Task MarkAbortedAsync_conflicting_outcome_after_forget_clears_the_tombstone()
     {
         var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
         var (grain, state) = CreateGrain(
@@ -629,17 +661,16 @@ public partial class TxRegistryGrainTests
         await grain.MarkCommittedAsync(txid);
         await grain.ForgetAsync(txid);
 
-        // Re-marking with the same outcome must clear the tombstone
-        // (so the conflict-detection guard does not block a subsequent
-        // opposite-outcome remark - the existing Mark_then_Forget_then_Mark
-        // test exercises that path).
-        await grain.MarkCommittedAsync(txid);
+        // A tombstoned saga has completed its post-fan-out cleanup, so a fresh
+        // Mark carrying a DIFFERENT verdict is a new authoritative outcome
+        // rather than a write-once violation. That is the case the
+        // tombstone-clearing prologue exists for, and it is unchanged.
+        await grain.MarkAbortedAsync(txid);
 
         Assert.Multiple(() =>
         {
-            Assert.That(state.State.ForgottenAt, Does.Not.ContainKey(txid),
-                "MarkCommittedAsync must clear the tombstone on a previously-forgotten txid.");
-            Assert.That(state.State.Decisions[txid], Is.EqualTo(TxStatus.Committed));
+            Assert.That(state.State.ForgottenAt, Does.Not.ContainKey(txid));
+            Assert.That(state.State.Decisions[txid], Is.EqualTo(TxStatus.Aborted));
         });
     }
 
