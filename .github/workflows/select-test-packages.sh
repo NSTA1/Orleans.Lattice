@@ -167,6 +167,7 @@ if [ ${#projects[@]} -eq 0 ]; then
 fi
 
 declare -A consumers=()   # producer csproj -> " consumer consumer ..."
+declare -A parsedPerFile=()
 edgeCount=0
 unresolved=()
 
@@ -178,6 +179,7 @@ while IFS= read -r line; do
   ref="${line#*Include=\"}"
   ref="${ref%\"}"
   [ -n "$ref" ] || continue
+  parsedPerFile["$proj"]=$(( ${parsedPerFile[$proj]-0} + 1 ))
   normalize_path "${proj%/*}/${ref}"
   target="$NORMALIZED"
   if [ ! -f "$target" ]; then
@@ -187,6 +189,46 @@ while IFS= read -r line; do
   consumers["$target"]="${consumers[$target]-} ${proj}"
   edgeCount=$((edgeCount + 1))
 done < <(grep -oHE '<ProjectReference[[:space:]]+Include="[^"]+"' "${projects[@]}" || true)
+
+# The parse above is a regex, so it recognises exactly one spelling:
+# `<ProjectReference` followed by whitespace and then `Include="..."`. Every
+# other legal MSBuild spelling of the same element is silently invisible to it:
+#
+#   <ProjectReference PrivateAssets="all" Include="..." />   (Include not first)
+#   <ProjectReference
+#       Include="..." />                                     (Include on its own line)
+#   <ProjectReference Include='...' />                       (single-quoted)
+#
+# A missed element is not a parse error - it is a missing edge, which narrows
+# the selection, which is exactly the #2330 failure mode this script exists to
+# remove. It would fail silently and in the safe-looking direction: a green run
+# over too few packages.
+#
+# So count the `<ProjectReference` element openings independently of the
+# attribute parse and require the two to agree per file. `</ProjectReference>`
+# cannot be miscounted (it is `</P`, not `<P`), and the trailing character class
+# stops `<ProjectReferenceSomethingElse` counting.
+declare -A openPerFile=()
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  f="${line%%:*}"
+  openPerFile["$f"]=$(( ${openPerFile[$f]-0} + 1 ))
+done < <(grep -oHE '<ProjectReference([[:space:]]|/>|>)' "${projects[@]}" || true)
+
+unparsed=()
+for proj in "${projects[@]}"; do
+  opened=${openPerFile[$proj]-0}
+  parsed=${parsedPerFile[$proj]-0}
+  if [ "$opened" -ne "$parsed" ]; then
+    unparsed+=("${proj}: ${opened} <ProjectReference> element(s), ${parsed} parsed")
+  fi
+done
+
+if [ ${#unparsed[@]} -gt 0 ]; then
+  echo "::error::select-test-packages.sh: the ProjectReference parse is not total - ${#unparsed[@]} file(s) contain an element the Include= parse did not see. Every missed element is a missing dependency edge, so the selection would be too narrow (issue #2330). Rewrite the reference in the \`<ProjectReference Include=\"...\" />\` form, or widen the parse:" >&2
+  printf '  %s\n' "${unparsed[@]}" >&2
+  exit 1
+fi
 
 if [ ${#unresolved[@]} -gt 0 ]; then
   echo "::error::select-test-packages.sh: ${#unresolved[@]} ProjectReference(s) did not resolve to a file:" >&2
@@ -203,31 +245,37 @@ if [ "$edgeCount" -eq 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Closure. Breadth-first walk from the csprojs owned by the seeded packages,
-#    following reverse edges (producer -> consumer): "who could this break?".
-#    The owning package of every reached project lands in DEPENDENTS, a global
-#    set, again to avoid forking a subshell per call.
+# 3. Closure. Breadth-first walk from a set of SEED CSPROJ NODES, following
+#    reverse edges (producer -> consumer): "who could this break?". The owning
+#    package of every reached project lands in DEPENDENTS, a global set, again
+#    to avoid forking a subshell per call.
+#
+#    The seeds are nodes, not packages, and that distinction is load-bearing.
+#    Seeding by package would enqueue every csproj the package owns, so a
+#    change confined to `test/lattice/` would also enqueue
+#    `src/lattice/Orleans.Lattice.csproj` - which nothing in the change touched
+#    - and the src node's reverse edges would fan the selection out to 45
+#    packages for a change no other package can observe. Feeding a node-level
+#    walk a package-level seed is how that happens.
+#
+#    Seeding at node level is also strictly more general than special-casing
+#    test paths: it assumes nothing about whether test projects are referenced.
+#    If some project ever does reference a test project, that edge is already in
+#    the graph and gets traversed, and the selection widens on its own.
 # ---------------------------------------------------------------------------
 declare -A DEPENDENTS=()
 dependents_of() {
   local -A reached=()
   local -a queue=()
-  local seedList=" $* "
   local proj owner node consumer head
 
   DEPENDENTS=()
 
-  for proj in "${projects[@]}"; do
-    owner="${ownerOf[$proj]-}"
-    [ -n "$owner" ] || continue
-    case "$seedList" in
-      *" $owner "*)
-        if [ -z "${reached[$proj]-}" ]; then
-          reached["$proj"]=1
-          queue+=("$proj")
-        fi
-        ;;
-    esac
+  for proj in "$@"; do
+    if [ -z "${reached[$proj]-}" ]; then
+      reached["$proj"]=1
+      queue+=("$proj")
+    fi
   done
 
   head=0
@@ -251,9 +299,24 @@ dependents_of() {
 
 # --fanout-table: how far a change to each package alone reaches. This is the
 # cost of the closure, computed rather than guessed.
+#
+# Seeded with EVERY node the package owns, so each row is that package's worst
+# case - the figure you get when its src project changes. A change confined to
+# the package's test project reaches fewer (usually only itself), because the
+# walk now starts from the changed node; see section 3. Reporting the worst
+# case keeps the table an upper bound on cost rather than an average that
+# flatters it.
 if [ "$fanoutTable" = true ]; then
   for p in "${packages[@]}"; do
-    dependents_of "$p"
+    nodes=()
+    for proj in "${projects[@]}"; do
+      [ "${ownerOf[$proj]-}" = "$p" ] && nodes+=("$proj")
+    done
+    if [ ${#nodes[@]} -eq 0 ]; then
+      printf '%s\t0\n' "$p"
+      continue
+    fi
+    dependents_of "${nodes[@]}"
     printf '%s\t%s\n' "$p" "${#DEPENDENTS[@]}"
   done
   exit 0
@@ -278,6 +341,34 @@ fi
 #    paths, so this is a tightening with no behavioural change on this tree.
 # ---------------------------------------------------------------------------
 seeded=()
+declare -A seedNodeSet=()
+declare -A seedNodelessPackage=()
+
+# Directory -> the csproj declared directly in it, so a changed file can be
+# mapped to the project that actually compiles it by walking up its parents.
+declare -A projectInDir=()
+for proj in "${projects[@]}"; do
+  projectInDir["${proj%/*}"]="$proj"
+done
+
+# The csproj that owns a changed path: the nearest ancestor directory holding
+# one. Empty when no ancestor does - a file under docs/<name>/, or a package
+# with no project at all.
+owning_node() {
+  local p="$1" dir
+  OWNING_NODE=""
+  dir="${p%/*}"
+  while [ -n "$dir" ] && [ "$dir" != "$p" ]; do
+    if [ -n "${projectInDir[$dir]-}" ]; then
+      OWNING_NODE="${projectInDir[$dir]}"
+      return 0
+    fi
+    [[ $dir == */* ]] || break
+    dir="${dir%/*}"
+  done
+  return 0
+}
+
 for name in "${packages[@]}"; do
   hit=0
   while IFS= read -r f; do
@@ -286,13 +377,34 @@ for name in "${packages[@]}"; do
       *.md) continue ;;
     esac
     case "$f" in
-      src/"$name"/*|test/"$name"/*|docs/"$name"/*) hit=1; break ;;
+      src/"$name"/*|test/"$name"/*|docs/"$name"/*)
+        hit=1
+        owning_node "$f"
+        if [ -n "$OWNING_NODE" ]; then
+          seedNodeSet["$OWNING_NODE"]=1
+        else
+          # A changed file under the package that no csproj compiles (a
+          # docs/<name>/ asset, say). It cannot be reasoned about at node
+          # level, so fall back to this package's whole node set rather than
+          # expanding from nothing - never narrow on the unknown case.
+          seedNodelessPackage["$name"]=1
+        fi
+        ;;
     esac
   done <<< "$changed"
   if [ "$hit" -eq 1 ]; then
     seeded+=("$name")
   fi
 done
+
+# Expand the node-less packages to every node they own.
+if [ ${#seedNodelessPackage[@]} -gt 0 ]; then
+  for proj in "${projects[@]}"; do
+    owner="${ownerOf[$proj]-}"
+    [ -n "$owner" ] || continue
+    [ -n "${seedNodelessPackage[$owner]-}" ] && seedNodeSet["$proj"]=1
+  done
+fi
 
 declare -A selectedSet=()
 declare -A reasonOf=()
@@ -313,13 +425,15 @@ else
     selectedSet["$s"]=1
     reasonOf["$s"]="changed"
   done
-  dependents_of "${seeded[@]}"
-  for p in "${!DEPENDENTS[@]}"; do
-    if [ -z "${selectedSet[$p]-}" ]; then
-      selectedSet["$p"]=1
-      reasonOf["$p"]="depends on a changed package"
-    fi
-  done
+  if [ ${#seedNodeSet[@]} -gt 0 ]; then
+    dependents_of "${!seedNodeSet[@]}"
+    for p in "${!DEPENDENTS[@]}"; do
+      if [ -z "${selectedSet[$p]-}" ]; then
+        selectedSet["$p"]=1
+        reasonOf["$p"]="depends on a changed project"
+      fi
+    done
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -387,10 +501,19 @@ emit_report() {
   # Test projects no package owns are outside this job's selection universe
   # entirely. Naming them keeps the denominator honest rather than letting them
   # read as covered.
-  local orphans=() d name
+  #
+  # `find ... | grep -q .` would be the obvious spelling and is wrong here.
+  # `grep -q` exits on its first match, closing the pipe, so `find` takes
+  # SIGPIPE and exits 141. Under `set -o pipefail` the pipeline then reports
+  # 141 even though grep succeeded, the condition reads false, and the orphan is
+  # silently dropped from the report - a race whose outcome depends on whether
+  # find happens to finish writing before grep exits. Capture find's output
+  # instead: a command substitution reads to EOF, so there is no pipe to break.
+  local orphans=() d name found
   for d in test/*/; do
     name="$(basename "$d")"
-    if [ -z "${isPackage[$name]-}" ] && find "$d" -name '*.Tests.csproj' -type f | grep -q .; then
+    found="$(find "$d" -name '*.Tests.csproj' -type f)"
+    if [ -z "${isPackage[$name]-}" ] && [ -n "$found" ]; then
       orphans+=("$name")
     fi
   done

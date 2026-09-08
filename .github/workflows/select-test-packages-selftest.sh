@@ -110,6 +110,206 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 1b. Parse TOTALITY, counted with a deliberately different pattern.
+#
+# Check 1 above counts with the same `Include="..."` regex the selector uses,
+# so it verifies the selector did not LOSE an element it saw - but it cannot
+# see an element neither of them recognises. Both would agree, and both would
+# be wrong, in the direction that narrows the selection.
+#
+# Count the element OPENINGS instead, which is attribute-order-, quote-style-,
+# and line-break-agnostic, and require that number to equal the parsed number.
+# On disagreement some csproj spells a reference in a shape the parse drops.
+# ---------------------------------------------------------------------------
+openings=$(grep -rhoE '<ProjectReference([[:space:]]|/>|>)' \
+             --include='*.csproj' src test | grep -c . || true)
+
+check
+if [ "$openings" != "$expectedEdges" ]; then
+  fail "the tree contains ${openings} <ProjectReference> element(s) but only ${expectedEdges} match the Include= parse; some reference is spelled in a shape the selector drops, which would silently narrow the selection."
+else
+  pass "the ProjectReference parse is total: ${openings} element(s), ${expectedEdges} parsed."
+fi
+
+# ---------------------------------------------------------------------------
+# 1c. Negative control for 1b, executed rather than asserted.
+#
+# 1b passing means "no such reference exists today". It says nothing about
+# whether the selector would NOTICE one. Plant a reference in a shape the parse
+# cannot see - attributes before Include=, which is legal MSBuild and the most
+# likely way this arrives - and require the selector to fail closed and name
+# the file. Without this, 1b and the selector's own guard could both be dead
+# code and every run would still be green.
+# ---------------------------------------------------------------------------
+probeDir="test/.select-test-packages-parse-probe"
+probe="${probeDir}/Probe.Tests.csproj"
+cleanup_probe() { rm -rf "$probeDir"; }
+trap cleanup_probe EXIT
+
+mkdir -p "$probeDir"
+cat > "$probe" <<'PROBE'
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference PrivateAssets="all" Include="..\..\src\lattice\Orleans.Lattice.csproj" />
+  </ItemGroup>
+</Project>
+PROBE
+
+probeStatus=0
+probeOutput="$(printf 'Orleans.Lattice.slnx\n' | bash "$SELECTOR" 2>&1 >/dev/null)" || probeStatus=$?
+cleanup_probe
+trap - EXIT
+
+check
+if [ "$probeStatus" -eq 0 ]; then
+  fail "the selector accepted a csproj whose ProjectReference the parse cannot see; the totality guard is not firing."
+elif ! [[ $probeOutput == *"$probe"* ]]; then
+  fail "the selector rejected the unparseable reference but did not name ${probe}; the diagnostic is not actionable."
+else
+  pass "an unparseable ProjectReference makes the selector fail closed and name the file."
+fi
+
+# ---------------------------------------------------------------------------
+# 1d. The orphan report is a set, not a race.
+#
+# The orphan line previously tested for a test project with
+# `find ... | grep -q .`. grep -q exits on its first match, find takes SIGPIPE,
+# and under `set -o pipefail` the pipeline reports 141 even though grep
+# succeeded - so an orphan could vanish from the report depending on whether
+# find finished writing first. Require the reported set to equal the computed
+# set, over repeated runs so a surviving race is not silently sampled away.
+# ---------------------------------------------------------------------------
+expectedOrphans=()
+for dir in test/*/; do
+  name="$(basename "$dir")"
+  [ -d "src/${name}" ] && continue
+  found="$(find "$dir" -name '*.Tests.csproj' -type f)"
+  [ -n "$found" ] && expectedOrphans+=("$name")
+done
+expectedOrphanLine="${expectedOrphans[*]}"
+
+orphanRuns=0
+orphanMismatch=""
+while [ "$orphanRuns" -lt 5 ]; do
+  reportedOrphanLine="$(printf 'Orleans.Lattice.slnx\n' \
+                          | bash "$SELECTOR" 2>&1 >/dev/null \
+                          | sed -nE 's/^Test projects outside this job.s selection universe .*`([^`]*)`[[:space:]]*$/\1/p')"
+  if [ "$reportedOrphanLine" != "$expectedOrphanLine" ]; then
+    orphanMismatch="run $((orphanRuns + 1)): reported \`${reportedOrphanLine}\`, expected \`${expectedOrphanLine}\`"
+    break
+  fi
+  orphanRuns=$((orphanRuns + 1))
+done
+
+check
+if [ -z "$expectedOrphanLine" ]; then
+  fail "computed no orphan test projects at all; the orphan check would be vacuous."
+elif [ -n "$orphanMismatch" ]; then
+  fail "the orphan report is not stable - ${orphanMismatch}."
+else
+  pass "the orphan report is exact and stable over ${orphanRuns} runs: \`${expectedOrphanLine}\`."
+fi
+
+# ---------------------------------------------------------------------------
+# 1e. Seeding happens at NODE level, not package level.
+#
+# The closure walks csproj nodes, but if the seed is a package it enqueues
+# every node that package owns. A change confined to `test/lattice/` would then
+# also enqueue `src/lattice/Orleans.Lattice.csproj`, whose reverse edges fan the
+# selection out to 45 packages - for a change no other project can observe.
+#
+# The expectation here is computed from the graph, NOT from the present fact
+# that nothing references test/lattice. An independent reverse-closure is built
+# from the changed node and compared against the selector. If some project ever
+# does reference a test project, both sides widen together and this still holds,
+# so nothing about test projects is assumed.
+# ---------------------------------------------------------------------------
+declare -A sfConsumers=()
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  sfProj="${line%%:*}"
+  sfRef="${line#*Include=\"}"
+  sfRef="${sfRef%\"}"
+  sfDir="${sfProj%/*}/${sfRef//\\//}"
+  sfTarget="$(cd "$(dirname "$sfDir")" 2>/dev/null && pwd)/$(basename "$sfDir")" || continue
+  sfTarget="${sfTarget#"$PWD/"}"
+  [ -f "$sfTarget" ] || continue
+  sfConsumers["$sfTarget"]="${sfConsumers[$sfTarget]-} ${sfProj}"
+done < <(grep -rhoHE '<ProjectReference[[:space:]]+Include="[^"]+"' --include='*.csproj' src test 2>/dev/null \
+           || grep -roHE '<ProjectReference[[:space:]]+Include="[^"]+"' --include='*.csproj' src test)
+
+# Reverse closure from one node -> owning package names.
+closure_from_node() {
+  local -A seen=(); local -a q=("$1"); local h=0 n c owner
+  CLOSURE=()
+  seen["$1"]=1
+  while [ "$h" -lt ${#q[@]} ]; do
+    n="${q[$h]}"; h=$((h + 1))
+    for c in ${sfConsumers[$n]-}; do
+      if [ -z "${seen[$c]-}" ]; then seen["$c"]=1; q+=("$c"); fi
+    done
+  done
+  local -A owners=()
+  for n in "${!seen[@]}"; do
+    case "$n" in
+      src/*/*|test/*/*)
+        owner="${n#*/}"; owner="${owner%%/*}"
+        [ -d "src/${owner}" ] && owners["$owner"]=1
+        ;;
+    esac
+  done
+  mapfile -t CLOSURE < <(printf '%s\n' "${!owners[@]}" | LC_ALL=C sort)
+}
+
+testNode="$(find test/lattice -maxdepth 1 -name '*.csproj' -type f | head -n 1)"
+srcNode="$(find src/lattice -maxdepth 1 -name '*.csproj' -type f | head -n 1)"
+
+check
+if [ -z "$testNode" ] || [ -z "$srcNode" ]; then
+  fail "could not locate the src and test csproj for package lattice; check 1e cannot run."
+else
+  closure_from_node "$testNode"; expectTestOnly=("${CLOSURE[@]}")
+  # The always-on dashboards arm is added after the closure, so fold it in.
+  contains "lattice.dashboards" "${expectTestOnly[@]}" || expectTestOnly+=("lattice.dashboards")
+  mapfile -t expectTestOnly < <(printf '%s\n' "${expectTestOnly[@]}" | LC_ALL=C sort -u)
+
+  mapfile -t actualTestOnly < <(select_for "test/lattice/Hygiene/SomeTest.cs")
+
+  if [ "${expectTestOnly[*]}" != "${actualTestOnly[*]}" ]; then
+    fail "a test/lattice-only change selected \`${actualTestOnly[*]}\` but the graph implies \`${expectTestOnly[*]}\`; the reverse walk is being seeded with nodes the change did not touch."
+  else
+    pass "a test/lattice-only change selects exactly the graph-implied ${#actualTestOnly[@]} package(s): \`${actualTestOnly[*]}\`."
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 1f. The other direction, so 1e cannot be satisfied by under-selecting.
+#
+# 1e alone would still pass if the walk stopped expanding altogether. Pin the
+# src side against the same independently-computed closure, and require the two
+# directions to actually differ - which is the observable signature of
+# node-level seeding.
+# ---------------------------------------------------------------------------
+check
+if [ -z "$srcNode" ]; then
+  fail "could not locate the src csproj for package lattice; check 1f cannot run."
+else
+  closure_from_node "$srcNode"; expectSrcOnly=("${CLOSURE[@]}")
+  contains "lattice.dashboards" "${expectSrcOnly[@]}" || expectSrcOnly+=("lattice.dashboards")
+  mapfile -t expectSrcOnly < <(printf '%s\n' "${expectSrcOnly[@]}" | LC_ALL=C sort -u)
+
+  mapfile -t actualSrcOnly < <(select_for "src/lattice/WalMoveOptions.cs")
+
+  if [ "${expectSrcOnly[*]}" != "${actualSrcOnly[*]}" ]; then
+    fail "a src/lattice-only change selected ${#actualSrcOnly[@]} package(s) but the graph implies ${#expectSrcOnly[@]}."
+  elif [ ${#actualSrcOnly[@]} -le ${#actualTestOnly[@]} ]; then
+    fail "a src/lattice change selected ${#actualSrcOnly[@]} package(s), no more than the ${#actualTestOnly[@]} a test/lattice change selected; seeding is not discriminating by node."
+  else
+    pass "a src/lattice-only change selects the graph-implied ${#actualSrcOnly[@]} package(s), against ${#actualTestOnly[@]} for test-only."
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 2. The regression in #2330/#2329: a core-library change must reach
 #    lattice.api.backup, whose test project calls straight into src/lattice.
 # ---------------------------------------------------------------------------
