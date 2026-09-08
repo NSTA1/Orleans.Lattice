@@ -160,6 +160,10 @@ public sealed class LatticeApiMcpRegionCatalogTenantScopeTests
         {
             var regions = await catalog.ListRegionsAsync();
 
+            // A catalog that returned nothing at all would satisfy "no region
+            // carries a tenant annotation" vacuously, so the disclosure claim
+            // needs a region to actually be present to be about anything.
+            Assert.That(regions, Is.Not.Empty, "the router advertises a region, so the catalog must return one");
             Assert.That(regions.Select(r => r.TenantScope), Is.All.Null,
                 "A cluster with no tenancy engine must never echo a caller-supplied tenant id back.");
         }
@@ -192,6 +196,9 @@ public sealed class LatticeApiMcpRegionCatalogTenantScopeTests
 
         var regions = await catalog.ListRegionsAsync();
 
+        // Same vacuity as the asserted-tenant case above: with no regions the
+        // "carries no annotation" claim is satisfied without being tested.
+        Assert.That(regions, Is.Not.Empty, "the router advertises a region, so the catalog must return one");
         Assert.That(regions.Select(r => r.TenantScope), Is.All.Null,
             "A non-tenant answer must be indistinguishable from the pre-tenancy answer.");
     }

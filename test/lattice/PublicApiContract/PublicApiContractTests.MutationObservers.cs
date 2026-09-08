@@ -94,9 +94,14 @@ public partial class PublicApiContractTests
         await tree.SetAsync("k", Bytes("v"));
 
         var captured = await CaptureMutationsForTreeAsync(treeId, expectedMin: 1);
-        Assert.That(
-            captured.Where(m => m.Kind == MutationKind.Set).Select(m => m.Category),
-            Is.All.EqualTo(MutationCategory.User));
+
+        // The capture barrier guarantees the sequence is non-empty, but the Set
+        // filter can still narrow it to nothing - and Is.All over an empty
+        // sequence is vacuously true, so the categorisation claim would pass
+        // without a single Set event ever being categorised.
+        var setCategories = captured.Where(m => m.Kind == MutationKind.Set).Select(m => m.Category).ToList();
+        Assert.That(setCategories, Is.Not.Empty, "a user write must surface as a Set mutation to categorise");
+        Assert.That(setCategories, Is.All.EqualTo(MutationCategory.User));
     }
 
     // ── Atomic-batch slots ──────────────────────────────────────────────

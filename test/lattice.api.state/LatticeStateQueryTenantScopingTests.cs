@@ -318,6 +318,11 @@ public sealed class LatticeStateQueryTenantScopingTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+            // Without the emptiness guard a gate that was never consulted at all
+            // would satisfy Is.All vacuously, which is exactly the failure mode
+            // this test exists to rule out. The sibling case above guards the
+            // same way.
+            Assert.That(gate.AuthorizedTreeIds, Is.Not.Empty, "the refusal must have been evaluated at all");
             Assert.That(gate.AuthorizedTreeIds, Is.All.EqualTo(AcmeTree),
                 "the refusal must be evaluated against the tree the read would have addressed");
         });
