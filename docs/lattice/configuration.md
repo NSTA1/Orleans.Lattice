@@ -299,7 +299,7 @@ These walks do not hold a shard root, so unlike an unbounded read walk they cann
 
 Raising it drains faster at the cost of longer individual turns; setting it to `0` or less disables the bound and restores the unbounded walk. It does **not** govern the authoritative post-freeze sweeps in a split's `Swap` / `Complete` phases or a consolidation's `Swap` / `Complete` phases, which are deliberately unbounded - see [Bounded background leaf walks](#bounded-background-leaf-walks) below.
 
-The tombstone compactor and the shard consolidator keep their own long-standing per-pass leaf caps ([`CompactionLeafBatchSize`](#compactionleafbatchsize) and `ConsolidationDrainLeavesPerPass`) and inherit only the wall-clock net from [`BackgroundDrainMaxDuration`](#backgrounddrainmaxduration).
+The tombstone compactor, the shard consolidator and the empty-leaf reclaim walk keep their own long-standing per-pass leaf caps ([`CompactionLeafBatchSize`](#compactionleafbatchsize) governs the first and the third, `ConsolidationDrainLeavesPerPass` the second) and inherit only the wall-clock net from [`BackgroundDrainMaxDuration`](#backgrounddrainmaxduration).
 
 Alongside its per-pass leaf cap, the shard consolidator bounds how many donor **entries** it accumulates into a single merge call to the survivor shard during drain: `ConsolidationDrainBatchSize` (default: **1024 entries**; the options validator rejects a value below `1`). Larger values reduce per-call overhead; smaller values bound peak memory on the coordinator silo and the size of the Orleans grain message. The drain is idempotent under any chunking - re-running converges by CRDT last-writer-wins - so this is purely a cost knob and never a correctness input.
 
@@ -317,11 +317,15 @@ Wall-clock safety net for a single background coordinator drain pass (default: *
 
 [`BackgroundDrainLeavesPerPass`](#backgrounddrainleavesperpass) is the primary, deterministic bound; this covers the case a leaf count cannot, where a small number of leaves are individually very slow - cold activations rehydrating large snapshots, or a fan-out merge into many target shards. Set to `TimeSpan.Zero` to disable it and rely on the leaf count alone.
 
+The **empty-leaf reclaim walk** inherits this same net. Reclaim is the one walk here that does hold a shard root's turn, so it is the walk where the distinction matters most: its leaf bound counts probes, and the cost of a probe varies by orders of magnitude between a warm activation and a cold one rehydrating from storage, so a probe budget tuned for a warm shard is not a time bound on a cold one. A pass has been observed holding a shard root for **59.2 seconds** with a user scan enqueued behind it, which is head-of-line blocking on that shard for the whole of it. Because queue wait falls outside the scan's own page-fill ceiling, that surfaces to the caller as an Orleans `TimeoutException` rather than as a stall the scan can report on itself. See [How fast a shard actually heals](tree-structure.md#how-fast-a-shard-actually-heals).
+
+Every pass logs its elapsed time, probe count, fold count and stop reason at information level, including passes that fold nothing, so the bound can be seen binding in the field rather than only asserted in a test.
+
 This option can be changed freely at any time.
 
 ### Bounded background leaf walks
 
-Six background coordinator walks traverse a shard's leaf chain. Each is either **work-bounded and resumable** or **deliberately atomic**, and which one it is follows from what the surrounding protocol needs rather than from how long the walk happens to be:
+Ten background walks traverse a shard's leaf chain. Each is either **work-bounded and resumable** or **deliberately atomic**, and which one it is follows from what the surrounding protocol needs rather than from how long the walk happens to be. All but one run on a background coordinator; empty-leaf reclaim is the exception and runs on the shard root itself, which is why its bound is the one a user request feels directly:
 
 | Walk | Bounded? | Why |
 |---|---|---|
@@ -332,10 +336,11 @@ Six background coordinator walks traverse a shard's leaf chain. Each is either *
 | Online snapshot copy | Yes | An online snapshot is a converging mirror, not a point-in-time image: shadow-forwarding mirrors concurrent writes onto the destination throughout, and shards are already copied one at a time across ticks. |
 | Offline snapshot copy | No | The destination shard is assembled bottom-up by a single bulk load, which by contract needs the complete sorted entry set and an empty destination, so there is no intermediate position to resume from. The source is quiesced for the copy's duration. |
 | Tombstone compaction | Yes | Per-leaf compaction is idempotent and independent. |
+| Empty-leaf reclaim | Yes | A fold is a complete, independently correct unlink; a pass boundary between two folds leaves the chain in a state no reader can distinguish from one where the pass simply had less work. Unlike every other row this walk holds the **shard root**, so its bound is the only one that decides how long a user read or write waits. |
 | Consolidation `Drain` phase | Yes | The donor still serves traffic and still shadow-forwards; the survivor's copy only becomes authoritative in `Swap`. |
 | Consolidation `Swap` / `Complete` final sweeps | No | Both run inside the freeze window, where nothing they read can change and holding the window open across ticks is a real availability cost. |
 
-Every resumable walk persists its position as a **key**, never a leaf grain id. Orleans grains are virtual, so an id persisted across a pass boundary can activate a fresh, empty grain whose sibling pointer is null - a resumed walk would conclude it had reached the end of the chain and stop, silently leaving the rest of the shard unvisited with no exception, metric or log line to show for it. A key is always re-descended onto whichever leaf now owns it, so a leaf that has been split, or reclaimed, between two passes cannot truncate the sweep.
+Every resumable walk records its position as a **key**, never a leaf grain id. Orleans grains are virtual, so an id persisted across a pass boundary can activate a fresh, empty grain whose sibling pointer is null - a resumed walk would conclude it had reached the end of the chain and stop, silently leaving the rest of the shard unvisited with no exception, metric or log line to show for it. A key is always re-descended onto whichever leaf now owns it, so a leaf that has been split, or reclaimed, between two passes cannot truncate the sweep. (Empty-leaf reclaim holds its key cursor in the shard root's activation rather than in persisted state, so it restarts at the head of the chain when the activation recycles. That is correctness-neutral: the cursor only decides where a pass begins, never what it is willing to fold.)
 
 A walk yields only where it can name that position - the visited leaf's exclusive high bound, which is exactly where the next leaf begins. A leaf that declares no usable high bound is not a stopping point: the walk keeps going rather than stop without a resume position, so a misconfigured bound degrades to the unbounded walk rather than to a truncated sweep.
 
