@@ -113,6 +113,16 @@ internal sealed partial class BPlusLeafGrain
     private static readonly object _replayConcurrencyGateLock = new();
 
     /// <summary>
+    /// Test-only view of the process-wide replay concurrency gate, or
+    /// <see langword="null"/> before the first activation with a tree id has
+    /// sized it. Exposed so a regression test can assert that a fault raised
+    /// after a permit is acquired does not permanently reduce the gate (issue
+    /// #2256): the gate is sized once and never re-created, so a lost permit is
+    /// lost for the lifetime of the process and its exhaustion is silent.
+    /// </summary>
+    internal static SemaphoreSlim? ReplayConcurrencyGateForTest => Volatile.Read(ref _replayConcurrencyGate);
+
+    /// <summary>
     /// Lazily resolves the per-silo replay concurrency gate from
     /// <paramref name="options"/>. A non-positive
     /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> resolves
@@ -145,6 +155,14 @@ internal sealed partial class BPlusLeafGrain
     /// Returns <c>null</c> for a leaf with no tree id (a no-op activation that
     /// does no replay and must not consume a permit).
     /// </summary>
+    /// <remarks>
+    /// The caller must enter the <c>try</c> whose <c>finally</c> releases the
+    /// permit as the very next statement. The gate is sized once by
+    /// <see cref="ResolveReplayConcurrencyGate"/> and is never re-created or
+    /// topped up, so a permit lost between the acquisition and that region is
+    /// lost for the lifetime of the process, and the resulting exhaustion is a
+    /// silent wait rather than a fault (issue #2256).
+    /// </remarks>
     private async Task<SemaphoreSlim?> AcquireReplayPermitAsync(CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(state.State.TreeId))
@@ -221,58 +239,76 @@ internal sealed partial class BPlusLeafGrain
         // activation (no tree id) takes no permit.
         bool advanced;
         var replayPermit = await AcquireReplayPermitAsync(cancellationToken);
-        if (replayPermit is not null)
-        {
-            // The cold/warm discriminator is precisely the replay-start
-            // override computed at step 0.5: a -1 sentinel means neither the
-            // snapshot rehydrate nor a pre-populated cache supplied an anchor,
-            // so this activation replays the whole readable WAL window (cold);
-            // a null override means the activation resumed above an anchor and
-            // replays only the tail (warm). Nothing else needs to be computed
-            // or plumbed - the value is already in scope, which is why the
-            // discriminator belongs on the existing counter rather than on a
-            // second one (issue #2148).
-            var cold = replayCheckpointOverride == -1L;
-            var replayTreeId = state.State.TreeId!;
-            LatticeMetrics.LeafActivationReplays.Add(
-                1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, replayTreeId),
-                cold ? LatticeMetrics.ActivationTemperatureCold : LatticeMetrics.ActivationTemperatureWarm,
-                LatticeTenantLabel.ForTree(replayTreeId));
 
-            // ... and sample the same two totals into the log, because a
-            // counter is only readable where something is scraping the
-            // process, and the deployed host exposes no metrics endpoint
-            // (issue #2148). Observe unconditionally - before any logger or
-            // level check - so the totals account for every permitted replay
-            // whether or not a line is emitted for it.
-            var temperatureSample = ObserveLeafActivationReplay(replayTreeId, cold, Stopwatch.GetTimestamp());
-            if (temperatureSample is { } totals)
-            {
-                // Gate on IsEnabled as the over-budget warning does: the
-                // templated call would otherwise allocate a params object[]
-                // and box both totals even when the line is filtered out.
-                var temperatureLogger = ResolveLogger();
-                if (temperatureLogger is not null && temperatureLogger.IsEnabled(LogLevel.Information))
-                {
-                    temperatureLogger.LogInformation(
-                        "Leaf activation replays for tree '{TreeId}' since this silo started: {ColdReplays} cold "
-                        + "(no snapshot rehydrate and an empty entry cache, so the whole readable WAL window is "
-                        + "replayed) and {WarmReplays} warm (resumed above a snapshot or cache anchor). These are "
-                        + "CUMULATIVE process-wide totals, not a count since the previous line: the line is "
-                        + "rate-limited to one per tree per {IntervalSeconds}s, so any single line yields the "
-                        + "cold:warm ratio and any two yield the rate between them. Activations of a leaf with no "
-                        + "tree id bound take no replay permit and are counted on neither arm. Informational: a "
-                        + "cold replay is correct, just more expensive than a warm one.",
-                        replayTreeId,
-                        totals.Cold,
-                        totals.Warm,
-                        (long)ActivationTemperatureLogInterval.TotalSeconds);
-                }
-            }
-        }
+        // Nothing may sit between the acquisition above and this try, whose
+        // finally is the only thing that returns the permit (issue #2256). The
+        // observation block below used to run outside it, so a throw from the
+        // metric add, the tenant-label lookup, the totals sample, the logger
+        // resolution, the IsEnabled probe or the templated call itself lost the
+        // permit for the lifetime of the process: the gate is sized once by
+        // ResolveReplayConcurrencyGate and is never re-created or topped up. It
+        // defaults to Environment.ProcessorCount, which honours a container CPU
+        // quota, so on a 2-vCPU host two such throws - ever - stop the silo
+        // activating leaves entirely, and the symptom is a silent wait on
+        // WaitAsync rather than an error. A throwing logging sink is transient
+        // and environmental, which is exactly the fault a unit test never sees.
         try
         {
+            if (replayPermit is not null)
+            {
+                // The cold/warm discriminator is precisely the replay-start
+                // override computed at step 0.5: a -1 sentinel means neither the
+                // snapshot rehydrate nor a pre-populated cache supplied an anchor,
+                // so this activation replays the whole readable WAL window (cold);
+                // a null override means the activation resumed above an anchor and
+                // replays only the tail (warm). Nothing else needs to be computed
+                // or plumbed - the value is already in scope, which is why the
+                // discriminator belongs on the existing counter rather than on a
+                // second one (issue #2148).
+                //
+                // This is pure observation and does not need to hold a permit; it
+                // sits inside the guarded region because being inside it is what
+                // makes the release unconditional, not because it needs the gate.
+                var cold = replayCheckpointOverride == -1L;
+                var replayTreeId = state.State.TreeId!;
+                LatticeMetrics.LeafActivationReplays.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, replayTreeId),
+                    cold ? LatticeMetrics.ActivationTemperatureCold : LatticeMetrics.ActivationTemperatureWarm,
+                    LatticeTenantLabel.ForTree(replayTreeId));
+
+                // ... and sample the same two totals into the log, because a
+                // counter is only readable where something is scraping the
+                // process, and the deployed host exposes no metrics endpoint
+                // (issue #2148). Observe unconditionally - before any logger or
+                // level check - so the totals account for every permitted replay
+                // whether or not a line is emitted for it.
+                var temperatureSample = ObserveLeafActivationReplay(replayTreeId, cold, Stopwatch.GetTimestamp());
+                if (temperatureSample is { } totals)
+                {
+                    // Gate on IsEnabled as the over-budget warning does: the
+                    // templated call would otherwise allocate a params object[]
+                    // and box both totals even when the line is filtered out.
+                    var temperatureLogger = ResolveLogger();
+                    if (temperatureLogger is not null && temperatureLogger.IsEnabled(LogLevel.Information))
+                    {
+                        temperatureLogger.LogInformation(
+                            "Leaf activation replays for tree '{TreeId}' since this silo started: {ColdReplays} cold "
+                            + "(no snapshot rehydrate and an empty entry cache, so the whole readable WAL window is "
+                            + "replayed) and {WarmReplays} warm (resumed above a snapshot or cache anchor). These are "
+                            + "CUMULATIVE process-wide totals, not a count since the previous line: the line is "
+                            + "rate-limited to one per tree per {IntervalSeconds}s, so any single line yields the "
+                            + "cold:warm ratio and any two yield the rate between them. Activations of a leaf with no "
+                            + "tree id bound take no replay permit and are counted on neither arm. Informational: a "
+                            + "cold replay is correct, just more expensive than a warm one.",
+                            replayTreeId,
+                            totals.Cold,
+                            totals.Warm,
+                            (long)ActivationTemperatureLogInterval.TotalSeconds);
+                    }
+                }
+            }
+
             advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
         }
         finally
