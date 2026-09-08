@@ -54,6 +54,18 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// not-yet-counted corpus cannot defeat it, because it observes the failure
 /// rather than predicting it.
 /// </para>
+/// <para>
+/// <b>Both guards report what they did, at information level.</b> A guard whose
+/// steady state is invisible cannot be verified, because its silence is
+/// indistinguishable from its absence - and before issue #2253 both of these had
+/// that shape. Every distinct decision either guard reaches is announced once per
+/// repository at information level, and its steady state is carried by the
+/// periodic summary <see cref="RepoContextRetrievalGuardReporter"/> paces, so a
+/// repeat-skip or a repeated budget skip is counted rather than logged per query.
+/// The two zeros this ladder can produce stay distinguishable: no budget
+/// evaluations at all means the budget was never reached, whereas evaluations
+/// with no skips means it was reached and declined.
+/// </para>
 /// </summary>
 internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
 {
@@ -61,6 +73,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     private readonly IRepoContextSemanticIndex _exact;
     private readonly RepoContextExactScanBudget _exactScanBudget;
     private readonly RepoContextExactScanBreaker _exactScanBreaker;
+    private readonly RepoContextRetrievalGuardReporter _guards;
     private readonly ILogger<AnnRepoContextSemanticIndex> _logger;
 
     /// <summary>Creates the approximate-first semantic index.</summary>
@@ -68,6 +81,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     /// <param name="exact">The exact scan used while the plane is building, and kept as the correctness oracle. Must not be <see langword="null"/>.</param>
     /// <param name="exactScanBudget">The budget deciding whether an exact gather can finish under the tree's configured scan-page bounds. Must not be <see langword="null"/>.</param>
     /// <param name="exactScanBreaker">The record of gathers that have already proved they cannot finish. Must not be <see langword="null"/>.</param>
+    /// <param name="guards">The counters that make both guards' operating state readable from an information-level container. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger the fallback report is written to. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public AnnRepoContextSemanticIndex(
@@ -75,17 +89,20 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         IRepoContextSemanticIndex exact,
         RepoContextExactScanBudget exactScanBudget,
         RepoContextExactScanBreaker exactScanBreaker,
+        RepoContextRetrievalGuardReporter guards,
         ILogger<AnnRepoContextSemanticIndex> logger)
     {
         ArgumentNullException.ThrowIfNull(plane);
         ArgumentNullException.ThrowIfNull(exact);
         ArgumentNullException.ThrowIfNull(exactScanBudget);
         ArgumentNullException.ThrowIfNull(exactScanBreaker);
+        ArgumentNullException.ThrowIfNull(guards);
         ArgumentNullException.ThrowIfNull(logger);
         _plane = plane;
         _exact = exact;
         _exactScanBudget = exactScanBudget;
         _exactScanBreaker = exactScanBreaker;
+        _guards = guards;
         _logger = logger;
     }
 
@@ -122,6 +139,28 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(k);
 
+        _guards.RecordSearch(repoId);
+        try
+        {
+            return await SearchCoreAsync(repoId, query, querySpace, k, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            // In a finally so the summary is paced by queries rather than by
+            // outcomes: a ladder that only ever faults is exactly the state an
+            // operator most needs a periodic reading of.
+            ReportGuardsIfDue(repoId);
+        }
+    }
+
+    private async Task<IReadOnlyList<RepoContextVectorMatch>> SearchCoreAsync(
+        string repoId,
+        ReadOnlyMemory<float> query,
+        EmbeddingSpaceTag querySpace,
+        int k,
+        CancellationToken cancellationToken)
+    {
         var outcome = await _plane
             .SearchAsync(repoId, query, querySpace, k, cancellationToken)
             .ConfigureAwait(false);
@@ -132,7 +171,22 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             // competing with is no longer holding the tree. Restoring the fallback
             // here is what keeps a trip from outliving its cause: no cooldown to
             // wait out, and a later rebuild re-arms the breaker on its own evidence.
-            _exactScanBreaker.Reset(repoId);
+            _guards.RecordPlaneServed(repoId);
+            if (_exactScanBreaker.Reset(repoId))
+            {
+                // Rare by construction - once per trip - and the transition issue
+                // #2253 singles out, because it is the first execution of a path
+                // that has never run in production. Logged every time, not once.
+                _guards.RecordBreakerReset(repoId);
+                _logger.LogInformation(
+                    "Repository-context exact-scan breaker for {RepoId} closed: the approximate plane answered for "
+                    + "itself in space {ModelId}/{Dimension}, so the contention that stalled the gather is gone and "
+                    + "the exact fallback is armed again.",
+                    repoId,
+                    querySpace.ModelId,
+                    querySpace.Dimension);
+            }
+
             return outcome.Matches;
         }
 
@@ -143,18 +197,60 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             // next one cheaper, so it is not started. This is the branch that holds
             // when the corpus is uncounted and the budget below therefore fails
             // open - the state the whole bootstrap window is in.
-            _logger.LogDebug(
-                "Repository-context semantic search for {RepoId} in space {ModelId}/{Dimension} skipped the exact "
-                + "scan: a gather over this repository has already stalled while the approximate index builds. "
-                + "Serving keyword recall until the plane answers for itself.",
-                repoId,
-                querySpace.ModelId,
-                querySpace.Dimension);
+            //
+            // It runs on every subsequent query, so it is announced once at
+            // information level (which is the proof the path executed at all) and
+            // counted thereafter. Logging it per query at an operator-visible level
+            // would trade an unreadable state for a flood.
+            if (_guards.RecordBreakerRepeatSkip(repoId))
+            {
+                _logger.LogInformation(
+                    "Repository-context exact-scan breaker for {RepoId} is open and suppressed its first gather in "
+                    + "space {ModelId}/{Dimension}: a gather over this repository has already stalled while the "
+                    + "approximate index builds. Serving keyword recall until the plane answers for itself. Further "
+                    + "suppressed gathers are counted into the periodic retrieval-ladder guard summary rather than "
+                    + "logged per query.",
+                    repoId,
+                    querySpace.ModelId,
+                    querySpace.Dimension);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Repository-context semantic search for {RepoId} in space {ModelId}/{Dimension} skipped the exact "
+                    + "scan: a gather over this repository has already stalled while the approximate index builds. "
+                    + "Serving keyword recall until the plane answers for itself.",
+                    repoId,
+                    querySpace.ModelId,
+                    querySpace.Dimension);
+            }
 
             return Array.Empty<RepoContextVectorMatch>();
         }
 
-        if (!CanAffordExactScan(repoId, querySpace, out var corpus, out var affordable))
+        var decision = EvaluateExactScanBudget(repoId, querySpace, out var corpus, out var affordable);
+        if (_guards.RecordBudgetDecision(repoId, decision, corpus, affordable))
+        {
+            // The budget reaches the same decision on every query once the ladder
+            // settles, so each distinct decision is announced once and counted
+            // thereafter. This line is what resolves the ambiguity issue #2253 was
+            // filed over: a budget that never appears here was never reached, and a
+            // budget that appears with CorpusUnknown was reached and declined.
+            _logger.LogInformation(
+                "Repository-context exact-scan budget for {RepoId} in space {ModelId}/{Dimension} reached decision "
+                + "{Decision} for the first time: {Reason} Corpus {Corpus} vector(s) against an affordable "
+                + "{Affordable}. Further outcomes of the same kind are counted into the periodic "
+                + "retrieval-ladder guard summary rather than logged per query.",
+                repoId,
+                querySpace.ModelId,
+                querySpace.Dimension,
+                decision,
+                DescribeBudgetDecision(decision),
+                corpus,
+                DescribeAffordable(affordable));
+        }
+
+        if (decision == RepoContextExactScanBudgetDecision.Exceeded)
         {
             // The gather would range-scan the whole vector-metadata prefix, and the
             // tree's own configuration says a scan that size cannot fill its pages
@@ -164,7 +260,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             // matches takes the same destination directly, and the search service
             // resolves it to the keyword.vector_plane_unavailable cause, which is the
             // documented "the plane is still building" answer.
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Repository-context semantic search for {RepoId} in space {ModelId}/{Dimension} skipped the exact "
                 + "scan: the approximate index is still building and the corpus of {Corpus} vectors exceeds the "
                 + "{Affordable} a page fill can cover within the configured scan-page budget. Serving keyword "
@@ -209,6 +305,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             // other fault keeps propagating, so a genuinely broken index is still
             // reported as degraded rather than masked as "still building".
             var first = _exactScanBreaker.Trip(repoId);
+            _guards.RecordBreakerTrip(repoId);
             _logger.Log(
                 first ? LogLevel.Warning : LogLevel.Debug,
                 ex,
@@ -225,8 +322,83 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     }
 
     /// <summary>
-    /// Whether an exact gather over this repository and embedding space can
-    /// complete under the vector-metadata tree's configured scan-page bounds.
+    /// Emits the periodic reading of both guards' counters when one is due. This is
+    /// the line an operator reads to answer "did this guard act, and if not, why
+    /// not" from a container running at information level.
+    /// </summary>
+    /// <param name="repoId">The repository the search was served for.</param>
+    private void ReportGuardsIfDue(string repoId)
+    {
+        if (!_guards.TryTakeSummary(repoId, out var guards))
+        {
+            return;
+        }
+
+        _logger.LogInformation(
+            "Repository-context retrieval-ladder guards for {RepoId}, cumulative since process start: {Searches} "
+            + "search(es), of which the approximate plane answered {PlaneServed} so neither guard was consulted and "
+            + "{Bootstrapping} reached the fallback. Exact-scan budget: {BudgetEvaluations} evaluation(s) - "
+            + "{BudgetUnbounded} with no bound configured, {BudgetCorpusUnknown} declined for an uncounted corpus, "
+            + "{BudgetWithinBudget} cleared as affordable, {BudgetExceeded} skipped as unaffordable; last read "
+            + "corpus {Corpus} against an affordable {Affordable}. Exact-scan breaker: currently {BreakerState}, "
+            + "{BreakerTrips} trip(s), {BreakerRepeatSkips} gather(s) suppressed while open, {BreakerResets} "
+            + "reset(s). Zero evaluations means the guard was never reached; evaluations with zero skips means it "
+            + "was reached and declined.",
+            repoId,
+            guards.Searches,
+            guards.PlaneServed,
+            guards.Bootstrapping,
+            guards.BudgetEvaluations,
+            guards.BudgetUnbounded,
+            guards.BudgetCorpusUnknown,
+            guards.BudgetWithinBudget,
+            guards.BudgetExceeded,
+            guards.LastCorpus,
+            DescribeAffordable(guards.LastAffordable),
+            _exactScanBreaker.IsTripped(repoId) ? "open" : "closed",
+            guards.BreakerTrips,
+            guards.BreakerRepeatSkips,
+            guards.BreakerResets);
+    }
+
+    /// <summary>
+    /// Why a budget decision came out the way it did, in the operator's terms. Kept
+    /// beside the decision rather than in the log template so every emission of a
+    /// decision carries the same explanation.
+    /// </summary>
+    /// <param name="decision">The decision to describe.</param>
+    /// <returns>A sentence ending in a full stop.</returns>
+    internal static string DescribeBudgetDecision(RepoContextExactScanBudgetDecision decision) => decision switch
+    {
+        RepoContextExactScanBudgetDecision.Unbounded =>
+            "the vector-metadata tree's scan-page configuration disables the bound, so the budget cannot skip a "
+            + "gather however large the corpus is.",
+        RepoContextExactScanBudgetDecision.CorpusUnknown =>
+            "the bound applies but no corpus count exists yet, so the budget failed open and the gather ran. The "
+            + "breaker is what covers this window.",
+        RepoContextExactScanBudgetDecision.WithinBudget =>
+            "the corpus is counted and fits inside the budget, so the gather ran.",
+        _ =>
+            "the corpus is counted and exceeds the budget, so the gather was skipped and keyword recall served "
+            + "instead of a scan that cannot complete.",
+    };
+
+    /// <summary>
+    /// Renders an affordable vector count for a log line, naming the fail-open
+    /// sentinel rather than printing <see cref="int.MaxValue"/>, which reads as a
+    /// very large threshold and is not one.
+    /// </summary>
+    /// <param name="affordable">The budget's reported affordable vector count.</param>
+    /// <returns>The rendered value.</returns>
+    internal static string DescribeAffordable(int affordable)
+        => affordable == RepoContextExactScanBudget.Unbounded
+            ? "unbounded"
+            : affordable.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// What the exact-scan budget concludes about a gather over this repository and
+    /// embedding space, under the vector-metadata tree's configured scan-page
+    /// bounds.
     /// <para>
     /// <b>Fails open on an unknown corpus, and that is not sufficient on its
     /// own.</b> The size is read from the build progress the plane already holds,
@@ -238,6 +410,16 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     /// it safe is that it is no longer the only guard:
     /// <see cref="RepoContextExactScanBreaker"/> catches the case this cannot,
     /// from the fault rather than from a count. See issue #2231.
+    /// </para>
+    /// <para>
+    /// <b>It reports which fail-open branch it took, not merely that it took
+    /// one.</b> <see cref="RepoContextExactScanBudgetDecision.Unbounded"/> and
+    /// <see cref="RepoContextExactScanBudgetDecision.CorpusUnknown"/> both run the
+    /// gather, but for unrelated reasons: the first says the configuration
+    /// disables the guard, the second says the guard is armed and has nothing to
+    /// judge against yet. Returning a single boolean collapsed them, and that
+    /// collapse is what made the budget's field behaviour unattributable in issue
+    /// #2253.
     /// </para>
     /// <para>
     /// <b>The count is repository-wide, not per space.</b> The gather scans the
@@ -253,15 +435,15 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     /// <param name="space">The embedding space the query was produced in.</param>
     /// <param name="corpus">The best known corpus size, reported for the log line.</param>
     /// <param name="affordable">The budget's affordable vector count, reported for the log line.</param>
-    /// <returns><see langword="true"/> when the gather should run.</returns>
-    private bool CanAffordExactScan(
+    /// <returns>The decision. Only <see cref="RepoContextExactScanBudgetDecision.Exceeded"/> skips the gather.</returns>
+    private RepoContextExactScanBudgetDecision EvaluateExactScanBudget(
         string repoId, EmbeddingSpaceTag space, out int corpus, out int affordable)
     {
         corpus = 0;
         affordable = _exactScanBudget.AffordableVectorCount;
         if (affordable == RepoContextExactScanBudget.Unbounded)
         {
-            return true;
+            return RepoContextExactScanBudgetDecision.Unbounded;
         }
 
         // VectorsExpected is what the build counted in the store of record;
@@ -274,6 +456,13 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         }
 
         corpus = Math.Max(corpus, _plane.KnownVectorCount(repoId));
-        return corpus <= 0 || corpus <= affordable;
+        if (corpus <= 0)
+        {
+            return RepoContextExactScanBudgetDecision.CorpusUnknown;
+        }
+
+        return corpus <= affordable
+            ? RepoContextExactScanBudgetDecision.WithinBudget
+            : RepoContextExactScanBudgetDecision.Exceeded;
     }
 }
