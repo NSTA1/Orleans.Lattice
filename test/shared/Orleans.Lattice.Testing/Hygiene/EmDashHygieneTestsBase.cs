@@ -38,8 +38,10 @@ public abstract class EmDashHygieneTestsBase
         var repoRoot = HygieneRepository.FindRepoRoot();
 
         var violations = new List<string>();
+        var scanned = 0;
         foreach (var file in HygieneFiles.EnumerateTextFiles(repoRoot, Scope))
         {
+            scanned++;
             var lines = File.ReadAllLines(file);
             for (int i = 0; i < lines.Length; i++)
             {
@@ -51,6 +53,12 @@ public abstract class EmDashHygieneTestsBase
                 }
             }
         }
+
+        // Anti-vacuity control (issue #2275): asserted on the DENOMINATOR and
+        // never on the violation list, so a scope whose roots have moved fails
+        // here rather than reporting a clean repository it never read.
+        HygieneDenominator.RequireExamined(
+            scanned, nameof(EmDashHygieneTestsBase), "text files", HygieneDenominator.Describe(Scope));
 
         Assert.That(violations, Is.Empty,
             "Em-dash characters (U+2014) are not permitted in tracked files. "

@@ -69,6 +69,16 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
         var starts = StartMarkerRegex.Matches(content);
         var ends = EndMarkerRegex.Matches(content);
 
+        // Anti-vacuity control (issue #2275). Every rule below is driven off
+        // `starts`, so with no marker blocks found the balance check compares
+        // 0 to 0, the layer-set comparison compares two empty lists, every
+        // per-block loop body is skipped, and the gate reports a pass. Deleting
+        // the markers from the doc - or a regex that stopped matching them -
+        // therefore disables this gate silently, which is why the denominator
+        // is asserted and not the violation list.
+        HygieneDenominator.RequireExamined(
+            starts.Count, nameof(PerformanceReportMarkerHygieneTestsBase), "perf-table marker blocks", docPath);
+
         var violations = new List<string>();
 
         // Rule 1: balanced markers.
@@ -308,6 +318,13 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
                 $"line {i + 1}: orphan '> Measured ' note (not preceded by a :end marker after at most one blank line); "
                 + $"full line: '{lines[i].Trim()}'");
         }
+
+        // Anti-vacuity control (issue #2275). With no :end markers in the file
+        // the walk below never enters its body, no note is ever required, and
+        // the gate passes. The denominator is the number of :end markers the
+        // walk actually reached.
+        HygieneDenominator.RequireExamined(
+            seenEnds.Count, nameof(PerformanceReportMarkerHygieneTestsBase), "perf-table :end markers", docPath);
 
         Assert.That(violations, Is.Empty,
             "performance-single-silo.md provenance-note hygiene violations found. "

@@ -65,11 +65,40 @@ public abstract class IntegrationCategoryHygieneTestsBase
     {
         var assembly = GetType().Assembly;
 
-        var fixtures = SafeGetTypes(assembly)
+        var allTypes = SafeGetTypes(assembly).ToList();
+
+        var fixtures = allTypes
             .Where(t => t.IsClass && !t.IsAbstract)
             .Where(HasTestFixtureAttribute)
             .OrderBy(t => t.FullName, StringComparer.Ordinal)
             .ToList();
+
+        // Anti-vacuity control (issue #2275), in two parts, because the
+        // obvious one is worthless here.
+        //
+        // NOT ASSERTED: fixtures.Count > 0. This fixture is itself a
+        // [TestFixture] in the assembly it reflects over, so that predicate is
+        // TRUE BY CONSTRUCTION and could not have come out differently. It
+        // would read exactly like a control while proving nothing - the defect
+        // this whole control exists to prevent.
+        //
+        // (1) The real vacuity path is SafeGetTypes degrading: it swallows
+        // ReflectionTypeLoadException and returns only the types that did
+        // load, so a load failure shrinks the population silently and the gate
+        // reports clean over whatever survived.
+        HygieneDenominator.RequireExamined(
+            allTypes.Count, nameof(IntegrationCategoryHygieneTestsBase), "loaded types", assembly.FullName ?? assembly.ToString());
+
+        // (2) End-to-end self-detection: the running fixture must find ITSELF
+        // through the same reflection and attribute-reading path it uses to
+        // find everything else. Unlike a count, this can genuinely fail - if
+        // HasTestFixtureAttribute or the type walk breaks, the gate stops
+        // detecting fixtures and this is what says so.
+        Assert.That(fixtures, Does.Contain(GetType()),
+            $"HYGIENE GATE VACUOUS: '{nameof(IntegrationCategoryHygieneTestsBase)}' did not detect its own "
+            + $"fixture type '{GetType().FullName}' while reflecting over {assembly.GetName().Name}, so its "
+            + "fixture-discovery path is broken and its clean report means nothing. "
+            + $"It found {fixtures.Count} fixture(s) among {allTypes.Count} loaded type(s).");
 
         var violations = new List<string>();
         foreach (var fixture in fixtures)

@@ -8,19 +8,51 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// machinery. Consults <see cref="ICommitLogReader"/> for head and
 /// tail offsets and the resolved options for the configured triggers.
 /// <para>
-/// Three triggers can elect a recovery path: (1) the WAL has been
-/// trimmed past the leaf's persisted checkpoint
-/// (<c>tail &gt; checkpoint</c>); (2) the partition-wide offset gap
-/// exceeds <see cref="LatticeOptions.MaxLeafReplayEntries"/> - a
-/// sound upper bound on this leaf's own work, so a CANDIDATE that
-/// the leaf confirms against the exact post-filter count (issue
-/// #2149); or
-/// (3) the persisted checkpoint is older than
-/// <see cref="LatticeOptions.LeafProjectionRetention"/>. When a
-/// trigger fires the configured
-/// <see cref="LatticeOptions.ProjectionRebuildPolicy"/> selects
+/// Three triggers fire here, but only ONE of them routes to a
+/// recovery path, and the distinction is load-bearing (issue #2275).
+/// </para>
+/// <para>
+/// (1) GENUINE LOSS: the WAL has been trimmed past the leaf's
+/// persisted checkpoint (<c>tail &gt; checkpoint + 1</c>). This is the
+/// only trigger that consults
+/// <see cref="LatticeOptions.ProjectionRebuildPolicy"/>, which selects
 /// between snapshot-then-WAL, full WAL rebuild, or surfacing
 /// <see cref="LeafProjectionStaleException"/>.
+/// </para>
+/// <para>
+/// (2) the partition-wide offset gap exceeds
+/// <see cref="LatticeOptions.MaxLeafReplayEntries"/>, and (3) the
+/// persisted checkpoint is older than
+/// <see cref="LatticeOptions.LeafProjectionRetention"/>. These are
+/// COST signals against an INTACT WAL. They do not elect a recovery
+/// path and they never consult the rebuild policy: both return
+/// <see cref="FallOffLogDecision.TailReplayOverBudget"/> and the leaf
+/// tail-replays regardless, because a slow activation is recoverable
+/// and a bricked tree is not (issue #1738).
+/// </para>
+/// <para>
+/// WHAT CONSUMES <see cref="FallOffLogDecision.TailReplayOverBudget"/>:
+/// in production, nothing. <c>BPlusLeafGrain</c>'s activation switch
+/// matches the value and falls straight through to the replay that
+/// would have run anyway (issue #2291 removed the stall-check gate it
+/// used to feed). The over-budget WARNING and the
+/// <c>activation_replays_over_budget</c> counter are raised downstream
+/// in <c>ReplayPartitionAsync</c> off <c>appliedEntries</c>, this
+/// leaf's exact post-filter count, on every replay path and NOT off
+/// this decision (issue #2149). Deleting trigger 2 would not change
+/// which activations warn. Do not describe the gap comparison as a
+/// candidate the leaf later "confirms": no such handshake exists.
+/// </para>
+/// <para>
+/// The ONE surviving side effect, which is incidental rather than
+/// designed: an over-budget or over-age leaf returns before the
+/// <see cref="LatticeOptions.LeafSnapshotMargin"/> proximity check
+/// below, so it never yields the
+/// <see cref="FallOffLogDecision.SnapshotPending"/> advisory. A leaf
+/// whose partition gap sits over budget therefore does not signal the
+/// maintenance grain to snapshot, which is the opposite of what its
+/// depth suggests it should do. Recorded, not fixed, because it is a
+/// behavioural change and this pass is documentation only.
 /// </para>
 /// <para>
 /// <see cref="ICommitLogReader"/> is resolved lazily via
@@ -85,7 +117,10 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         // needed offset itself fell off) is still tail > checkpoint + 1.
         var walTrimmedPastCheckpoint = checkpointOffset > 0 && tail > checkpointOffset + 1;
 
-        // Trigger 2: replay budget CANDIDATE.
+        // Trigger 2: replay budget COST SIGNAL.
+        //
+        // (Named a CANDIDATE until issue #2275. Nothing confirms it; see the
+        // class remarks and the note below.)
         //
         // Units (issue #2149). `head` is per (treeId, shardIndex) - per WAL
         // PARTITION, shared by every leaf pinned to it - and the gap is
@@ -105,14 +140,31 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         //     appliedByThisLeaf <= gap
         //
         // always holds. The gap is therefore a SOUND UPPER BOUND on the
-        // per-leaf work, which makes the cheap negative valid - gap <= budget
-        // proves the leaf is under budget without reading a single entry -
-        // while the positive proves nothing at all. So this trigger elects a
-        // CANDIDATE, and the verdict is taken downstream in the documented
-        // unit: BPlusLeafGrain.ReplayPartitionAsync counts the entries that
-        // actually pass ShouldApplyDuringReplay during the replay it is
-        // performing anyway (one increment per applied entry, no extra read)
-        // and warns only when that exact count crosses the budget.
+        // per-leaf work. That arithmetic is unchanged and still true.
+        //
+        // WHAT IS NO LONGER TRUE is that anything acts on it (issue #2275,
+        // after #2291). This trigger used to elect a CANDIDATE that the leaf
+        // confirmed downstream, and that phrasing survived here after the
+        // mechanism was removed. Today BOTH outcomes of the comparison lead
+        // to the same place: gap <= budget yields TailReplay and gap > budget
+        // yields TailReplayOverBudget, and the leaf's activation switch does
+        // nothing with either - it tail-replays. The over-budget verdict is
+        // computed independently in ReplayPartitionAsync, which counts the
+        // entries that actually pass ShouldApplyDuringReplay during the
+        // replay it is performing anyway (one increment per applied entry, no
+        // extra read) and warns when that exact count crosses the budget. It
+        // does that on every replay path, whether or not this trigger fired,
+        // so the set of activations that warn is identical with this trigger
+        // and without it.
+        //
+        // The comparison is kept for the reason below (a pre-check that
+        // scanned the window would cost what the replay costs) plus its one
+        // incidental effect, documented on the class: firing it skips the
+        // SnapshotPending advisory. If you are tempted to restore a
+        // confirm-the-candidate handshake, note that the downstream count is
+        // already exact and already unconditional; the candidate would add a
+        // second quantity to keep in step, which is what #2149 and #2291 each
+        // had to unpick.
         //
         // Confirming here instead would mean scanning (checkpoint, head]
         // before the replay - the same read the replay then repeats, and the
