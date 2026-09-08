@@ -196,6 +196,8 @@ public sealed class RepoContextVectorWriterAnnMaintenanceTests
             return false;
         }
 
+        public int KnownVectorCount(string repoId) => 0;
+
         public Task ApplyWriteAsync(
             string repoId,
             EmbeddingSpaceTag space,

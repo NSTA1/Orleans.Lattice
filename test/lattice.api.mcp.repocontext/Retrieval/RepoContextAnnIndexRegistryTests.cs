@@ -55,6 +55,54 @@ public sealed class RepoContextAnnIndexRegistryTests
     }
 
     [Test]
+    public void The_known_vector_count_is_zero_until_an_index_is_opened()
+    {
+        using var fixture = new AnnPlaneFixture();
+        fixture.SeedRing(16);
+
+        Assert.That(fixture.Registry.KnownVectorCount(AnnPlaneFixture.RepoId), Is.Zero,
+            "Nothing has been opened, so nothing is known. Zero here means unknown, not empty - which is why "
+            + "the exact-scan budget must treat it as an unknown rather than as a corpus small enough to "
+            + "scan.");
+    }
+
+    [Test]
+    public async Task The_known_vector_count_sums_every_space_the_plane_holds()
+    {
+        using var fixture = new AnnPlaneFixture();
+        var second = new EmbeddingSpaceTag("second-model", 8, VectorNormalization.UnitL2);
+        fixture.SeedRing(16);
+        for (var i = 0; i < 24; i++)
+        {
+            var vector = new float[second.Dimension];
+            vector[0] = 1f;
+            fixture.Factory.For(AnnPlaneFixture.RepoId, second).Source
+                .Set($"second-{i:D6}", RepoContextKeys.File(AnnPlaneFixture.RepoId, $"src/Second{i}.cs"), vector);
+        }
+
+        await fixture.BuildAsync(Ct);
+        await fixture.Registry.EnsureBuiltAsync(AnnPlaneFixture.RepoId, second, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixture.Registry.KnownVectorCount(AnnPlaneFixture.RepoId), Is.EqualTo(40),
+                "The exact gather range-scans the repository's whole vector prefix and filters by space in "
+                + "memory, so the rows it visits are every space's. Reporting one space's count would "
+                + "under-state the scan by however many spaces the repository holds.");
+            Assert.That(fixture.Registry.KnownVectorCount("other"), Is.Zero,
+                "The count is per repository, because the prefix the gather walks is.");
+        });
+    }
+
+    [Test]
+    public void The_known_vector_count_rejects_a_null_repository()
+    {
+        using var fixture = new AnnPlaneFixture();
+
+        Assert.That(() => fixture.Registry.KnownVectorCount(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
     public async Task Retrieval_keeps_working_and_reports_the_build_state_while_the_index_is_building()
     {
         // A batch size below the corpus guarantees the build needs several steps, so

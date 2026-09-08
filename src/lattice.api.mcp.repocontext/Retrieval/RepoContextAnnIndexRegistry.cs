@@ -98,6 +98,26 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     }
 
     /// <inheritdoc />
+    public int KnownVectorCount(string repoId)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        var total = 0L;
+        foreach (var (key, handle) in _entries)
+        {
+            if (!string.Equals(key.RepoId, repoId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var progress = handle.Progress;
+            total += Math.Max(progress.VectorsExpected, progress.VectorsIndexed);
+        }
+
+        return total >= int.MaxValue ? int.MaxValue : (int)total;
+    }
+
+    /// <inheritdoc />
     public Task ApplyWriteAsync(
         string repoId,
         EmbeddingSpaceTag space,
