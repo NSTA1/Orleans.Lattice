@@ -193,7 +193,7 @@ internal static class LockAdmissionCore
         state.FencingCounter = token;
         state.IsHeld = true;
         state.HolderToken = token;
-        state.LeaseExpiresAtTicks = nowTicks + leaseTicks;
+        state.LeaseExpiresAtTicks = SaturatingLeaseExpiry(nowTicks, leaseTicks);
         return token;
     }
 
@@ -241,7 +241,7 @@ internal static class LockAdmissionCore
             return false;
         }
 
-        state.LeaseExpiresAtTicks = nowTicks + leaseTicks;
+        state.LeaseExpiresAtTicks = SaturatingLeaseExpiry(nowTicks, leaseTicks);
         return true;
     }
 
@@ -268,4 +268,22 @@ internal static class LockAdmissionCore
         state.LeaseExpiresAtTicks = 0;
         return true;
     }
+
+    /// <summary>
+    /// The absolute lease-expiry tick, <paramref name="nowTicks"/> +
+    /// <paramref name="leaseTicks"/>, saturated at <see cref="DateTime.MaxValue"/>
+    /// ticks instead of overflowing. Both inputs are non-negative (the callers
+    /// guard <paramref name="leaseTicks"/> and <paramref name="nowTicks"/> is a
+    /// real UTC tick), so an extreme-but-permitted lease duration - a large
+    /// <c>LatticeOptions.MaxLockLeaseDuration</c>, which the validator accepts as
+    /// long as it is positive - would otherwise wrap the sum to a negative tick
+    /// that <see cref="IsLeaseExpired"/> reads as already-expired (silently
+    /// breaking mutual exclusion) and that <c>LatticeLockGrain.BuildLease</c>
+    /// cannot materialise as a <see cref="DateTimeOffset"/>. Saturating keeps an
+    /// enormous lease held while staying inside the representable expiry range.
+    /// </summary>
+    private static long SaturatingLeaseExpiry(long nowTicks, long leaseTicks)
+        => leaseTicks > DateTime.MaxValue.Ticks - nowTicks
+            ? DateTime.MaxValue.Ticks
+            : nowTicks + leaseTicks;
 }
