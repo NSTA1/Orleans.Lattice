@@ -115,6 +115,7 @@ public sealed class RepoContextAnnRecallTests
         var index = new AnnRepoContextSemanticIndex(
             registry,
             ThrowingExactIndex.Instance,
+            RepoContextExactScanBudgets.Unbounded(),
             NullLogger<AnnRepoContextSemanticIndex>.Instance);
 
         var candidates = source.Candidates();
