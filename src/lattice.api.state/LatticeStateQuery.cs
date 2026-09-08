@@ -508,11 +508,39 @@ internal sealed class LatticeStateQuery(
         // unchanged at zero cost, so the catalog is byte-for-byte identical.
         allIds = FilterTreeIdsByActiveTenant(allIds);
 
-        var ordered = allIds
-            .Where(id => !IsTagIndexTree(id))
-            .Where(id => request.IncludeSystemTrees || (!IsReservedTree(id) && !IsSystemDataTree(id)))
-            .Where(id => request.PageToken is null || string.CompareOrdinal(id, request.PageToken) > 0)
-            .OrderBy(id => id, StringComparer.Ordinal);
+        // Single-pass filter into one exact-upper-bound list, then an in-place
+        // ordinal sort. The prior LINQ chain allocated a closure display class,
+        // three predicate delegates, the fused Where iterator and an
+        // OrderedEnumerable, and then - on enumeration - buffered the source,
+        // materialised a parallel key array and an index map before yielding a
+        // single page. The list below is the only allocation, its capacity is the
+        // exact upper bound on how many ids can survive the filter, and
+        // List<T>.Sort with the ordinal comparer produces the identical order.
+        var pageToken = request.PageToken;
+        var includeSystemTrees = request.IncludeSystemTrees;
+        var ordered = new List<string>(allIds.Count);
+        for (var i = 0; i < allIds.Count; i++)
+        {
+            var candidate = allIds[i];
+            if (IsTagIndexTree(candidate))
+            {
+                continue;
+            }
+
+            if (!includeSystemTrees && (IsReservedTree(candidate) || IsSystemDataTree(candidate)))
+            {
+                continue;
+            }
+
+            if (pageToken is not null && string.CompareOrdinal(candidate, pageToken) <= 0)
+            {
+                continue;
+            }
+
+            ordered.Add(candidate);
+        }
+
+        ordered.Sort(StringComparer.Ordinal);
 
         var pageSize = request.EffectivePageSize;
         var pageIds = new List<string>(pageSize);
@@ -648,14 +676,34 @@ internal sealed class LatticeStateQuery(
         // whenever read visibility was off or no auth gate was registered.
         registrations = FilterViewsByActiveTenant(registrations);
 
-        var candidates = registrations
+        // Single-pass filter into one exact-upper-bound list, then an in-place
+        // ordinal sort by view name - the same shape ListTreesAsync uses, and for
+        // the same reason: the LINQ chain's closure, delegates, iterators,
+        // OrderBy buffer/key/map arrays and trailing ToArray copy all collapse
+        // onto the one list that has to exist anyway.
+        var viewPageToken = request.PageToken;
+        var includeSystemViews = request.IncludeSystemTrees;
+        var candidates = new List<ViewListing>(registrations.Count);
+        foreach (var registration in registrations)
+        {
             // Hide system views (those named with the system-data prefix, e.g. the
             // backup catalog index/history) from the listing unless the caller
             // explicitly opts in, mirroring how ListTreesAsync hides system trees.
-            .Where(r => request.IncludeSystemTrees || !IsSystemDataTree(r.ViewName))
-            .Where(r => request.PageToken is null || string.CompareOrdinal(r.ViewName, request.PageToken) > 0)
-            .OrderBy(r => r.ViewName, StringComparer.Ordinal)
-            .ToArray();
+            if (!includeSystemViews && IsSystemDataTree(registration.ViewName))
+            {
+                continue;
+            }
+
+            if (viewPageToken is not null
+                && string.CompareOrdinal(registration.ViewName, viewPageToken) <= 0)
+            {
+                continue;
+            }
+
+            candidates.Add(registration);
+        }
+
+        candidates.Sort(ViewListingByViewName.Instance);
 
         // Scope views to those whose source tree the subject may read, so a view
         // does not leak the existence of data over an unreadable source. An
@@ -668,7 +716,7 @@ internal sealed class LatticeStateQuery(
         IReadOnlyList<ViewListing> ordered;
         if (subject is { } resolved)
         {
-            var visible = new List<ViewListing>(candidates.Length);
+            var visible = new List<ViewListing>(candidates.Count);
             foreach (var candidate in candidates)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -768,10 +816,29 @@ internal sealed class LatticeStateQuery(
         // entirely, so a tenant caller enumerating tag indexes saw every tenant's.
         allIds = FilterTreeIdsByActiveTenant(allIds);
 
-        var ordered = allIds
-            .Where(IsTagIndexTree)
-            .Where(id => request.PageToken is null || string.CompareOrdinal(id, request.PageToken) > 0)
-            .OrderBy(id => id, StringComparer.Ordinal);
+        // Single-pass filter into one exact-upper-bound list, then an in-place
+        // ordinal sort, exactly as ListTreesAsync does. The registry read above
+        // already pushed the tag-index prefix down, so essentially every id
+        // survives the first test and the list capacity is a tight bound.
+        var tagPageToken = request.PageToken;
+        var ordered = new List<string>(allIds.Count);
+        for (var i = 0; i < allIds.Count; i++)
+        {
+            var candidate = allIds[i];
+            if (!IsTagIndexTree(candidate))
+            {
+                continue;
+            }
+
+            if (tagPageToken is not null && string.CompareOrdinal(candidate, tagPageToken) <= 0)
+            {
+                continue;
+            }
+
+            ordered.Add(candidate);
+        }
+
+        ordered.Sort(StringComparer.Ordinal);
 
         // The source-tree filter needs a factory; auth-backed visibility also needs
         // one to resolve each index's covered trees. Resolve it when either is in
@@ -2656,4 +2723,17 @@ internal sealed class LatticeStateQuery(
         OpsPerSecond = shard.OpsPerSecond,
         SplitInProgress = shard.SplitInProgress,
     };
+
+    /// <summary>
+    /// Ordinal comparison of two <see cref="ViewListing"/> records by
+    /// <see cref="ViewListing.ViewName"/>. One cached instance replaces the
+    /// per-request key-selector delegate the LINQ ordering allocated.
+    /// </summary>
+    private sealed class ViewListingByViewName : IComparer<ViewListing>
+    {
+        internal static readonly ViewListingByViewName Instance = new();
+
+        public int Compare(ViewListing x, ViewListing y) =>
+            string.CompareOrdinal(x.ViewName, y.ViewName);
+    }
 }

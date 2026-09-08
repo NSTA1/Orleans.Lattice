@@ -34,7 +34,7 @@ internal sealed class LatticeStateMetricsObserver(SharedMetricsSampler sampler)
         {
             SampledAt = DateTimeOffset.UtcNow,
             IsInitial = true,
-            Trees = Ordered(current.Values),
+            Trees = Ordered(current),
         };
     }
 
@@ -45,6 +45,13 @@ internal sealed class LatticeStateMetricsObserver(SharedMetricsSampler sampler)
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // The previous tick's map is a private diff baseline that is never handed
+        // out, so it is retained and refilled in place rather than reallocated.
+        // The prior shape built a whole new Dictionary from `current` on EVERY
+        // tick, which is an O(trees) bucket + entry array allocation per
+        // subscriber per tick, discarded a tick later - the single largest cost
+        // of an otherwise idle delta feed. Clear() keeps the backing arrays, so
+        // after the first tick the baseline refill allocates nothing at all.
         Dictionary<string, TreeMetrics>? previous = null;
 
         await foreach (var current in _sampler.SubscribeAsync(request, cancellationToken).ConfigureAwait(false))
@@ -55,8 +62,10 @@ internal sealed class LatticeStateMetricsObserver(SharedMetricsSampler sampler)
                 {
                     SampledAt = DateTimeOffset.UtcNow,
                     IsInitial = true,
-                    Trees = Ordered(current.Values),
+                    Trees = Ordered(current),
                 };
+
+                previous = new Dictionary<string, TreeMetrics>(current.Count, StringComparer.Ordinal);
             }
             else
             {
@@ -72,29 +81,90 @@ internal sealed class LatticeStateMetricsObserver(SharedMetricsSampler sampler)
                     }
                 }
 
-                // OrderBy fully materialises and sorts its source, so the prior
-                // intermediate .ToList() only allocated a throwaway list; sort the
-                // filtered key sequence directly into the result array.
-                var removed = previous.Keys
-                    .Where(id => !current.ContainsKey(id))
-                    .OrderBy(static id => id, StringComparer.Ordinal)
-                    .ToArray();
+                // A tree disappearing is rare, so the removed list is created
+                // lazily and the steady-state tick allocates nothing for it. The
+                // prior shape ran a capturing Where over previous.Keys and then an
+                // OrderBy, which allocated a closure, two iterators and OrderBy's
+                // buffer/key/map arrays on every tick just to yield an empty set.
+                List<string>? removed = null;
+                foreach (var id in previous.Keys)
+                {
+                    if (!current.ContainsKey(id))
+                    {
+                        (removed ??= []).Add(id);
+                    }
+                }
+
+                removed?.Sort(StringComparer.Ordinal);
 
                 yield return new TreeMetricsSnapshot
                 {
                     SampledAt = DateTimeOffset.UtcNow,
                     IsInitial = false,
                     Trees = Ordered(changed),
-                    RemovedTreeIds = removed,
+                    RemovedTreeIds = removed ?? (IReadOnlyList<string>)Array.Empty<string>(),
                 };
             }
 
-            previous = new Dictionary<string, TreeMetrics>(current, StringComparer.Ordinal);
+            previous.Clear();
+            foreach (var pair in current)
+            {
+                previous[pair.Key] = pair.Value;
+            }
         }
     }
 
-    private static IReadOnlyList<TreeMetrics> Ordered(IEnumerable<TreeMetrics> metrics)
-        => metrics.OrderBy(static m => m.TreeId, StringComparer.Ordinal).ToArray();
+    /// <summary>
+    /// Orders a whole sample map by tree id into one exact-width array.
+    /// </summary>
+    /// <remarks>
+    /// <c>OrderBy(...).ToArray()</c> buffers its source, materialises a parallel
+    /// key array and an index map, sorts the map, and then projects a third array
+    /// out of it. Copying the values straight into one exact-width array and
+    /// sorting that array in place produces the identical ordering for one
+    /// allocation instead of four.
+    /// </remarks>
+    private static IReadOnlyList<TreeMetrics> Ordered(IReadOnlyDictionary<string, TreeMetrics> metrics)
+    {
+        if (metrics.Count == 0)
+        {
+            return Array.Empty<TreeMetrics>();
+        }
+
+        var ordered = new TreeMetrics[metrics.Count];
+        var next = 0;
+        foreach (var value in metrics.Values)
+        {
+            ordered[next++] = value;
+        }
+
+        Array.Sort(ordered, TreeMetricsByTreeId.Instance);
+        return ordered;
+    }
+
+    /// <summary>
+    /// Orders an already-materialised delta list by tree id, in place. The list is
+    /// built here and handed straight out, so sorting it costs nothing beyond the
+    /// list that already exists.
+    /// </summary>
+    private static IReadOnlyList<TreeMetrics> Ordered(List<TreeMetrics> metrics)
+    {
+        metrics.Sort(TreeMetricsByTreeId.Instance);
+        return metrics;
+    }
+
+    /// <summary>
+    /// Ordinal comparison of two <see cref="TreeMetrics"/> by
+    /// <see cref="TreeMetrics.TreeId"/>. A single cached instance replaces the
+    /// per-call key selector delegate the LINQ ordering allocated.
+    /// </summary>
+    private sealed class TreeMetricsByTreeId : IComparer<TreeMetrics>
+    {
+        internal static readonly TreeMetricsByTreeId Instance = new();
+
+        public int Compare(TreeMetrics? x, TreeMetrics? y) =>
+            string.CompareOrdinal(x?.TreeId, y?.TreeId);
+    }
 
     private static bool SameMetrics(TreeMetrics a, TreeMetrics b)
     {

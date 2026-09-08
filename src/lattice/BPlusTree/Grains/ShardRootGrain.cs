@@ -470,32 +470,98 @@ internal sealed partial class ShardRootGrain(
         // Group keys by their target leaf. Mirrors TraverseForBatchReadAsync
         // but addresses the raw leaf grain directly (bypassing LeafCacheGrain)
         // so tombstones and TTL metadata survive - matching single-key
-        // GetRawEntryAsync semantics. The bucket value carries the
-        // (key, inputIndex) pair so the per-leaf batched response can be
-        // scattered back into the index-aligned result list.
-        var leafBuckets = new Dictionary<GrainId, List<(string Key, int Index)>>();
+        // GetRawEntryAsync semantics.
+        //
+        // The overwhelmingly common shape here is single-leaf: this is the
+        // saga capture path, whose affected keys were resolved from one leaf
+        // set. So the bucketing structures are built LAZILY and only once a
+        // SECOND distinct leaf is actually observed. Until then the routing
+        // pass records nothing but the sole leaf id and a running count, and
+        // the sole-leaf call below hands the caller's own `keys` list straight
+        // to the leaf - no bucket dictionary, no per-key (key, index) tuple
+        // list, and no per-leaf key-copy list at all.
+        //
+        // When a second leaf does appear, the already-routed prefix is known to
+        // belong entirely to the first leaf and sits at input indices
+        // 0..soleCount-1, so the buckets are materialised from `keys` without
+        // re-traversing anything.
+        GrainId soleLeafId = default;
+        var soleLeafCount = 0;
+        Dictionary<GrainId, LeafKeyBucket>? leafBuckets = null;
+
         // Type-correcting flat-tree fast path: a corrupt RootIsLeaf flag left
         // true over an internal root (issue 899) falls through to per-key
         // routing rather than bucketing the whole batch onto the internal root.
         if (RootIsLeafTyped)
         {
-            var rootLeaf = state.State.RootNodeId!.Value;
-            var bucket = new List<(string, int)>(keys.Count);
-            for (int i = 0; i < keys.Count; i++) bucket.Add((keys[i], i));
-            leafBuckets[rootLeaf] = bucket;
+            soleLeafId = state.State.RootNodeId!.Value;
+            soleLeafCount = keys.Count;
         }
         else
         {
             for (int i = 0; i < keys.Count; i++)
             {
                 var leafId = await TraverseToLeafAsync(keys[i]);
+                if (leafBuckets is null)
+                {
+                    if (i == 0)
+                    {
+                        soleLeafId = leafId;
+                        soleLeafCount = 1;
+                        continue;
+                    }
+
+                    if (leafId == soleLeafId)
+                    {
+                        soleLeafCount++;
+                        continue;
+                    }
+
+                    // Second distinct leaf: materialise the buckets, seeding the
+                    // first one with the prefix already routed to soleLeafId.
+                    leafBuckets = new Dictionary<GrainId, LeafKeyBucket>(2);
+                    var first = new LeafKeyBucket(soleLeafCount);
+                    for (var j = 0; j < soleLeafCount; j++)
+                    {
+                        first.Add(keys[j], j);
+                    }
+
+                    leafBuckets[soleLeafId] = first;
+                }
+
                 if (!leafBuckets.TryGetValue(leafId, out var bucket))
                 {
-                    bucket = new List<(string, int)>();
+                    bucket = new LeafKeyBucket(4);
                     leafBuckets[leafId] = bucket;
                 }
-                bucket.Add((keys[i], i));
+
+                bucket.Add(keys[i], i);
             }
+        }
+
+        if (leafBuckets is null)
+        {
+            if (soleLeafCount == 0)
+            {
+                return result;
+            }
+
+            // Sole leaf: the caller's key list is already exactly the batch, in
+            // input order, so it is handed over as-is and the response scatters
+            // back by position.
+            var soleLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(soleLeafId);
+            var soleResult = await soleLeaf.GetRawEntriesAsync(keys);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                var raw = soleResult[i];
+                if (raw is null || raw.Value.IsTombstone)
+                {
+                    continue;
+                }
+                result[i] = raw;
+            }
+
+            return result;
         }
 
         // One batched RPC per distinct leaf, walked sequentially. Unlike the
@@ -503,8 +569,8 @@ internal sealed partial class ShardRootGrain(
         // because a scattered probe buckets into many leaves and the summed
         // latency then breaches the response deadline, this saga path's
         // workload is single-leaf: the transaction's affected keys were
-        // resolved from one leaf set, so leafBuckets almost always holds one
-        // entry and the fan-out machinery would buy nothing but a
+        // resolved from one leaf set, so this multi-leaf walk is the rare
+        // shape and the fan-out machinery would buy nothing but a
         // Task.WhenAll allocation per call. Should a genuinely wide,
         // many-leaf batch ever reach here it would inherit the same
         // sum-of-round-trips latency, so mirror the read path's fan-out at
@@ -512,12 +578,13 @@ internal sealed partial class ShardRootGrain(
         foreach (var (leafId, bucket) in leafBuckets)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafKeys = new List<string>(bucket.Count);
-            foreach (var (key, _) in bucket) leafKeys.Add(key);
 
-            var leafResult = await leaf.GetRawEntriesAsync(leafKeys);
+            // The bucket already holds its keys as the List<string> the grain
+            // call takes, so it is passed through directly rather than copied
+            // out of a (key, index) tuple list into a second list per leaf.
+            var leafResult = await leaf.GetRawEntriesAsync(bucket.Keys);
 
-            for (int i = 0; i < bucket.Count; i++)
+            for (int i = 0; i < bucket.Keys.Count; i++)
             {
                 var raw = leafResult[i];
                 // Tombstones are surfaced as null to match the single-key
@@ -529,10 +596,34 @@ internal sealed partial class ShardRootGrain(
                     // result slot already initialised to null above.
                     continue;
                 }
-                result[bucket[i].Index] = raw;
+                result[bucket.Indices[i]] = raw;
             }
         }
         return result;
+    }
+
+    /// <summary>
+    /// One leaf's slice of a raw batch read: the keys routed to that leaf, in
+    /// input order, alongside each key's index in the caller's request list.
+    /// </summary>
+    /// <remarks>
+    /// The two are kept as parallel lists rather than one list of
+    /// <c>(string Key, int Index)</c> pairs so the key list can be handed
+    /// straight to <see cref="IBPlusLeafGrain.GetRawEntriesAsync(List{string})"/>.
+    /// The tuple shape forced a second, whole-bucket-width <c>List&lt;string&gt;</c>
+    /// to be copied out of it before every per-leaf call.
+    /// </remarks>
+    private sealed class LeafKeyBucket(int capacity)
+    {
+        internal List<string> Keys { get; } = new(capacity);
+
+        internal List<int> Indices { get; } = new(capacity);
+
+        internal void Add(string key, int index)
+        {
+            Keys.Add(key);
+            Indices.Add(index);
+        }
     }
 
     public async Task<bool> ExistsAsync(string key)
