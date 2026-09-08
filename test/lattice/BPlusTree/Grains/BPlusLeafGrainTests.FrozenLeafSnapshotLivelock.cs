@@ -238,4 +238,82 @@ public partial class BPlusLeafGrainTests
             + "offset until the ordinary periodic cadence fires, so the fix does not tax leaves that never "
             + "rolled back");
     }
+
+    // Mid-window offset: only 2,560 of the 5,120-entry (155852, 160972] window has
+    // been re-absorbed when this activation's flush runs. Models an activation
+    // whose tail replay was cut off by teardown before it re-reached the full
+    // durable frontier.
+    private const long FrozenLeafPartialReadvance = FrozenLeafStaleOffset + 2560; // 158412
+
+    [Test]
+    public async Task Off_cadence_capture_banks_only_the_replay_reapplied_offset_not_the_durable_grain_state()
+    {
+        // SECOND DISCRIMINATOR + budget-tracking control. The PM's prediction is
+        // that a correct fix converges over ~five activations of ~5,120 re-applied
+        // steps, NOT in one jump, and that instant convergence would mean the
+        // budget or teardown path changed. This test pins the mechanism to the
+        // honest side of that line: the off-cadence capture must stamp exactly the
+        // offset the tail replay actually RE-APPLIED into the cache this
+        // activation (here a partial 158412), never the durable grain-state
+        // frontier (160972). Banking 160972 while the cache only covers 158412
+        // would be the silent-loss hazard - claiming coverage the leaf does not
+        // hold - i.e. a disguised max(snapshot, persisted). So:
+        //   * coverage == 158412  -> banks what was rebuilt: monotone, budget-bounded.
+        //   * coverage == 160972  -> over-claims to the known-durable offset (unsafe).
+        //   * coverage == 155852  -> fix absent, frozen (fails in the control arm).
+        // The field leaf re-folds the whole 5,120 every activation (its grain-state
+        // row is byte-stable at 160972), so on the box the divergence happens to
+        // close in one activation; this test proves that is because the replay
+        // genuinely re-applied all 5,120, not because the fix skipped ahead.
+        const int partitions = 8;
+        var dataKey = FrozenLeafKeyForPartition(FrozenLeafDivergentPartition, partitions);
+
+        var snapshotState = new FakePersistentState<LeafSnapshotBlob>();
+        var store = new LeafSnapshotStorageGrain(Substitute.For<IGrainContext>(), snapshotState);
+        await store.SaveAsync(FrozenLeafStaleSnapshotBlob(dataKey), default);
+
+        var (leaf, leafState) = CreateResidualLeafWithSnapshotStore(
+            partitions, store, coordinatorTail: 1,
+            reclassifyEveryN: LatticeOptions.DefaultLeafSnapshotReClassifyEveryNCheckpoints);
+        leafState.State.ProjectionCheckpointOffset = FrozenLeafDurableCheckpoints[0];
+        leafState.State.ProjectionCheckpointOffsetsByPartition =
+            (long[])FrozenLeafDurableCheckpoints.Clone();
+
+        var rehydrated = await leaf.TryRehydrateFromSnapshotAsync(default);
+        Assert.That(rehydrated, Is.True);
+        Assert.That(
+            leaf.GetCurrentCheckpointForPartition(FrozenLeafDivergentPartition),
+            Is.EqualTo(FrozenLeafStaleOffset),
+            "precondition: rehydrate rolled the divergent partition back to the stale offset");
+
+        // Tail replay re-absorbs only PART of the window before this flush - a
+        // teardown-truncated activation. The re-applied frontier is 158412, well
+        // short of the durable 160972.
+        AsProjection(leaf).Apply(BuildSet(
+            dataKey, Encoding.UTF8.GetBytes("partial"), hlcPhysical: 1000, treeId: ResidualTreeId));
+        using (LatticeApplyOffsetContext.BeginScope(FrozenLeafDivergentPartition, FrozenLeafPartialReadvance))
+        {
+            await AsProjection(leaf).SetCheckpointOffsetAsync(FrozenLeafPartialReadvance, default);
+        }
+        await AsProjection(leaf).FlushCheckpointAsync(default);
+
+        Assert.That(
+            leaf.DurableSnapshotCoverageForPartition(FrozenLeafDivergentPartition),
+            Is.EqualTo(FrozenLeafPartialReadvance),
+            "the off-cadence capture must bank exactly the re-applied offset (158412), proving convergence "
+            + "tracks budget-bounded replay progress and never over-claims to the durable grain-state frontier");
+        Assert.That(
+            leaf.DurableSnapshotCoverageForPartition(FrozenLeafDivergentPartition),
+            Is.LessThan(FrozenLeafDurableOffset),
+            "coverage must NOT jump to the known-durable 160972: that would assert coverage the cache does not "
+            + "hold - the silent-loss hazard a bare max(snapshot, persisted) would introduce");
+
+        var reloaded = await store.LoadAsync(default);
+        Assert.That(reloaded, Is.Not.Null);
+        Assert.That(
+            reloaded!.SnapshotOffsetsByPartition![FrozenLeafDivergentPartition],
+            Is.EqualTo(FrozenLeafPartialReadvance),
+            "the durable blob records the partial re-applied frontier, so a subsequent activation resumes from "
+            + "158412 and banks strictly more - monotone convergence, not a single jump");
+    }
 }
