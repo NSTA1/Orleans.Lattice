@@ -1292,9 +1292,12 @@ internal sealed partial class ReplicationApplier
         var treeId = first.TreeId;
         var origin = first.OriginClusterId ?? string.Empty;
 
-        var outcome = decision == ReplicationTenantIsolationDecision.RejectOutOfRegion
-            ? LatticeReplicationMetrics.OutcomeRejectedTenantOffline
-            : LatticeReplicationMetrics.OutcomeRejectedForeignTenant;
+        var outcome = decision switch
+        {
+            ReplicationTenantIsolationDecision.RejectOutOfRegion => LatticeReplicationMetrics.OutcomeRejectedTenantOffline,
+            ReplicationTenantIsolationDecision.RejectSuspendedTenant => LatticeReplicationMetrics.OutcomeRejectedSuspendedTenant,
+            _ => LatticeReplicationMetrics.OutcomeRejectedForeignTenant,
+        };
 
         _logger.LogWarning(
             "Rejected inbound replication run of {Count} entries for tree '{Tree}' from origin '{Origin}': "

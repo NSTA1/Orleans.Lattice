@@ -231,4 +231,165 @@ public sealed class LatticeTreeAdminApiGrpcAuthInterceptorUnitTests
                 new FakeServerCallContext(FullMethod(LatticeTreeAdminGrpcMethods.CheckTreeExistsMethodName)),
                 null!));
     }
+
+    // ---- Every tree a call reaches is authorized ------------------------
+    //
+    // DescribeCall decodes ONE target tree, but two requests carry a second,
+    // independently caller-chosen tree the operation actually writes to or
+    // redirects at: SnapshotTree's DestinationTreeId (the facade calls
+    // SnapshotTreeAsync(TreeId, DestinationTreeId, ...)) and SetTreeAlias's
+    // PhysicalTreeId (SetTreeAliasAsync(TreeId, PhysicalTreeId, ...)). While only
+    // the primary was authorized, a caller holding a grant on one tree it owns
+    // could snapshot over an arbitrary victim tree, or re-point its own logical
+    // name at one, without the authorizer ever being shown the tree at risk.
+
+    /// <summary>
+    /// A per-tree authorizer that admits exactly one tree id and records every
+    /// target it was asked about, so a target that never reached it is provable.
+    /// </summary>
+    private sealed class SingleTreeAuthorizer(string allowedTreeId) : ILatticeTreeAdminApiAuthorizer
+    {
+        public List<string?> Seen { get; } = [];
+
+        public Task<bool> IsAuthorizedAsync(
+            LatticeTreeAdminApiAuthorizationContext context,
+            CancellationToken cancellationToken = default)
+        {
+            Seen.Add(context.TargetId);
+            return Task.FromResult(string.Equals(context.TargetId, allowedTreeId, StringComparison.Ordinal));
+        }
+    }
+
+    [Test]
+    public void SnapshotTree_destination_tree_is_authorized_and_a_foreign_one_is_refused()
+    {
+        var authorizer = new SingleTreeAuthorizer("mine");
+        var interceptor = Create(authorizer);
+        var continuationRan = false;
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await interceptor.UnaryServerHandler(
+            new TreeAdminSnapshotRequest
+            {
+                TreeId = "mine",
+                DestinationTreeId = "victim",
+                Mode = TreeSnapshotMode.Online,
+            },
+            new FakeServerCallContext(FullMethod(LatticeTreeAdminGrpcMethods.SnapshotTreeMethodName)),
+            (_, _) =>
+            {
+                continuationRan = true;
+                return Task.FromResult(new TreeSnapshotStatus { TreeId = "mine" });
+            }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(continuationRan, Is.False, "the snapshot must never reach the facade");
+            Assert.That(
+                authorizer.Seen,
+                Does.Contain("victim"),
+                "the destination tree must be put to the authorizer, not carried in on the source tree's grant");
+        });
+    }
+
+    [Test]
+    public void SetTreeAlias_physical_tree_is_authorized_and_a_foreign_one_is_refused()
+    {
+        var authorizer = new SingleTreeAuthorizer("mine");
+        var interceptor = Create(authorizer);
+        var continuationRan = false;
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await interceptor.UnaryServerHandler(
+            new TreeAdminSetAliasRequest { TreeId = "mine", PhysicalTreeId = "victim" },
+            new FakeServerCallContext(FullMethod(LatticeTreeAdminGrpcMethods.SetTreeAliasMethodName)),
+            (_, _) =>
+            {
+                continuationRan = true;
+                return Task.FromResult(new TreeAliasResolution { TreeId = "mine", PhysicalTreeId = "mine" });
+            }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(continuationRan, Is.False, "the alias must never reach the facade");
+            Assert.That(authorizer.Seen, Does.Contain("victim"));
+        });
+    }
+
+    [Test]
+    public async Task Both_trees_authorized_still_admits_the_call()
+    {
+        // The converse control: the second check narrows nothing a legitimate
+        // caller was entitled to do.
+        var interceptor = Create(new AllowAllTreeAdminApiAuthorizer());
+        var response = new TreeSnapshotStatus { TreeId = "mine" };
+
+        var result = await interceptor.UnaryServerHandler(
+            new TreeAdminSnapshotRequest
+            {
+                TreeId = "mine",
+                DestinationTreeId = "mine-snap",
+                Mode = TreeSnapshotMode.Online,
+            },
+            new FakeServerCallContext(FullMethod(LatticeTreeAdminGrpcMethods.SnapshotTreeMethodName)),
+            (_, _) => Task.FromResult(response));
+
+        Assert.That(result, Is.SameAs(response));
+    }
+
+    [Test]
+    public async Task A_single_tree_call_still_costs_exactly_one_authorizer_round_trip()
+    {
+        // A request naming the same tree twice, and every request naming only one,
+        // must not pay a second authorizer call.
+        var authorizer = new SingleTreeAuthorizer("mine");
+        var interceptor = Create(authorizer);
+
+        await interceptor.UnaryServerHandler(
+            new TreeAdminSetAliasRequest { TreeId = "mine", PhysicalTreeId = "mine" },
+            new FakeServerCallContext(FullMethod(LatticeTreeAdminGrpcMethods.SetTreeAliasMethodName)),
+            (_, _) => Task.FromResult(new TreeAliasResolution { TreeId = "mine", PhysicalTreeId = "mine" }));
+
+        await interceptor.UnaryServerHandler(
+            new TreeAdminTreeRequest { TreeId = "mine" },
+            new FakeServerCallContext(FullMethod(LatticeTreeAdminGrpcMethods.CheckTreeExistsMethodName)),
+            (_, _) => Task.FromResult(new TreeExistenceResult { TreeId = "mine" }));
+
+        Assert.That(authorizer.Seen, Has.Count.EqualTo(2), "one authorizer call per call, not per tree slot");
+    }
+
+    [Test]
+    public void DescribeSecondaryTarget_decodes_only_a_distinct_second_tree()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                LatticeTreeAdminApiGrpcAuthInterceptor.DescribeSecondaryTarget(
+                    new TreeAdminSnapshotRequest { TreeId = "a", DestinationTreeId = "b" }, "a"),
+                Is.EqualTo("b"));
+            Assert.That(
+                LatticeTreeAdminApiGrpcAuthInterceptor.DescribeSecondaryTarget(
+                    new TreeAdminSetAliasRequest { TreeId = "a", PhysicalTreeId = "b" }, "a"),
+                Is.EqualTo("b"));
+            Assert.That(
+                LatticeTreeAdminApiGrpcAuthInterceptor.DescribeSecondaryTarget(
+                    new TreeAdminSetAliasRequest { TreeId = "a", PhysicalTreeId = "a" }, "a"),
+                Is.Null,
+                "the same tree twice is already adjudicated");
+            Assert.That(
+                LatticeTreeAdminApiGrpcAuthInterceptor.DescribeSecondaryTarget(
+                    new TreeAdminSnapshotRequest { TreeId = "a", DestinationTreeId = "   " }, "a"),
+                Is.Null,
+                "a blank id names no tree");
+            Assert.That(
+                LatticeTreeAdminApiGrpcAuthInterceptor.DescribeSecondaryTarget(
+                    new TreeAdminTreeRequest { TreeId = "a" }, "a"),
+                Is.Null,
+                "a request carrying one tree has no second target");
+            Assert.That(
+                LatticeTreeAdminApiGrpcAuthInterceptor.DescribeSecondaryTarget<TreeAdminSnapshotRequest>(null!, null),
+                Is.Null,
+                "the streaming shape passes no request message");
+        });
+    }
 }

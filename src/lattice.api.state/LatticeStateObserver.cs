@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.Api.State;
 
@@ -90,12 +91,37 @@ internal sealed class LatticeStateObserver(
         //     keys it may read.
         // A range-delete notification cannot be safely narrowed to an authorized
         // subset, so a partially-authorized subject never observes one.
+        //
+        // A materialised-view ("view-*") subscription is decided against the
+        // view's SOURCE tree, exactly as the read facade decides one
+        // (LatticeStateQuery.IsTreeReadHiddenAsync / ResolveViewKeyFilterAsync).
+        // The view id is a caller-supplied name for someone else's data: a grant
+        // on "view-orders" says nothing about who may read "orders", so deciding
+        // the subscription against the view id asks a question whose answer cannot
+        // protect the source. Because the feed reads the WAL directly there is no
+        // downstream gate to compensate, so authorizing the view id alone let a
+        // subject holding only a view grant - or a Tree:* grant, which reaches a
+        // view because "view-" is not a reserved prefix - stream every key, change
+        // kind and HLC timestamp of a source tree it may not read, and bypassed an
+        // explicit Deny on that source, which was never evaluated. Resolving the
+        // source also yields the source's key filter, so a prefix-granted
+        // subscriber is pruned to the keys it may read rather than being handed
+        // the whole view. Fails closed when the source cannot be resolved.
         Func<string, bool>? keyFilter = null;
         var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
         if (subject is { } resolved)
         {
+            var authorizationTreeId = request.TreeId;
+            if (LatticeViewTrees.IsViewTree(request.TreeId))
+            {
+                authorizationTreeId = await LatticeStateViewSource
+                    .ResolveAsync(services, _grainFactory, request.TreeId, cancellationToken)
+                    .ConfigureAwait(false)
+                    ?? throw new KeyNotFoundException($"Tree '{request.TreeId}' was not found.");
+            }
+
             var (allowed, filter) = await _visibility
-                .ResolveTreeReadAccessAsync(request.TreeId, resolved, cancellationToken)
+                .ResolveTreeReadAccessAsync(authorizationTreeId, resolved, cancellationToken)
                 .ConfigureAwait(false);
             if (!allowed)
             {
