@@ -535,11 +535,60 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
+    /// <summary>
+    /// Publishes this leaf's current child-digest snapshot to its parent
+    /// internal node, then piggybacks the best-effort byte-footprint
+    /// publish.
+    /// <para>
+    /// The upward publish is a cross-grain RPC that recurses toward the
+    /// shard root; a parent that is itself mid-mutation can leave the
+    /// await neither completing nor faulting until Orleans' fixed response
+    /// timeout, consuming this leaf's turn or activation budget. That is
+    /// the issue #2220 mechanism when the publish runs inline from a
+    /// checkpoint flush during cold replay. The await is therefore bounded
+    /// by <see cref="LatticeOptions.DigestPublishTimeout"/>, mirroring
+    /// <c>BPlusInternalGrain.PublishUpwardAsync</c>: on the deadline the
+    /// publish is abandoned (its eventual completion harmlessly
+    /// unobserved) and a <see cref="TimeoutException"/> is thrown for the
+    /// caller to record and re-drive. The digest is staleness-tolerant -
+    /// callers keep <c>_digestDirty</c> set on failure so the next
+    /// mutation republishes. <see cref="Timeout.InfiniteTimeSpan"/>
+    /// restores the historical unbounded await.
+    /// </para>
+    /// </summary>
     private async Task PublishCurrentDigestAsync(GrainId parentId)
     {
         var snapshot = BuildOwnChildDigestSnapshot();
         var parent = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
-        await parent.OnChildDigestPublishedAsync(context.GrainId, snapshot);
+
+        var timeout = (await GetOptionsAsync()).DigestPublishTimeout;
+        if (timeout == Timeout.InfiniteTimeSpan)
+        {
+            await parent.OnChildDigestPublishedAsync(context.GrainId, snapshot);
+        }
+        else
+        {
+            // A fresh one-shot source per publish (rather than the internal
+            // node's recycled deadline) keeps this reentrancy-trivial: the
+            // leaf's turns are serialised, so there is never a second publish
+            // in flight to bound, no pooled source to disarm, and no
+            // fired-in-the-race-window hazard to reason about.
+            using var deadline = new CancellationTokenSource(timeout);
+            try
+            {
+                await parent.OnChildDigestPublishedAsync(context.GrainId, snapshot)
+                    .WaitAsync(deadline.Token);
+            }
+            catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Leaf digest publish from '{context.GrainId}' of tree "
+                    + $"'{state.State.TreeId ?? "<unknown>"}' to parent '{parentId}' exceeded the "
+                    + $"{timeout} publish deadline ({nameof(LatticeOptions.DigestPublishTimeout)}); the "
+                    + "parent is likely mid-mutation. The publish is abandoned; the digest stays dirty "
+                    + "and the next mutation re-drives convergence.", oce);
+            }
+        }
 
         // Piggyback the per-leaf byte-footprint publish on the digest
         // commit boundary. Skipped when the values are unchanged since

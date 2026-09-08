@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -44,7 +45,7 @@ internal sealed partial class LatticeGrain(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     LatticeOptionsResolver optionsResolver,
     IServiceProvider services,
-    ILogger<LatticeGrain> logger) : ILattice, ISystemLattice, IReplicationApplyGrain
+    ILogger<LatticeGrain> logger) : ILattice, ISystemLattice, IReplicationApplyGrain, IGrainBase
 {
     private string? _treeIdCache;
     private string TreeId => _treeIdCache ??= context.GrainId.Key.ToString()!;
@@ -3614,10 +3615,13 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
-    /// Lazily activates the per-tree autonomic loops on the first write to
-    /// this tree: the <c>HotShardMonitorGrain</c> that splits hot shards, and
-    /// the <c>ShardHealingOrchestratorGrain</c> that consolidates over-split
-    /// ones. Subsequent writes are no-ops.
+    /// Activates the per-tree autonomic loops: the <c>HotShardMonitorGrain</c>
+    /// that splits hot shards, and the <c>ShardHealingOrchestratorGrain</c>
+    /// that consolidates over-split ones. Called once from
+    /// <see cref="OnActivateAsync(CancellationToken)"/> - so a tree that has
+    /// stopped taking writes still arms - and again from every write path,
+    /// which re-attempts an arming that lost the race with reminder-service
+    /// startup. Subsequent calls are no-ops.
     /// <para>
     /// The two are bootstrapped independently rather than under one flag,
     /// because disabling adaptive splitting on a deployment whose trees are
@@ -3626,6 +3630,15 @@ internal sealed partial class LatticeGrain(
     /// leave that tree damaged forever. Each loop is a no-op when its own
     /// switch (<see cref="LatticeOptions.AutoSplitEnabled"/> and
     /// <see cref="LatticeOptions.ShardHealingEnabled"/>) is <c>false</c>.
+    /// </para>
+    /// <para>
+    /// That independence extends to failure: an arming fault on the hot-shard
+    /// monitor does not prevent the healing arming attempt. The healing attempt
+    /// is made either way and the monitor's fault is then rethrown unchanged,
+    /// so a caller on a write path still sees exactly the exception it saw
+    /// before. Without this, one transient fault could leave a read-only tree
+    /// unhealed until it next deactivated, because activation is that tree's
+    /// only arming opportunity.
     /// </para>
     /// </summary>
     private async Task EnsureMonitorAsync()
@@ -3637,8 +3650,108 @@ internal sealed partial class LatticeGrain(
             return;
         }
 
-        await EnsureHotShardMonitorAsync();
-        await EnsureShardHealingAsync();
+        // Armed independently, in this order, and a fault arming the first must
+        // not cost this tree the second (#2187). The two are already decoupled
+        // in policy - see the note above on AutoSplitEnabled - but they used to
+        // be coupled in control flow, because a non-transient exception from
+        // EnsureHotShardMonitorAsync propagated before healing was reached.
+        // That matters most on a tree that has stopped taking writes: every
+        // other call site here is a write path, so activation is its only
+        // arming opportunity and the "a later operation re-attempts" mitigation
+        // is unavailable. A single transient monitor fault was enough to leave
+        // such a tree unhealed until it next deactivated.
+        ExceptionDispatchInfo? monitorFault = null;
+        try
+        {
+            await EnsureHotShardMonitorAsync();
+        }
+        catch (Exception ex)
+        {
+            // Captured rather than swallowed: rethrown below with its original
+            // stack trace, so the operation path still surfaces it unchanged.
+            monitorFault = ExceptionDispatchInfo.Capture(ex);
+        }
+
+        try
+        {
+            await EnsureShardHealingAsync();
+        }
+        catch (Exception ex) when (monitorFault is not null)
+        {
+            // Only reachable when both loops fault. The monitor fault is what a
+            // caller sees today, when healing is never reached at all, so it
+            // keeps precedence and this one is logged rather than allowed to
+            // displace it - attempting healing must not reshape the exception
+            // the caller already gets.
+            logger.LogWarning(
+                ex,
+                "Arming shard healing for tree {TreeId} also failed while recovering from a hot-shard-monitor arming fault; surfacing the monitor fault.",
+                TreeId);
+        }
+
+        monitorFault?.Throw();
+    }
+
+    /// <inheritdoc />
+    IGrainContext IGrainBase.GrainContext => context;
+
+    /// <summary>
+    /// Arms this tree's autonomic loops when the activation starts, so a tree
+    /// that has stopped taking writes still heals.
+    /// <para>
+    /// Every other <see cref="EnsureMonitorAsync"/> call site sits on a write
+    /// path, which made arming a function of traffic shape rather than of the
+    /// tree existing. A tree is over-split by a bulk ingest and may then serve
+    /// reads for the rest of its life, so the trees most in need of healing
+    /// were precisely the ones that never armed it. Activation is the one seam
+    /// a new entry point cannot forget to annotate, which is how the gap arose:
+    /// the arming call was added to the write verbs and the read verbs were
+    /// never revisited.
+    /// </para>
+    /// <para>
+    /// This does not make the operation-path calls redundant. They are the
+    /// retry for an arming attempt that lost the race with the reminder
+    /// service's asynchronous startup - see <see cref="EnsureShardHealingAsync"/>,
+    /// which returns without latching its flag in that case - and once armed
+    /// they cost a <c>bool</c> test rather than a call.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Arming never fails activation.</b> The catch here is deliberately
+    /// wider than the reminder-service-transient filter the two helpers apply
+    /// to themselves, because the failure modes differ in consequence rather
+    /// than in kind. Arming reaches persistent grain storage
+    /// (<c>HotShardMonitorGrain</c> writes its activation timestamp) and the
+    /// reminder table, both of which can be transiently unavailable during silo
+    /// start - exactly when activations happen. Letting that propagate would
+    /// fail the activation and take the tree offline for reads and writes,
+    /// trading a missing background loop for a total outage of the data the
+    /// loop exists to maintain.
+    /// </para>
+    /// <para>
+    /// Nothing is lost by swallowing it here. Neither helper latches its flag
+    /// on a failed attempt, so the next operation re-attempts, and the
+    /// operation-path catch is unchanged and still narrow - a non-transient
+    /// arming failure surfaces to the next writer with its original shape.
+    /// The activation attempt is strictly additive: it can arm a tree that
+    /// would not otherwise have armed, and it cannot suppress a diagnostic
+    /// that would otherwise have been raised.
+    /// </para>
+    /// </remarks>
+    public async Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await EnsureMonitorAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to arm the autonomic loops for tree {TreeId} at activation; the tree still serves reads and writes and a later operation re-attempts.",
+                TreeId);
+        }
     }
 
     private async Task EnsureHotShardMonitorAsync()
@@ -3649,6 +3762,12 @@ internal sealed partial class LatticeGrain(
         var monitor = grainFactory.GetGrain<IHotShardMonitorGrain>(TreeId);
         try
         {
+            // EnsureRunningAsync is [AlwaysInterleave] by contract (#2218): the
+            // monitor's own sampling pass can be the caller that births this
+            // activation (its status-verb call on a quiet tree), so the monitor
+            // may be mid-turn when we arm it here. Without interleaving this
+            // await and that sampling turn deadlock until the 30s response
+            // timeout.
             await monitor.EnsureRunningAsync();
         }
         catch (Exception ex) when (ReminderServiceReadiness.IsStillInitializing(ex))
@@ -3684,6 +3803,10 @@ internal sealed partial class LatticeGrain(
         var orchestrator = grainFactory.GetGrain<IShardHealingOrchestratorGrain>(TreeId);
         try
         {
+            // EnsureRunningAsync is [AlwaysInterleave] by contract (#2218), for
+            // the same reason as the hot-shard monitor: an over-split tree's
+            // healing sweep can be the caller that births this activation, so the
+            // orchestrator may be mid-sweep when we arm it here.
             await orchestrator.EnsureRunningAsync();
         }
         catch (Exception ex) when (ReminderServiceReadiness.IsStillInitializing(ex))

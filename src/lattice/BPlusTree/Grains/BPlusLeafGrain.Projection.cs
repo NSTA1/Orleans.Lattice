@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -273,26 +274,104 @@ internal sealed partial class BPlusLeafGrain
             // depends on it.
             MarkDigestDirty();
             await PersistAsync();
-            _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
-            await ReportCursorIfActiveAsync();
-            // Structural callers bypass the c2-xxviii coalescing
-            // window so the parent's chained-fold observes the new
-            // checkpoint offset before this method returns.
-            await PublishDigestUpwardInlineAsync();
-            await MaybeRunPeriodicSnapshotRecheckAsync();
+            // The durable advance has now committed. Per the #2220
+            // invariant, no failure in the post-persist notification tail
+            // (cursor report, inline upward digest publish, snapshot
+            // recheck) may propagate out of this flush and destroy the
+            // activation once the durable write has landed.
+            await CompleteCheckpointFlushTailAsync();
             return;
         }
 
         if (persistEvenWithoutPendingAdvance)
         {
             await PersistAsync();
-            _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
+            // Durable write committed; contain the post-persist tail so a
+            // notification failure cannot destroy the activation (#2220).
+            await CompleteCheckpointFlushTailAsync();
+        }
+    }
+
+    /// <summary>
+    /// Runs the post-persist notification tail of a checkpoint flush -
+    /// the cursor report, the inline upward digest publish, and the
+    /// periodic snapshot recheck - with each step contained so a failure
+    /// cannot propagate out of <see cref="FlushPendingCheckpointAsync"/>
+    /// once the durable write has already committed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The invariant (issue #2220): after <c>PersistAsync</c> commits the
+    /// advanced checkpoint, this activation is durably correct. The
+    /// remaining steps are notifications, not part of the durability
+    /// contract <c>PersistAsync</c> has already satisfied, so none of them
+    /// may tear the activation down. The field mechanism was the inline
+    /// upward digest publish: a synchronous parent-chain publish whose
+    /// latency consumed the activation budget during cold replay, so the
+    /// flush faulted, the activation was destroyed, and the reactivation
+    /// re-drove the same replay - a loop. Containing the tail breaks that
+    /// loop.
+    /// </para>
+    /// <para>
+    /// Each failure is recorded at warning with its exception, never
+    /// swallowed silently, so a genuine upward cascade (for example an
+    /// issue #2218-class fault) stays observable. The digest stays dirty
+    /// on a failed publish (<c>PublishCurrentDigestAndClearDirtyAsync</c>
+    /// clears the flag only on success) so the coalescing timer or the
+    /// next mutation re-drives it; the cursor report and snapshot recheck
+    /// are idempotent and re-run on the next flush. Steps are contained
+    /// independently so a failure in one does not skip the others.
+    /// </para>
+    /// </remarks>
+    private async Task CompleteCheckpointFlushTailAsync()
+    {
+        _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
+
+        try
+        {
             await ReportCursorIfActiveAsync();
-            // Apply work may have updated ProjectionHash since the
-            // previous publish; flush any pending dirt. Structural
-            // flush boundary - bypass the c2-xxviii coalescing window.
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogWarning(
+                ex,
+                "Leaf {GrainId}: cursor report failed after a durable checkpoint flush; the checkpoint is "
+                + "persisted and the report re-drives on the next flush. The activation is retained (#2220).",
+                context.GrainId);
+        }
+
+        try
+        {
+            // Structural callers bypass the c2-xxviii coalescing window so
+            // the parent's chained-fold observes the new checkpoint offset
+            // before this method returns. A publish fault or its bounded
+            // latency (see PublishCurrentDigestAsync) must not propagate:
+            // the durable write has committed and the digest stays dirty
+            // for out-of-band re-drive.
             await PublishDigestUpwardInlineAsync();
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogWarning(
+                ex,
+                "Leaf {GrainId}: inline upward digest publish failed after a durable checkpoint flush; the "
+                + "checkpoint is persisted, the digest stays dirty and the publish re-drives out of band. "
+                + "The activation is retained (#2220).",
+                context.GrainId);
+        }
+
+        try
+        {
             await MaybeRunPeriodicSnapshotRecheckAsync();
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogWarning(
+                ex,
+                "Leaf {GrainId}: periodic snapshot recheck failed after a durable checkpoint flush; the "
+                + "checkpoint is persisted and the recheck re-runs on the next flush. The activation is "
+                + "retained (#2220).",
+                context.GrainId);
         }
     }
 

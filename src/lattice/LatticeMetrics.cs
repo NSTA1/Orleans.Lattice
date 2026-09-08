@@ -225,6 +225,32 @@ public static class LatticeMetrics
     /// tests and custom OpenTelemetry exporters can subscribe by reference rather
     /// than by name.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This field must stay above every instrument declared below it, and every
+    /// instrument must be constructed from it.</b> Static field initialisers execute
+    /// in declaration order, and <c>MeterListener.Start()</c> raises
+    /// <c>InstrumentPublished</c> for already-existing instruments outside the lock
+    /// that registers the listener. A listener callback that is the first code in the
+    /// process to touch this class therefore runs this initialiser re-entrantly, part
+    /// way through: any field declared below the instrument being published is still
+    /// <see langword="null"/> at that moment.
+    /// </para>
+    /// <para>
+    /// The many fixtures that match on
+    /// <c>ReferenceEquals(instrument.Meter, LatticeMetrics.Meter)</c> would then
+    /// compare against <see langword="null"/>, never enable the instrument, and record
+    /// zero measurements without throwing - surfacing as a missing production emission
+    /// rather than a broken harness. Building every instrument from this field keeps
+    /// any such mistake loud instead: the reordered initialiser throws
+    /// <see cref="TypeInitializationException"/> on first use.
+    /// </para>
+    /// <para>
+    /// Enforced by <c>MeterFieldDeclarationOrderTests</c>; both orderings are
+    /// demonstrated by <c>MeterListeningTests</c>. See the Metrics section of
+    /// <c>.github/copilot-instructions.md</c>.
+    /// </para>
+    /// </remarks>
     public static readonly Meter Meter = new(MeterName);
 
     // --- Shard-level counters (ShardRootGrain) -----------------------------------
@@ -1133,11 +1159,22 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Counter of activation-time leaf materialiser replays that ran <b>beyond</b>
-    /// the configured <see cref="LatticeOptions.MaxLeafReplayEntries"/> budget (or
-    /// past <see cref="LatticeOptions.LeafProjectionRetention"/>) while the
-    /// write-ahead log still covered the whole needed window. Tagged with
-    /// <see cref="TagTree"/> and <see cref="TagPartition"/> (the WAL partition
-    /// ordinal, bounded by <see cref="LatticeOptions.WalPartitions"/>).
+    /// the configured <see cref="LatticeOptions.MaxLeafReplayEntries"/> budget
+    /// while the write-ahead log still covered the whole needed window. Tagged
+    /// with <see cref="TagTree"/> and <see cref="TagPartition"/> (the WAL
+    /// partition ordinal, bounded by
+    /// <see cref="LatticeOptions.WalPartitions"/>).
+    /// <para>
+    /// Since issue #2149 this counts the leaf's <b>exact post-range-filter</b>
+    /// applied-entry count crossing the budget, measured during the replay
+    /// itself. It previously counted the classifier's partition-wide WAL gap
+    /// crossing it, which is a different quantity in different units: the gap
+    /// spans every leaf pinned to the partition, so on a partition carrying
+    /// ~1,350 leaves it overstated a single leaf's work by up to that fan-out
+    /// and the counter tracked partition depth rather than per-leaf cost. The
+    /// counter is now in the same units as the budget it is named after, so a
+    /// non-zero rate means leaves really are individually over budget.
+    /// </para>
     /// <para>
     /// These replays converge correctly - they are simply longer than the budget
     /// anticipated - so the condition is a capacity signal, not a fault. A tree
@@ -1154,12 +1191,14 @@ public static class LatticeMetrics
     /// the rate only, and cannot on its own distinguish many leaves each
     /// replaying once from one leaf replaying forever. That distinction is made
     /// from the accompanying warning log, which names the leaf and its
-    /// persisted checkpoint (issue #2023).
+    /// persisted checkpoint (issue #2023), and from the separate stalled-replay
+    /// warning, which is raised when a leaf re-enters replay from an unchanged
+    /// checkpoint (issue #2149, fault shape of issue #2165).
     /// </para>
     /// </summary>
     public static readonly Counter<long> LeafActivationOverBudgetReplays =
         Meter.CreateCounter<long>("orleans.lattice.leaf.activation_replays_over_budget", unit: "{replay}",
-            description: "Activation-time leaf replays that exceeded the configured replay budget with an intact WAL, tagged by tree and WAL partition.");
+            description: "Activation-time leaf replays whose own post-range-filter applied-entry count exceeded the configured replay budget with an intact WAL, tagged by tree and WAL partition.");
 
     /// <summary>
     /// Counter of activation-time eager cursor-publish failures, emitted by
@@ -1174,6 +1213,33 @@ public static class LatticeMetrics
     public static readonly Counter<long> LeafActivationCursorPublishFailures =
         Meter.CreateCounter<long>("orleans.lattice.leaf.activation_cursor_publish_failures", unit: "{failure}",
             description: "Activation-time eager cursor-publish failures, tagged by tree.");
+
+    /// <summary>
+    /// Counter of resident unresolved saga prepares recorded into
+    /// <c>LeafNodeState.UnresolvedReplayWork</c> <b>beyond</b> the
+    /// <see cref="LatticeOptions.MaxDurableUnresolvedReplayWork"/> cap, emitted
+    /// by <c>BPlusLeafGrain.EnsureUnresolvedPrepareRecorded</c> (issue #2183).
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// <para>
+    /// This exists for a PROVIDER-DEPENDENT hazard, not for the deployment this
+    /// repository runs. A resident prepare must never be dropped (dropping it
+    /// pins the flush ceiling forever - the #2183 livelock), so past the cap it
+    /// is recorded unconditionally and the row is allowed to grow while the
+    /// #2208 saga-terminal leak is unfixed. On the default <c>local</c>
+    /// durability profile that row is backed by SQLite (~1GB BLOB), so the
+    /// growth is a write-amplification cost, not a correctness one. On an
+    /// <c>Orleans.Lattice.Storage.AzureTable</c> deployment the 1MB entity cap
+    /// makes an unbounded row a genuine persist hazard, and that operator has
+    /// no other signal before the write fails. This counter (and the paired
+    /// one-shot warning) is that signal. It is observability ONLY: nothing here
+    /// caps or drops a prepare - a behavioural cap would reintroduce the exact
+    /// drop-and-freeze defect issue #2183 removes. Do not delete it because it
+    /// reads as dead weight on SQLite; it is dead weight on SQLite by design.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafUnresolvedPrepareLedgerBeyondCap =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap", unit: "{prepare}",
+            description: "Resident unresolved saga prepares recorded beyond the MaxDurableUnresolvedReplayWork cap, tagged by tree and WAL partition. Provider-dependent persist hazard on Azure Table (1MB entity cap); benign on the SQLite local profile.");
 
     // --- Storage-usage instruments (byte-accurate retained footprint) ------
     //
