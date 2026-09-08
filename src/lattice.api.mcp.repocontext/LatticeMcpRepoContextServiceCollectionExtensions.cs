@@ -170,6 +170,7 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // response says which guarantee it carries through its retrieval path.
         services.TryAddSingleton<ExactKnnSemanticIndex>();
         services.TryAddSingleton<RepoContextExactScanBudget>();
+        services.TryAddSingleton<RepoContextExactScanBreaker>();
         services.TryAddSingleton<RepoContextAnnOptions>();
         services.TryAddSingleton<IRepoContextAnnBackingFactory, LatticeRepoContextAnnBackingFactory>();
         services.TryAddSingleton<RepoContextAnnIndexRegistry>();
@@ -209,6 +210,7 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                     sp.GetRequiredService<IRepoContextAnnIndex>(),
                     exact,
                     sp.GetRequiredService<RepoContextExactScanBudget>(),
+                    sp.GetRequiredService<RepoContextExactScanBreaker>(),
                     sp.GetRequiredService<ILogger<AnnRepoContextSemanticIndex>>());
         });
 

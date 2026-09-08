@@ -40,33 +40,52 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// documented cause for a plane that is still building, which is exactly what is
 /// true. Below that size nothing changes and the exact gather still answers.
 /// </para>
+/// <para>
+/// <b>And it is skipped when it has already failed to finish, whatever the
+/// budget predicted.</b> The budget is a prediction from a corpus size, and that
+/// size is <c>0</c> from process start until the build publishes its first
+/// progress - the whole interval the skip exists to protect - so on its own the
+/// budget fails open through precisely the window it was written for (issue
+/// #2231). <see cref="RepoContextExactScanBreaker"/> closes that window without
+/// reading any count: one gather faults with
+/// <see cref="ScanPageStalledException"/>, that fault is caught and reported as
+/// the same no-matches answer the budget's skip produces, and no further gather
+/// is started for the repository until the plane serves. A miscounted or
+/// not-yet-counted corpus cannot defeat it, because it observes the failure
+/// rather than predicting it.
+/// </para>
 /// </summary>
 internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
 {
     private readonly IRepoContextAnnIndex _plane;
     private readonly IRepoContextSemanticIndex _exact;
     private readonly RepoContextExactScanBudget _exactScanBudget;
+    private readonly RepoContextExactScanBreaker _exactScanBreaker;
     private readonly ILogger<AnnRepoContextSemanticIndex> _logger;
 
     /// <summary>Creates the approximate-first semantic index.</summary>
     /// <param name="plane">The approximate retrieval plane. Must not be <see langword="null"/>.</param>
     /// <param name="exact">The exact scan used while the plane is building, and kept as the correctness oracle. Must not be <see langword="null"/>.</param>
     /// <param name="exactScanBudget">The budget deciding whether an exact gather can finish under the tree's configured scan-page bounds. Must not be <see langword="null"/>.</param>
+    /// <param name="exactScanBreaker">The record of gathers that have already proved they cannot finish. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger the fallback report is written to. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public AnnRepoContextSemanticIndex(
         IRepoContextAnnIndex plane,
         IRepoContextSemanticIndex exact,
         RepoContextExactScanBudget exactScanBudget,
+        RepoContextExactScanBreaker exactScanBreaker,
         ILogger<AnnRepoContextSemanticIndex> logger)
     {
         ArgumentNullException.ThrowIfNull(plane);
         ArgumentNullException.ThrowIfNull(exact);
         ArgumentNullException.ThrowIfNull(exactScanBudget);
+        ArgumentNullException.ThrowIfNull(exactScanBreaker);
         ArgumentNullException.ThrowIfNull(logger);
         _plane = plane;
         _exact = exact;
         _exactScanBudget = exactScanBudget;
+        _exactScanBreaker = exactScanBreaker;
         _logger = logger;
     }
 
@@ -109,7 +128,30 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
 
         if (outcome.State != RepoContextAnnServingState.Bootstrapping)
         {
+            // The plane answered for itself, so the build that a stalled gather was
+            // competing with is no longer holding the tree. Restoring the fallback
+            // here is what keeps a trip from outliving its cause: no cooldown to
+            // wait out, and a later rebuild re-arms the breaker on its own evidence.
+            _exactScanBreaker.Reset(repoId);
             return outcome.Matches;
+        }
+
+        if (_exactScanBreaker.IsTripped(repoId))
+        {
+            // A gather over this repository has already spent a full page-fill
+            // ceiling and faulted. Nothing about the plane still building makes the
+            // next one cheaper, so it is not started. This is the branch that holds
+            // when the corpus is uncounted and the budget below therefore fails
+            // open - the state the whole bootstrap window is in.
+            _logger.LogDebug(
+                "Repository-context semantic search for {RepoId} in space {ModelId}/{Dimension} skipped the exact "
+                + "scan: a gather over this repository has already stalled while the approximate index builds. "
+                + "Serving keyword recall until the plane answers for itself.",
+                repoId,
+                querySpace.ModelId,
+                querySpace.Dimension);
+
+            return Array.Empty<RepoContextVectorMatch>();
         }
 
         if (!CanAffordExactScan(repoId, querySpace, out var corpus, out var affordable))
@@ -147,27 +189,64 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             querySpace.ModelId,
             querySpace.Dimension);
 
-        return await _exact
-            .SearchAsync(repoId, query, querySpace, k, cancellationToken)
-            .ConfigureAwait(false);
+        try
+        {
+            return await _exact
+                .SearchAsync(repoId, query, querySpace, k, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ScanPageStalledException ex)
+        {
+            // Only this fault is absorbed. It is the tree telling us a page fill did
+            // not return inside its ceiling, which is a statement about contention
+            // and not about the corpus: field traces put the abort after between
+            // zero and seven leaves, across seventeen shards, so no count of any
+            // accuracy predicts it. The fault is therefore the measurement - record
+            // it so no later query repeats it, and report the same no-matches answer
+            // the predicted skip produces. Letting it propagate would reach keyword
+            // recall too, but classified as keyword.index_degraded, which claims a
+            // broken index rather than the still-building plane that is true. Every
+            // other fault keeps propagating, so a genuinely broken index is still
+            // reported as degraded rather than masked as "still building".
+            var first = _exactScanBreaker.Trip(repoId);
+            _logger.Log(
+                first ? LogLevel.Warning : LogLevel.Debug,
+                ex,
+                "Repository-context semantic search for {RepoId} in space {ModelId}/{Dimension} abandoned the "
+                + "exact scan: the gather stalled against the vector-metadata tree while the approximate index "
+                + "builds. Serving keyword recall, and skipping the gather for this repository until the plane "
+                + "answers for itself.",
+                repoId,
+                querySpace.ModelId,
+                querySpace.Dimension);
+
+            return Array.Empty<RepoContextVectorMatch>();
+        }
     }
 
     /// <summary>
     /// Whether an exact gather over this repository and embedding space can
     /// complete under the vector-metadata tree's configured scan-page bounds.
     /// <para>
-    /// <b>Fails open on every unknown.</b> The corpus size is read from the build
-    /// progress the plane already holds, which costs nothing - but it is
-    /// <c>0</c> until the build has counted the store of record, and the plane may
-    /// hold no handle at all. Neither is evidence the gather is unaffordable, so
-    /// both keep the pre-existing behaviour and run it.
+    /// <b>Fails open on an unknown corpus, and that is not sufficient on its
+    /// own.</b> The size is read from the build progress the plane already holds,
+    /// which costs nothing - but it is <c>0</c> until the build has counted the
+    /// store of record, so a prediction from it clears every gather for the whole
+    /// bootstrap window. Failing open is still the right answer here, because an
+    /// uncounted corpus is genuinely no evidence of an unaffordable gather and a
+    /// small deployment must keep its exact fallback from first start. What makes
+    /// it safe is that it is no longer the only guard:
+    /// <see cref="RepoContextExactScanBreaker"/> catches the case this cannot,
+    /// from the fault rather than from a count. See issue #2231.
     /// </para>
     /// <para>
-    /// The count covers one embedding space while the gather scans the
-    /// repository's whole vector prefix and filters by space, so it is a lower
-    /// bound on the rows the scan will visit. Under-counting can only decide to
-    /// run a gather, never to skip one, which is the safe direction for an
-    /// estimate to err in.
+    /// <b>The count is repository-wide, not per space.</b> The gather scans the
+    /// repository's whole vector prefix and filters by space in memory, so a
+    /// single space's progress is a lower bound on the rows it visits - and
+    /// under-counting is what lets an unaffordable gather clear the threshold.
+    /// <see cref="IRepoContextAnnIndex.KnownVectorCount"/> sums every space the
+    /// plane has opened, and the larger of that and this space's own progress is
+    /// the best known size.
     /// </para>
     /// </summary>
     /// <param name="repoId">The repository being searched.</param>
@@ -185,16 +264,16 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             return true;
         }
 
-        if (!_plane.TryGetProgress(repoId, space, out var progress))
-        {
-            return true;
-        }
-
         // VectorsExpected is what the build counted in the store of record;
         // VectorsIndexed is what it has taken in so far. Either can lead the other
         // depending on how far the build got and whether the corpus grew under it,
         // so the larger is the best-known size.
-        corpus = Math.Max(progress.VectorsExpected, progress.VectorsIndexed);
+        if (_plane.TryGetProgress(repoId, space, out var progress))
+        {
+            corpus = Math.Max(progress.VectorsExpected, progress.VectorsIndexed);
+        }
+
+        corpus = Math.Max(corpus, _plane.KnownVectorCount(repoId));
         return corpus <= 0 || corpus <= affordable;
     }
 }

@@ -121,11 +121,24 @@ Arming is idempotent. A coordinator that finds its index already built still per
 
 **Multi-silo note.** A coordinator is a single cluster-wide activation, and the in-memory index a query is served from is per silo. On a multi-silo host the coordinator's silo is warmed with no query; another silo opens its own handle on its first query, which is a **reload** of the already-built index rather than a rebuild. The expensive half - streaming the corpus - is paid once, off the request path, whichever silo hosts the coordinator.
 
+### When the exact fallback is declined
+
+The exact fallback is bounded rather than unconditional, because on a large corpus it can cost more than it is worth while the build holds the same tree. The gather range-scans the whole vector-metadata prefix a page at a time, and while the build is streaming into those same shards a page fill can queue behind the build's writes on non-reentrant shard roots until it exceeds `LatticeOptions.MaxScanPageStallDuration` and the shard root abandons it. The query then reaches keyword recall anyway, having spent the full ceiling first, and having spent it loading the very tree whose build completing is the only thing that would end the condition.
+
+Two guards bound it, and it is worth being precise about what each one can and cannot know:
+
+- A **corpus bound** declines a gather the tree's own configuration already rules out: `MaxScanPageStallDuration / MaxScanPageDuration` is how many nominal page fills fit inside the hard ceiling, and multiplying by the gather's page size gives the corpus a scan can cover. This is a **proxy for contention, not a model of the fault.** A stall is not a volume overrun - field traces show the ceiling reached on the *first* leaf of the chain, on a single read that never returns, which no corpus arithmetic predicts. The bound helps because a declined gather is never started, not because the arithmetic describes what went wrong. Every unknown fails open, including a corpus the build has not counted yet.
+- A **repository-scoped breaker** observes the fault directly. A gather that does stall is caught rather than propagated, and no further gather is started for that repository until the approximate plane answers for itself, at which point the fallback is restored with no cooldown to wait out. This is what makes failing open on an unknown corpus safe: the cost of a wrong prediction is one query, once per repository per build.
+
+A declined or abandoned gather is reported as `keyword.vector_plane_unavailable` - a plane that is still building - and never as `keyword.index_degraded`, which would claim a capability loss that is not present. No result is ever wrong either way: the same keyword recall is returned.
+
+Below the corpus bound nothing changes and the exact gather still answers with complete recall, which is the regime a small repository sits in permanently. Because the derived threshold lands above `RepoContextAnnOptions.MinimumTrainingCount`, a corpus too small to train a partitioning is answered exhaustively by the plane itself and never reaches the fallback at all.
+
 ## How a superseded index is retired
 
 There are three distinct transitions, and all three are now handled.
 
-1. **No index to index (adoption).** An existing deployment starts with no index. Until one is built, queries are answered by the exact scan with complete recall, and `retrievalPath` reports which path answered. No operator action, no migration step.
+1. **No index to index (adoption).** An existing deployment starts with no index. Until one is built, queries are answered by the exact scan with complete recall, and `retrievalPath` reports which path answered. No operator action, no migration step. On a corpus large enough that the scan cannot complete within the tree's configured page-fill ceiling, the fallback is declined and keyword recall answers instead - see [When the exact fallback is declined](#when-the-exact-fallback-is-declined).
 2. **Generation to generation, within one embedding space (retrain or rebuild).** A generation covers a whole partitioning, so a retrain writes a **fresh** generation and flips the manifest to it rather than editing the live one. The manifest is written last by every flush, so it is the atomic swap point: the previous generation stays queryable until the flip, and a crash mid-write leaves it live rather than a half-built one. The superseded generation is then retired by prefix delete.
 3. **Space to space, that is a new model or dimension.** The index prefix is keyed by `(repository, embedding space)`, so a model change produces a wholly separate index. That separation is deliberate - retirement works by prefix delete, so two spaces sharing a prefix would delete each other's generations - but it left the abandoned space resident forever: invisible to queries, harmless to correctness, and hundreds of megabytes per abandoned space.
 

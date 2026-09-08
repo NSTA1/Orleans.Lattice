@@ -116,6 +116,7 @@ public sealed class RepoContextAnnRecallTests
             registry,
             ThrowingExactIndex.Instance,
             RepoContextExactScanBudgets.Unbounded(),
+            new RepoContextExactScanBreaker(),
             NullLogger<AnnRepoContextSemanticIndex>.Instance);
 
         var candidates = source.Candidates();

@@ -56,6 +56,30 @@ internal interface IRepoContextAnnIndex
     bool TryGetProgress(string repoId, EmbeddingSpaceTag space, out VectorIndexBuildProgress progress);
 
     /// <summary>
+    /// The best known number of vectors a repository holds, summed across every
+    /// embedding space the plane has opened an index for.
+    /// <para>
+    /// <b>Repository-wide because the exact gather is.</b>
+    /// <see cref="ExactKnnSemanticIndex"/> range-scans
+    /// <see cref="RepoContextKeys.VectorsPrefix(string)"/> and filters by space in
+    /// memory, so the rows it visits are the repository's, not one space's. A
+    /// per-space count read from <see cref="TryGetProgress"/> is therefore a lower
+    /// bound on the scan's real cost, and judging
+    /// <see cref="RepoContextExactScanBudget"/> against it under-counts by however
+    /// many spaces the repository holds - which clears gathers the budget exists
+    /// to skip.
+    /// </para>
+    /// <para>
+    /// Returns <c>0</c> when nothing is known yet, which is not evidence of an
+    /// empty repository: a plane that has opened no index, or whose build has not
+    /// counted the store of record, reports nothing. Treat it as unknown.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>
+    /// <returns>The summed count, or <c>0</c> when unknown.</returns>
+    int KnownVectorCount(string repoId);
+
+    /// <summary>
     /// Applies a completed local vector write to the plane so the index never
     /// lags the store of record on a change it could observe: the vectors a
     /// source now holds are upserted, and the identifiers it no longer holds are
