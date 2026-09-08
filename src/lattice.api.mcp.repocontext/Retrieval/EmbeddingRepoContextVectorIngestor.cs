@@ -75,6 +75,15 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     internal const int MaxSymbolGapScanBackoffPasses = 8;
 
     /// <summary>
+    /// The most passes the file arm will ever skip its gap back-fill after the
+    /// vector plane looked saturated, or after its own selection was caught
+    /// repeating work the previous pass already landed. Same budget and same
+    /// doubling as <see cref="MaxSymbolGapScanBackoffPasses"/>, because it is the
+    /// same failure on the other arm (issue #2208).
+    /// </summary>
+    internal const int MaxFileGapScanBackoffPasses = 8;
+
+    /// <summary>
     /// The ingest arm names carried into every batched embed-and-store log line.
     /// <para>
     /// The three arms share one embed body, so before these existed its warnings
@@ -165,11 +174,41 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// pass's gap selection overlaps the previous pass, how the rolling union of
     /// gap-selected files grows against the walked corpus, and how many files the
     /// previous pass both selected and LANDED are being re-selected now - the file-arm
-    /// reading of the symbol arm's re-embed-loop signature. It is diagnostic state
-    /// only: nothing here gates, defers, or changes what the arm embeds, so a live
-    /// deployment can be read without altering the very behaviour under measurement.
+    /// reading of the symbol arm's re-embed-loop signature. That last measurement is
+    /// no longer only a measurement: it is the signal the file arm's gap-scan backoff
+    /// consumes (<see cref="_fileGapScanBackoff"/>), because measuring the loop and
+    /// then discarding the reading is exactly how the arm went on re-embedding the
+    /// same closed pool for 179 consecutive passes.
     /// </summary>
     private readonly ConcurrentDictionary<string, FileGapHistory> _fileGapHistory = new();
+
+    /// <summary>
+    /// The file arm's per-repository gap-back-fill backoff, carried across reconcile
+    /// passes because the ingestor is a singleton.
+    /// <para>
+    /// This is the file-arm twin of <see cref="_symbolGapScanBackoff"/>, and it
+    /// exists because issue #2208 is issues #2071/#2078 on the other arm. The symbol
+    /// arm was given a cross-pass backoff and converged; the file arm was left
+    /// without one and did not, so a deployed repository kept re-embedding the same
+    /// closed pool of files on every zero-change pass, indefinitely - the rolling
+    /// union of its gap selections stayed flat while passes kept entering and
+    /// leaving it, which is a set being re-selected rather than fresh loss.
+    /// </para>
+    /// <para>
+    /// The trigger is the same pair as the symbol arm's: a pass that deferred
+    /// batches because the plane looked saturated, or a pass whose gap selection
+    /// repeats what the previous pass already embedded AND recorded. The second is
+    /// the one that fires here, because this loop is built entirely out of batches
+    /// that SUCCEED - see <see cref="_lastGapLanded"/>, which explains the mechanism
+    /// in full.
+    /// </para>
+    /// <para>
+    /// A skipped pass still embeds every file the reconcile reported as CHANGED.
+    /// Only the opportunistic back-fill of unchanged files stands down, and only
+    /// until a pass that actually runs it completes without saturation.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, FileGapScanBackoff> _fileGapScanBackoff = new();
 
     /// <summary>Creates the embedding vector ingestor.</summary>
     /// <param name="writer">The writer that persists vectors onto the reserved trees. Must not be <see langword="null"/>.</param>
@@ -257,6 +296,13 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var coverageProbeFailed = false;
         var gapsSelected = 0;
         var gapSelectedFiles = new List<RepoFileEntry>();
+
+        // Claimed before the selection so it governs this whole pass, exactly as the
+        // symbol arm claims its own. The coverage probe still runs: it is a bounded
+        // point-read, the contentless mark/unmark below needs it, and it is the
+        // embed-and-store write load - not the probe - that keeps the membership tree
+        // beyond its replay budget. Only the back-fill selection stands down.
+        var skipGapScan = ClaimFileGapScanSkip(repoId);
         try
         {
             coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken)
@@ -275,12 +321,18 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 unchangedFiles.Count);
         }
 
-        var toEmbed = coverageProbeFailed
+        var toEmbed = coverageProbeFailed || skipGapScan
             ? new List<RepoFileEntry>(changedFiles)
             : SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles, out gapsSelected, out gapSelectedFiles);
         if (toEmbed.Count == 0)
         {
-            return new RepoFileVectorIngestOutcome(0, gapsSelected, !coverageProbeFailed);
+            // An early return still has to fold this pass into the backoff, or a
+            // repository whose reconcile changes nothing would never clear a budget
+            // it was granted, and never accrue one either.
+            RecordFileGapScanOutcome(repoId, saturated: false, skippedGapScan: skipGapScan);
+            NoteAndLogUnmeasuredGapShape(
+                repoId, coverageProbeFailed, skipGapScan, changedFiles.Count, unchangedFiles.Count);
+            return new RepoFileVectorIngestOutcome(0, gapsSelected, !coverageProbeFailed, Deferred: false, skipGapScan);
         }
 
         var sources = new List<EmbeddingSource>(toEmbed.Count);
@@ -396,8 +448,23 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 string.Join(", ", unreadable.Take(10)));
         }
 
-        var embedOutcome = await EmbedAndStoreReportingLandedAsync(repoId, FileArm, sources, onProgress, cancellationToken)
-            .ConfigureAwait(false);
+        var stalledGapProgress = false;
+        EmbedOutcome embedOutcome;
+        try
+        {
+            embedOutcome = await EmbedAndStoreReportingLandedAsync(repoId, FileArm, sources, onProgress, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A pass that landed NOTHING still throws, so the arm reports incomplete -
+            // but it is also the most saturated pass there is, and the backoff has to
+            // see it. Recording only the returned outcome would miss exactly the case
+            // the re-embed loop shows up in.
+            RecordFileGapScanOutcome(repoId, saturated: true, skippedGapScan: skipGapScan);
+            throw;
+        }
+
         var embedded = embedOutcome.Landed.Count;
 
         // The contentless markers are the file arm's equivalent bookkeeping: losing
@@ -437,19 +504,17 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 repoId);
         }
 
-        // Diagnostic instrumentation for the never-converging back-fill (issue #2208).
-        // With this pass's vectors and contentless markers now written, measure the
-        // shape of the gap selection directly: how it overlaps the previous pass, how
-        // its rolling union grows against the walked corpus, and - the sharpest
-        // signal - how many files the PREVIOUS pass both selected and LANDED are being
-        // re-selected now. That last is the symbol arm's re-embed-loop signature
-        // (DetectStalledGapProgress, issues #2071/#2078): a write that returned
-        // success but is not observable on the next pass. The file arm carries no such
-        // detector; this only measures it, changing neither what is embedded nor the
-        // pass outcome, so a live box can be read without altering what it is doing.
+        // Measures the shape of the gap selection directly (issue #2208): how it
+        // overlaps the previous pass, how its rolling union grows against the walked
+        // corpus, and - the sharpest signal - how many files the PREVIOUS pass both
+        // selected and LANDED are being re-selected now. That last is the symbol arm's
+        // re-embed-loop signature (DetectStalledGapProgress, issues #2071/#2078): a
+        // write that returned success but is not observable on the next pass. The file
+        // arm now backs off on it, so this call both reports the shape and returns the
+        // verdict RecordFileGapScanOutcome below acts on.
         if (gapSelectedFiles.Count > 0)
         {
-            await LogGapDiagnosticsAsync(
+            stalledGapProgress = await LogGapDiagnosticsAsync(
                 repoId,
                 gapSelectedFiles,
                 embedOutcome.Landed,
@@ -460,38 +525,73 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
         else
         {
-            // This pass measured no gap shape, so it advances no history. Record that
-            // it happened, or the next measured pass compares itself against a pass
-            // that is not the preceding one while reporting it as "previous" - and an
-            // entrant measured across an unknown number of unmeasured passes is not
-            // alarmable, because anything could have happened in the interval
-            // (issue #2292).
-            _fileGapHistory.GetOrAdd(repoId, static _ => new FileGapHistory()).NoteUnmeasuredPass();
-
-            // An empty selection has two OPPOSITE causes, and the guard above was
-            // silent for both: either the coverage probe failed, so no gap sweep was
-            // attempted at all and the back-fill made no progress it could have made,
-            // or the probe succeeded and genuinely found nothing left to back-fill,
-            // which is convergence. Reading the first as the second says a stuck
-            // back-fill has finished; reading the second as the first says a finished
-            // one is stuck. Two agents spent hours discriminating these from indirect
-            // evidence because this branch said nothing. It is one line either way.
-            _logger.LogInformation(
-                "Repo {RepoId}: back-fill gap set shape not measured this pass: {Reason} (walked={Walked} file(s), "
-                + "changed={Changed}, unchanged={Unchanged}, coverageProbe={Probe}).",
-                repoId,
-                coverageProbeFailed
-                    ? "the embedding-coverage probe failed, so no gap sweep was attempted and this pass advanced "
-                      + "the back-fill by nothing. This is NOT convergence"
-                    : "the coverage probe succeeded and selected no gap files, so every walked file is already "
-                      + "covered or contentless. This IS convergence for the file arm",
-                changedFiles.Count + unchangedFiles.Count,
-                changedFiles.Count,
-                unchangedFiles.Count,
-                coverageProbeFailed ? "failed" : "succeeded");
+            NoteAndLogUnmeasuredGapShape(
+                repoId, coverageProbeFailed, skipGapScan, changedFiles.Count, unchangedFiles.Count);
         }
 
-        return new RepoFileVectorIngestOutcome(embedded, gapsSelected, !coverageProbeFailed, embedOutcome.Saturated);
+        // Fold this pass into the backoff. A pass that deferred batches saw the plane
+        // saturated directly; a pass whose selection repeats what the last pass
+        // already landed saw the same saturation through its only visible symptom,
+        // because this loop is built out of batches that succeed. Either way,
+        // re-embedding the same set again cannot help and is itself the write load
+        // keeping the membership tree past its replay budget (issue #2208).
+        RecordFileGapScanOutcome(
+            repoId, embedOutcome.Saturated || stalledGapProgress, skippedGapScan: skipGapScan);
+
+        return new RepoFileVectorIngestOutcome(
+            embedded, gapsSelected, !coverageProbeFailed, embedOutcome.Saturated, skipGapScan);
+    }
+
+    /// <summary>
+    /// Records that a pass measured no gap-set shape, and says which of the three
+    /// mutually exclusive reasons produced it.
+    /// <para>
+    /// The reason is the whole point. An empty gap selection is reached by causes
+    /// that mean OPPOSITE things - the probe failed so nothing was attempted, the
+    /// probe succeeded and found nothing left to do, or the back-fill was skipped
+    /// under backoff and never asked - and a pass that does not name which is
+    /// indistinguishable from the others in a deployed container's log. This is the
+    /// line an operator reads to tell "quiet because converged" from "quiet because
+    /// backed off" (issues #2208, #2253).
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository whose pass measured nothing.</param>
+    /// <param name="coverageProbeFailed">Whether the coverage probe failed, so no gap sweep was attempted.</param>
+    /// <param name="skippedGapScan">Whether the back-fill was skipped under the gap-scan backoff.</param>
+    /// <param name="changedFiles">Files the reconcile reported changed this pass.</param>
+    /// <param name="unchangedFiles">Files the reconcile reported unchanged this pass.</param>
+    private void NoteAndLogUnmeasuredGapShape(
+        string repoId, bool coverageProbeFailed, bool skippedGapScan, int changedFiles, int unchangedFiles)
+    {
+        // This pass measured no gap shape, so it advances no history. Record that it
+        // happened, or the next measured pass compares itself against a pass that is
+        // not the preceding one while reporting it as "previous" - and an entrant
+        // measured across an unknown number of unmeasured passes is not alarmable,
+        // because anything could have happened in the interval (issue #2292). A
+        // skipped pass is an unmeasured pass in exactly that sense, so the backoff
+        // cannot manufacture a spurious regression warning on the pass that follows
+        // it.
+        _fileGapHistory.GetOrAdd(repoId, static _ => new FileGapHistory()).NoteUnmeasuredPass();
+
+        var reason = coverageProbeFailed
+            ? "the embedding-coverage probe failed, so no gap sweep was attempted and this pass advanced "
+              + "the back-fill by nothing. This is NOT convergence"
+            : skippedGapScan
+                ? "the gap back-fill was SKIPPED under the file-arm backoff, so no gap sweep was attempted "
+                  + "and this pass advanced the back-fill by nothing. This is NOT convergence"
+                : "the coverage probe succeeded and selected no gap files, so every walked file is already "
+                  + "covered or contentless. This IS convergence for the file arm";
+
+        _logger.LogInformation(
+            "Repo {RepoId}: back-fill gap set shape not measured this pass: {Reason} (walked={Walked} file(s), "
+            + "changed={Changed}, unchanged={Unchanged}, coverageProbe={Probe}, gapScanSkipped={Skipped}).",
+            repoId,
+            reason,
+            changedFiles + unchangedFiles,
+            changedFiles,
+            unchangedFiles,
+            coverageProbeFailed ? "failed" : "succeeded",
+            skippedGapScan);
     }
 
     /// <inheritdoc />
@@ -829,6 +929,94 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// <param name="Remaining">How many further passes must skip the back-fill.</param>
     /// <param name="Streak">Consecutive saturated passes, which sets the next budget.</param>
     private readonly record struct SymbolGapScanBackoff(int Remaining, int Streak);
+
+    /// <summary>
+    /// Consumes one pass of the file arm's gap-back-fill skip budget, if any is
+    /// outstanding, and reports whether this pass should skip the back-fill.
+    /// </summary>
+    /// <param name="repoId">The repository about to run its file arm.</param>
+    /// <returns><see langword="true"/> when this pass must embed only changed files.</returns>
+    private bool ClaimFileGapScanSkip(string repoId)
+    {
+        if (!_fileGapScanBackoff.TryGetValue(repoId, out var backoff) || backoff.Remaining <= 0)
+        {
+            return false;
+        }
+
+        // A concurrent pass may have consumed the same budget; either outcome is
+        // sound, so a single compare-and-swap attempt is enough - a lost race just
+        // means the other pass took the skip and this one does the back-fill.
+        var next = backoff with { Remaining = backoff.Remaining - 1 };
+        return _fileGapScanBackoff.TryUpdate(repoId, next, backoff);
+    }
+
+    /// <summary>
+    /// Folds one file-arm pass into the gap-back-fill backoff: a saturated pass
+    /// doubles the skip budget (clamped by <see cref="MaxFileGapScanBackoffPasses"/>),
+    /// while a clean pass that actually ran the back-fill clears it outright.
+    /// </summary>
+    /// <param name="repoId">The repository whose pass just finished.</param>
+    /// <param name="saturated">Whether the pass deferred batches, or re-selected work the previous pass already landed.</param>
+    /// <param name="skippedGapScan">Whether the pass skipped the gap back-fill, so it is no evidence the plane recovered.</param>
+    private void RecordFileGapScanOutcome(string repoId, bool saturated, bool skippedGapScan)
+    {
+        if (saturated)
+        {
+            var updated = _fileGapScanBackoff.AddOrUpdate(
+                repoId,
+                _ => new FileGapScanBackoff(Remaining: 1, Streak: 1),
+                (_, current) =>
+                {
+                    var streak = Math.Min(current.Streak + 1, 30);
+                    var budget = Math.Min(1 << Math.Min(streak - 1, 30), MaxFileGapScanBackoffPasses);
+                    return new FileGapScanBackoff(budget, streak);
+                });
+
+            _logger.LogWarning(
+                "Repo {RepoId}: the file arm's gap back-fill is not making progress against the vector plane "
+                + "(consecutive saturated passes: {Streak}); skipping the gap back-fill for the next {Passes} pass(es) "
+                + "so the membership tree can drain. Changed files are still embedded meanwhile (issue #2208).",
+                repoId,
+                updated.Streak,
+                updated.Remaining);
+            return;
+        }
+
+        // Only a pass that actually ran the back-fill is evidence the plane
+        // recovered; a skipped pass never touched the membership tree hard enough to
+        // find out, so it must not clear the budget it was granted by. Without this
+        // guard the first skip would fake recovery and the backoff would disarm
+        // itself, leaving the loop exactly as it was.
+        if (!skippedGapScan && _fileGapScanBackoff.TryRemove(repoId, out _))
+        {
+            _logger.LogInformation(
+                "Repo {RepoId}: the file arm completed a full gap back-fill without saturation; backoff cleared.",
+                repoId);
+        }
+    }
+
+    /// <summary>
+    /// The file arm's outstanding gap-back-fill skip budget for one repository, or
+    /// zero when the arm is running its back-fill normally.
+    /// <para>
+    /// Exposed so a convergence test can assert that a quiet pass reached zero
+    /// selected gaps by SCANNING and finding none, rather than by never scanning.
+    /// Without it, <c>GapsSelected == 0</c> stops discriminating between those two
+    /// states the moment this arm can skip, and the acceptance tests for issue #2208
+    /// would pass while the very regression they exist to catch was fully masked.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository to report on.</param>
+    /// <returns>The number of further passes that will skip the gap back-fill.</returns>
+    internal int FileGapScanBackoffRemaining(string repoId)
+        => _fileGapScanBackoff.TryGetValue(repoId, out var backoff) ? backoff.Remaining : 0;
+
+    /// <summary>
+    /// The file arm's outstanding gap-back-fill skip budget for one repository.
+    /// </summary>
+    /// <param name="Remaining">How many further passes must skip the back-fill.</param>
+    /// <param name="Streak">Consecutive saturated passes, which sets the next budget.</param>
+    private readonly record struct FileGapScanBackoff(int Remaining, int Streak);
 
     /// <summary>
     /// Embeds the repository's durable agent-memory entries as their own passages
@@ -1684,8 +1872,16 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// re-embed-loop signature (<see cref="DetectStalledGapProgress"/>, issues
     /// #2071/#2078). A majority re-selected while the immediate read-back sees them
     /// covered is a write that lands but does not stay observable - the
-    /// WAL-replay-budget loop, which the file arm has no backoff for; a low read-back
-    /// is a write that is not durable.
+    /// WAL-replay-budget loop; a low read-back is a write that is not durable.
+    /// </para>
+    /// <para>
+    /// The majority-re-selected reading is also what this method now <b>returns</b>.
+    /// It was measured here and discarded, which is precisely why the file arm went
+    /// on re-embedding the same closed pool for 179 consecutive passes while every
+    /// batch reported success: the loop was instrumented but nothing consumed the
+    /// instrument. The threshold is a majority rather than any single repeat, for the
+    /// same reason the symbol arm uses one - a handful of legitimate stragglers must
+    /// not be mistaken for the loop, which shows up as nearly the whole set returning.
     /// </para>
     /// <para>
     /// The set shape also carries the <b>entrant partition</b> (issue #2292). This
@@ -1705,7 +1901,15 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// and thrown away.
     /// </para>
     /// </summary>
-    private async Task LogGapDiagnosticsAsync(
+    /// <param name="repoId">The repository whose pass is being measured.</param>
+    /// <param name="gapSelectedFiles">The files this pass selected because their coverage flag was missing.</param>
+    /// <param name="landedKeys">The source keys this pass embedded and recorded.</param>
+    /// <param name="coverage">This pass's observed coverage.</param>
+    /// <param name="changedFileCount">Files the reconcile changed this pass.</param>
+    /// <param name="walkedFiles">Files walked this pass, for the union-versus-corpus reading.</param>
+    /// <param name="cancellationToken">Cancels the read-back probe.</param>
+    /// <returns><see langword="true"/> when this pass's selection repeats a majority of what the previous pass landed.</returns>
+    private async Task<bool> LogGapDiagnosticsAsync(
         string repoId,
         IReadOnlyList<RepoFileEntry> gapSelectedFiles,
         IReadOnlyCollection<string> landedKeys,
@@ -1714,6 +1918,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         int walkedFiles,
         CancellationToken cancellationToken)
     {
+        var stalled = false;
         try
         {
             var selectedKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -1735,6 +1940,24 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
             var history = _fileGapHistory.GetOrAdd(repoId, static _ => new FileGapHistory());
             var stats = history.Observe(selectedKeys, landedFromGap, coverage, changedFileCount, walkedFiles);
+
+            // The verdict the backoff consumes. Same majority rule as the symbol arm's
+            // DetectStalledGapProgress, and for the same reason: a source the last pass
+            // embedded, stored, and recorded membership for should not be selected
+            // again at all, so a majority of them returning means the flag writes are
+            // not becoming observable and repeating them cannot help.
+            stalled = stats.PreviousLanded > 0 && stats.LandedRepeats * 2 >= stats.PreviousLanded;
+            if (stalled)
+            {
+                _logger.LogWarning(
+                    "Repo {RepoId}: {Repeats} of the {Landed} file(s) the previous pass embedded AND recorded are "
+                    + "being selected again, so the membership writes are not becoming observable and re-embedding "
+                    + "them cannot help. Treating this as a saturated plane and standing the gap back-fill down "
+                    + "(issue #2208).",
+                    repoId,
+                    stats.LandedRepeats,
+                    stats.PreviousLanded);
+            }
 
             // The read-back is the only store touch this instrumentation adds, so run
             // it on alternate passes: a pass preceded by a read-back (arm A) versus one
@@ -1821,7 +2044,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             {
                 // Arm-B pass: deliberately no read-back, so the next pass's coverage
                 // probe meets the store untouched by this instrumentation.
-                return;
+                return stalled;
             }
 
             int visibleNow;
@@ -1846,7 +2069,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     "Repo {RepoId}: back-fill coverage read-back probe failed; the durability signal for this "
                     + "pass is unavailable but the pass is unaffected.",
                     repoId);
-                return;
+                return stalled;
             }
 
             _logger.LogInformation(
@@ -1854,8 +2077,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 + "file(s) the previous pass embedded AND recorded, {LandedRepeats} are re-selected now; immediate "
                 + "coverage read-back sees {VisibleNow} of {GapCount} of this pass's gaps as covered. A majority "
                 + "re-selected with a high read-back is a write that lands but does not stay observable (the "
-                + "WAL-replay-budget re-embed loop, cf. issues #2071/#2078 on the symbol arm, which the file arm "
-                + "has no backoff for); a low read-back is a write that is not durable.",
+                + "WAL-replay-budget re-embed loop, cf. issues #2071/#2078 on the symbol arm; the file arm now "
+                + "backs off on the same signal, issue #2208); a low read-back is a write that is not durable.",
                 repoId,
                 stats.Passes,
                 stats.PreviousLanded,
@@ -1870,6 +2093,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 "Repo {RepoId}: back-fill gap diagnostics failed; diagnostic only and the pass is unaffected.",
                 repoId);
         }
+
+        return stalled;
     }
 
     /// <summary>

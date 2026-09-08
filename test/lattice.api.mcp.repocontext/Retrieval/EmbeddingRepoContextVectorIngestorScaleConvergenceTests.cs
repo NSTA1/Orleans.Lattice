@@ -141,6 +141,18 @@ public sealed class EmbeddingRepoContextVectorIngestorScaleConvergenceTests
                 Is.True,
                 "the quiet pass must have completed its membership probe, or its verdict is worthless");
             Assert.That(
+                quiet.GapScanSkipped,
+                Is.False,
+                "the quiet pass must have actually RUN its gap scan. Since the file arm gained a gap-scan "
+                + "backoff (issue #2208), GapsSelected == 0 no longer discriminates on its own: a pass that "
+                + "skipped the scan reports zero gaps without having looked, so a regression could be fully "
+                + "masked with the assertion below still green. This is what keeps it honest");
+            Assert.That(
+                ingestor.FileGapScanBackoffRemaining(RepoId),
+                Is.Zero,
+                "and no skip budget may be outstanding either, or the NEXT pass would be the one that "
+                + "silently stopped looking");
+            Assert.That(
                 quiet.GapsSelected,
                 Is.Zero,
                 "no unchanged file may be selected as a gap once its vector is live");
@@ -180,6 +192,16 @@ public sealed class EmbeddingRepoContextVectorIngestorScaleConvergenceTests
         Assert.Multiple(() =>
         {
             Assert.That(third.FilesEmbedded, Is.Zero, "the back-fill must remain a fixed point");
+            Assert.That(
+                third.GapScanSkipped,
+                Is.False,
+                "the third pass must have run its gap scan rather than skipped it under the backoff "
+                + "(issue #2208); a skipped pass embeds nothing for a reason that is not convergence, and "
+                + "would satisfy every other assertion here");
+            Assert.That(
+                ingestor.FileGapScanBackoffRemaining(RepoId),
+                Is.Zero,
+                "no skip budget may be outstanding across a converged run");
             Assert.That(third.Converged, Is.True);
             Assert.That(
                 provider.CapturedTexts.Count,
