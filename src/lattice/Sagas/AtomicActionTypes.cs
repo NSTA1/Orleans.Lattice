@@ -51,7 +51,40 @@ public enum AtomicActionStepKind
 public readonly record struct AtomicActionEntry(
     [property: Id(0)] string Key,
     [property: Id(1)] byte[] Value,
-    [property: Id(2)] bool Delete);
+    [property: Id(2)] bool Delete)
+{
+    /// <summary>
+    /// Compares two entries by value, with <see cref="Value"/> compared by content.
+    /// The compiler-generated record-struct equality compares the
+    /// <see cref="byte"/> array with <see cref="EqualityComparer{T}.Default"/>
+    /// (reference equality), so two entries built from independently allocated but
+    /// byte-identical payloads - and, in particular, an entry and its
+    /// post-serialization self - would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The entry to compare against.</param>
+    public bool Equals(AtomicActionEntry other) =>
+        string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && BytesEqual(Value, other.Value)
+        && Delete == other.Delete;
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Key, StringComparer.Ordinal);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        hash.Add(Delete);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
+}
 
 /// <summary>
 /// One step of an <see cref="AtomicActionPlan"/>. A <see cref="AtomicActionStepKind.Custom"/>
