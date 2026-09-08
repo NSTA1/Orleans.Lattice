@@ -114,4 +114,131 @@ public sealed class GrpcDataDtoEqualityTests
 
         Assert.That(copy, Is.EqualTo(original));
     }
+
+    [Test]
+    public void CrdtMapField_equal_content_with_distinct_arrays_are_equal()
+    {
+        var a = new CrdtMapField { Field = "f", Values = [new byte[] { 1, 2 }, new byte[] { 3 }] };
+        var b = new CrdtMapField { Field = "f", Values = [new byte[] { 1, 2 }, new byte[] { 3 }] };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReferenceEquals(a.Values[0], b.Values[0]), Is.False);
+            Assert.That(a, Is.EqualTo(b));
+            Assert.That(a.GetHashCode(), Is.EqualTo(b.GetHashCode()));
+        });
+    }
+
+    [Test]
+    public void CrdtMapField_differing_value_content_is_not_equal()
+    {
+        var a = new CrdtMapField { Field = "f", Values = [new byte[] { 1, 2 }] };
+        var b = new CrdtMapField { Field = "f", Values = [new byte[] { 1, 9 }] };
+
+        Assert.That(a, Is.Not.EqualTo(b));
+    }
+
+    [Test]
+    public void CrdtMapField_differing_value_count_is_not_equal()
+    {
+        var a = new CrdtMapField { Field = "f", Values = [new byte[] { 1 }] };
+        var b = new CrdtMapField { Field = "f", Values = [new byte[] { 1 }, new byte[] { 2 }] };
+
+        Assert.That(a, Is.Not.EqualTo(b));
+    }
+
+    [Test]
+    public void CrdtMapField_differing_field_is_not_equal()
+    {
+        var a = new CrdtMapField { Field = "f", Values = [new byte[] { 1 }] };
+        var b = new CrdtMapField { Field = "other", Values = [new byte[] { 1 }] };
+
+        Assert.That(a, Is.Not.EqualTo(b));
+    }
+
+    [Test]
+    public void CrdtMapField_round_trip_compares_equal_by_value()
+    {
+        using var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = services.GetRequiredService<Serializer<CrdtMapField>>();
+        var original = new CrdtMapField { Field = "f", Values = [new byte[] { 1, 2 }, new byte[] { 3, 4 }] };
+
+        var copy = serializer.Deserialize(serializer.SerializeToArray(original));
+
+        Assert.That(copy, Is.EqualTo(original));
+    }
+
+    private static CrdtReadResponse SampleReadResponse() => new()
+    {
+        CounterValue = 5,
+        FlagValue = true,
+        Elements = [new byte[] { 1, 2 }, new byte[] { 3 }],
+        Vector = [new CrdtVectorEntry { ReplicaId = "r", Clock = "1:2" }],
+        Map = [new CrdtMapField { Field = "f", Values = [new byte[] { 7 }] }],
+    };
+
+    [Test]
+    public void CrdtReadResponse_equal_content_with_distinct_arrays_are_equal()
+    {
+        var a = SampleReadResponse();
+        var b = SampleReadResponse();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReferenceEquals(a.Elements[0], b.Elements[0]), Is.False);
+            Assert.That(a, Is.EqualTo(b));
+            Assert.That(a.GetHashCode(), Is.EqualTo(b.GetHashCode()));
+        });
+    }
+
+    [Test]
+    public void CrdtReadResponse_differing_element_content_is_not_equal()
+    {
+        var a = SampleReadResponse();
+        var b = a with { Elements = [new byte[] { 1, 2 }, new byte[] { 9 }] };
+
+        Assert.That(a, Is.Not.EqualTo(b));
+    }
+
+    [Test]
+    public void CrdtReadResponse_differing_map_value_content_is_not_equal()
+    {
+        var a = SampleReadResponse();
+        var b = a with { Map = [new CrdtMapField { Field = "f", Values = [new byte[] { 8 }] }] };
+
+        Assert.That(a, Is.Not.EqualTo(b));
+    }
+
+    [Test]
+    public void CrdtReadResponse_differing_vector_is_not_equal()
+    {
+        var a = SampleReadResponse();
+        var b = a with { Vector = [new CrdtVectorEntry { ReplicaId = "r", Clock = "9:9" }] };
+
+        Assert.That(a, Is.Not.EqualTo(b));
+    }
+
+    [Test]
+    public void CrdtReadResponse_differing_scalar_is_not_equal()
+    {
+        var a = SampleReadResponse();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(a, Is.Not.EqualTo(a with { CounterValue = 6 }));
+            Assert.That(a, Is.Not.EqualTo(a with { FlagValue = false }));
+        });
+    }
+
+    [Test]
+    public void CrdtReadResponse_round_trip_compares_equal_by_value()
+    {
+        using var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = services.GetRequiredService<Serializer<CrdtReadResponse>>();
+        var original = SampleReadResponse();
+
+        var copy = serializer.Deserialize(serializer.SerializeToArray(original));
+
+        Assert.That(copy, Is.EqualTo(original));
+    }
 }

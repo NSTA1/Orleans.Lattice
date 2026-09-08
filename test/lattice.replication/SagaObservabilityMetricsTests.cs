@@ -74,6 +74,7 @@ public class SagaObservabilityMetricsTests
             Assert.That(LatticeReplicationMetrics.SagaReasonInfeasible, Is.EqualTo("infeasible"));
             Assert.That(LatticeReplicationMetrics.SagaReasonPrecondition, Is.EqualTo("precondition"));
             Assert.That(LatticeReplicationMetrics.SagaReasonBuildFailed, Is.EqualTo("build-failed"));
+            Assert.That(LatticeReplicationMetrics.SagaReasonNotReplicated, Is.EqualTo("not-replicated"));
             Assert.That(LatticeReplicationMetrics.SagaReasonSingle, Is.EqualTo("single"));
             Assert.That(LatticeReplicationMetrics.SagaReasonSet, Is.EqualTo("set"));
         });

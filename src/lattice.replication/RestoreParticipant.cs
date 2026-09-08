@@ -129,6 +129,39 @@ internal sealed class RestoreParticipant(
         return _builtSets.TryGetValue(sagaId, out results);
     }
 
+    /// <summary>
+    /// Whether this cluster hosts the <b>single-tree</b> target named by
+    /// <paramref name="request"/>. The target arrives on the inbound cross-cluster
+    /// saga control channel, which authorizes the <i>origin cluster</i> and not the
+    /// tree, so it is peer-supplied and must be re-derived against local
+    /// replication enrollment before anything is built, swapped, or reverted -
+    /// otherwise a peer holding an accepted mesh credential picks the tree the
+    /// shadow cutover overwrites, including a tree kept deliberately cluster-local
+    /// or a reserved <c>sys-</c> authorization tree. This is the single-tree
+    /// counterpart of <see cref="FilterHostedMembers"/>, which already applies the
+    /// same seam per member on the set path.
+    /// <para>
+    /// A legitimate single-tree saga can only ever name a replicated tree:
+    /// <c>RestoreSagaDispatcher</c> declines to promote a restore to a saga at all
+    /// unless <see cref="IReplicatedTreeMembership.IsReplicated"/> holds for the
+    /// resolved target, so the gate refuses nothing the coordinator can produce.
+    /// When the membership seam is not wired (direct unit tests) the gate is a
+    /// no-op, matching <see cref="FilterHostedMembers"/>.
+    /// </para>
+    /// </summary>
+    private bool IsHostedTarget(SagaControlRequest request) =>
+        membership is null || membership.IsReplicated(request.TargetTree);
+
+    /// <summary>The refusal returned for a target tree this cluster does not replicate.</summary>
+    private static SagaParticipantPrepareResult NotReplicated(string targetTree)
+    {
+        RecordVote(LatticeReplicationMetrics.SagaReasonNotReplicated);
+        return new SagaParticipantPrepareResult(
+            SagaVote.Abort,
+            $"Target tree '{targetTree}' is not replicated on this cluster: " +
+            "a coordinated restore may only target a tree this cluster is enrolled for.");
+    }
+
     /// <inheritdoc />
     public async Task<SagaParticipantPrepareResult> PrepareAsync(
         SagaControlRequest request, CancellationToken cancellationToken = default)
@@ -145,6 +178,14 @@ internal sealed class RestoreParticipant(
         if (setMembers is not null)
         {
             return await PrepareSetAsync(request, setMembers, cancellationToken);
+        }
+
+        if (!IsHostedTarget(request))
+        {
+            logger.LogWarning(
+                "Restore participant: refusing saga '{SagaId}' - target tree '{TargetTree}' is not replicated here.",
+                request.SagaId, request.TargetTree);
+            return NotReplicated(request.TargetTree);
         }
 
         var restoreRequest = BuildRestoreRequest(request);
@@ -246,6 +287,18 @@ internal sealed class RestoreParticipant(
             return;
         }
 
+        // Re-derived independently of prepare: a replayed or forged commit must not
+        // be able to reach the alias swap on the strength of never having prepared.
+        if (!IsHostedTarget(request))
+        {
+            logger.LogWarning(
+                "Restore participant: refusing commit for saga '{SagaId}' - target tree '{TargetTree}' is not replicated here.",
+                request.SagaId, request.TargetTree);
+            RecordCommit(LatticeReplicationMetrics.SagaReasonNotReplicated);
+            await grainFactory.GetGrain<ISagaWriteFenceGrain>(request.SagaId).LiftAsync();
+            return;
+        }
+
         var restoreRequest = BuildRestoreRequest(request);
 
         // Reuse the prepared shadow; if a reactivation lost the in-memory cache,
@@ -296,6 +349,16 @@ internal sealed class RestoreParticipant(
         if (setMembers is not null)
         {
             await AbortSetAsync(request, setMembers, fence, cancellationToken);
+            return;
+        }
+
+        // Nothing was ever prepared for a tree this cluster does not replicate, so
+        // there is nothing to compensate; reverting an alias on an unenrolled tree
+        // would itself be the write the prepare gate exists to refuse.
+        if (!IsHostedTarget(request))
+        {
+            RecordAbort(LatticeReplicationMetrics.SagaReasonNotReplicated);
+            await fence.LiftAsync();
             return;
         }
 
