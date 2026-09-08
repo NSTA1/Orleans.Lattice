@@ -220,6 +220,18 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
     /// unparseable row is necessarily one that was never requested, and so trips the
     /// unrequested arm as well.
     /// </para>
+    /// <para>
+    /// That last step depends on a detail of the counting loop worth naming, because
+    /// an edit could remove it without looking like a behaviour change: the
+    /// unrequested arm increments and FALLS THROUGH - it has no <c>continue</c> - so
+    /// a row nobody asked for still reaches the key parse below it. Adding a
+    /// <c>continue</c> there as a tidy-up would make the two counts independent
+    /// again, at which point the unparseable arm becomes reachable, this paragraph
+    /// becomes false, and the disjunct it describes as redundant becomes
+    /// load-bearing. The disjunct is kept for that reason rather than removed as
+    /// dead: if this analysis is right it costs nothing, and if it is subtly wrong
+    /// the check is still there.
+    /// </para>
     /// </summary>
     [Test]
     public async Task The_anomaly_test_excludes_a_short_read_and_includes_an_unrequested_row()
