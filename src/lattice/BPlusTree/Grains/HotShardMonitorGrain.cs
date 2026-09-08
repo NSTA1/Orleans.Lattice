@@ -207,6 +207,16 @@ internal sealed class HotShardMonitorGrain(
     /// <inheritdoc />
     public async Task EnsureRunningAsync()
     {
+        // INVARIANT (load-bearing for [AlwaysInterleave] on the interface,
+        // #2218): there must be no await between the `if (_running) return;`
+        // guard and `_running = true;`. Single-threaded turn semantics then let
+        // at most one caller run the body, and a call admitted mid-sampling-pass
+        // observes `_running == true` here and returns without touching state.
+        // NOTE the deliberate asymmetry with ShardHealingOrchestratorGrain: this
+        // monitor sets `_running` BEFORE the AutoSplitEnabled check, so a
+        // disabled monitor latches and never re-evaluates (preserving #2181's
+        // semantics); the orchestrator checks its switch first and does not
+        // latch. Both are no-ops under interleaving - do not align them.
         if (_running) return;
         _running = true;
 
