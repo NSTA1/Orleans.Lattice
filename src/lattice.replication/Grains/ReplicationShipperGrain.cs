@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
@@ -443,6 +444,22 @@ internal sealed class ReplicationShipperGrain(
     private ArrayBufferWriter<byte>? _coalesceReencodeWriter;
 
     /// <summary>
+    /// Activation-scoped pool of per-key delta-run buffers reused by the
+    /// CRDT coalescing pass. A run buffer is handed out only when a key is
+    /// observed a second time, and every buffer is returned (cleared, not
+    /// freed) at the end of the pass, so a steady-state ship path that
+    /// coalesces the same key shape every tick allocates no run buffers at
+    /// all after the first tick.
+    /// </summary>
+    private List<List<object>>? _coalesceRunBuffers;
+
+    /// <summary>
+    /// Number of entries in <see cref="_coalesceRunBuffers"/> handed out so
+    /// far in the current coalescing pass. Reset at the start of each pass.
+    /// </summary>
+    private int _coalesceRunBuffersInUse;
+
+    /// <summary>
     /// Per-key accumulator for the CRDT branch of the pre-ship coalescing
     /// pass. Holds the running combined delta, the index of the last
     /// contributing entry (whose HLC / causal metadata the merged result
@@ -453,13 +470,26 @@ internal sealed class ReplicationShipperGrain(
     /// </summary>
     private struct CrdtCoalesceState
     {
-        /// <summary>The running combined typed delta (deserialised DTO).</summary>
-        public object? Combined;
+        /// <summary>
+        /// The run of deserialised typed deltas folded for this key, or
+        /// <see langword="null"/> while the key has been seen exactly once.
+        /// Materialised on the SECOND occurrence, seeded with the first
+        /// entry's lazily deserialised delta - a key that never repeats is
+        /// never deserialised at all, which on a wide keyspace is most of
+        /// the drained batch.
+        /// </summary>
+        public List<object>? Run;
+
+        /// <summary>
+        /// The first occurrence's raw typed-delta bytes, held undeserialised
+        /// until a second occurrence proves the key is worth folding.
+        /// </summary>
+        public byte[]? FirstDelta;
 
         /// <summary>Index in the drain buffer of the last contributing entry.</summary>
         public int LastIndex;
 
-        /// <summary>Number of source deltas folded into <see cref="Combined"/>.</summary>
+        /// <summary>Number of source deltas folded for this key.</summary>
         public int FoldCount;
 
         /// <summary>
@@ -2768,15 +2798,23 @@ internal sealed class ReplicationShipperGrain(
 
         var states = _coalesceCrdtState ??= new Dictionary<string, CrdtCoalesceState>(StringComparer.Ordinal);
         states.Clear();
+        _coalesceRunBuffersInUse = 0;
 
         var count = _drainBuffer.Count;
 
-        // Pass 1: accumulate, per coalescable key, the running combined
-        // delta and the index of the last contributing entry. An opaque
-        // (null-delta) same-key entry flips the key to non-combinable so
-        // every one of its entries ships verbatim. The drain buffer is
-        // HLC-ascending and single-origin, so folding in iteration order
-        // is the same causal order the receiver would apply.
+        // Pass 1: record, per coalescable key, the run of typed deltas to fold
+        // and the index of the last contributing entry. An opaque (null-delta)
+        // same-key entry flips the key to non-combinable so every one of its
+        // entries ships verbatim. The drain buffer is HLC-ascending and
+        // single-origin, so folding in iteration order is the same causal
+        // order the receiver would apply.
+        //
+        // The first occurrence of a key is recorded as RAW BYTES and is
+        // deserialised only if a second occurrence arrives: pass 2 keeps a
+        // single-occurrence key's entry verbatim, so deserialising it eagerly
+        // built a whole typed delta graph that was then discarded. On a wide
+        // keyspace, where most keys appear once, that was the dominant cost of
+        // the pass.
         for (var i = 0; i < count; i++)
         {
             var entry = _drainBuffer[i];
@@ -2786,38 +2824,54 @@ internal sealed class ReplicationShipperGrain(
             }
 
             var key = entry.Key ?? string.Empty;
-            if (!states.TryGetValue(key, out var state))
+            // Single probe: the state struct is written back through the ref
+            // the lookup already located, so a key is hashed once per entry
+            // rather than once to read and again to store.
+            ref var state = ref CollectionsMarshal.GetValueRefOrAddDefault(states, key, out var existed);
+            if (!existed)
             {
-                state = new CrdtCoalesceState { CanCombine = true };
+                state.CanCombine = true;
             }
 
             if (entry.Delta is null)
             {
                 // Opaque payload on a CRDT mode: cannot be combined safely.
-                // Force the whole key to ship verbatim.
+                // Force the whole key to ship verbatim, and release any run
+                // buffer already handed out for it.
                 state.CanCombine = false;
-                states[key] = state;
+                state.Run = null;
+                state.FirstDelta = null;
                 continue;
             }
 
             if (!state.CanCombine)
             {
-                states[key] = state;
                 continue;
             }
 
-            var delta = shape.DeserializeDelta(entry.Delta);
             if (state.FoldCount == 0)
             {
-                state.Combined = delta;
+                // First occurrence: hold the bytes, do not deserialise yet.
+                state.FirstDelta = entry.Delta;
             }
             else
             {
-                state.Combined = shape.CombineDeltas(state.Combined!, delta);
+                var run = state.Run;
+                if (run is null)
+                {
+                    // Second occurrence: the key is genuinely a run, so pay for
+                    // the first entry's deserialisation now and seed the buffer.
+                    run = RentCoalesceRunBuffer();
+                    run.Add(shape.DeserializeDelta(state.FirstDelta!));
+                    state.Run = run;
+                    state.FirstDelta = null;
+                }
+
+                run.Add(shape.DeserializeDelta(entry.Delta));
             }
+
             state.LastIndex = i;
             state.FoldCount++;
-            states[key] = state;
         }
 
         // Pass 2: compact in place. Keep every non-coalescable entry and
@@ -2864,7 +2918,7 @@ internal sealed class ReplicationShipperGrain(
             {
                 var key = entry.Key ?? string.Empty;
                 var state = states[key];
-                var combinedBytes = shape.SerializeDelta!(state.Combined!);
+                var combinedBytes = shape.SerializeDelta!(CombineDeltaRun(shape, state.Run!));
                 // The merged result inherits the last contributing entry's
                 // HLC / causal metadata (entry is that entry); only the
                 // typed delta payload changes. Re-encode through the same
@@ -2892,12 +2946,14 @@ internal sealed class ReplicationShipperGrain(
 
         if (elidedCount == 0)
         {
+            ReleaseCoalesceRunBuffers();
             return;
         }
 
         _drainBuffer.RemoveRange(write, count - write);
         _drainEncodedSegments.RemoveRange(write, count - write);
         _drainEncodedByteCount += reencodeByteDelta - elidedBytes;
+        ReleaseCoalesceRunBuffers();
 
         LatticeReplicationMetrics.CoalesceEntriesElided.Add(
             elidedCount,
@@ -2914,6 +2970,70 @@ internal sealed class ReplicationShipperGrain(
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
             LatticeTenantLabel.ForTree(_treeName));
+    }
+
+    /// <summary>
+    /// Hands out a cleared per-key delta-run buffer from the activation-scoped
+    /// pool, growing the pool by one only the first time a pass needs a run
+    /// slot it has not needed before.
+    /// </summary>
+    private List<object> RentCoalesceRunBuffer()
+    {
+        var pool = _coalesceRunBuffers ??= [];
+        if (_coalesceRunBuffersInUse == pool.Count)
+        {
+            pool.Add([]);
+        }
+
+        var buffer = pool[_coalesceRunBuffersInUse++];
+        buffer.Clear();
+        return buffer;
+    }
+
+    /// <summary>
+    /// Drops the deserialised deltas the pass folded so they are not held
+    /// alive by the pool between ticks, while keeping the buffer objects and
+    /// their backing arrays for reuse.
+    /// </summary>
+    private void ReleaseCoalesceRunBuffers()
+    {
+        var pool = _coalesceRunBuffers;
+        if (pool is null)
+        {
+            return;
+        }
+
+        for (var i = 0; i < _coalesceRunBuffersInUse; i++)
+        {
+            pool[i].Clear();
+        }
+
+        _coalesceRunBuffersInUse = 0;
+    }
+
+    /// <summary>
+    /// Folds a same-key run of typed deltas into one combined delta, using the
+    /// shape's single-pass <c>CombineDeltaRun</c> when it has one and falling
+    /// back to a pairwise <see cref="CrdtShape.CombineDeltas"/> fold otherwise.
+    /// Both produce the same result - every shape's combine is commutative,
+    /// associative and idempotent - but the pairwise form re-materialises the
+    /// whole running union on each step and so is quadratic in the run length.
+    /// </summary>
+    private static object CombineDeltaRun(CrdtShape shape, List<object> run)
+    {
+        var runFold = shape.CombineDeltaRun;
+        if (runFold is not null)
+        {
+            return runFold(run);
+        }
+
+        var combined = run[0];
+        for (var i = 1; i < run.Count; i++)
+        {
+            combined = shape.CombineDeltas!(combined, run[i]);
+        }
+
+        return combined;
     }
 
     /// <summary>

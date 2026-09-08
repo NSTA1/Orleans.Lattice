@@ -226,6 +226,15 @@ public partial class ReplicationShipperGrainTests
 
         public void Append(WalRecord entry) => Entries.Add(entry);
 
+        /// <summary>
+        /// Recovers the <see cref="WalRecord"/> behind a shipped entry's
+        /// encoded bytes, which the shipper produced through this same
+        /// activation-shared encoder. Lets a test assert on the record the
+        /// peer would apply (its coalesced delta in particular) rather than
+        /// on the stub's opaque stash index.
+        /// </summary>
+        public WalRecord DecodeShippedEntry(ReadOnlySpan<byte> encoded) => _encoder.Decode(encoded);
+
         public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken)
         {
             Entries.Add(entry);

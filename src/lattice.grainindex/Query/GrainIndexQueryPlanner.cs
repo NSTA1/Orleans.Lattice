@@ -70,12 +70,69 @@ internal static class GrainIndexQueryPlanner
 
     private static List<List<QueryAtom>> ToDisjunctiveNormalForm(Expression expression, bool negated)
     {
+        // Fast path for the predicate shape that dominates in practice: an
+        // '&&' chain (or its De Morgan dual) with no disjunction anywhere
+        // under it, which lowers to exactly one conjunction. The general
+        // recursion below reaches that same answer by allocating a nested
+        // singleton pair - an outer List<List<QueryAtom>> and an inner
+        // List<QueryAtom>, each with its own backing array - for EVERY atom,
+        // and then folding all but one of them away in Distribute. Collecting
+        // the atoms straight into a single list instead allocates one list
+        // pair for the whole predicate rather than one per atom, and produces
+        // a bit-identical result: for a pure conjunction the general path only
+        // ever takes Distribute's right.Count == 1 branch, which appends in
+        // source order, and its conjunction product is always 1 so the
+        // MaxConjunctions ceiling cannot be reached.
+        var single = new List<QueryAtom>();
+        if (TryCollectConjunction(expression, negated, single))
+        {
+            return [single];
+        }
+
+        return ToDisjunctiveNormalFormCore(expression, negated);
+    }
+
+    /// <summary>
+    /// Collects <paramref name="expression"/> into <paramref name="atoms"/> when
+    /// it lowers to a single conjunction, returning <c>false</c> as soon as a
+    /// disjunction is reached (at which point <paramref name="atoms"/> is
+    /// partially filled and the caller discards it).
+    /// </summary>
+    private static bool TryCollectConjunction(Expression expression, bool negated, List<QueryAtom> atoms)
+    {
         expression = Unwrap(expression);
 
         switch (expression)
         {
             case UnaryExpression unary when unary.NodeType == ExpressionType.Not:
-                return ToDisjunctiveNormalForm(unary.Operand, !negated);
+                return TryCollectConjunction(unary.Operand, !negated, atoms);
+
+            case BinaryExpression binary when binary.NodeType is ExpressionType.AndAlso or ExpressionType.OrElse:
+            {
+                // Same De Morgan rule as the general lowering: the node is a
+                // conjunction under the inherited polarity, or the predicate is
+                // not a pure conjunction and the fast path does not apply.
+                if ((binary.NodeType == ExpressionType.AndAlso) == negated)
+                    return false;
+
+                return TryCollectConjunction(binary.Left, negated, atoms)
+                    && TryCollectConjunction(binary.Right, negated, atoms);
+            }
+
+            default:
+                atoms.Add(new QueryAtom(expression, negated));
+                return true;
+        }
+    }
+
+    private static List<List<QueryAtom>> ToDisjunctiveNormalFormCore(Expression expression, bool negated)
+    {
+        expression = Unwrap(expression);
+
+        switch (expression)
+        {
+            case UnaryExpression unary when unary.NodeType == ExpressionType.Not:
+                return ToDisjunctiveNormalFormCore(unary.Operand, !negated);
 
             case BinaryExpression binary when binary.NodeType is ExpressionType.AndAlso or ExpressionType.OrElse:
             {
@@ -83,8 +140,8 @@ internal static class GrainIndexQueryPlanner
                 // and vice versa, so one flag drives both the combinator and the
                 // polarity handed down to each side.
                 bool conjunction = (binary.NodeType == ExpressionType.AndAlso) != negated;
-                var left = ToDisjunctiveNormalForm(binary.Left, negated);
-                var right = ToDisjunctiveNormalForm(binary.Right, negated);
+                var left = ToDisjunctiveNormalFormCore(binary.Left, negated);
+                var right = ToDisjunctiveNormalFormCore(binary.Right, negated);
                 return conjunction ? Distribute(left, right) : Concatenate(left, right);
             }
 

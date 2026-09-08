@@ -20,7 +20,7 @@ namespace Orleans.Lattice;
 /// host construction. One descriptor lives per <c>(treeId, mode)</c>
 /// slot in the <see cref="CrdtShapeRegistry"/>.
 /// </summary>
-public sealed class CrdtShape
+public sealed partial class CrdtShape
 {
     /// <summary>The CRDT mode this descriptor applies to.</summary>
     public LatticeMergeMode Mode { get; }
@@ -84,6 +84,27 @@ public sealed class CrdtShape
     /// </summary>
     public Func<object, object, object>? CombineDeltas { get; }
 
+    /// <summary>
+    /// Folds a whole same-key run of deserialised typed deltas into one
+    /// combined delta in a single pass, producing exactly the result a
+    /// left-to-right <see cref="CombineDeltas"/> fold over the same run
+    /// would produce. It exists because the pairwise fold is quadratic: a
+    /// run of <c>N</c> deltas re-walks and re-materialises everything
+    /// unions <c>1..k-1</c> accumulated on every step <c>k</c>, so both the
+    /// element walk and the intermediate collections it allocates grow with
+    /// <c>N^2</c>. Unioning every source once into a single accumulator
+    /// sized from the run's own combined width makes both linear.
+    /// <para>
+    /// <see langword="null"/> for shapes with no combine at all, in which
+    /// case the sender ships the source deltas individually. Callers that
+    /// hold a run should prefer this and fall back to a pairwise
+    /// <see cref="CombineDeltas"/> fold when it is <see langword="null"/>;
+    /// the two are interchangeable because every shape's combine is
+    /// commutative, associative, and idempotent.
+    /// </para>
+    /// </summary>
+    internal Func<IReadOnlyList<object>, object>? CombineDeltaRun { get; init; }
+
     /// <summary>Initialises a new <see cref="CrdtShape"/>.</summary>
     public CrdtShape(
         LatticeMergeMode mode,
@@ -133,6 +154,7 @@ public sealed class CrdtShape
                 using var w = new Utf8JsonWriter(writer);
                 JsonSerializer.Serialize(w, (OrSet)state, CrdtJsonSerializerContext.Default.OrSet);
             },
+            CombineDeltaRun = static run => CombineOrSetDeltaRun(run),
         };
     }
 
@@ -156,6 +178,7 @@ public sealed class CrdtShape
                 using var w = new Utf8JsonWriter(writer);
                 JsonSerializer.Serialize(w, (PnCounter)state, CrdtJsonSerializerContext.Default.PnCounter);
             },
+            CombineDeltaRun = static run => CombinePnCounterDeltaRun(run),
         };
     }
 
@@ -179,6 +202,7 @@ public sealed class CrdtShape
                 using var w = new Utf8JsonWriter(writer);
                 JsonSerializer.Serialize(w, (VersionVector)state, CrdtJsonSerializerContext.Default.VersionVector);
             },
+            CombineDeltaRun = static run => CombineVersionVectorDeltaRun(run),
         };
     }
 
@@ -202,6 +226,7 @@ public sealed class CrdtShape
                 using var w = new Utf8JsonWriter(writer);
                 JsonSerializer.Serialize(w, (MvRegister)state, CrdtJsonSerializerContext.Default.MvRegister);
             },
+            CombineDeltaRun = static run => CombineMvRegisterDeltaRun(run),
         };
     }
 
@@ -225,6 +250,7 @@ public sealed class CrdtShape
                 using var w = new Utf8JsonWriter(writer);
                 JsonSerializer.Serialize(w, (GCounter)state, CrdtJsonSerializerContext.Default.GCounter);
             },
+            CombineDeltaRun = static run => CombineGCounterDeltaRun(run),
         };
     }
 
@@ -248,6 +274,7 @@ public sealed class CrdtShape
                 using var w = new Utf8JsonWriter(writer);
                 JsonSerializer.Serialize(w, (OrFlag)state, CrdtJsonSerializerContext.Default.OrFlag);
             },
+            CombineDeltaRun = static run => CombineOrFlagDeltaRun(run),
         };
     }
 
@@ -271,6 +298,7 @@ public sealed class CrdtShape
                 using var w = new Utf8JsonWriter(writer);
                 JsonSerializer.Serialize(w, (RwFlag)state, CrdtJsonSerializerContext.Default.RwFlag);
             },
+            CombineDeltaRun = static run => CombineRwFlagDeltaRun(run),
         };
     }
 
@@ -294,6 +322,7 @@ public sealed class CrdtShape
                 using var w = new Utf8JsonWriter(writer);
                 JsonSerializer.Serialize(w, (GSet)state, CrdtJsonSerializerContext.Default.GSet);
             },
+            CombineDeltaRun = static run => CombineGSetDeltaRun(run),
         };
     }
 
@@ -322,6 +351,7 @@ public sealed class CrdtShape
                 using var w = new Utf8JsonWriter(writer);
                 JsonSerializer.Serialize(w, (BoundedRegister)state, CrdtJsonSerializerContext.Default.BoundedRegister);
             },
+            CombineDeltaRun = run => CombineBoundedRegisterDeltaRun(run, isMin),
         };
     }
 
@@ -345,6 +375,7 @@ public sealed class CrdtShape
                 using var w = new Utf8JsonWriter(writer);
                 JsonSerializer.Serialize(w, (RwSet)state, CrdtJsonSerializerContext.Default.RwSet);
             },
+            CombineDeltaRun = static run => CombineRwSetDeltaRun(run),
         };
     }
 
@@ -368,7 +399,10 @@ public sealed class CrdtShape
             () => new Rga(),
             state => s.Serialize((Rga)state),
             delta => d.Serialize((RgaDelta)delta),
-            static (a, b) => CombineRgaDelta((RgaDelta)a, (RgaDelta)b));
+            static (a, b) => CombineRgaDelta((RgaDelta)a, (RgaDelta)b))
+        {
+            CombineDeltaRun = static run => CombineRgaDeltaRun(run),
+        };
     }
 
     /// <summary>
@@ -407,7 +441,10 @@ public sealed class CrdtShape
             state => s.Serialize((OrMap<TKey, TValue>)state),
             delta => d.Serialize((OrMapDelta<TKey, TValue>)delta),
             combineDeltas: static (a, b) =>
-                CombineOrMapDelta<TKey, TValue>((OrMapDelta<TKey, TValue>)a, (OrMapDelta<TKey, TValue>)b));
+                CombineOrMapDelta<TKey, TValue>((OrMapDelta<TKey, TValue>)a, (OrMapDelta<TKey, TValue>)b))
+        {
+            CombineDeltaRun = static run => CombineOrMapDeltaRun<TKey, TValue>(run),
+        };
     }
 
     // --- Delta-combine helpers (pre-ship coalescing) ----------------------------

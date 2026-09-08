@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -365,6 +365,20 @@ if (string.Equals(suite, "grainindexplanfolds", StringComparison.OrdinalIgnoreCa
     Console.WriteLine("[microbench] suite   -> grainindexplanfolds (GrainIndexPlanFoldBenchmarks)");
     var grainIndexPlanFoldsSummary = BenchmarkRunner.Run<GrainIndexPlanFoldBenchmarks>(config);
     return grainIndexPlanFoldsSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "crdtrunfolds", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> crdtrunfolds (CrdtDeltaRunFoldBenchmarks)");
+    var crdtRunFoldsSummary = BenchmarkRunner.Run<CrdtDeltaRunFoldBenchmarks>(config);
+    return crdtRunFoldsSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "coalescedefertrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> coalescedefertrims (CoalesceDeferAndDnfTrimBenchmarks)");
+    var coalesceDeferTrimsSummary = BenchmarkRunner.Run<CoalesceDeferAndDnfTrimBenchmarks>(config);
+    return coalesceDeferTrimsSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "applymergefanout", StringComparison.OrdinalIgnoreCase))
