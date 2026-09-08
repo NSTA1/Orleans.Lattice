@@ -1742,6 +1742,7 @@ internal sealed partial class ShardRootGrain(
         string? resumeFrom = null;
         while (true)
         {
+            StandDownIfCeilingFired(scan);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var result = await leafGrain.DeleteRangeAsync(startInclusive, endExclusive, predicate);
             totalDeleted += result.Deleted;
@@ -1872,6 +1873,7 @@ internal sealed partial class ShardRootGrain(
         var currentId = leafId.Value;
         while (true)
         {
+            StandDownIfCeilingFired(scan);
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
             var leafCount = 0;
             if (hasMovedAway)
@@ -2035,6 +2037,7 @@ internal sealed partial class ShardRootGrain(
         var currentId = leafId.Value;
         while (true)
         {
+            StandDownIfCeilingFired(scan);
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
             if (await leaf.CountAsync(null, null) > 0)
                 return new ShardAnyPage { Found = true };
@@ -2127,6 +2130,7 @@ internal sealed partial class ShardRootGrain(
         var currentId = leafId.Value;
         while (true)
         {
+            StandDownIfCeilingFired(scan);
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
             if (hasActiveSplit || hasMovedAway)
             {
@@ -2228,6 +2232,7 @@ internal sealed partial class ShardRootGrain(
         var currentId = leafId.Value;
         while (true)
         {
+            StandDownIfCeilingFired(scan);
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
             // Push the [startInclusive, endExclusive) bound to the leaf so it
             // returns only the in-range keys; the per-slot ownership filter is
@@ -2860,6 +2865,7 @@ internal sealed partial class ShardRootGrain(
         scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
         {
+            StandDownIfCeilingFired(scan);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             // Pass continuationToken as afterExclusive so the leaf filters
             // at the source - avoids transferring keys that would be
@@ -3005,6 +3011,7 @@ internal sealed partial class ShardRootGrain(
         scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
         {
+            StandDownIfCeilingFired(scan);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             // Pass the effective upper boundary as beforeExclusive so the leaf
             // filters at the source - avoids transferring keys that would be
@@ -3136,6 +3143,7 @@ internal sealed partial class ShardRootGrain(
         scan.Phase = ScanPagePhase.LeafWalk;
         while (entries.Count < pageSize)
         {
+            StandDownIfCeilingFired(scan);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             // Pass continuationToken as afterExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
@@ -3269,6 +3277,7 @@ internal sealed partial class ShardRootGrain(
         scan.Phase = ScanPagePhase.LeafWalk;
         while (entries.Count < pageSize)
         {
+            StandDownIfCeilingFired(scan);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             // Pass continuationToken as beforeExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
@@ -3409,6 +3418,7 @@ internal sealed partial class ShardRootGrain(
         scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
         {
+            StandDownIfCeilingFired(scan);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var leafKeys = await leafGrain.GetKeysAsync(effectiveStart, endExclusive, afterExclusive: continuationToken, predicate: predicate);
             scan.Budget.RecordLeafVisited();
@@ -3523,6 +3533,7 @@ internal sealed partial class ShardRootGrain(
         scan.Phase = ScanPagePhase.LeafWalk;
         while (entries.Count < pageSize)
         {
+            StandDownIfCeilingFired(scan);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var leafEntries = await leafGrain.GetEntriesAsync(effectiveStart, endExclusive, continuationToken, predicate: predicate);
             scan.Budget.RecordLeafVisited();

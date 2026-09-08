@@ -981,6 +981,24 @@ public class LatticeOptions
     /// shard becomes this single number.
     /// </para>
     /// <para>
+    /// The ceiling stops the walk as well as the wait. Ending only the wait
+    /// releases the shard root's non-reentrancy lock, which is what lets queued
+    /// work drain, but it leaves the abandoned page fill running as a detached
+    /// continuation: it keeps its place in the leaf chain and, once the read it
+    /// was parked on returns, walks on - issuing further leaf calls against the
+    /// very leaves whose contention caused the stall, on behalf of a caller
+    /// that was told to retry seconds earlier. The retry then contends with its
+    /// own predecessor's leftovers, which makes the next stall likelier. Each
+    /// walk loop therefore re-reads this deadline between iterations and
+    /// unwinds when it has fired, so the work a stall leaks is bounded by the
+    /// one read already in flight rather than by the length of the leaf chain.
+    /// That leaked work is invisible to every volume bound
+    /// (<see cref="MaxLeavesPerScanPage"/> and its siblings) because the walk has
+    /// not overrun any of them - it is one await that did not return - and it
+    /// is invisible to shard queue depth because it is no longer a request.
+    /// See issue 2233.
+    /// </para>
+    /// <para>
     /// It should sit comfortably above <see cref="MaxScanPageDuration"/> so the
     /// graceful partial-page path is always preferred and this only fires when
     /// that path could not run, and it must sit <em>below</em> the Orleans
