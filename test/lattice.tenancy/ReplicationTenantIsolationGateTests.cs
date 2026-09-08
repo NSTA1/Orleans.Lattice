@@ -73,6 +73,49 @@ public sealed class ReplicationTenantIsolationGateTests
         await Task.CompletedTask;
     }
 
+    /// <summary>A registry record for <see cref="Acme"/> in the given status.</summary>
+    private static TenantRecord Record(TenantStatus status) => TenantRecord.Create(
+        Acme, status, TenantQuotas.Unbounded, TenantPlacement.Shared, HybridLogicalClock.Zero, "test");
+
+    /// <summary>Stubs the registry so <see cref="Acme"/> exists and is active.</summary>
+    private static void KnowsActive(ITenantRegistry registry) =>
+        registry.GetAsync(Acme, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantRecord?>(Record(TenantStatus.Active)));
+
+    /// <summary>Stubs the registry so <see cref="Acme"/> exists but is suspended.</summary>
+    private static void KnowsSuspended(ITenantRegistry registry) =>
+        registry.GetAsync(Acme, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantRecord?>(Record(TenantStatus.Suspended)));
+
+    /// <summary>Stubs the registry so <see cref="Acme"/> does not exist.</summary>
+    private static void KnowsNothing(ITenantRegistry registry) =>
+        registry.GetAsync(Acme, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantRecord?>(null));
+
+    /// <summary>
+    /// A maintainer compiled over a registry containing one tenant in the given
+    /// status, so that tenant is answered from the in-memory fast path.
+    /// </summary>
+    private static async Task<CompiledTenantPolicySnapshotMaintainer> CompiledPolicyWithStatusAsync(
+        TenantId tenant,
+        TenantStatus status)
+    {
+        var source = Substitute.For<ITenantRegistry>();
+        source.ListAsync(Arg.Any<CancellationToken>()).Returns(_ => ToAsyncWithStatus(tenant, status));
+
+        var maintainer = new CompiledTenantPolicySnapshotMaintainer(
+            source, NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        await maintainer.RebuildNowAsync();
+        return maintainer;
+    }
+
+    private static async IAsyncEnumerable<TenantRecord> ToAsyncWithStatus(TenantId tenant, TenantStatus status)
+    {
+        yield return TenantRecord.Create(
+            tenant, status, TenantQuotas.Unbounded, TenantPlacement.Shared, HybridLogicalClock.Zero, "test");
+        await Task.CompletedTask;
+    }
+
     [Test]
     public void IsActive_is_true_for_the_active_gate()
     {
@@ -153,7 +196,7 @@ public sealed class ReplicationTenantIsolationGateTests
     public async Task EvaluateAsync_existing_resident_tenant_admits()
     {
         var registry = Substitute.For<ITenantRegistry>();
-        registry.ExistsAsync(Acme, Arg.Any<CancellationToken>()).Returns(true);
+        KnowsActive(registry);
         // Null residency default (IsActive false) => all regions allowed.
         var gate = CreateGate(registry);
 
@@ -166,7 +209,7 @@ public sealed class ReplicationTenantIsolationGateTests
     public async Task EvaluateAsync_nonexistent_tenant_rejects_unknown_and_never_auto_creates()
     {
         var registry = Substitute.For<ITenantRegistry>();
-        registry.ExistsAsync(Acme, Arg.Any<CancellationToken>()).Returns(false);
+        KnowsNothing(registry);
         var residency = Substitute.For<ITenantResidencyResolver>();
         residency.IsActive.Returns(true);
         residency.IsOnlineInServingRegion(Acme).Returns(true);
@@ -185,7 +228,7 @@ public sealed class ReplicationTenantIsolationGateTests
     public async Task EvaluateAsync_existing_tenant_offline_in_region_rejects_out_of_region()
     {
         var registry = Substitute.For<ITenantRegistry>();
-        registry.ExistsAsync(Acme, Arg.Any<CancellationToken>()).Returns(true);
+        KnowsActive(registry);
         var residency = Substitute.For<ITenantResidencyResolver>();
         residency.IsActive.Returns(true);
         residency.IsOnlineInServingRegion(Acme).Returns(false);
@@ -200,7 +243,7 @@ public sealed class ReplicationTenantIsolationGateTests
     public async Task EvaluateAsync_existing_tenant_online_in_region_admits()
     {
         var registry = Substitute.For<ITenantRegistry>();
-        registry.ExistsAsync(Acme, Arg.Any<CancellationToken>()).Returns(true);
+        KnowsActive(registry);
         var residency = Substitute.For<ITenantResidencyResolver>();
         residency.IsActive.Returns(true);
         residency.IsOnlineInServingRegion(Acme).Returns(true);
@@ -217,7 +260,7 @@ public sealed class ReplicationTenantIsolationGateTests
         // The null residency default (IsActive false) means residency is not yet
         // wired (until T20), so an existing tenant is admitted in every region.
         var registry = Substitute.For<ITenantRegistry>();
-        registry.ExistsAsync(Acme, Arg.Any<CancellationToken>()).Returns(true);
+        KnowsActive(registry);
         var residency = Substitute.For<ITenantResidencyResolver>();
         residency.IsActive.Returns(false);
         var gate = CreateGate(registry, residency);
@@ -273,20 +316,20 @@ public sealed class ReplicationTenantIsolationGateTests
         // exist". A tenant created moments ago must still be admitted, so the
         // authoritative registry is consulted rather than the write being refused.
         var registry = Substitute.For<ITenantRegistry>();
-        registry.ExistsAsync(Acme, Arg.Any<CancellationToken>()).Returns(true);
+        KnowsActive(registry);
         var gate = CreateGate(registry, policy: await CompiledPolicyAsync(TenantId.Parse("other")));
 
         var decision = await gate.EvaluateAsync(AcmeTree);
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
-        await registry.Received(1).ExistsAsync(Acme, Arg.Any<CancellationToken>());
+        await registry.Received(1).GetAsync(Acme, Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task EvaluateAsync_unknown_tenant_absent_from_snapshot_still_rejects()
     {
         var registry = Substitute.For<ITenantRegistry>();
-        registry.ExistsAsync(Acme, Arg.Any<CancellationToken>()).Returns(false);
+        KnowsNothing(registry);
         var gate = CreateGate(registry, policy: await CompiledPolicyAsync(TenantId.Parse("other")));
 
         var decision = await gate.EvaluateAsync(AcmeTree);
@@ -322,7 +365,7 @@ public sealed class ReplicationTenantIsolationGateTests
 
         // The authoritative registry no longer knows the tenant.
         var registry = Substitute.For<ITenantRegistry>();
-        registry.ExistsAsync(Acme, Arg.Any<CancellationToken>()).Returns(Task.FromResult(false));
+        KnowsNothing(registry);
         var gate = CreateGate(registry, policy: policy);
 
         var decision = await gate.EvaluateAsync(AcmeTree, CancellationToken.None);
@@ -331,7 +374,7 @@ public sealed class ReplicationTenantIsolationGateTests
             decision,
             Is.EqualTo(ReplicationTenantIsolationDecision.RejectUnknownTenant),
             "a stale snapshot must not keep a deleted tenant admitted");
-        await registry.Received(1).ExistsAsync(Acme, Arg.Any<CancellationToken>());
+        await registry.Received(1).GetAsync(Acme, Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -350,7 +393,7 @@ public sealed class ReplicationTenantIsolationGateTests
         var decision = await gate.EvaluateAsync(AcmeTree, CancellationToken.None);
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
-        await registry.DidNotReceive().ExistsAsync(Arg.Any<TenantId>(), Arg.Any<CancellationToken>());
+        await registry.DidNotReceive().GetAsync(Arg.Any<TenantId>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -362,12 +405,135 @@ public sealed class ReplicationTenantIsolationGateTests
     {
         var policy = await FailingPolicyAsync(Acme);
         var registry = Substitute.For<ITenantRegistry>();
-        registry.ExistsAsync(Acme, Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
+        KnowsActive(registry);
         var gate = CreateGate(registry, policy: policy);
 
         var decision = await gate.EvaluateAsync(AcmeTree, CancellationToken.None);
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+    }
+
+    // ---- Tenant lifecycle status binds the apply path too -----------------
+    //
+    // The gate asked only whether a tenant EXISTS, never whether it is admissible.
+    // The authoring path has always refused a non-Active tenant
+    // (LatticeTenantPolicyEngine.ValidateActiveTenant), so suspension was a
+    // one-sided control: an operator suspends a tenant, every local write is
+    // refused, and the tenant's data goes on changing anyway from any peer region
+    // still shipping for it. Both halves of the decision - the compiled fast path
+    // and the authoritative registry fallback - must apply the same rule.
+
+    /// <summary>
+    /// The regression proper, on the fallback half: a tenant the registry knows but
+    /// has suspended is refused rather than admitted on existence alone.
+    /// </summary>
+    [Test]
+    public async Task Suspended_tenant_is_refused_by_the_registry_fallback()
+    {
+        var registry = Substitute.For<ITenantRegistry>();
+        KnowsSuspended(registry);
+        var gate = CreateGate(registry, policy: await CompiledPolicyAsync(TenantId.Parse("other")));
+
+        var decision = await gate.EvaluateAsync(AcmeTree);
+
+        Assert.That(
+            decision,
+            Is.EqualTo(ReplicationTenantIsolationDecision.RejectSuspendedTenant),
+            "a suspended tenant's inbound shipping must not be applied");
+    }
+
+    /// <summary>
+    /// The same rule on the compiled fast path, which answers the overwhelming
+    /// majority of applies: short-circuiting the registry read must not
+    /// short-circuit the status check.
+    /// </summary>
+    [Test]
+    public async Task Suspended_tenant_is_refused_on_the_compiled_fast_path()
+    {
+        var registry = Substitute.For<ITenantRegistry>();
+        var policy = await CompiledPolicyWithStatusAsync(Acme, TenantStatus.Suspended);
+        Assert.That(policy.IsSnapshotAuthoritative, Is.True, "guard: the fast path must be the one under test");
+        var gate = CreateGate(registry, policy: policy);
+
+        var decision = await gate.EvaluateAsync(AcmeTree);
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectSuspendedTenant));
+        Assert.That(registry.ReceivedCalls(), Is.Empty, "the fast path must stay allocation- and round-trip-free");
+    }
+
+    /// <summary>
+    /// A suspended tenant is refused for its status, not silently reclassified as
+    /// unknown or out-of-region: the three refusals carry different reason tags and
+    /// different operator remedies, so they must stay distinguishable.
+    /// </summary>
+    [Test]
+    public async Task Suspended_tenant_is_not_reported_as_unknown_or_out_of_region()
+    {
+        var registry = Substitute.For<ITenantRegistry>();
+        KnowsSuspended(registry);
+        var residency = Substitute.For<ITenantResidencyResolver>();
+        residency.IsActive.Returns(true);
+        residency.IsOnlineInServingRegion(Acme).Returns(true);
+        var gate = CreateGate(registry, residency);
+
+        var decision = await gate.EvaluateAsync(AcmeTree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision, Is.Not.EqualTo(ReplicationTenantIsolationDecision.Admit));
+            Assert.That(decision, Is.Not.EqualTo(ReplicationTenantIsolationDecision.RejectUnknownTenant));
+            Assert.That(decision, Is.Not.EqualTo(ReplicationTenantIsolationDecision.RejectOutOfRegion));
+        });
+    }
+
+    /// <summary>
+    /// The converse control: an active tenant is still admitted, so the status
+    /// check narrows nothing it should not.
+    /// </summary>
+    [Test]
+    public async Task Active_tenant_is_still_admitted_on_both_halves()
+    {
+        var fallbackRegistry = Substitute.For<ITenantRegistry>();
+        KnowsActive(fallbackRegistry);
+        var fallbackGate = CreateGate(
+            fallbackRegistry, policy: await CompiledPolicyAsync(TenantId.Parse("other")));
+
+        var fastGate = CreateGate(
+            Substitute.For<ITenantRegistry>(),
+            policy: await CompiledPolicyWithStatusAsync(Acme, TenantStatus.Active));
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(
+                await fallbackGate.EvaluateAsync(AcmeTree),
+                Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+            Assert.That(
+                await fastGate.EvaluateAsync(AcmeTree),
+                Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+        });
+    }
+
+    /// <summary>
+    /// Platform and legacy trees sit outside every tenant namespace, so the status
+    /// check must not reach them: a suspended tenant cannot stop system definitions
+    /// or pre-tenancy trees from converging.
+    /// </summary>
+    [Test]
+    public async Task Status_check_does_not_reach_platform_or_legacy_trees()
+    {
+        var registry = Substitute.For<ITenantRegistry>();
+        KnowsSuspended(registry);
+        var gate = CreateGate(registry);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(
+                await gate.EvaluateAsync(PlatformTree),
+                Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+            Assert.That(
+                await gate.EvaluateAsync(LegacyTree),
+                Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+        });
     }
 
     [Test]
@@ -376,7 +542,6 @@ public sealed class ReplicationTenantIsolationGateTests
             () => new ReplicationTenantIsolationGate(
                 Substitute.For<ITenantRegistry>(), new NullTenantResidencyResolver(), null!),
             Throws.ArgumentNullException);
-
     /// <summary>
     /// Builds a maintainer holding a good compile of <paramref name="tenants"/>
     /// whose subsequent rebuild has failed, so the snapshot is populated but no

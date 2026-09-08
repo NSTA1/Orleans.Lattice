@@ -295,9 +295,12 @@ internal sealed partial class ReplicationApplier(
                 {
                     await DeadLetterTenantIsolationAsync(entry, decision, cancellationToken)
                         .ConfigureAwait(false);
-                    outcome = decision == ReplicationTenantIsolationDecision.RejectOutOfRegion
-                        ? LatticeReplicationMetrics.OutcomeRejectedTenantOffline
-                        : LatticeReplicationMetrics.OutcomeRejectedForeignTenant;
+                    outcome = decision switch
+                    {
+                        ReplicationTenantIsolationDecision.RejectOutOfRegion => LatticeReplicationMetrics.OutcomeRejectedTenantOffline,
+                        ReplicationTenantIsolationDecision.RejectSuspendedTenant => LatticeReplicationMetrics.OutcomeRejectedSuspendedTenant,
+                        _ => LatticeReplicationMetrics.OutcomeRejectedForeignTenant,
+                    };
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
                 }
             }
@@ -1227,15 +1230,24 @@ internal sealed partial class ReplicationApplier(
         ReplicationTenantIsolationDecision decision,
         CancellationToken cancellationToken)
     {
-        var (reasonTag, failureReason) = decision == ReplicationTenantIsolationDecision.RejectOutOfRegion
-            ? (LatticeReplicationMetrics.ReasonTenantOffline,
-                $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that is not "
-                + "resident in the region serving this receiver; the write was refused so it cannot "
-                + "land in a region outside the tenant's residency set.")
-            : (LatticeReplicationMetrics.ReasonForeignTenant,
-                $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that does not "
-                + "exist on this receiver; the write was refused so a peer cannot create or smuggle "
-                + "into a foreign or non-existent tenant.");
+        var (reasonTag, failureReason) = decision switch
+        {
+            ReplicationTenantIsolationDecision.RejectOutOfRegion =>
+                (LatticeReplicationMetrics.ReasonTenantOffline,
+                    $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that is not "
+                    + "resident in the region serving this receiver; the write was refused so it cannot "
+                    + "land in a region outside the tenant's residency set."),
+            ReplicationTenantIsolationDecision.RejectSuspendedTenant =>
+                (LatticeReplicationMetrics.ReasonSuspendedTenant,
+                    $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that exists but "
+                    + "is not active on this receiver; the write was refused so an administrative suspension "
+                    + "binds the replication apply path as well as the authoring path."),
+            _ =>
+                (LatticeReplicationMetrics.ReasonForeignTenant,
+                    $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that does not "
+                    + "exist on this receiver; the write was refused so a peer cannot create or smuggle "
+                    + "into a foreign or non-existent tenant."),
+        };
 
         var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
         return dlq.EnqueueAsync(

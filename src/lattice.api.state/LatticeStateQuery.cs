@@ -145,44 +145,10 @@ internal sealed class LatticeStateQuery(
     /// cannot be recovered or the source cannot be resolved, so the caller fails
     /// closed and hides the view rather than leaking it.
     /// </summary>
-    private async ValueTask<string?> ResolveViewSourceTreeIdAsync(string treeId, CancellationToken cancellationToken)
-    {
-        var viewName = ViewNameFromTreeId(treeId);
-        if (viewName.Length == 0)
-        {
-            return null;
-        }
-
-        var local = _services.GetService<IViewCatalog>()?.TryGet(viewName);
-        if (local is { } registration)
-        {
-            return registration.SourceTreeId;
-        }
-
-        try
-        {
-            IReadOnlyList<RuntimeViewRegistration> runtime;
-            using (LatticeAccessGateContext.EnterSystemOrigin())
-            {
-                var registry = _grainFactory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey);
-                runtime = await registry.ListAsync().ConfigureAwait(false);
-            }
-
-            foreach (var reg in runtime)
-            {
-                if (string.Equals(reg.ViewName, viewName, StringComparison.Ordinal))
-                {
-                    return reg.SourceTreeId;
-                }
-            }
-        }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            // Fail closed below on any transient registry-activation failure.
-        }
-
-        return null;
-    }
+    private async ValueTask<string?> ResolveViewSourceTreeIdAsync(string treeId, CancellationToken cancellationToken) =>
+        await LatticeStateViewSource
+            .ResolveAsync(_services, _grainFactory, treeId, cancellationToken)
+            .ConfigureAwait(false);
 
     /// <summary>
     /// Decides whether a catalog entry may be surfaced to a subject with

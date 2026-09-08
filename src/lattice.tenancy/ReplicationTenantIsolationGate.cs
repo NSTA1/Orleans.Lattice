@@ -108,9 +108,21 @@ internal sealed class ReplicationTenantIsolationGate(
         // or failing, so those windows fall back to the registry and the fast path
         // is kept for the steady state it was added for.
         if (_policy.IsSnapshotAuthoritative
-            && _policy.Current.TryGetTenant(tenant.Value ?? string.Empty, out _))
+            && _policy.Current.TryGetTenant(tenant.Value ?? string.Empty, out var compiled)
+            && compiled is not null)
         {
-            return new ValueTask<ReplicationTenantIsolationDecision>(EvaluateResidency(tenant));
+            // A tenant that exists but has been SUSPENDED is not admissible. The
+            // authoring path already refuses it (LatticeTenantPolicyEngine
+            // .ValidateActiveTenant denies any non-Active status), so admitting its
+            // inbound shipping here would make suspension a one-sided control: an
+            // operator suspends a tenant, every local write is refused, and the
+            // tenant's data goes on changing anyway from any peer region still
+            // shipping for it. Existence is not the same question as admissibility,
+            // and this gate previously only asked the first.
+            return new ValueTask<ReplicationTenantIsolationDecision>(
+                compiled.Status == TenantStatus.Active
+                    ? EvaluateResidency(tenant)
+                    : ReplicationTenantIsolationDecision.RejectSuspendedTenant);
         }
 
         return EvaluateAgainstRegistryAsync(tenant, cancellationToken);
@@ -130,15 +142,24 @@ internal sealed class ReplicationTenantIsolationGate(
     /// <summary>
     /// Slow path for a tenant absent from the compiled snapshot: consults the
     /// authoritative registry before admitting, so a not-yet-compiled tenant is
-    /// evaluated correctly and an unknown one is still refused.
+    /// evaluated correctly and an unknown one is still refused. The record is read
+    /// rather than merely probed for existence, because the decision turns on the
+    /// tenant's lifecycle status as well as its existence and a bare existence
+    /// probe cannot answer the second.
     /// </summary>
     private async ValueTask<ReplicationTenantIsolationDecision> EvaluateAgainstRegistryAsync(
         TenantId tenant,
         CancellationToken cancellationToken)
     {
-        if (!await _registry.ExistsAsync(tenant, cancellationToken).ConfigureAwait(false))
+        var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false);
+        if (record is null)
         {
             return ReplicationTenantIsolationDecision.RejectUnknownTenant;
+        }
+
+        if (!record.IsActive)
+        {
+            return ReplicationTenantIsolationDecision.RejectSuspendedTenant;
         }
 
         return EvaluateResidency(tenant);
