@@ -58,6 +58,17 @@ public partial class TreeSnapshotGrainTests
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
         var state = existingState ?? new FakePersistentState<TreeSnapshotState>();
 
+        var registry = Substitute.For<ILatticeRegistry>();
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.ExistsAsync(Arg.Any<string>()).Returns(false);
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = ShardCount,
+            }));
+
         var grain = new TreeSnapshotGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeSnapshotGrain>(), state);
@@ -127,25 +138,27 @@ public partial class TreeSnapshotGrainTests
     }
 
     [Test]
-    public async Task Initiating_a_snapshot_clears_a_previous_completion_flag()
+    public async Task Starting_a_new_snapshot_clears_a_previous_completion_flag()
     {
         // A grain that already ran a snapshot to completion keeps Complete=true
-        // until the next one starts. Leaving it set would make IsCompleteAsync
-        // report the *previous* snapshot's result while the new one is still
-        // copying.
+        // until the next one starts. The public entry point clears it up front,
+        // before it does any of the work that can fail - otherwise a snapshot
+        // that got as far as validation would leave IsCompleteAsync reporting
+        // the *previous* snapshot's result while the new one was still copying.
         var existing = new FakePersistentState<TreeSnapshotState>
         {
             State = new TreeSnapshotState { Complete = true },
         };
-        var (grain, state, _, grainFactory, _) = CreateGrain(existingState: existing);
-        SetupShardMocks(grainFactory, SourceTreeId);
+        var h = CreateGrainWithTimerRegistry(existing);
+        SetupShardMocks(h.Factory, SourceTreeId);
 
-        await grain.InitiateSnapshotStateAsync(DestTreeId, SnapshotMode.Offline, ShardCount);
+        await h.Grain.SnapshotAsync(DestTreeId, SnapshotMode.Offline);
 
         Assert.Multiple(() =>
         {
-            Assert.That(state.State.Complete, Is.False);
-            Assert.That(state.State.InProgress, Is.True);
+            Assert.That(h.State.State.Complete, Is.False);
+            Assert.That(h.State.State.InProgress, Is.True);
+            Assert.That(h.State.State.DestinationTreeId, Is.EqualTo(DestTreeId));
         });
     }
 
