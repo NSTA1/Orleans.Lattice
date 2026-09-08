@@ -128,24 +128,129 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> resolves
     /// to <see cref="Environment.ProcessorCount"/>. The gate is sized once on
     /// first use and is a process-wide structural constant thereafter.
+    /// <para>
+    /// <b><see cref="Environment.ProcessorCount"/> does not always honour the
+    /// container CPU quota, and this gate is where that bites (issue #2278).</b>
+    /// It is cgroup-aware <em>by default</em>, but <c>DOTNET_PROCESSOR_COUNT</c>
+    /// (and <c>System.GC.HeapCount</c> under a configured heap count) is an
+    /// explicit override that takes precedence over the cgroup-derived value.
+    /// A host that sets it higher than the quota - which is an ordinary thing to
+    /// do, and invisible from inside the process - sizes this gate above the CPU
+    /// the process can actually obtain, and every permit it hands out is a
+    /// concurrent WHOLE-WINDOW replay: a CPU-bound deserialise-and-apply loop.
+    /// Observed in the deployed repo-context host at 16 permits against a
+    /// 6-CPU quota (2.67x) under workstation GC, which produced thread-pool
+    /// starvation, activations cancelled by the runtime mid-replay, and - because
+    /// an interrupted rebuild latches neither capture signal in
+    /// <c>TryCaptureSnapshotOnDeactivateAsync</c> - leaves that could never bank
+    /// a snapshot and so re-entered a cold whole-window replay on every
+    /// activation. Oversubscribing this gate is therefore not merely slow: it is
+    /// self-reinforcing, because the replay it makes too slow is the very work
+    /// whose completion would have made the next one cheap.
+    /// </para>
+    /// <para>
+    /// Nothing here can read the cgroup quota portably, and it deliberately does
+    /// not try: <c>DOTNET_PROCESSOR_COUNT</c> is a documented, supported override
+    /// doing exactly what it is specified to do, so library code that reached
+    /// past it would silently defeat an operator instruction that every other
+    /// .NET subsystem in the process obeys, leaving the process holding two
+    /// conflicting beliefs about its own CPU count (ruled out on issue #2279).
+    /// What this does instead is make the number <em>observable</em>: the
+    /// resolved ceiling is logged once alongside the configured option and
+    /// <see cref="Environment.ProcessorCount"/>, so an operator diagnosing a
+    /// replay storm can read the figure the process actually chose rather than
+    /// inferring it from the host's vCPU count. The sizing remedy needs no code
+    /// at all - pin
+    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>
+    /// explicitly wherever the quota and <see cref="Environment.ProcessorCount"/>
+    /// can disagree, since it already takes precedence over the default.
+    /// </para>
     /// </summary>
-    private static SemaphoreSlim ResolveReplayConcurrencyGate(LatticeOptions options)
+    private static SemaphoreSlim ResolveReplayConcurrencyGate(LatticeOptions options, Func<ILogger?> loggerAccessor)
     {
         var existing = Volatile.Read(ref _replayConcurrencyGate);
         if (existing is not null)
             return existing;
 
+        bool sizedHere;
+        int max;
         lock (_replayConcurrencyGateLock)
         {
             if (_replayConcurrencyGate is null)
             {
-                var max = options.WalMaterialiserMaxConcurrentReplays;
+                max = options.WalMaterialiserMaxConcurrentReplays;
                 if (max <= 0)
                     max = Environment.ProcessorCount;
                 _replayConcurrencyGate = new SemaphoreSlim(max, max);
+                sizedHere = true;
             }
+            else
+            {
+                (sizedHere, max) = (false, 0);
+            }
+        }
 
-            return _replayConcurrencyGate;
+        if (sizedHere)
+            LogResolvedReplayConcurrencyGate(max, options.WalMaterialiserMaxConcurrentReplays, loggerAccessor);
+
+        return Volatile.Read(ref _replayConcurrencyGate)!;
+    }
+
+    /// <summary>
+    /// Emits the one-per-process record of the resolved gate ceiling.
+    /// <para>
+    /// Three properties of this method are load-bearing rather than stylistic.
+    /// It runs <b>outside</b> the initialisation lock, because a logging sink is
+    /// arbitrary code and holding the lock across it would serialise every other
+    /// activation racing to resolve the same gate behind a slow sink. It takes
+    /// the logger as a <see cref="Func{TResult}"/> and invokes it only on the
+    /// sizing path, so the overwhelming majority of activations - which find the
+    /// gate already built and return before reaching here - never resolve a
+    /// logger for it at all; that also keeps the permit-leak regression fixture
+    /// for issue #2256 measuring what it claims to, since resolving a logger
+    /// earlier on the acquisition path would move that fixture's injected fault
+    /// to before the permit is taken and quietly void its instrument. And it
+    /// swallows everything, because issue #2256 established here that a throwing
+    /// logging sink is a real environmental fault on this exact path; an
+    /// observability improvement that can itself fail an activation is a
+    /// regression, not an improvement.
+    /// </para>
+    /// <para>
+    /// Exposed as <c>internal</c> rather than <c>private</c> so the swallow can
+    /// be pinned by a test. The gate itself is sized once per process and has no
+    /// reset seam, so a fixture that tried to observe this line by driving a
+    /// real activation would pass or fail on test-execution order - the same
+    /// order-dependent flake shape the meter-field convention exists to prevent.
+    /// Calling the emitter directly is deterministic and tests the property that
+    /// can actually regress.
+    /// </para>
+    /// </summary>
+    internal static void LogResolvedReplayConcurrencyGate(int max, int configured, Func<ILogger?> loggerAccessor)
+    {
+        try
+        {
+            var logger = loggerAccessor();
+            if (logger is null || !logger.IsEnabled(LogLevel.Information))
+                return;
+
+            logger.LogInformation(
+                "Leaf WAL replay concurrency gate sized to {MaxConcurrentReplays} permit(s) for this silo. "
+                + "Configured WalMaterialiserMaxConcurrentReplays={ConfiguredMaxConcurrentReplays} "
+                + "(non-positive means unset, in which case the ceiling follows Environment.ProcessorCount), "
+                + "and Environment.ProcessorCount reports {ProcessorCount}. Each permit admits one whole-window "
+                + "WAL replay, which is CPU bound, so a ceiling above the CPU this process can actually obtain "
+                + "oversubscribes it. Environment.ProcessorCount honours a container CPU quota only while "
+                + "DOTNET_PROCESSOR_COUNT does not override it, so compare these figures against the container's "
+                + "real quota rather than assuming the runtime already reflects it, and pin "
+                + "WalMaterialiserMaxConcurrentReplays explicitly on a constrained host. The gate is sized once "
+                + "per process and is never re-created or topped up.",
+                max,
+                configured,
+                Environment.ProcessorCount);
+        }
+        catch
+        {
+            // Deliberately swallowed - see the summary above.
         }
     }
 
@@ -169,7 +274,7 @@ internal sealed partial class BPlusLeafGrain
             return null;
 
         var options = await GetOptionsAsync();
-        var gate = ResolveReplayConcurrencyGate(options);
+        var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
         await gate.WaitAsync(cancellationToken);
         return gate;
     }
@@ -247,11 +352,14 @@ internal sealed partial class BPlusLeafGrain
         // resolution, the IsEnabled probe or the templated call itself lost the
         // permit for the lifetime of the process: the gate is sized once by
         // ResolveReplayConcurrencyGate and is never re-created or topped up. It
-        // defaults to Environment.ProcessorCount, which honours a container CPU
-        // quota, so on a 2-vCPU host two such throws - ever - stop the silo
-        // activating leaves entirely, and the symptom is a silent wait on
-        // WaitAsync rather than an error. A throwing logging sink is transient
-        // and environmental, which is exactly the fault a unit test never sees.
+        // defaults to Environment.ProcessorCount, which is cgroup-aware only
+        // when DOTNET_PROCESSOR_COUNT does not override it (issue #2278), so on
+        // a 2-vCPU host two such throws - ever - stop the silo activating
+        // leaves entirely, and the symptom is a silent wait on WaitAsync rather
+        // than an error. Note the override cuts both ways: it can also size the
+        // gate ABOVE the quota, which does not exhaust it but oversubscribes
+        // the CPU behind it. A throwing logging sink is transient and
+        // environmental, which is exactly the fault a unit test never sees.
         try
         {
             if (replayPermit is not null)
