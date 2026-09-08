@@ -1239,13 +1239,36 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 failedBatches++;
                 consecutiveBatchFailures++;
                 pendingMembers.Clear();
+
+                // Name the batch's sources. A gap residue that persists across passes
+                // is either the SAME sources failing every time - a deterministic
+                // write fault, such as a key range served by a permanently stalled
+                // leaf - or a different set each pass, which is ordinary contention
+                // that will drain. The passage count alone cannot separate those, and
+                // that ambiguity is exactly what left the never-converging back-fill
+                // unattributed for four rounds of investigation (issue #2208). Units
+                // are contiguous per source, so comparing against the last key
+                // deduplicates without a set.
+                var batchSources = new List<string>();
+                for (var i = 0; i < count; i++)
+                {
+                    var ownerKey = sources[unitOwner[start + i]].SourceKey;
+                    if (batchSources.Count == 0 || !string.Equals(batchSources[^1], ownerKey, StringComparison.Ordinal))
+                    {
+                        batchSources.Add(ownerKey);
+                    }
+                }
+
                 _logger.LogWarning(
                     ex,
-                    "Repo {RepoId}: the {Arm} arm could not record a batch of {Count} passage(s); its sources stay "
-                    + "unmarked and are retried on the next reconcile. Continuing with the remaining batches.",
+                    "Repo {RepoId}: the {Arm} arm could not record a batch of {Count} passage(s) spanning "
+                    + "{Sources} source(s); they stay unmarked and are retried on the next reconcile. Continuing "
+                    + "with the remaining batches. sample: {Sample}",
                     repoId,
                     arm,
-                    count);
+                    count,
+                    batchSources.Count,
+                    string.Join(", ", batchSources.Take(6)));
 
                 // Consecutive record failures mean the vector plane is saturated, not
                 // that one batch was unlucky. Driving the remaining batches into it
