@@ -87,10 +87,15 @@ jobs:
           #
           # The trailing `(/...)*` group permitting further path segments is
           # load-bearing, not incidental: it is what lets an epic integration
-          # branch (`<type>/epic/<slug>`) and its per-item sub-branches
-          # (`<type>/epic/<slug>/<item>`) pass with no `epic` prefix added
-          # here. Do not tighten it to a single segment, and do not add `epic`
-          # to the alternation - a bare `epic/<slug>` is not the convention.
+          # branch (`<type>/epic/<slug>`) pass with no `epic` prefix added
+          # here. Its member branches separate the item slug with a HYPHEN
+          # (`<type>/epic/<slug>-<item>`) and not a further path segment:
+          # git stores a branch as a file at `refs/heads/<name>`, so
+          # `refs/heads/<type>/epic/<slug>` and a nested
+          # `refs/heads/<type>/epic/<slug>/<item>` cannot coexist, whichever
+          # is created first. Do not tighten the group to a single segment,
+          # and do not add `epic` to the alternation - a bare `epic/<slug>`
+          # is not the convention.
           prefixes='feat|fix|docs|test|tests|perf|chore|ci|refactor|build|deps|revert|release'
 
           if ! printf '%s' "${BRANCH}" | grep -Eq "^(${prefixes})/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*$"; then
