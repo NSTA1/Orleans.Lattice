@@ -152,9 +152,14 @@ internal sealed partial class BPlusLeafGrain
     /// clamp is transient. It is NOT a safe bound for an unresolved PREPARE:
     /// nothing drains a prepare whose saga never terminates, so a dropped
     /// prepare pins the flush ceiling at (prepare - 1) forever and the leaf
-    /// banks no durable forward progress at all - the livelock issue #2183
-    /// reproduces once a long-lived leaf's ledger has saturated with
-    /// never-resolving orphan prepares. Dropping a prepare is also unsafe for
+    /// banks no durable forward progress at all - the latent livelock issue
+    /// #2183 fixes, demonstrated by the two-arm control in
+    /// <c>BPlusLeafGrainTests.ReplayFlushCeiling</c>. This is a latent defect
+    /// fixed on UNIT evidence; it is NOT the freeze observed on the deployed
+    /// repocontext leaf, whose ledger was measured near-empty (so its cap was
+    /// never hit) - that field freeze is an activation aborted mid-replay by a
+    /// digest-publish timeout (issue #2220), a different mechanism on a
+    /// disjoint path. Dropping a prepare is also unsafe for
     /// the aged-out-commit reason #2190 documents: a prepare whose commit
     /// terminal has truncated on another partition reads InFlight yet
     /// committed, so it must be preserved, not discarded.

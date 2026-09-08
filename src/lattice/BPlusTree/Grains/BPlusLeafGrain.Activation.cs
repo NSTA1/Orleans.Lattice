@@ -2701,10 +2701,16 @@ internal sealed partial class BPlusLeafGrain
                         // prepare (registry InFlight forever) is never. So a
                         // prepare that is dropped at the cap pins the ceiling
                         // at (prepare - 1) PERMANENTLY, and the leaf banks zero
-                        // forward progress across every future activation - the
-                        // livelock this issue reproduces on the deployed box,
-                        // where a long-lived leaf's ledger has saturated with
-                        // never-resolving orphan prepares.
+                        // forward progress across every future activation. This
+                        // is the latent defect issue #2183 fixes, proven by the
+                        // two-arm control in BPlusLeafGrainTests.ReplayFlushCeiling
+                        // (a dropped prepare never advances the checkpoint; a
+                        // recorded one does). It is NOT the freeze observed on
+                        // the deployed repocontext leaf: that leaf's durable row
+                        // was measured near-empty, so its cap was never hit, and
+                        // its freeze is an activation aborted mid-replay by a
+                        // digest-publish timeout (issue #2220) - a different
+                        // mechanism on a disjoint path.
                         //
                         // A resident prepare must therefore be recorded
                         // unconditionally whenever the ledger is enabled: it is
