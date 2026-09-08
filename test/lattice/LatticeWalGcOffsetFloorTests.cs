@@ -14,11 +14,19 @@ namespace Orleans.Lattice.Tests;
 /// (low) HLC but are appended at HIGH WAL offsets, breaking the
 /// HLC-monotonic-in-offset invariant the HLC trim floor relies on. A reap's low
 /// HLC is <see cref="LatticeWalGc"/>-eligible under any positive cursor, so the
-/// GC would trim it PAST a lagging leaf's applied checkpoint offset, tripping
+/// GC would trim it PAST a lagging leaf's projection checkpoint offset, tripping
 /// the offset-space fall-off detector and wedging ingest. The offset floor makes
-/// the GC never trim an entry at or above the lowest durably-applied leaf
-/// checkpoint offset, so the low-HLC/high-offset reaps survive until the leaf
-/// applies them.
+/// the GC never trim an entry at or above the lowest durable leaf checkpoint
+/// offset, so the low-HLC/high-offset reaps survive until the leaf has read
+/// them.
+/// <para>
+/// Those checkpoints are SCANNED-through, not applied-through (issue #2270): a
+/// leaf advances its checkpoint over entries it skips as another leaf's, so a
+/// surviving entry is not pinned "until the leaf applies it". Taking the MINIMUM
+/// is what makes the floor sound - skipping only inflates the checkpoint of a
+/// leaf that does NOT own the entry, and the one leaf that does own it cannot
+/// skip it, so it holds the minimum down until it genuinely applies.
+/// </para>
 /// </summary>
 [TestFixture]
 public sealed class LatticeWalGcOffsetFloorTests

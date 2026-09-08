@@ -216,9 +216,20 @@ public sealed class LatticeWalGc(
         // low-HLC / high-offset WAL entry (a tombstone-compaction reap re-emits
         // an old timestamp at a new offset, so the WAL is not HLC-monotonic in
         // offset): such an entry is HLC-eligible under any positive cursor yet
-        // sits above a lagging leaf's applied checkpoint offset. Flooring the
-        // trim at the lowest durably-applied offset keeps every not-yet-applied
-        // entry readable so the leaf never falls off its own log.
+        // sits above a lagging leaf's projection checkpoint offset. Flooring
+        // the trim at the lowest such offset keeps every entry the lagging leaf
+        // has not yet read readable, so the leaf never falls off its own log.
+        //
+        // Those offsets are SCANNED-through, not applied-through (issue #2270):
+        // replay advances a leaf's checkpoint over entries it skips as another
+        // leaf's, so a checkpoint here can sit above entries this leaf never
+        // applied. Taking the MINIMUM is exactly what makes that safe. Skipping
+        // only ever inflates the checkpoint of a leaf that does NOT own the
+        // entry; the single leaf that does own it cannot skip it, so it holds
+        // the minimum below that offset until it genuinely applies, and the
+        // entry is retained. See BPlusLeafGrain.RebuildProjectionFromWalAsync,
+        // which names this floor as the reason scanned-through advance is
+        // load-bearing rather than an oversight.
         var offsetFloor = await ComputeMaterialiserOffsetFloorAsync(treeName).ConfigureAwait(false);
         var causalStable = await cursors.GetCausalStableAsync(treeName, cancellationToken).ConfigureAwait(false);
         var blockedFloor = await cursors.GetBlockedFloorAsync(treeName, cancellationToken).ConfigureAwait(false);

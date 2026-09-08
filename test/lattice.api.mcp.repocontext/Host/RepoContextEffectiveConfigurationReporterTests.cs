@@ -257,6 +257,80 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
             + "defect than the invisibility it removes");
     }
 
+    /// <summary>
+    /// Covers <see cref="RepoContextEffectiveConfiguration.ReadProcessEnvironment"/>,
+    /// the seam that supplies the real report its input. Every other test here hands
+    /// <see cref="RepoContextEffectiveConfiguration.DescribeUnreadVariables"/> a
+    /// hand-built list, so the whole "supplied but not read" arm of #2279 could work
+    /// perfectly in this fixture while reading nothing at run time.
+    /// <para>
+    /// Asserted through the COMPOSITION rather than on the returned list, because that
+    /// is the contract the method's own summary states - "the shape
+    /// <c>DescribeUnreadVariables</c> accepts". A test that only asserted the pair is
+    /// present would still pass if the two sides disagreed on prefix casing or on the
+    /// null-value representation.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void A_variable_set_on_this_process_reaches_the_unread_report()
+    {
+        const string probeKey = "LATTICE_PROBE_READ_PROCESS_ENVIRONMENT";
+        Environment.SetEnvironmentVariable(probeKey, "1");
+        try
+        {
+            var environment = RepoContextEffectiveConfiguration.ReadProcessEnvironment();
+
+            Assert.That(
+                environment.Any(pair => pair.Key is not null),
+                Is.True,
+                "the process environment always holds at least one variable; an empty read "
+                + "here means the enumeration broke, not that the environment is empty - fix "
+                + "the read rather than relaxing this floor");
+
+            var lines = RepoContextEffectiveConfiguration.DescribeUnreadVariables(
+                environment,
+                RepoContextEffectiveConfigurationReporter.KnownKeys);
+
+            Assert.That(
+                lines,
+                Has.Exactly(1).Contains(probeKey),
+                "the report is only a trace of the deployment if it reads the deployment's "
+                + "actual environment; a variable set on this process and read by nothing "
+                + "must arrive at the unread arm through the real seam");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(probeKey, null);
+        }
+    }
+
+    /// <summary>
+    /// The read drops non-string environment keys. Nothing downstream can render one,
+    /// and a null name would otherwise be carried as far as the prefix test in
+    /// <see cref="RepoContextEffectiveConfiguration.DescribeUnreadVariables"/>.
+    /// </summary>
+    [Test]
+    public void The_process_environment_read_never_yields_a_null_name()
+    {
+        var names = RepoContextEffectiveConfiguration.ReadProcessEnvironment()
+            .Select(pair => pair.Key)
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                names, Is.Not.Empty,
+                "an all-null assertion over an empty sequence is vacuously true, so this "
+                + "floor is what stops the guard below silently ceasing to check anything. "
+                + "If it trips, fix the read - do not delete the floor");
+
+            Assert.That(
+                names, Has.None.Null,
+                "DescribeUnreadVariables guards against a null name, but this read is where "
+                + "that guarantee is supposed to come from");
+        });
+    }
+
     private sealed class CapturingLogger : ILogger<RepoContextEffectiveConfigurationReporter>
     {
         public List<string> Messages { get; } = [];
