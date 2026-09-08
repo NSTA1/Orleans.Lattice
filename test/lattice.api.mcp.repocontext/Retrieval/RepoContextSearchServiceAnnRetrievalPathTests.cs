@@ -134,7 +134,11 @@ public sealed class RepoContextSearchServiceAnnRetrievalPathTests
 
     private static AnnRepoContextSemanticIndex Ann(
         IRepoContextAnnIndex plane, IRepoContextSemanticIndex exact)
-        => new(plane, exact, NullLogger<AnnRepoContextSemanticIndex>.Instance);
+        => new(
+            plane,
+            exact,
+            RepoContextExactScanBudgets.Unbounded(),
+            NullLogger<AnnRepoContextSemanticIndex>.Instance);
 
     [Test]
     public async Task A_built_index_answers_and_the_response_reports_semantic_approximate()

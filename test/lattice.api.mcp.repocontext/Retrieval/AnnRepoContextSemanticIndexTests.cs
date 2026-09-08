@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
+using Orleans.Lattice.Vector.Persistence;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 
@@ -21,9 +22,28 @@ public sealed class AnnRepoContextSemanticIndexTests
 
     private CancellationToken Ct => TestContext.CurrentContext.CancellationToken;
 
+    /// <summary>
+    /// A budget that never bounds the exact gather, so a fixture that is not about
+    /// the budget sees exactly the pre-existing behaviour.
+    /// </summary>
+    private static RepoContextExactScanBudget UnboundedBudget()
+        => RepoContextExactScanBudgets.Unbounded();
+
+    /// <summary>
+    /// The shipped defaults: a 30 second response timeout derives a 25 second
+    /// stall ceiling, against a 5 second cooperative page budget, so a gather may
+    /// visit five pages - 1,280 vectors.
+    /// </summary>
+    private static RepoContextExactScanBudget DefaultBudget()
+        => RepoContextExactScanBudgets.Default();
+
     private static AnnRepoContextSemanticIndex Create(
         IRepoContextAnnIndex plane, IRepoContextSemanticIndex exact)
-        => new(plane, exact, NullLogger<AnnRepoContextSemanticIndex>.Instance);
+        => Create(plane, exact, UnboundedBudget());
+
+    private static AnnRepoContextSemanticIndex Create(
+        IRepoContextAnnIndex plane, IRepoContextSemanticIndex exact, RepoContextExactScanBudget budget)
+        => new(plane, exact, budget, NullLogger<AnnRepoContextSemanticIndex>.Instance);
 
     private static IRepoContextAnnIndex PlaneReturning(RepoContextAnnSearchOutcome outcome)
     {
@@ -35,6 +55,31 @@ public sealed class AnnRepoContextSemanticIndexTests
                 Arg.Any<int>(),
                 Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RepoContextAnnSearchOutcome>(outcome));
+        return plane;
+    }
+
+    /// <summary>
+    /// A bootstrapping plane that reports a corpus of <paramref name="vectors"/>
+    /// vectors, which is the signal the exact-scan budget is judged against.
+    /// </summary>
+    private static IRepoContextAnnIndex BootstrappingPlaneWithCorpus(int vectors)
+    {
+        var plane = PlaneReturning(RepoContextAnnSearchOutcome.Bootstrapping);
+        var progress = new VectorIndexBuildProgress(
+            VectorIndexBuildPhase.Ingesting,
+            Generation: 1,
+            VectorsIndexed: 0,
+            VectorsExpected: vectors,
+            PartitionsPersisted: 0,
+            PartitionsTotal: 0,
+            RestoredFromDurableState: false);
+
+        plane.TryGetProgress(Arg.Any<string>(), Arg.Any<EmbeddingSpaceTag>(), out Arg.Any<VectorIndexBuildProgress>())
+            .Returns(call =>
+            {
+                call[2] = progress;
+                return true;
+            });
         return plane;
     }
 
@@ -58,6 +103,10 @@ public sealed class AnnRepoContextSemanticIndexTests
             .Returns(Task.FromResult<IReadOnlyList<RepoContextVectorMatch>>(matches));
         return index;
     }
+
+    private static bool Searched(IRepoContextSemanticIndex exact)
+        => exact.ReceivedCalls().Any(call => call.GetMethodInfo().Name == nameof(exact.SearchAsync));
+
 
     private static RepoContextAnnSearchOutcome Answer(
         RepoContextAnnServingState state, params string[] sourceKeys)
@@ -133,7 +182,7 @@ public sealed class AnnRepoContextSemanticIndexTests
         {
             Assert.That(matches[0].SourceKey, Is.EqualTo("repo/acme/file/src/Ann.cs"));
             Assert.That(
-                exact.ReceivedCalls().Any(call => call.GetMethodInfo().Name == nameof(exact.SearchAsync)),
+                Searched(exact),
                 Is.False,
                 "Falling through to the full prefix scan when the index can answer would defeat the change.");
         });
@@ -182,19 +231,24 @@ public sealed class AnnRepoContextSemanticIndexTests
     {
         var plane = PlaneReturning(RepoContextAnnSearchOutcome.Bootstrapping);
         var exact = ExactReturning("k");
+        var budget = UnboundedBudget();
 
         Assert.Multiple(() =>
         {
             Assert.That(
                 () => new AnnRepoContextSemanticIndex(
-                    null!, exact, NullLogger<AnnRepoContextSemanticIndex>.Instance),
+                    null!, exact, budget, NullLogger<AnnRepoContextSemanticIndex>.Instance),
                 Throws.ArgumentNullException);
             Assert.That(
                 () => new AnnRepoContextSemanticIndex(
-                    plane, null!, NullLogger<AnnRepoContextSemanticIndex>.Instance),
+                    plane, null!, budget, NullLogger<AnnRepoContextSemanticIndex>.Instance),
                 Throws.ArgumentNullException);
             Assert.That(
-                () => new AnnRepoContextSemanticIndex(plane, exact, null!),
+                () => new AnnRepoContextSemanticIndex(
+                    plane, exact, null!, NullLogger<AnnRepoContextSemanticIndex>.Instance),
+                Throws.ArgumentNullException);
+            Assert.That(
+                () => new AnnRepoContextSemanticIndex(plane, exact, budget, null!),
                 Throws.ArgumentNullException);
         });
     }
@@ -228,5 +282,103 @@ public sealed class AnnRepoContextSemanticIndexTests
             Assert.That(ReferenceEquals(first.Matches, second.Matches), Is.True,
                 "Reporting the common no-index case must not allocate on the per-query path.");
         });
+    }
+
+    [Test]
+    public async Task A_building_plane_over_a_corpus_beyond_the_scan_budget_never_starts_the_exact_scan()
+    {
+        var exact = ExactReturning("repo/acme/file/src/A.cs");
+        var index = Create(BootstrappingPlaneWithCorpus(100_000), exact, DefaultBudget());
+
+        var matches = await index.SearchAsync(RepoId, new float[] { 1f, 0f, 0f }, Space, 5, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Searched(exact), Is.False,
+                "A gather this size cannot fill its pages inside the configured stall ceiling. Starting it spends "
+                + "the whole ceiling, faults with ScanPageStalledException, ends at keyword recall anyway, and "
+                + "loads the very tree the build is streaming while it does so.");
+            Assert.That(matches, Is.Empty,
+                "No matches is what the search service resolves to keyword.vector_plane_unavailable - the "
+                + "documented cause for a plane that is still building, reached with no scan at all.");
+        });
+    }
+
+    [Test]
+    public async Task A_building_plane_over_a_small_corpus_still_runs_the_exact_scan()
+    {
+        var exact = ExactReturning("repo/acme/file/src/A.cs");
+        var index = Create(BootstrappingPlaneWithCorpus(500), exact, DefaultBudget());
+
+        var matches = await index.SearchAsync(RepoId, new float[] { 1f, 0f, 0f }, Space, 5, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Searched(exact), Is.True,
+                "A corpus that fits the budget completes comfortably, and the exact answer is the better one. "
+                + "The budget must never disable the exact fallback outright.");
+            Assert.That(matches, Has.Count.EqualTo(1));
+            Assert.That(matches[0].SourceKey, Is.EqualTo("repo/acme/file/src/A.cs"));
+        });
+    }
+
+    [Test]
+    public async Task A_serving_plane_answers_whatever_the_corpus_size()
+    {
+        var exact = ExactReturning("repo/acme/file/src/Exact.cs");
+        var plane = PlaneReturning(
+            Answer(RepoContextAnnServingState.Approximate, "repo/acme/file/src/Ann.cs"));
+        var index = Create(plane, exact, DefaultBudget());
+
+        var matches = await index.SearchAsync(RepoId, new float[] { 1f, 0f, 0f }, Space, 5, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matches[0].SourceKey, Is.EqualTo("repo/acme/file/src/Ann.cs"),
+                "Once the index is built the approximate path answers exactly as before; the budget governs the "
+                + "fallback only and must not reach a serving plane.");
+            Assert.That(Searched(exact), Is.False);
+        });
+    }
+
+    [Test]
+    public async Task A_corpus_the_build_has_not_counted_yet_still_runs_the_exact_scan()
+    {
+        var exact = ExactReturning("repo/acme/file/src/A.cs");
+        var index = Create(BootstrappingPlaneWithCorpus(0), exact, DefaultBudget());
+
+        await index.SearchAsync(RepoId, new float[] { 1f, 0f, 0f }, Space, 5, Ct);
+
+        Assert.That(Searched(exact), Is.True,
+            "An uncounted corpus is not evidence the gather is unaffordable. The budget fails open on every "
+            + "unknown, so the only behaviour it ever removes is a scan the configuration says cannot finish.");
+    }
+
+    [Test]
+    public async Task A_pair_the_plane_holds_no_progress_for_still_runs_the_exact_scan()
+    {
+        var exact = ExactReturning("repo/acme/file/src/A.cs");
+        var plane = PlaneReturning(RepoContextAnnSearchOutcome.Bootstrapping);
+        plane.TryGetProgress(Arg.Any<string>(), Arg.Any<EmbeddingSpaceTag>(), out Arg.Any<VectorIndexBuildProgress>())
+            .Returns(false);
+        var index = Create(plane, exact, DefaultBudget());
+
+        await index.SearchAsync(RepoId, new float[] { 1f, 0f, 0f }, Space, 5, Ct);
+
+        Assert.That(Searched(exact), Is.True,
+            "No handle for the pair means no corpus size to judge, which is another unknown to fail open on.");
+    }
+
+    [Test]
+    public async Task An_unbounded_scan_budget_never_skips_the_exact_scan()
+    {
+        var exact = ExactReturning("repo/acme/file/src/A.cs");
+        var index = Create(BootstrappingPlaneWithCorpus(100_000), exact, UnboundedBudget());
+
+        await index.SearchAsync(RepoId, new float[] { 1f, 0f, 0f }, Space, 5, Ct);
+
+        Assert.That(Searched(exact), Is.True,
+            "A deployment that disabled the stall ceiling has no ceiling for a gather to trip, so there is "
+            + "nothing to protect it from and the pre-existing behaviour stands.");
     }
 }
