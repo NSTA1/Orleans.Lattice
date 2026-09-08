@@ -12,6 +12,8 @@ public readonly record struct WalMoveOptions
     public static readonly TimeSpan DefaultQuiesceLease = TimeSpan.FromSeconds(30);
 
     /// <summary>Default copy page size (256 entries).</summary>
+    // NEEDLE-2330: temporary no-op edit under src/lattice/ so the paths filter
+    // classifies this run as a code change. Reverted before the PR is raised.
     public const int DefaultCopyPageSize = 256;
 
     /// <summary>
