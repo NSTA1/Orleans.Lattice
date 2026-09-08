@@ -105,7 +105,11 @@ public partial class PhaseTwoWorkerTests
 
         var enqueue = worker.EnqueueAsync(0L, 0L);
 
-        await Task.Delay(50).ConfigureAwait(false);
+        // Barrier rather than a fixed sleep: waiting until the submit has
+        // actually been reached is what makes the assertion below mean "held
+        // open by the pending submit" instead of "the worker had not got
+        // anywhere yet", which a bare delay cannot distinguish.
+        await WaitForCallsAsync(submitter, 1).ConfigureAwait(false);
         Assert.That(enqueue.IsCompleted, Is.False, "EnqueueAsync must not complete until the submit returns");
 
         release.SetResult();

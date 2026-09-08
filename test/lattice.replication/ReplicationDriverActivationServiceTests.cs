@@ -6,6 +6,7 @@ using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grains;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -338,16 +339,12 @@ public partial class ReplicationDriverActivationServiceTests
         // Runtime add: both per-tree shippers must be activated.
         topology.EmitAdded("site-c");
 
-        // The runtime activation path is fire-and-forget; allow a few
-        // event-loop ticks for the inner task to finish.
-        for (var i = 0; i < 50; i++)
-        {
-            if (shipperAlpha.ReceivedCalls().Any() && shipperBeta.ReceivedCalls().Any())
-            {
-                break;
-            }
-            await Task.Delay(20);
-        }
+        // The runtime activation path is fire-and-forget, so wait on the shared
+        // barrier: it fails where the wait gave up rather than leaving a
+        // timed-out wait to surface as a confusing Received(1) failure below.
+        await TestPoll.UntilAsync(
+            () => shipperAlpha.ReceivedCalls().Any() && shipperBeta.ReceivedCalls().Any(),
+            "both per-tree shippers to be activated for the runtime-added peer");
 
         await shipperAlpha.Received(1).EnsureActiveAsync(Arg.Any<CancellationToken>());
         await shipperBeta.Received(1).EnsureActiveAsync(Arg.Any<CancellationToken>());
@@ -369,14 +366,31 @@ public partial class ReplicationDriverActivationServiceTests
             .Returns(Substitute.For<IReplicationMaintenanceGrain>());
         var initial = Substitute.For<IReplicationShipperGrain>();
         factory.GetGrain<IReplicationShipperGrain>("alpha/site-b").Returns(initial);
+        var added = Substitute.For<IReplicationShipperGrain>();
+        factory.GetGrain<IReplicationShipperGrain>("alpha/site-c").Returns(added);
         var topology = new FakeReplicationTopology(new[] { "site-b" });
         var (service, _) = Create(trees, peers: new[] { "site-b" }, customFactory: factory, topology: topology);
 
         await RunExecuteAsync(service, CancellationToken.None);
+
+        // Positive control. A DidNotReceive gated only by elapsed time passes
+        // for the wrong reason - nothing had happened yet - rather than the
+        // right one, so first prove the subscription is live and that a peer
+        // change which does warrant activation really does resolve a shipper
+        // grain through this very factory.
+        topology.EmitAdded("site-c");
+        await TestPoll.UntilAsync(
+            () => added.ReceivedCalls().Any(),
+            "positive control: the added peer's shipper to be activated");
+        await added.Received(1).EnsureActiveAsync(Arg.Any<CancellationToken>());
+
         factory.ClearReceivedCalls();
 
+        // OnPeerChange returns without scheduling anything for a non-Added
+        // kind, and the topology invokes its subscribers inline, so once
+        // EmitRemoved has returned the decision is already made and no barrier
+        // (nor the fixed sleep this used to take) is needed.
         topology.EmitRemoved("site-b");
-        await Task.Delay(50);
 
         factory.DidNotReceive().GetGrain<IReplicationShipperGrain>(Arg.Any<string>());
     }

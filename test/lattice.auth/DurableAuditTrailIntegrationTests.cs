@@ -205,16 +205,17 @@ public sealed class DurableAuditTrailDisabledIntegrationTests
                 Throws.TypeOf<LatticeAuthorizationDeniedException>());
         }
 
-        // Give any (erroneously scheduled) background dispatch time to land.
-        await Task.Delay(300);
-
+        // Reuse the shared reader rather than a fixed sleep plus a raw scan: it
+        // polls (so an erroneously scheduled background dispatch gets a wider
+        // window than the old 300ms to land and be caught) and it tolerates the
+        // EnumerationAbortedException a concurrent audit write can raise
+        // mid-scan, which the unguarded enumeration here could not.
         using (AuthClusterFixture.AsSubject(AuthClusterFixture.BootstrapAdmin))
         {
-            var keys = new List<string>();
-            await foreach (var key in _fixture.Lattice("sys-auth-audit").KeysAsync())
-            {
-                keys.Add(key);
-            }
+            var keys = await AuditTrailReader.PollForKeysAsync(
+                () => _fixture.Lattice("sys-auth-audit"),
+                minimum: 1,
+                timeoutMs: 1000);
 
             Assert.That(keys, Is.Empty, "the durable trail is opt-in: nothing must be written when it is disabled");
         }

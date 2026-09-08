@@ -43,6 +43,10 @@ public class GrainIndexProjectorTests
     {
         var projection = IndexedTestIndex.Projector().Project("alice", State());
 
+        // "No entry mentions Secret" is vacuously true of no entries at all.
+        Assert.That(projection.Entries, Is.Not.Empty,
+            "the omission claim is only meaningful over a non-empty projection");
+
         Assert.That(
             projection.Entries.Any(e => System.Text.Encoding.UTF8.GetString(e.Value).Contains("Secret", StringComparison.Ordinal)),
             Is.False);
@@ -52,6 +56,11 @@ public class GrainIndexProjectorTests
     public void Every_projected_entry_points_back_at_exactly_one_grain()
     {
         var projection = IndexedTestIndex.Projector().Project("alice", State());
+
+        // The per-entry claim below is vacuously satisfied by a projection that
+        // produced no entries at all, so pin non-emptiness first.
+        Assert.That(projection.Entries, Is.Not.Empty,
+            "the back-reference claim is only meaningful over a non-empty projection");
 
         foreach (var entry in projection.Entries)
         {
