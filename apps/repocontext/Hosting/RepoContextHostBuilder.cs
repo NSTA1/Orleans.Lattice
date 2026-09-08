@@ -215,6 +215,15 @@ public static class RepoContextHostBuilder
         // Warmup + graceful-drain coordinator (flips readiness).
         builder.Services.AddHostedService<RepoContextStartupService>();
 
+        // State the configuration this process actually resolved, once, at startup. The
+        // deployment's real settings arrive from an untracked compose override, so reading
+        // the repository does not tell you what the container runs - and the only reason
+        // that divergence was ever noticed is that one subsystem already reports its own
+        // resolved cadence. This generalises that to every supplied variable plus the
+        // runtime facts (ProcessorCount) that are not variables at all. Observability
+        // only; it validates nothing. See issue #2294, and #2075 for the precedent.
+        builder.Services.AddHostedService<RepoContextEffectiveConfigurationReporter>();
+
         // Vector-plane warmup driver: issues the first semantic query itself so the
         // retrieval readiness component reports demonstrated capability instead of
         // waiting for traffic an orchestrator will not route to a not-ready box.
