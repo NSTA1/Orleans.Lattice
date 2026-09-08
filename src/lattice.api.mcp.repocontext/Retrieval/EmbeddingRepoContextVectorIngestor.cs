@@ -287,24 +287,46 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         List<string>? contentlessToMark = null;
         List<string>? contentfulToUnmark = null;
         List<string>? unreadable = null;
+        List<string>? racedWithDeletion = null;
         foreach (var file in toEmbed)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var sourceKey = RepoContextKeys.File(repoId, file.RelativePath);
-            var text = await ReadContentAsync(repoRoot, file.RelativePath, cancellationToken).ConfigureAwait(false);
+            var read = await ReadContentAsync(repoRoot, file.RelativePath, cancellationToken).ConfigureAwait(false);
+            var text = read.Text;
             if (text is null)
             {
-                // A read failure (IO or permission), not a contentless file: leave it
+                if (read.Absent)
+                {
+                    // Deleted between the walk that enumerated it and the read that
+                    // would have embedded it. This needs no retirement path and is not
+                    // a fault: the next walk does not enumerate it, so the plan
+                    // classifies it removed and it is never offered to the gap sweep
+                    // again. Counting it with the unreadable files below would
+                    // conflate a race that self-heals in one pass with a fault that
+                    // never does, which is the conflation that cost #2208 four rounds
+                    // of investigation (issue #2269).
+                    (racedWithDeletion ??= new List<string>()).Add(file.RelativePath);
+                    continue;
+                }
+
+                // A read failure on a file that IS still present - an exclusive lock,
+                // a bad sector, or a permission this process does not hold. It is left
                 // uncovered so a later pass retries it once the file is readable,
-                // rather than marking it considered.
+                // rather than marked considered.
                 //
                 // That retry is right for a TRANSIENT failure and silently wrong for a
-                // PERSISTENT one. A file that never becomes readable is never covered,
-                // so the always-on gap sweep re-selects it on every pass forever, at
-                // zero contention - a permanent gap set that is indistinguishable from
-                // a broken presence check or from write-path loss, because until this
-                // warning existed the skip was recorded nowhere at all. Naming the
-                // files is what separates those cases in the field (issue #2208).
+                // PERSISTENT one. Such a file is enumerated by every walk, so the
+                // always-on gap sweep re-selects it on every pass forever, at zero
+                // contention - a permanent gap set that is indistinguishable from a
+                // broken presence check or from write-path loss. Naming the files is
+                // what separates those cases in the field (issue #2208).
+                //
+                // Retiring it with a marker is deliberately NOT done here. A
+                // permission fault is fixable by an operator and does not change the
+                // file's digest, so a retired file would return to the unchanged set,
+                // be excluded by its own marker, and never be embedded - trading a
+                // loud non-convergence for a silent coverage hole (issue #2269).
                 (unreadable ??= new List<string>()).Add(file.RelativePath);
                 continue;
             }
@@ -340,15 +362,34 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             sources.Add(new EmbeddingSource(sourceKey, windows));
         }
 
+        if (racedWithDeletion is not null)
+        {
+            // Reported separately from the unreadable files, and at Information,
+            // because this population needs no action and clears itself: these files
+            // are gone, so the next walk does not enumerate them and the gap sweep is
+            // never offered them again. Folding them into the warning above would make
+            // its count - whose whole diagnostic value is that a REPEATING value means
+            // a permanent gap set - rise and fall with ordinary build churn.
+            _logger.LogInformation(
+                "Repo {RepoId}: {Count} of the {Selected} file(s) selected for embedding were deleted between "
+                + "the walk that enumerated them and the read that would have embedded them. They need no "
+                + "retry: the next walk does not enumerate them. sample: {Sample}",
+                repoId,
+                racedWithDeletion.Count,
+                toEmbed.Count,
+                string.Join(", ", racedWithDeletion.Take(10)));
+        }
+
         if (unreadable is not null)
         {
             // One line per pass, not one per file: a build tree can make hundreds
             // unreadable at once and the count is the signal, not each name.
             _logger.LogWarning(
-                "Repo {RepoId}: {Count} of the {Selected} file(s) selected for embedding could not be read and "
-                + "stay uncovered, so the gap sweep re-selects them on the next pass. A count that repeats at the "
-                + "same value across passes is a PERMANENT gap set - files that can never be embedded - not a "
-                + "saturated vector plane. sample: {Sample}",
+                "Repo {RepoId}: {Count} of the {Selected} file(s) selected for embedding are still present but "
+                + "could not be read, so they stay uncovered and the gap sweep re-selects them on the next pass. "
+                + "A count that repeats at the same value across passes is a PERMANENT gap set - files that can "
+                + "never be embedded - not a saturated vector plane. Files that were merely deleted mid-pass are "
+                + "counted separately and are not included here. sample: {Sample}",
                 repoId,
                 unreadable.Count,
                 toEmbed.Count,
@@ -1454,22 +1495,52 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             : $"{kind} {record.FullyQualifiedName}\n{signature}";
     }
 
-    private static async Task<string?> ReadContentAsync(
+    /// <summary>
+    /// What reading a selected file's content produced. The absent case is kept
+    /// distinct from the unreadable case because their futures differ completely: a
+    /// file that has been deleted is not enumerated by the next walk, so it is
+    /// classified removed and never offered to the gap sweep again, while a file that
+    /// is still present but cannot be read is offered by every walk and re-selected
+    /// on every pass (issue #2269). Collapsing both to null made a self-healing race
+    /// indistinguishable from a permanent fault.
+    /// </summary>
+    /// <param name="Text">The content read, truncated to the embedding limit, or
+    /// <see langword="null"/> when the read did not succeed.</param>
+    /// <param name="Absent">Whether the read failed because the file was no longer
+    /// there, as opposed to being present and unreadable.</param>
+    private readonly record struct FileReadResult(string? Text, bool Absent)
+    {
+        /// <summary>The file is still present but could not be read.</summary>
+        public static FileReadResult Unreadable { get; } = new(null, Absent: false);
+
+        /// <summary>The file was gone by the time the read reached it.</summary>
+        public static FileReadResult Missing { get; } = new(null, Absent: true);
+    }
+
+    private static async Task<FileReadResult> ReadContentAsync(
         string repoRoot, string relativePath, CancellationToken cancellationToken)
     {
         var fullPath = Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
         try
         {
             var content = await File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false);
-            return content.Length > MaxEmbedChars ? content[..MaxEmbedChars] : content;
+            return new FileReadResult(
+                content.Length > MaxEmbedChars ? content[..MaxEmbedChars] : content,
+                Absent: false);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Both derive from IOException, so this filter has to precede the
+            // IOException arm below or a deleted file would be reported as a fault.
+            return FileReadResult.Missing;
         }
         catch (IOException)
         {
-            return null;
+            return FileReadResult.Unreadable;
         }
         catch (UnauthorizedAccessException)
         {
-            return null;
+            return FileReadResult.Unreadable;
         }
     }
 
