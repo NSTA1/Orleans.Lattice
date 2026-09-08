@@ -34,6 +34,13 @@ public sealed class TenantUsageMeteringServiceTests
     /// <summary>An in-memory registry returning a fixed tenant roster.</summary>
     private sealed class FakeRegistry(params TenantId[] tenants) : ITenantRegistry
     {
+        /// <summary>
+        /// The quotas every listed tenant is registered with. Defaults to unbounded
+        /// so the metering tests that predate overage accrual are unaffected;
+        /// an overage test constrains it.
+        /// </summary>
+        public TenantQuotas Quotas { get; set; } = TenantQuotas.Unbounded;
+
         public Task<TenantRecord?> GetAsync(TenantId tenant, CancellationToken cancellationToken = default) =>
             Task.FromResult<TenantRecord?>(null);
 
@@ -48,7 +55,7 @@ public sealed class TenantUsageMeteringServiceTests
                 yield return TenantRecord.Create(
                     tenant,
                     TenantStatus.Active,
-                    TenantQuotas.Unbounded,
+                    Quotas,
                     TenantPlacement.Shared,
                     HybridLogicalClock.Tick(HybridLogicalClock.Zero),
                     "test");
@@ -90,7 +97,8 @@ public sealed class TenantUsageMeteringServiceTests
         ITenantRegistry registry,
         RecordingStore store,
         IGrainFactory grainFactory,
-        TimeSpan? interval = null)
+        TimeSpan? interval = null,
+        OverageTestData.FakeTenantOverageStore? overageStore = null)
     {
         var options = Substitute.For<IOptionsMonitor<TenantUsageAccountingOptions>>();
         options.CurrentValue.Returns(new TenantUsageAccountingOptions
@@ -102,14 +110,18 @@ public sealed class TenantUsageMeteringServiceTests
             PublishMinRelativeDelta = 0,
         });
 
-        var publisher = new TenantUsagePublisher(
-            store,
-            Options.Create(new Orleans.Configuration.ClusterOptions { ClusterId = "cluster-a" }),
-            options);
+        var cluster = Options.Create(new Orleans.Configuration.ClusterOptions { ClusterId = "cluster-a" });
+
+        var publisher = new TenantUsagePublisher(store, cluster, options);
+
+        var overageMeter = new TenantOverageMeter(
+            overageStore ?? new OverageTestData.FakeTenantOverageStore(),
+            cluster);
 
         return new TenantUsageMeteringService(
             registry,
             publisher,
+            overageMeter,
             grainFactory,
             TimeProvider.System,
             options,
@@ -166,6 +178,119 @@ public sealed class TenantUsageMeteringServiceTests
         // The whole point: without this driver nothing ever published, so admission
         // never had a sample to admit against and quotas could not bind.
         Assert.That(store.Published, Has.Count.EqualTo(2));
+    }
+
+    // ---- Overage accrual -------------------------------------------------
+
+    /// <summary>
+    /// <see cref="TenantOverageMeter"/> is documented as "the low-frequency,
+    /// cadence-driven side of the overage layer (the caller supplies the cadence)"
+    /// - the same wording <see cref="TenantUsagePublisher"/> carried when issue
+    /// #1688 found that nothing supplied its cadence. The overage sibling was left
+    /// in exactly that state: registered in DI, unit-tested, and called by nothing
+    /// in <c>src/</c>, so <see cref="ITenantOverageBilling.ListMeteredOverageAsync"/>
+    /// returned nothing however far past quota a tenant ran, and every overage
+    /// figure on <see cref="TenantObservabilitySnapshot"/> was permanently zero.
+    /// These tests pin that the metering cycle actually drives it.
+    /// </summary>
+    [Test]
+    public async Task A_metering_cycle_accrues_overage_for_a_tenant_over_quota()
+    {
+        var store = new RecordingStore();
+        var overage = new OverageTestData.FakeTenantOverageStore();
+        var registry = new FakeRegistry(Acme) { Quotas = OverageTestData.Quotas(bytes: 100, keys: 5) };
+
+        // One tree measuring 400 bytes / 40 keys against caps of 100 / 5.
+        var service = Create(
+            registry,
+            store,
+            GrainFactoryWith(["t/acme/orders"], bytesPerTree: 400, keysPerTree: 40),
+            overageStore: overage);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(overage.Metered, Has.Count.EqualTo(1), "the cycle must drive the overage meter");
+            Assert.That(overage.Metered[0].Tenant, Is.EqualTo(Acme));
+            Assert.That(overage.Metered[0].Cluster, Is.EqualTo("cluster-a"));
+            Assert.That(overage.Metered[0].Increment.Bytes, Is.EqualTo(300), "400 bytes against a 100 cap");
+            Assert.That(overage.Metered[0].Increment.Keys, Is.EqualTo(35), "40 keys against a 5 cap");
+        });
+    }
+
+    [Test]
+    public async Task A_metering_cycle_accrues_no_overage_for_a_tenant_within_quota()
+    {
+        var store = new RecordingStore();
+        var overage = new OverageTestData.FakeTenantOverageStore();
+        var registry = new FakeRegistry(Acme) { Quotas = OverageTestData.Quotas(bytes: 10_000, keys: 1_000) };
+
+        var service = Create(
+            registry,
+            store,
+            GrainFactoryWith(["t/acme/orders"], bytesPerTree: 400, keysPerTree: 40),
+            overageStore: overage);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        Assert.That(overage.Metered, Is.Empty, "a within-quota tenant meters nothing");
+    }
+
+    /// <summary>
+    /// Overage is a Riemann sum, so accrual must run on every cycle even when the
+    /// usage publish is suppressed. A steady over-quota tenant moves too little
+    /// between ticks to clear the hysteresis band, so binding accrual to a
+    /// successful publish would silently stop billing precisely the sustained
+    /// overage the meter exists to capture.
+    /// </summary>
+    [Test]
+    public async Task Overage_accrues_on_every_cycle_even_when_the_usage_publish_is_suppressed()
+    {
+        var store = new RecordingStore();
+        var overage = new OverageTestData.FakeTenantOverageStore();
+        var registry = new FakeRegistry(Acme) { Quotas = OverageTestData.Quotas(bytes: 100) };
+
+        var service = Create(
+            registry,
+            store,
+            GrainFactoryWith(["t/acme/orders"], bytesPerTree: 400, keysPerTree: 40),
+            overageStore: overage);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+        await service.MeterOnceAsync(CancellationToken.None);
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Published, Has.Count.EqualTo(1),
+                "an unchanged footprint publishes once and is then suppressed");
+            Assert.That(overage.Metered, Has.Count.EqualTo(3),
+                "but overage still accrues on every tick");
+            Assert.That(
+                overage.Records.Single().Fold().Bytes,
+                Is.EqualTo(900),
+                "three ticks of 300 bytes over cap accumulate");
+        });
+    }
+
+    [Test]
+    public async Task The_reserved_default_tenant_accrues_no_overage()
+    {
+        var store = new RecordingStore();
+        var overage = new OverageTestData.FakeTenantOverageStore();
+        var registry = new FakeRegistry(TenantId.Default) { Quotas = OverageTestData.Quotas(bytes: 1) };
+
+        var service = Create(
+            registry,
+            store,
+            GrainFactoryWith(["orders"], bytesPerTree: 400),
+            overageStore: overage);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        Assert.That(overage.Metered, Is.Empty,
+            "the reserved default tenant is unbounded and is skipped before metering");
     }
 
     [Test]
@@ -448,17 +573,23 @@ public sealed class TenantUsageMeteringServiceTests
         var publisher = new TenantUsagePublisher(
             store, Options.Create(new Orleans.Configuration.ClusterOptions()), options);
         var grainFactory = Substitute.For<IGrainFactory>();
+        var overageMeter = new TenantOverageMeter(
+            new OverageTestData.FakeTenantOverageStore(),
+            Options.Create(new Orleans.Configuration.ClusterOptions()));
 
         Assert.Multiple(() =>
         {
             Assert.That(() => new TenantUsageMeteringService(
-                null!, publisher, grainFactory, TimeProvider.System, options,
+                null!, publisher, overageMeter, grainFactory, TimeProvider.System, options,
                 NullLogger<TenantUsageMeteringService>.Instance), Throws.ArgumentNullException);
             Assert.That(() => new TenantUsageMeteringService(
-                new FakeRegistry(), null!, grainFactory, TimeProvider.System, options,
+                new FakeRegistry(), null!, overageMeter, grainFactory, TimeProvider.System, options,
                 NullLogger<TenantUsageMeteringService>.Instance), Throws.ArgumentNullException);
             Assert.That(() => new TenantUsageMeteringService(
-                new FakeRegistry(), publisher, null!, TimeProvider.System, options,
+                new FakeRegistry(), publisher, null!, grainFactory, TimeProvider.System, options,
+                NullLogger<TenantUsageMeteringService>.Instance), Throws.ArgumentNullException);
+            Assert.That(() => new TenantUsageMeteringService(
+                new FakeRegistry(), publisher, overageMeter, null!, TimeProvider.System, options,
                 NullLogger<TenantUsageMeteringService>.Instance), Throws.ArgumentNullException);
         });
     }
@@ -724,6 +855,9 @@ public sealed class TenantUsageMeteringServiceTests
         var service = new TenantUsageMeteringService(
             registry,
             publisher,
+            new TenantOverageMeter(
+                new OverageTestData.FakeTenantOverageStore(),
+                Options.Create(new Orleans.Configuration.ClusterOptions { ClusterId = "cluster-a" })),
             GrainFactoryWith([]),
             TimeProvider.System,
             options,
@@ -806,6 +940,9 @@ public sealed class TenantUsageMeteringServiceTests
             var svc = new TenantUsageMeteringService(
                 registry,
                 publisher,
+                new TenantOverageMeter(
+                    new OverageTestData.FakeTenantOverageStore(),
+                    Options.Create(new Orleans.Configuration.ClusterOptions { ClusterId = "cluster-a" })),
                 _factory,
                 TimeProvider.System,
                 options,
@@ -831,5 +968,67 @@ public sealed class TenantUsageMeteringServiceTests
                 "test");
             await Task.CompletedTask;
         }
+    }
+    // ---- Per-tenant failure containment (security review F4) --------------
+    //
+    // Overage accrual was awaited inside the per-tenant loop with no containment,
+    // so a throw - the optimistic-concurrency conflict the overage store raises
+    // under contention is the obvious one - propagated out of MeterOnceAsync and
+    // skipped every remaining tenant's usage publish, plus the retention prune.
+    // Since quota admission is driven by those published samples, a tenant able to
+    // induce contention on its own overage record could suppress quota enforcement
+    // for every tenant that sorted after it: a cross-tenant denial of enforcement.
+
+    [Test]
+    public async Task A_tenant_whose_overage_accrual_throws_does_not_abort_the_pass()
+    {
+        var harness = new MutableUsageHarness();
+        harness.AddTree("t/acme/orders", bytes: 4096, keys: 32);
+        harness.AddTree("t/globex/orders", bytes: 2048, keys: 16);
+        var store = new RecordingStore();
+
+        // acme is enumerated first and its accrual always fails.
+        var overageStore = new OverageTestData.FakeTenantOverageStore
+        {
+            ThrowFor = tenant => tenant.Equals(Acme)
+                ? new TenantOverageConcurrencyException(Acme, 3)
+                : null,
+        };
+
+        // A ceiling low enough that both tenants are over it, so accrual is
+        // actually attempted for each rather than short-circuited as within quota.
+        var registry = new FakeRegistry(Acme, Globex) { Quotas = new TenantQuotas { MaxBytes = 1 } };
+        var service = Create(registry, store, harness.Factory, overageStore: overageStore);
+
+        Assert.That(
+            async () => await service.MeterOnceAsync(CancellationToken.None),
+            Throws.Nothing,
+            "one tenant's accrual failure must not surface as a pass-wide failure");
+
+        Assert.That(
+            store.Published.Select(p => p.Id),
+            Does.Contain(Globex),
+            "a tenant sorting after the failing one must still have its usage published");
+    }
+
+    [Test]
+    public async Task A_failing_tenant_still_has_its_own_usage_published()
+    {
+        // Containment is scoped so that the publish already performed for the
+        // failing tenant stands: accrual runs after it, so its failure must not
+        // retract the sample that quota admission depends on.
+        var harness = new MutableUsageHarness();
+        harness.AddTree("t/acme/orders", bytes: 4096, keys: 32);
+        var store = new RecordingStore();
+        var overageStore = new OverageTestData.FakeTenantOverageStore
+        {
+            ThrowFor = _ => new TenantOverageConcurrencyException(Acme, 3),
+        };
+        var registry = new FakeRegistry(Acme) { Quotas = new TenantQuotas { MaxBytes = 1 } };
+        var service = Create(registry, store, harness.Factory, overageStore: overageStore);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        Assert.That(store.Published.Select(p => p.Id), Does.Contain(Acme));
     }
 }

@@ -40,6 +40,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
 {
     private readonly ITenantRegistry _registry;
     private readonly TenantUsagePublisher _publisher;
+    private readonly TenantOverageMeter _overageMeter;
     private readonly IGrainFactory _grainFactory;
     private readonly TimeProvider _timeProvider;
     private readonly IOptionsMonitor<TenantUsageAccountingOptions> _options;
@@ -82,6 +83,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
     /// <summary>Initializes the metering service over its registry, publisher, and schedule inputs.</summary>
     /// <param name="registry">The tenant registry supplying the tenants to meter. Must not be <c>null</c>.</param>
     /// <param name="publisher">The usage publisher each roll-up is handed to. Must not be <c>null</c>.</param>
+    /// <param name="overageMeter">The overage meter each cycle's roll-up is accrued into. Must not be <c>null</c>.</param>
     /// <param name="grainFactory">The grain factory used to sample each tree's footprint. Must not be <c>null</c>.</param>
     /// <param name="timeProvider">The timestamp source backing the metering timer. Must not be <c>null</c>.</param>
     /// <param name="options">The usage-accounting options carrying the cadence. Must not be <c>null</c>.</param>
@@ -90,6 +92,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
     public TenantUsageMeteringService(
         ITenantRegistry registry,
         TenantUsagePublisher publisher,
+        TenantOverageMeter overageMeter,
         IGrainFactory grainFactory,
         TimeProvider timeProvider,
         IOptionsMonitor<TenantUsageAccountingOptions> options,
@@ -97,6 +100,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(publisher);
+        ArgumentNullException.ThrowIfNull(overageMeter);
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(options);
@@ -104,6 +108,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
 
         _registry = registry;
         _publisher = publisher;
+        _overageMeter = overageMeter;
         _grainFactory = grainFactory;
         _timeProvider = timeProvider;
         _options = options;
@@ -204,10 +209,55 @@ internal sealed class TenantUsageMeteringService : IHostedService
 
             seenTenants.Add(tenant.Value);
 
-            var samples = await SampleTenantTreesAsync(tenant, cancellationToken).ConfigureAwait(false);
-            await _publisher
-                .RollUpAndPublishAsync(tenant, samples, HybridLogicalClock.Tick(HybridLogicalClock.Zero), cancellationToken)
-                .ConfigureAwait(false);
+            // Per-tenant containment. Every await below reaches storage - a
+            // prefix scan of the tenant's trees, a usage publish, and an overage
+            // accrual that can raise an optimistic-concurrency conflict on the
+            // overage record - and an escaping exception would abandon the rest
+            // of the pass, skipping every tenant after this one and the prune
+            // below with it. That is a cross-tenant failure: admission is driven
+            // by the samples this pass publishes, so one tenant able to fault its
+            // own accrual (by contending on its own overage record) could stop
+            // its neighbours' ceilings being enforced at all. Isolate the failure
+            // to the tenant that caused it and carry on; the next tick retries.
+            //
+            // Cancellation is not contained - it must abort the whole pass.
+            try
+            {
+                var samples = await SampleTenantTreesAsync(tenant, cancellationToken).ConfigureAwait(false);
+                await _publisher
+                    .RollUpAndPublishAsync(tenant, samples, HybridLogicalClock.Tick(HybridLogicalClock.Zero), cancellationToken)
+                    .ConfigureAwait(false);
+
+                // Accrue this tick's overage against the tenant's declared caps.
+                //
+                // TenantOverageMeter carries the same "cadence-driven side ... the
+                // caller supplies the cadence" contract the publisher above does, but
+                // nothing ever supplied that cadence: it was registered in DI and
+                // unit-tested with no production caller, so ITenantOverageBilling
+                // reported nothing however far past quota a tenant ran. This is that
+                // missing driver.
+                //
+                // Deliberately NOT conditioned on the publish above returning true.
+                // The meter is a Riemann sum, so it must integrate every tick, whereas
+                // a publish is suppressed by UsagePublishHysteresis whenever the
+                // footprint has barely moved - which is exactly the shape of a tenant
+                // sitting steadily over its cap. Gating accrual on the publish would
+                // stop billing the sustained overage the meter exists to capture.
+                await _overageMeter
+                    .AccrueAsync(tenant, LocalUsageSample.RollUp(samples), record.Quotas, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Tenant usage metering failed for tenant {TenantId}; the remaining tenants in this pass are unaffected and the next tick retries.",
+                    tenant.Value);
+            }
         }
 
         // Only after a complete pass: a cycle that faulted part-way has not proved

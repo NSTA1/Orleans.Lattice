@@ -33,7 +33,8 @@ internal sealed class LatticeBackupCaptureService(
     LatticeOptionsResolver optionsResolver,
     IWalCursorRegistry cursorRegistry,
     IOptions<Orleans.Configuration.ClusterOptions> clusterOptions,
-    ILogger<LatticeBackupCaptureService> logger)
+    ILogger<LatticeBackupCaptureService> logger,
+    ITenantAdmissionController? admission = null)
     : ILatticeBackupCaptureService, ILatticeBackupIncrementalCaptureService
 {
     // The id of the cluster hosting this capture engine: the vantage point that
@@ -53,6 +54,52 @@ internal sealed class LatticeBackupCaptureService(
     {
         ArgumentNullException.ThrowIfNull(request);
         return CaptureTreeAsync(request.Name, request.Scope, request.PageSize, cancellationToken);
+    }
+
+    /// <summary>
+    /// Charges one capture against the calling tenant's request-rate budget.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A capture is the largest tenant-triggerable read the platform offers: it
+    /// drains the whole of a pinned cut through the raw-entry seam. Every page of
+    /// that drain runs inside a
+    /// <see cref="LatticeAccessGateContext.EnterSystemOrigin"/> scope, which is
+    /// necessary - the collector reads snapshot leaf grains as infrastructure -
+    /// but has the side effect that the data-plane read charge never sees it. A
+    /// tenant could therefore drive an unbounded sequence of full-keyspace scans
+    /// at no budgetary cost, which is the noisy-neighbour hole the read charge
+    /// exists to close, reached through a different verb.
+    /// </para>
+    /// <para>
+    /// Charged here, at the capture seam, strictly <em>after</em>
+    /// <see cref="BackupAccessAuthorizer"/> has admitted the scope and before the
+    /// system-origin drain begins. That ordering is the same invariant the data
+    /// plane observes: the tenant billed is a caller assertion, and only the
+    /// authorization step validates it.
+    /// </para>
+    /// <para>
+    /// One charge per capture, not per page. It bounds the rate at which captures
+    /// can be <em>initiated</em>, which is the vector here, while a single
+    /// capture's size is already bounded by
+    /// <see cref="LatticeOptions.MaxSnapshotReplayEntries"/>. An
+    /// infrastructure-authored capture (a scheduled backup running system-origin)
+    /// is exempt, as it is from every other tenant charge.
+    /// </para>
+    /// </remarks>
+    private void ThrowIfCaptureNotAdmitted(string treeId)
+    {
+        if (admission is not { IsActive: true } || LatticeAccessGateContext.IsSystemOrigin)
+        {
+            return;
+        }
+
+        var tenant = LatticeActiveTenantContext.Current ?? TenantId.Default;
+        if (!admission.IsReadAdmitted(tenant, treeId))
+        {
+            throw new LatticeTenantAccessDeniedException(
+                $"Tenant '{tenant}' is not admitted to capture a backup of tree '{treeId}'.");
+        }
     }
 
     /// <inheritdoc />
@@ -110,6 +157,9 @@ internal sealed class LatticeBackupCaptureService(
         try
         {
             await authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+
+            // Then, and only then, charge the capture against the tenant's budget.
+            ThrowIfCaptureNotAdmitted(treeId);
         }
         catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(
             BackupKind.Incremental, LatticeBackupMetrics.PhaseSnapshotOpen, ex))
@@ -562,6 +612,9 @@ internal sealed class LatticeBackupCaptureService(
         {
             // Fail-closed authorization before anything else is touched.
             await authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+
+            // Then, and only then, charge the capture against the tenant's budget.
+            ThrowIfCaptureNotAdmitted(treeId);
 
             var (startInclusive, endExclusive) = ResolveRange(scope);
             var lattice = grainFactory.GetGrain<ILattice>(treeId);
