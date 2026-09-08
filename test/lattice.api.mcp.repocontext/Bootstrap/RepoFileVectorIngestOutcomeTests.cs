@@ -46,6 +46,42 @@ public sealed class RepoFileVectorIngestOutcomeTests
     }
 
     [Test]
+    public void A_pass_that_skipped_its_gap_scan_is_never_converged()
+    {
+        // The same fail-closed direction one step further out. A pass that stood its
+        // gap back-fill down under the file arm's backoff (issue #2208) reaches zero
+        // selected gaps by never asking, which is indistinguishable from convergence
+        // on every other field of this record. Excluding it here is what stops
+        // "converged" quietly coming to mean "did not look", and it is the single
+        // predicate the convergence fixtures rely on to stay honest once the arm can
+        // skip at all.
+        var outcome = new RepoFileVectorIngestOutcome(
+            FilesEmbedded: 0,
+            GapsSelected: 0,
+            CoverageEstablished: true,
+            Deferred: false,
+            GapScanSkipped: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                outcome.Converged,
+                Is.False,
+                "a skipped gap scan proves nothing, however clean every other field looks");
+
+            // The control. Identical in every respect except the skip, so the flag is
+            // demonstrably what flips the verdict rather than something else in the
+            // record happening to be false.
+            var scanned = outcome with { GapScanSkipped = false };
+            Assert.That(
+                scanned.Converged,
+                Is.True,
+                "and the same pass that DID scan is converged, so the exclusion above is attributable to the "
+                + "skip alone");
+        });
+    }
+
+    [Test]
     public void None_is_the_inert_outcome_and_claims_nothing()
     {
         Assert.Multiple(() =>
