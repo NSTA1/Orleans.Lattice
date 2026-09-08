@@ -53,13 +53,36 @@ internal sealed partial class BPlusLeafGrain
         Cache.Clear();
         state.State.ProjectionHash = null;
 
-        // ProjectionCheckpointOffset uses "applied through offset N"
-        // semantics (the materialiser advances it to entry.Offset
-        // after each apply, and the replay gate reads strictly past
-        // it via ReadSliceAsync's fromExclusive parameter). Resetting
-        // to 0 would tell the next activation "I have already applied
-        // through offset 0", silently skipping the very first WAL
-        // entry that belongs to this leaf. The "nothing applied"
+        // ProjectionCheckpointOffset uses "SCANNED through offset N"
+        // semantics, not "applied through" (issue #2270). Replay advances
+        // it over every entry it reads, INCLUDING entries it deliberately
+        // skips as belonging to another leaf's key range or shard: the
+        // advance in ReplayPartitionAsync sits outside the
+        // ShouldApplyDuringReplay filter. The replay gate then reads
+        // strictly past it via ReadSliceAsync's fromExclusive parameter.
+        //
+        // That is deliberate and load-bearing, not an oversight. Advancing
+        // only over APPLIED entries would leave a leaf that owns no key in
+        // a partition sitting at its old checkpoint forever: it would
+        // re-scan that partition on every activation, and because
+        // LatticeWalGc.ComputeMaterialiserOffsetFloorAsync takes the
+        // MINIMUM of these offsets as the WAL retention floor, that one
+        // stalled leaf would pin WAL truncation for the whole tree.
+        //
+        // Scanning ahead of applying is safe there for the same reason:
+        // the floor is a minimum, and skipping only ever inflates the
+        // checkpoint of a leaf that does NOT own the entry. The single
+        // leaf that does own it cannot skip it, so it holds the minimum
+        // below that offset until it genuinely applies, and the entry is
+        // retained. The one operation that can retire that owner - empty
+        // leaf reclaim - is gated on LiveRowCount == 0 measured after a
+        // forced replay to head, and empty is precisely the value on which
+        // "skipped" and "applied" agree, so the absorbing predecessor
+        // inherits the range with nothing outstanding in it.
+        //
+        // Resetting to 0 here would tell the next activation "I have
+        // already scanned through offset 0", silently skipping the very
+        // first WAL entry that belongs to this leaf. The "nothing scanned"
         // sentinel is -1, matching IWalStorageProvider.GetHighestOffsetAsync's
         // -1-for-empty-WAL contract, so the materialiser reads from
         // offset 0 inclusive on the next activation.

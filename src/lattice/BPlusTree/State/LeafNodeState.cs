@@ -68,16 +68,30 @@ internal sealed class LeafNodeState
     [Id(9)] public GrainId? OldNextSibling { get; set; }
 
     /// <summary>
-    /// Highest write-ahead-log offset whose mutation has been durably
-    /// applied to this leaf's projection via the
-    /// <c>ILeafProjection.Apply</c> seam. Persisted alongside the
+    /// Highest write-ahead-log offset this leaf's activation-time replay
+    /// has SCANNED. Not "applied": replay advances this over entries it
+    /// skips as belonging to another leaf's key range or shard, because
+    /// the advance sits outside the <c>ShouldApplyDuringReplay</c> filter
+    /// (issue #2270). Persisted alongside the
     /// projection so a re-activation can resume replay from
     /// <c>ProjectionCheckpointOffset + 1</c> rather than scanning the
     /// full leaf state. Defaults to <c>0</c> on freshly persisted
     /// state to preserve the published empty-tree digest shape
     /// (<c>digest.CheckpointOffset == 0</c> for an empty leaf).
     /// <para>
-    /// The "nothing applied" sentinel is <c>-1</c>, matching
+    /// Scanned-through is deliberate and load-bearing. A leaf owning no
+    /// key in a partition must still advance, or it re-scans that
+    /// partition on every activation AND pins the WAL retention floor for
+    /// the whole tree, since
+    /// <c>LatticeWalGc.ComputeMaterialiserOffsetFloorAsync</c> takes the
+    /// MINIMUM of these offsets. Being a minimum is also why running ahead
+    /// of applying is safe there: skipping inflates only the checkpoints of
+    /// leaves that do not own the entry, while its one owner cannot skip it
+    /// and so holds the minimum down until it truly applies. Pinned by
+    /// <c>BPlusLeafGrainTests.CheckpointScanSemantics</c>.
+    /// </para>
+    /// <para>
+    /// The "nothing scanned" sentinel is <c>-1</c>, matching
     /// <see cref="IWalStorageProvider.GetHighestOffsetAsync"/>'s
     /// empty-WAL convention. The per-key entry cache is per-activation
     /// only, so a freshly activated leaf
