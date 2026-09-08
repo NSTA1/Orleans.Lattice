@@ -286,6 +286,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var sources = new List<EmbeddingSource>(toEmbed.Count);
         List<string>? contentlessToMark = null;
         List<string>? contentfulToUnmark = null;
+        List<string>? unreadable = null;
         foreach (var file in toEmbed)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -293,9 +294,18 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             var text = await ReadContentAsync(repoRoot, file.RelativePath, cancellationToken).ConfigureAwait(false);
             if (text is null)
             {
-                // A transient read failure (IO or permission), not a contentless
-                // file: leave it uncovered so a later pass retries it once the file
-                // is readable, rather than marking it considered.
+                // A read failure (IO or permission), not a contentless file: leave it
+                // uncovered so a later pass retries it once the file is readable,
+                // rather than marking it considered.
+                //
+                // That retry is right for a TRANSIENT failure and silently wrong for a
+                // PERSISTENT one. A file that never becomes readable is never covered,
+                // so the always-on gap sweep re-selects it on every pass forever, at
+                // zero contention - a permanent gap set that is indistinguishable from
+                // a broken presence check or from write-path loss, because until this
+                // warning existed the skip was recorded nowhere at all. Naming the
+                // files is what separates those cases in the field (issue #2208).
+                (unreadable ??= new List<string>()).Add(file.RelativePath);
                 continue;
             }
 
@@ -328,6 +338,21 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             }
 
             sources.Add(new EmbeddingSource(sourceKey, windows));
+        }
+
+        if (unreadable is not null)
+        {
+            // One line per pass, not one per file: a build tree can make hundreds
+            // unreadable at once and the count is the signal, not each name.
+            _logger.LogWarning(
+                "Repo {RepoId}: {Count} of the {Selected} file(s) selected for embedding could not be read and "
+                + "stay uncovered, so the gap sweep re-selects them on the next pass. A count that repeats at the "
+                + "same value across passes is a PERMANENT gap set - files that can never be embedded - not a "
+                + "saturated vector plane. sample: {Sample}",
+                repoId,
+                unreadable.Count,
+                toEmbed.Count,
+                string.Join(", ", unreadable.Take(10)));
         }
 
         var embedOutcome = await EmbedAndStoreReportingLandedAsync(repoId, FileArm, sources, onProgress, cancellationToken)
@@ -1261,13 +1286,36 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 failedBatches++;
                 consecutiveBatchFailures++;
                 pendingMembers.Clear();
+
+                // Name the batch's sources. A gap residue that persists across passes
+                // is either the SAME sources failing every time - a deterministic
+                // write fault, such as a key range served by a permanently stalled
+                // leaf - or a different set each pass, which is ordinary contention
+                // that will drain. The passage count alone cannot separate those, and
+                // that ambiguity is exactly what left the never-converging back-fill
+                // unattributed for four rounds of investigation (issue #2208). Units
+                // are contiguous per source, so comparing against the last key
+                // deduplicates without a set.
+                var batchSources = new List<string>();
+                for (var i = 0; i < count; i++)
+                {
+                    var ownerKey = sources[unitOwner[start + i]].SourceKey;
+                    if (batchSources.Count == 0 || !string.Equals(batchSources[^1], ownerKey, StringComparison.Ordinal))
+                    {
+                        batchSources.Add(ownerKey);
+                    }
+                }
+
                 _logger.LogWarning(
                     ex,
-                    "Repo {RepoId}: the {Arm} arm could not record a batch of {Count} passage(s); its sources stay "
-                    + "unmarked and are retried on the next reconcile. Continuing with the remaining batches.",
+                    "Repo {RepoId}: the {Arm} arm could not record a batch of {Count} passage(s) spanning "
+                    + "{Sources} source(s); they stay unmarked and are retried on the next reconcile. Continuing "
+                    + "with the remaining batches. sample: {Sample}",
                     repoId,
                     arm,
-                    count);
+                    count,
+                    batchSources.Count,
+                    string.Join(", ", batchSources.Take(6)));
 
                 // Consecutive record failures mean the vector plane is saturated, not
                 // that one batch was unlucky. Driving the remaining batches into it
