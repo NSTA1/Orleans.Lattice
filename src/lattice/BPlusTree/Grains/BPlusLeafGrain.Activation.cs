@@ -78,6 +78,28 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class BPlusLeafGrain
 {
     /// <summary>
+    /// Whether THIS activation replayed the whole readable WAL window (cold)
+    /// rather than resuming above a snapshot or cache anchor (warm). Latched
+    /// from the same replay-start override that tags
+    /// <see cref="LatticeMetrics.LeafActivationReplays"/>, so the deactivation
+    /// observation and the activation counter can never disagree about which
+    /// arm an activation belongs to (issue #2280). Defaults to <c>false</c>:
+    /// an activation that took no replay permit is counted on neither arm by
+    /// the activation counter and is reported as warm here.
+    /// </summary>
+    private bool _activationWasCold;
+
+    /// <summary>
+    /// Exact post-filter count of entries THIS activation took through the
+    /// projection rebuild seam, accumulated across every WAL partition it
+    /// replayed. Reported on the deactivation log line (issue #2280) so a
+    /// reader can tell "banked nothing because it did no work" from "banked
+    /// nothing because it did not pass its existing checkpoint" - which on a
+    /// cold replay is the arithmetically forced case, not a fault.
+    /// </summary>
+    private long _replayEntriesAppliedThisActivation;
+
+    /// <summary>
     /// Maximum number of WAL entries the activation-time replay reads
     /// per <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync"/>
     /// invocation. Bounds the worst-case replay memory footprint for a
@@ -343,14 +365,14 @@ internal sealed partial class BPlusLeafGrain
         // reactivation storm degrades into a bounded queue. A no-op
         // activation (no tree id) takes no permit.
         bool advanced;
-        var replayPermit = await AcquireReplayPermitAsync(cancellationToken);
+        SemaphoreSlim? replayPermit = null;
 
-        // Nothing may sit between the acquisition above and this try, whose
-        // finally is the only thing that returns the permit (issue #2256). The
-        // observation block below used to run outside it, so a throw from the
-        // metric add, the tenant-label lookup, the totals sample, the logger
-        // resolution, the IsEnabled probe or the templated call itself lost the
-        // permit for the lifetime of the process: the gate is sized once by
+        // The acquisition sits INSIDE the try, whose finally is the only thing
+        // that returns the permit (issue #2256). The observation block below
+        // used to run outside it, so a throw from the metric add, the
+        // tenant-label lookup, the totals sample, the logger resolution, the
+        // IsEnabled probe or the templated call itself lost the permit for the
+        // lifetime of the process: the gate is sized once by
         // ResolveReplayConcurrencyGate and is never re-created or topped up. It
         // defaults to Environment.ProcessorCount, which is cgroup-aware only
         // when DOTNET_PROCESSOR_COUNT does not override it (issue #2278), so on
@@ -360,8 +382,20 @@ internal sealed partial class BPlusLeafGrain
         // gate ABOVE the quota, which does not exhaust it but oversubscribes
         // the CPU behind it. A throwing logging sink is transient and
         // environmental, which is exactly the fault a unit test never sees.
+        //
+        // The acquisition moved inside the try for issue #2280 and this
+        // STRENGTHENS the #2256 invariant rather than relaxing it: there is now
+        // no window at all between acquiring the permit and the region that
+        // releases it, where before there was a one-statement gap. It is done
+        // so a cancellation delivered while QUEUED ON the permit is observed.
+        // That window is not incidental - its width is set by the very
+        // saturation issue #2280 is about, so under the conditions of interest
+        // it is plausibly the DOMINANT one, and leaving it uncounted would
+        // reproduce in the instrument the same blindness it was built to end.
         try
         {
+            replayPermit = await AcquireReplayPermitAsync(cancellationToken);
+
             if (replayPermit is not null)
             {
                 // The cold/warm discriminator is precisely the replay-start
@@ -378,6 +412,7 @@ internal sealed partial class BPlusLeafGrain
                 // sits inside the guarded region because being inside it is what
                 // makes the release unconditional, not because it needs the gate.
                 var cold = replayCheckpointOverride == -1L;
+                _activationWasCold = cold;
                 var replayTreeId = state.State.TreeId!;
                 LatticeMetrics.LeafActivationReplays.Add(
                     1,
@@ -418,6 +453,55 @@ internal sealed partial class BPlusLeafGrain
             }
 
             advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Activation-failure observation (issue #2280). OBSERVE AND
+            // RETHROW - never swallow. "Failures propagate" above is
+            // load-bearing: an activation that ate its cancellation would come
+            // online over a half-applied projection, which is exactly the
+            // #1535 no-loss violation the snapshot coverage gate exists to
+            // prevent. This catch adds a counter and changes nothing else.
+            //
+            // This site exists because the deactivation-time observation is
+            // STRUCTURALLY BLIND to the population #2280 is about. Orleans
+            // does not run OnDeactivateAsync when OnActivateAsync throws
+            // (measured on 10.2.2 with a positive control), and a cancelled
+            // cold replay throws OperationCanceledException out of activation
+            // via ThrowIfCancellationRequested below. Without this counter a
+            // cancelled cold replay would read as zero at every rate of
+            // occurrence, including the highest.
+            //
+            // A cancellation delivered while still QUEUED ON the replay permit
+            // is now counted too, under its own reason value rather than folded
+            // in with a cancellation that had actually begun replaying. The two
+            // are different events - one lost work in progress, the other never
+            // started - and blurring them would leave the instrument unable to
+            // answer the question it exists for. The queue window matters
+            // because its width is set by the saturation issue #2280 is about,
+            // so under the conditions of interest it is plausibly the larger of
+            // the two.
+            if (state.State.TreeId is { Length: > 0 } failedTreeId)
+            {
+                // replayPermit is still null exactly when the acquisition
+                // itself did not return - and a null permit cannot mean "no
+                // tree id" here, because that case is excluded by the guard
+                // above.
+                var reason = ex is not OperationCanceledException
+                    ? LatticeMetrics.ActivationFailureFaulted
+                    : replayPermit is null
+                        ? LatticeMetrics.ActivationFailureCanceledAwaitingPermit
+                        : LatticeMetrics.ActivationFailureCanceled;
+
+                LatticeMetrics.LeafActivationFailures.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, failedTreeId),
+                    replayCheckpointOverride == -1L ? LatticeMetrics.ActivationTemperatureCold : LatticeMetrics.ActivationTemperatureWarm,
+                    reason,
+                    LatticeTenantLabel.ForTree(failedTreeId));
+            }
+
+            throw;
         }
         finally
         {
@@ -3086,6 +3170,14 @@ internal sealed partial class BPlusLeafGrain
         // gap > budget && applied <= budget permanently un-retired.
         if (!overBudgetWarned && maxLeafReplayEntries > 0 && appliedEntries <= maxLeafReplayEntries)
             RetireOverBudgetLogStamp(treeId, ReplicaId, partition);
+
+        // Accumulate this partition's exact post-filter work into the
+        // per-activation total reported on the deactivation log line (#2280).
+        // Accumulated even when the replay is later cancelled, because the
+        // whole point is to distinguish "banked nothing having done nothing"
+        // from "banked nothing having applied a great many entries below the
+        // existing checkpoint mark".
+        _replayEntriesAppliedThisActivation += appliedEntries;
 
         return (Advanced: maxApplied > checkpoint, MaxApplied: maxApplied);
     }
