@@ -1581,9 +1581,11 @@ public class LatticeOptions
     /// within <see cref="LeafSnapshotMargin"/> of the WAL tail.
     /// <para>
     /// Set to <c>0</c> to disable the periodic re-classification
-    /// entirely; only the once-per-activation capture (driven by the
-    /// activation-time advisory) will fire. The activation-time
-    /// capture itself is not affected by this option.
+    /// entirely; only the activation-scoped captures (the
+    /// once-per-activation capture driven by the activation-time
+    /// advisory, and the one-shot snapshot-coverage-deficit escape that
+    /// breaks the frozen-leaf rehydrate livelock) will fire. Those
+    /// activation-scoped captures are not affected by this option.
     /// </para>
     /// </summary>
     public int LeafSnapshotReClassifyEveryNCheckpoints { get; set; } = DefaultLeafSnapshotReClassifyEveryNCheckpoints;
