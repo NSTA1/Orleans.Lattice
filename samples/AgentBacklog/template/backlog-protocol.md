@@ -164,6 +164,40 @@ changes, or because it ran out of run - **does not tag the item complete**. It
 writes an honest `resumeNote`, posts `result=released`, and leaves the item live
 for the next holder. That is the normal path, not a failure.
 
+#### When the dispatch reserves the merge to the project manager
+
+The rules above assume the claim holder merges its own pull request. A project
+manager may instead **reserve the merge to itself** - the right call when
+several items land on one shared integration branch and each merge changes what
+the next item is tested against, so the ordering is a project-manager decision
+rather than a worker one.
+
+The reservation does not weaken the completion rule; it moves **who satisfies
+it**. Read it as a two-party sequence:
+
+- **The worker never tags the item complete, and that is not a failure path.**
+  It is the same `result=released` stand-down described above, reached for a
+  different reason: not that the worker *could not* merge, but that it was
+  *instructed not to*. It writes an honest resume block, releases the claim
+  under its fencing token, and reports plainly that the merge is outstanding and
+  reserved.
+- **The project manager tags the item complete once it has merged**, under a
+  claim it takes itself. The tag still means "the pull request is merged into
+  its `baseBranch`" and nothing weaker. A reserved merge is the one case where
+  the party that satisfies that condition is not the party that held the claim
+  while the work was done, which is exactly why it has to be written down: an
+  unstated exception to a rule this load-bearing is indistinguishable from a
+  worker getting it wrong.
+- **A dispatch that reserves the merge must say so explicitly.** A worker whose
+  instructions and this protocol disagree should honour the dispatch and
+  **report the divergence** rather than silently pick one, because a divergence
+  is far more often a project-manager omission than a deliberate choice.
+
+The failure this prevents is a genuinely finished item sitting live in the ready
+set - offering itself to a second worker who would redo the work - because the
+only party permitted to tag it was forbidden to perform the act that defines the
+tag.
+
 #### A directly-deployed item still gets a ledger row, authored at completion
 
 Not every item reaches a worker through the backlog. A project manager may
