@@ -19,6 +19,14 @@ public sealed class ApiBackupTypeAliasesTests
     private const int MaxAliasLength = 6;
 
     [Test]
+    public void NEEDLE_2330_this_assertion_is_planted_and_must_fail()
+    {
+        Assert.Fail("NEEDLE-2330: planted failure in test/lattice.api.backup. "
+            + "If CI is red here after a src/lattice-only source edit, the dependency "
+            + "closure reached this package. Reverted before the PR is raised.");
+    }
+
+    [Test]
     public void All_aliases_are_at_most_six_characters()
     {
         foreach (var (name, value) in EnumerateConstants())
