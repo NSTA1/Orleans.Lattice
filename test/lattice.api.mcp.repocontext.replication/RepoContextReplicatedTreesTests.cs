@@ -44,6 +44,15 @@ public class RepoContextReplicatedTreesTests
     {
         var map = RepoContextReplicatedTrees.BuildEnrolmentMap();
 
+        // Both halves of the claim need witnesses: an empty map would satisfy
+        // the loop, and a map holding only the two pinned exceptions would
+        // satisfy it without any tree actually taking the LWW default.
+        Assert.That(map, Is.Not.Empty, "the enrolment map must enrol at least one tree");
+        Assert.That(
+            map.Keys.Any(k => k != RepoContextTrees.VectorMembership && k != RepoContextTrees.Memory),
+            Is.True,
+            "at least one tree must fall through to the LWW default for this test to test it");
+
         Assert.Multiple(() =>
         {
             foreach (var kv in map)

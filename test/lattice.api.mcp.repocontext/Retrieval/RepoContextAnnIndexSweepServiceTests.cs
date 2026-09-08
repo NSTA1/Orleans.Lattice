@@ -244,7 +244,14 @@ public sealed class RepoContextAnnIndexSweepServiceTests
         var sweep = Sweep(Store(grainFactory), Scheduler(grainFactory, withEmbedder: false));
 
         await sweep.StartAsync(Ct);
-        await Task.Delay(100, Ct);
+
+        // The service returns from ExecuteAsync as soon as it observes that
+        // scheduling is off, so awaiting that task is a real barrier: it proves
+        // the sweep ran and finished. A fixed sleep proved only that some wall
+        // clock elapsed, which would have passed just as well against a sweep
+        // that had not got going yet.
+        Assert.That(sweep.ExecuteTask, Is.Not.Null, "the background sweep must have been started");
+        await sweep.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         await sweep.StopAsync(Ct);
 
         grainFactory.DidNotReceive().GetGrain<IRepoContextAnnIndexBuildGrain>(Arg.Any<string>());

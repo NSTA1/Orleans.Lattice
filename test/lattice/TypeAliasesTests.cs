@@ -9,28 +9,18 @@ public class TypeAliasesTests
     [Test]
     public void All_aliases_are_at_most_six_characters()
     {
-        var fields = typeof(TypeAliases)
-            .GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)
-            .Where(f => f.IsLiteral && f.FieldType == typeof(string));
-
-        foreach (var field in fields)
+        foreach (var (name, value) in GetAliasConstants())
         {
-            var value = (string)field.GetValue(null)!;
             Assert.That(value.Length, Is.LessThanOrEqualTo(6),
-                $"TypeAliases.{field.Name} = \"{value}\" exceeds 6-char limit ({value.Length} chars)");
+                $"TypeAliases.{name} = \"{value}\" exceeds 6-char limit ({value.Length} chars)");
         }
     }
 
     [Test]
     public void All_aliases_start_with_ol_prefix()
     {
-        var fields = typeof(TypeAliases)
-            .GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)
-            .Where(f => f.IsLiteral && f.FieldType == typeof(string));
-
-        foreach (var field in fields)
+        foreach (var (name, value) in GetAliasConstants())
         {
-            var value = (string)field.GetValue(null)!;
             // Accept both the canonical "ol." prefix and the legacy
             // "olr." prefix introduced by the replication package
             // before the WAL adapter move pulled WAL types into core.
@@ -39,21 +29,15 @@ public class TypeAliasesTests
             var hasOlPrefix = value.StartsWith("ol.", StringComparison.Ordinal)
                 || value.StartsWith("olr.", StringComparison.Ordinal);
             Assert.That(hasOlPrefix, Is.True,
-                $"TypeAliases.{field.Name} = \"{value}\" does not start with \"ol.\" or \"olr.\"");
+                $"TypeAliases.{name} = \"{value}\" does not start with \"ol.\" or \"olr.\"");
         }
     }
 
     [Test]
     public void All_aliases_are_unique()
     {
-        var fields = typeof(TypeAliases)
-            .GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)
-            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
-            .ToList();
-
-        var values = fields.Select(f => (string)f.GetValue(null)!).ToList();
-        var duplicates = values
-            .GroupBy(v => v)
+        var duplicates = GetAliasConstants().Values
+            .GroupBy(v => v, StringComparer.Ordinal)
             .Where(g => g.Count() > 1)
             .Select(g => g.Key)
             .ToList();
@@ -115,12 +99,30 @@ public class TypeAliasesTests
             $"Aliases used by multiple types: {string.Join("; ", duplicates)}");
     }
 
+    /// <summary>
+    /// The alias table read by reflection, keyed by constant name.
+    /// <para>
+    /// The non-emptiness guard is load-bearing rather than defensive: every
+    /// caller either iterates this table or asserts that a set derived from it
+    /// is empty, and both shapes are vacuously satisfied by an empty table. The
+    /// reflection query is narrow enough to return nothing for a reason that has
+    /// nothing to do with the aliases being correct - a constant demoted from
+    /// <c>const</c> to <c>static readonly</c> clears <c>IsLiteral</c>, and the
+    /// whole wire-format guard would go green while asserting nothing.
+    /// </para>
+    /// </summary>
     private static Dictionary<string, string> GetAliasConstants()
     {
-        return typeof(TypeAliases)
+        var constants = typeof(TypeAliases)
             .GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
             .ToDictionary(f => f.Name, f => (string)f.GetValue(null)!, StringComparer.Ordinal);
+
+        Assert.That(constants, Is.Not.Empty,
+            "Expected at least one string alias constant on TypeAliases; an empty table would "
+            + "satisfy every alias assertion in this fixture without testing anything.");
+
+        return constants;
     }
 
     /// <summary>
