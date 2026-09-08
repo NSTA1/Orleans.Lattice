@@ -49,6 +49,25 @@ internal sealed class FakeEmbeddingProvider : IEmbeddingProvider
     public bool RejectEmptyStrings { get; set; }
 
     /// <summary>
+    /// The 1-based <see cref="EmbedAsync"/> call ordinals that return a fail-closed
+    /// unsuccessful result, leaving every other call to succeed normally. Unlike
+    /// <see cref="FailEmbeds"/>, which fails the whole pass uniformly, this fails
+    /// SOME batches within one pass - the shape a test needs to prove that a
+    /// partially-failed arm strands only the sources carried by the failed batches
+    /// while the rest land, and that the pass reports no signal distinguishing it
+    /// from a clean one.
+    /// </summary>
+    public HashSet<int> FailEmbedCallOrdinals { get; } = new();
+
+    /// <summary>
+    /// How many times <see cref="EmbedAsync"/> has been called, including calls that
+    /// were failed by <see cref="FailEmbedCallOrdinals"/>. This is the batch count a
+    /// test asserts against, so "the arm issued two batches and one failed" is
+    /// measured rather than inferred from the passage total.
+    /// </summary>
+    public int EmbedCallCount { get; private set; }
+
+    /// <summary>
     /// Every passage this provider was asked to embed, in call order. Lets a test
     /// assert what actually reached the embedder rather than only that a count
     /// came back - which is how a test tells "the right text was embedded" from
@@ -65,12 +84,13 @@ internal sealed class FakeEmbeddingProvider : IEmbeddingProvider
         IReadOnlyList<string> texts, EmbeddingTextType textType, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(texts);
+        EmbedCallCount++;
         if (ThrowOnEmbed)
         {
             throw new InvalidOperationException("The fake embedder was configured to throw.");
         }
 
-        if (FailEmbeds)
+        if (FailEmbeds || FailEmbedCallOrdinals.Contains(EmbedCallCount))
         {
             return Task.FromResult(EmbeddingResult.Failure(Space, "The fake embedder was configured to fail."));
         }
