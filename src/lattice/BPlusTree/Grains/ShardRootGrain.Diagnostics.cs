@@ -174,6 +174,7 @@ internal sealed partial class ShardRootGrain
 
             while (walk.HasLeaf)
             {
+                StandDownIfCeilingFired(scan);
                 var leaf = walk.CurrentLeaf;
                 if (deep)
                 {
@@ -426,6 +427,7 @@ internal sealed partial class ShardRootGrain
         var usage = default(ShardStorageUsage);
         while (walk.HasLeaf)
         {
+            StandDownIfCeilingFired(scan);
             cancellationToken.ThrowIfCancellationRequested();
             usage = Add(usage, await AccumulateLeafUsageAsync(
                 walk.CurrentLeafId!.Value.GetGuidKey(), cancellationToken));

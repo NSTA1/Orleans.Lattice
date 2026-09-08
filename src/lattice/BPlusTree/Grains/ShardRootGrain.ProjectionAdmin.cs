@@ -83,6 +83,7 @@ internal sealed partial class ShardRootGrain
 
         while (true)
         {
+            StandDownIfCeilingFired(scan);
             cancellationToken.ThrowIfCancellationRequested();
 
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
@@ -264,6 +265,7 @@ internal sealed partial class ShardRootGrain
 
         while (walk.HasLeaf)
         {
+            StandDownIfCeilingFired(scan);
             cancellationToken.ThrowIfCancellationRequested();
 
             // GetProjectionCheckpointOffsetAsync returns the legacy
@@ -393,6 +395,7 @@ internal sealed partial class ShardRootGrain
             var leafId = leftmostId.Value;
             while (true)
             {
+                StandDownIfCeilingFired(scan);
                 cancellationToken.ThrowIfCancellationRequested();
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
                 var freeze = await leaf.FreezeProjectionAsync(cancellationToken);
@@ -476,6 +479,7 @@ internal sealed partial class ShardRootGrain
                 for (var i = 0; i < frozen.Count; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    StandDownIfCeilingFired(scan);
                     var slot = i % window;
                     var rows = await inFlight[slot];
 

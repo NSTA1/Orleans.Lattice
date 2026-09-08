@@ -171,6 +171,26 @@ internal sealed partial class ShardRootGrain
     /// the stray continuation keeps writing its phase and leaf counter, and
     /// reusing it would corrupt a later call's diagnostics.
     /// </para>
+    /// <para>
+    /// What abandoning must <em>not</em> mean is that the walk carries on
+    /// working (issue 2233). <see cref="Task.WaitAsync(CancellationToken)"/>
+    /// ends the wait, never the task: left alone, the core walk keeps its
+    /// place in the leaf chain and, the moment the read it was parked on
+    /// returns, walks on - a read, a key-range and a sibling call per leaf for
+    /// the remainder of the chain. That work is charged to nobody. It is not a
+    /// request, so it is invisible to the non-reentrancy queue depth and to
+    /// the running-call count; its caller was answered with a stall, so it
+    /// logs no timeout; its page is discarded, so it produces no result. It
+    /// forces leaf activations, and each of those takes a permit from the
+    /// process-wide replay gate that every other shard's leaves also draw on -
+    /// so the damage is not even confined to this shard. And because the
+    /// caller has already been told to retry, the retry contends with the
+    /// wreckage of its own predecessor, which makes the next stall likelier
+    /// still. Hence <see cref="StandDownIfCeilingFired"/>: every bounded leaf
+    /// walk checks the same deadline the ceiling is watching, so a stall costs
+    /// at most the one read already in flight rather than the length of the
+    /// chain.
+    /// </para>
     /// </summary>
     private Task<T> GuardScanPageAsync<T>(ScanPageWalk walk, Task<T> page)
     {
@@ -195,6 +215,7 @@ internal sealed partial class ShardRootGrain
         }
         catch (OperationCanceledException oce) when (walk.DeadlineFired)
         {
+            ObserveAbandonedScanPage(page);
             throw ScanPageStalled(walk, oce);
         }
         catch
@@ -220,6 +241,68 @@ internal sealed partial class ShardRootGrain
             ScanPageWalkPool.Return(walk);
             throw;
         }
+    }
+
+    /// <summary>
+    /// The stand-down every bounded leaf walk takes at the top of each
+    /// iteration, so that the hard page-fill ceiling stops the walk and not
+    /// merely the wait on it (issue 2233).
+    /// <para>
+    /// This is the same deadline
+    /// <see cref="AwaitGuardedScanPageAsync{T}"/> is watching, read from
+    /// inside the walk rather than from outside it. Reading it here is what
+    /// makes <see cref="LatticeOptions.MaxScanPageStallDuration"/> mean what
+    /// it says: without it the ceiling ends the caller's wait and leaves the
+    /// walk running, so the bound applies to how long a caller waits rather
+    /// than to how much work a stalled page fill costs the silo.
+    /// </para>
+    /// <para>
+    /// It throws rather than returning a truncated page on purpose. The page
+    /// this walk would build is discarded either way - the guard has already
+    /// answered the caller - so returning one would only oblige all sixteen
+    /// core methods to name a resume key they have no caller for. Throwing
+    /// unwinds each of them identically, and the
+    /// <see cref="OperationCanceledException"/> it raises is the same fault
+    /// the guard already converts to a
+    /// <see cref="ScanPageStalledException"/> when the cancellation beats the
+    /// walk to it, so the caller cannot tell which of the two raced. When the
+    /// guard has already answered, the throw lands on an abandoned task and is
+    /// observed by <see cref="ObserveAbandonedScanPage"/>.
+    /// </para>
+    /// <para>
+    /// Deliberately <em>not</em> a work or volume predicate. The walk this
+    /// stops has not overrun any leaf, row or byte bound - it is stopped
+    /// because the wall clock the ceiling set has elapsed, which is the only
+    /// quantity that moves when the fault is a read that will not return.
+    /// </para>
+    /// </summary>
+    private static void StandDownIfCeilingFired(ScanPageWalk scan) =>
+        scan.DeadlineToken.ThrowIfCancellationRequested();
+
+    /// <summary>
+    /// Observes the outcome of a page fill the ceiling has abandoned, so that
+    /// the stand-down it is about to take cannot surface as an unobserved task
+    /// exception.
+    /// <para>
+    /// The continuation runs on <see cref="TaskScheduler.Default"/> rather
+    /// than on the captured activation scheduler: it exists only to read
+    /// <see cref="Task.Exception"/>, and the activation's single thread is the
+    /// resource this whole guard is trying to protect.
+    /// </para>
+    /// </summary>
+    private static void ObserveAbandonedScanPage(Task page)
+    {
+        if (page.IsCompleted)
+        {
+            _ = page.Exception;
+            return;
+        }
+
+        _ = page.ContinueWith(
+            static abandoned => _ = abandoned.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <summary>
