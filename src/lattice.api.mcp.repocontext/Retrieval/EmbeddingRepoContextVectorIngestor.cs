@@ -287,24 +287,46 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         List<string>? contentlessToMark = null;
         List<string>? contentfulToUnmark = null;
         List<string>? unreadable = null;
+        List<string>? racedWithDeletion = null;
         foreach (var file in toEmbed)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var sourceKey = RepoContextKeys.File(repoId, file.RelativePath);
-            var text = await ReadContentAsync(repoRoot, file.RelativePath, cancellationToken).ConfigureAwait(false);
+            var read = await ReadContentAsync(repoRoot, file.RelativePath, cancellationToken).ConfigureAwait(false);
+            var text = read.Text;
             if (text is null)
             {
-                // A read failure (IO or permission), not a contentless file: leave it
+                if (read.Absent)
+                {
+                    // Deleted between the walk that enumerated it and the read that
+                    // would have embedded it. This needs no retirement path and is not
+                    // a fault: the next walk does not enumerate it, so the plan
+                    // classifies it removed and it is never offered to the gap sweep
+                    // again. Counting it with the unreadable files below would
+                    // conflate a race that self-heals in one pass with a fault that
+                    // never does, which is the conflation that cost #2208 four rounds
+                    // of investigation (issue #2269).
+                    (racedWithDeletion ??= new List<string>()).Add(file.RelativePath);
+                    continue;
+                }
+
+                // A read failure on a file that IS still present - an exclusive lock,
+                // a bad sector, or a permission this process does not hold. It is left
                 // uncovered so a later pass retries it once the file is readable,
-                // rather than marking it considered.
+                // rather than marked considered.
                 //
                 // That retry is right for a TRANSIENT failure and silently wrong for a
-                // PERSISTENT one. A file that never becomes readable is never covered,
-                // so the always-on gap sweep re-selects it on every pass forever, at
-                // zero contention - a permanent gap set that is indistinguishable from
-                // a broken presence check or from write-path loss, because until this
-                // warning existed the skip was recorded nowhere at all. Naming the
-                // files is what separates those cases in the field (issue #2208).
+                // PERSISTENT one. Such a file is enumerated by every walk, so the
+                // always-on gap sweep re-selects it on every pass forever, at zero
+                // contention - a permanent gap set that is indistinguishable from a
+                // broken presence check or from write-path loss. Naming the files is
+                // what separates those cases in the field (issue #2208).
+                //
+                // Retiring it with a marker is deliberately NOT done here. A
+                // permission fault is fixable by an operator and does not change the
+                // file's digest, so a retired file would return to the unchanged set,
+                // be excluded by its own marker, and never be embedded - trading a
+                // loud non-convergence for a silent coverage hole (issue #2269).
                 (unreadable ??= new List<string>()).Add(file.RelativePath);
                 continue;
             }
@@ -340,15 +362,34 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             sources.Add(new EmbeddingSource(sourceKey, windows));
         }
 
+        if (racedWithDeletion is not null)
+        {
+            // Reported separately from the unreadable files, and at Information,
+            // because this population needs no action and clears itself: these files
+            // are gone, so the next walk does not enumerate them and the gap sweep is
+            // never offered them again. Folding them into the warning above would make
+            // its count - whose whole diagnostic value is that a REPEATING value means
+            // a permanent gap set - rise and fall with ordinary build churn.
+            _logger.LogInformation(
+                "Repo {RepoId}: {Count} of the {Selected} file(s) selected for embedding were deleted between "
+                + "the walk that enumerated them and the read that would have embedded them. They need no "
+                + "retry: the next walk does not enumerate them. sample: {Sample}",
+                repoId,
+                racedWithDeletion.Count,
+                toEmbed.Count,
+                string.Join(", ", racedWithDeletion.Take(10)));
+        }
+
         if (unreadable is not null)
         {
             // One line per pass, not one per file: a build tree can make hundreds
             // unreadable at once and the count is the signal, not each name.
             _logger.LogWarning(
-                "Repo {RepoId}: {Count} of the {Selected} file(s) selected for embedding could not be read and "
-                + "stay uncovered, so the gap sweep re-selects them on the next pass. A count that repeats at the "
-                + "same value across passes is a PERMANENT gap set - files that can never be embedded - not a "
-                + "saturated vector plane. sample: {Sample}",
+                "Repo {RepoId}: {Count} of the {Selected} file(s) selected for embedding are still present but "
+                + "could not be read, so they stay uncovered and the gap sweep re-selects them on the next pass. "
+                + "A count that repeats at the same value across passes is a PERMANENT gap set - files that can "
+                + "never be embedded - not a saturated vector plane. Files that were merely deleted mid-pass are "
+                + "counted separately and are not included here. sample: {Sample}",
                 repoId,
                 unreadable.Count,
                 toEmbed.Count,
@@ -450,7 +491,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 coverageProbeFailed ? "failed" : "succeeded");
         }
 
-        return new RepoFileVectorIngestOutcome(embedded, gapsSelected, !coverageProbeFailed);
+        return new RepoFileVectorIngestOutcome(embedded, gapsSelected, !coverageProbeFailed, embedOutcome.Saturated);
     }
 
     /// <inheritdoc />
@@ -1215,6 +1256,50 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var saturated = false;
         Exception? firstBatchFailure = null;
         var pendingMembers = new List<string>();
+
+        // Naming a failed batch's sources is what separates a deterministic write
+        // fault - a key range served by a permanently stalled leaf, say - from
+        // ordinary contention that will drain, and that ambiguity is what left the
+        // never-converging back-fill unattributed for four rounds of investigation
+        // (issue #2208). Both failure paths need it, so both compute it the same way.
+        // Units are contiguous per source, so comparing against the last key
+        // deduplicates without a set.
+        List<string> NameBatchSources(int from, int length)
+        {
+            var batchSources = new List<string>();
+            for (var i = 0; i < length; i++)
+            {
+                var ownerKey = sources[unitOwner[from + i]].SourceKey;
+                if (batchSources.Count == 0 || !string.Equals(batchSources[^1], ownerKey, StringComparison.Ordinal))
+                {
+                    batchSources.Add(ownerKey);
+                }
+            }
+
+            return batchSources;
+        }
+
+        // Consecutive failures mean the vector plane is saturated, not that one batch
+        // was unlucky. Driving the remaining batches into it adds load to a store that
+        // is already failing and lands nothing, so the arm stops here and lets the next
+        // reconcile retry from a quieter store. Whatever already landed is kept, and
+        // every deferred source is simply unmarked, so the next pass picks it up.
+        // The stage word keeps the two failure kinds distinguishable in the log while
+        // rendering the record case exactly as it did before.
+        void ReportSaturationDeferral(int from, int length, string stage)
+        {
+            var deferred = unitTexts.Count - (from + length);
+            _logger.LogWarning(
+                "Repo {RepoId}: {Failures} consecutive {Arm}-arm batches failed to {Stage}; the vector plane "
+                + "looks saturated, so deferring the remaining {Deferred} passage(s) to the next reconcile "
+                + "rather than adding load.",
+                repoId,
+                consecutiveBatchFailures,
+                arm,
+                stage,
+                deferred < 0 ? 0 : deferred);
+        }
+
         for (var start = 0; start < unitTexts.Count; start += EmbedBatchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1226,12 +1311,38 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 .ConfigureAwait(false);
             if (!result.Succeeded || result.Vectors.Count != count)
             {
-                _logger.LogInformation(
-                    "Bootstrap vectorisation for repository {RepoId} ({Arm} arm) skipped a batch of {Count} passage(s): the embedding call did not succeed ({Error}). Those sources fall back to keyword recall.",
+                // An embedding call that fails strands exactly the sources carrying a
+                // unit in this batch: none of them reaches a full slot set, so none
+                // completes, none has its membership recorded, and the always-on gap
+                // sweep re-selects every one of them on every later pass. That is the
+                // same loss a record failure causes, so it is accounted the same way.
+                // Before this it incremented neither counter, so it could not trip the
+                // saturation break however many times it fired, and it was logged at
+                // Information - which made a partial failure silent, since the batches
+                // that did land suppress the arm's "no embedding batch succeeded" line
+                // and leave a healthy-looking outcome behind (issue #2272).
+                var failedSources = NameBatchSources(start, count);
+                failedBatches++;
+                consecutiveBatchFailures++;
+
+                _logger.LogWarning(
+                    "Repo {RepoId}: the {Arm} arm could not embed a batch of {Count} passage(s) spanning "
+                    + "{Sources} source(s): the embedding call did not succeed ({Error}). They stay unmarked "
+                    + "and are retried on the next reconcile. sample: {Sample}",
                     repoId,
                     arm,
                     count,
-                    result.Error ?? "no vectors returned");
+                    failedSources.Count,
+                    result.Error ?? "no vectors returned",
+                    string.Join(", ", failedSources.Take(6)));
+
+                if (consecutiveBatchFailures >= MaxConsecutiveBatchFailures)
+                {
+                    saturated = true;
+                    ReportSaturationDeferral(start, count, "embed");
+                    break;
+                }
+
                 continue;
             }
 
@@ -1297,24 +1408,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 consecutiveBatchFailures++;
                 pendingMembers.Clear();
 
-                // Name the batch's sources. A gap residue that persists across passes
-                // is either the SAME sources failing every time - a deterministic
-                // write fault, such as a key range served by a permanently stalled
-                // leaf - or a different set each pass, which is ordinary contention
-                // that will drain. The passage count alone cannot separate those, and
-                // that ambiguity is exactly what left the never-converging back-fill
-                // unattributed for four rounds of investigation (issue #2208). Units
-                // are contiguous per source, so comparing against the last key
-                // deduplicates without a set.
-                var batchSources = new List<string>();
-                for (var i = 0; i < count; i++)
-                {
-                    var ownerKey = sources[unitOwner[start + i]].SourceKey;
-                    if (batchSources.Count == 0 || !string.Equals(batchSources[^1], ownerKey, StringComparison.Ordinal))
-                    {
-                        batchSources.Add(ownerKey);
-                    }
-                }
+                // Name the batch's sources, so a residue that persists across passes can
+                // be told apart from contention that will drain (see NameBatchSources).
+                var batchSources = NameBatchSources(start, count);
 
                 _logger.LogWarning(
                     ex,
@@ -1327,24 +1423,10 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     batchSources.Count,
                     string.Join(", ", batchSources.Take(6)));
 
-                // Consecutive record failures mean the vector plane is saturated, not
-                // that one batch was unlucky. Driving the remaining batches into it
-                // adds load to a store that is already timing out and lands nothing,
-                // so stop the arm here and let the next reconcile retry from a
-                // quieter store. Whatever already landed is kept, and every deferred
-                // source is simply unmarked, so the next pass picks it up.
                 if (consecutiveBatchFailures >= MaxConsecutiveBatchFailures)
                 {
                     saturated = true;
-                    var deferred = unitTexts.Count - (start + count);
-                    _logger.LogWarning(
-                        "Repo {RepoId}: {Failures} consecutive {Arm}-arm batches failed to record; the vector plane "
-                        + "looks saturated, so deferring the remaining {Deferred} passage(s) to the next reconcile "
-                        + "rather than adding load.",
-                        repoId,
-                        consecutiveBatchFailures,
-                        arm,
-                        deferred < 0 ? 0 : deferred);
+                    ReportSaturationDeferral(start, count, "record");
                     break;
                 }
 
@@ -1413,22 +1495,52 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             : $"{kind} {record.FullyQualifiedName}\n{signature}";
     }
 
-    private static async Task<string?> ReadContentAsync(
+    /// <summary>
+    /// What reading a selected file's content produced. The absent case is kept
+    /// distinct from the unreadable case because their futures differ completely: a
+    /// file that has been deleted is not enumerated by the next walk, so it is
+    /// classified removed and never offered to the gap sweep again, while a file that
+    /// is still present but cannot be read is offered by every walk and re-selected
+    /// on every pass (issue #2269). Collapsing both to null made a self-healing race
+    /// indistinguishable from a permanent fault.
+    /// </summary>
+    /// <param name="Text">The content read, truncated to the embedding limit, or
+    /// <see langword="null"/> when the read did not succeed.</param>
+    /// <param name="Absent">Whether the read failed because the file was no longer
+    /// there, as opposed to being present and unreadable.</param>
+    private readonly record struct FileReadResult(string? Text, bool Absent)
+    {
+        /// <summary>The file is still present but could not be read.</summary>
+        public static FileReadResult Unreadable { get; } = new(null, Absent: false);
+
+        /// <summary>The file was gone by the time the read reached it.</summary>
+        public static FileReadResult Missing { get; } = new(null, Absent: true);
+    }
+
+    private static async Task<FileReadResult> ReadContentAsync(
         string repoRoot, string relativePath, CancellationToken cancellationToken)
     {
         var fullPath = Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
         try
         {
             var content = await File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false);
-            return content.Length > MaxEmbedChars ? content[..MaxEmbedChars] : content;
+            return new FileReadResult(
+                content.Length > MaxEmbedChars ? content[..MaxEmbedChars] : content,
+                Absent: false);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Both derive from IOException, so this filter has to precede the
+            // IOException arm below or a deleted file would be reported as a fault.
+            return FileReadResult.Missing;
         }
         catch (IOException)
         {
-            return null;
+            return FileReadResult.Unreadable;
         }
         catch (UnauthorizedAccessException)
         {
-            return null;
+            return FileReadResult.Unreadable;
         }
     }
 
