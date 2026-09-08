@@ -120,12 +120,29 @@ internal readonly record struct RepoContextAnnSweepSnapshot(
 /// <para>
 /// <b>Why a zero here is evidence and not silence.</b> The counter records every
 /// sweep that ran, partitioned by outcome, so the total advances once per sweep
-/// interval for as long as the loop is alive. A fault that persists therefore
+/// for as long as the loop is alive. A fault that persists therefore
 /// shows as <c>outcome=faulted</c> climbing while <c>outcome=armed</c> stays at
 /// zero - loudest exactly when the hazard is occurring, rather than silent. A
 /// counter that only counted successful arming would instead read zero at the
 /// highest rate of the very fault it exists to catch, which is the shape declined
 /// on issue #2314.
+/// </para>
+/// <para>
+/// <b>Two cadences, so a rate taken against the interval is the wrong number.</b>
+/// The loop waits the sweep interval after a sweep that completes but the retry
+/// backoff after one that faults, and that backoff starts at 250 ms and doubles
+/// to a 30-second ceiling. The faulting arm therefore advances far faster than
+/// the interval, not at it. Against the 15-minute default reconcile interval a
+/// fault episode records nine sweeps in its first 62 seconds - at 0.0, 0.25,
+/// 0.75, 1.75, 3.75, 7.75, 15.75, 31.75 and 61.75 seconds - where a completing
+/// sweep would not yet have recorded its second at all, and it settles to 30 per
+/// interval once the backoff tops out. Against the one-minute floor that
+/// steady-state ratio is 2. So an operator who derives an expected rate from the
+/// sweep interval and compares <c>faulted</c> against it will understate the
+/// fault by that factor. The arm is louder than such a denominator predicts
+/// rather than quieter, so the error does not hide a fault - but it does misprice
+/// one, and the correct denominator is the total across all three arms, which is
+/// why the partition is total.
 /// </para>
 /// <para>
 /// <b>What it deliberately cannot cover.</b> A sweep loop that never starts
@@ -184,16 +201,19 @@ internal sealed class RepoContextAnnIndexSweepReporter : IDisposable
                 "Approximate-index build sweeps partitioned by outcome: 'armed' (the sweep completed and armed at "
                 + "least one build coordinator), 'empty' (it completed with no repository to arm), or 'faulted' "
                 + "(it threw, so nothing is scheduled until it gets through). Every sweep that runs is counted, so "
-                + "the total advances once per sweep interval and a zero on 'armed' beside a rising 'faulted' is a "
-                + "measured absence of arming rather than an absent measurement. All three series reading zero "
+                + "the total advances once per sweep - at the sweep interval while sweeps complete, and at the "
+                + "faster retry cadence (250 ms doubling to a 30-second ceiling) while they fault, so do not "
+                + "denominate 'faulted' by the sweep interval - and a zero on 'armed' beside a rising 'faulted' is "
+                + "a measured absence of arming rather than an absent measurement. All three series reading zero "
                 + "means the sweep loop is not running at all, which the service's startup line distinguishes.");
     }
 
     /// <summary>
     /// Records one sweep iteration and reports which transition, if any, the caller
     /// should log. The counter is incremented for every outcome, including the
-    /// faulting one, because it is the partition of a total that rises with the
-    /// sweep cadence that makes a zero on any single arm interpretable.
+    /// faulting one, because it is the partition of a total that rises once per
+    /// sweep - not once per sweep interval, since a faulting sweep is re-run on the
+    /// retry backoff - that makes a zero on any single arm interpretable.
     /// </summary>
     /// <param name="outcome">How the sweep ended.</param>
     /// <returns>The transition to announce, and the length of the fault run it opened or closed.</returns>
