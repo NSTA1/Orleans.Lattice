@@ -239,6 +239,12 @@ public class WalCommitLogWriterDrainTests
         await WaitUntilAsync(
             () => dispatches.Value >= 1,
             "the held dispatch to reach the shard, which is what fills the single admission slot the tail callers must then park behind");
+        // Guarding here rather than at each call site: every caller's claim is
+        // about the tail callers as a group, and `parked.All(...)` is satisfied
+        // by an empty array, so an arrange step that produced no tail callers
+        // would pass silently at all of them.
+        Assert.That(parked, Is.Not.Empty,
+            "the tail callers must exist, or the parked assertion below is vacuous");
         Assert.That(dispatches.Value, Is.EqualTo(1),
             "only the held dispatch may reach the shard; every tail caller must still be parked on the admission semaphore rather than dispatched");
         Assert.That(parked.All(t => !t.IsCompleted), Is.True,

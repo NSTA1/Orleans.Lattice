@@ -502,7 +502,7 @@ public sealed class ReplicationTenantIsolationGateTests
             Substitute.For<ITenantRegistry>(),
             policy: await CompiledPolicyWithStatusAsync(Acme, TenantStatus.Active));
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(
                 await fallbackGate.EvaluateAsync(AcmeTree),
@@ -525,7 +525,7 @@ public sealed class ReplicationTenantIsolationGateTests
         KnowsSuspended(registry);
         var gate = CreateGate(registry);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(
                 await gate.EvaluateAsync(PlatformTree),

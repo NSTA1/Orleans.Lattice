@@ -101,6 +101,30 @@ public class LeafWalkBudgetTests
         Assert.That(budget.ShouldYield(), Is.False);
     }
 
+    /// <summary>
+    /// An extreme but validated <see cref="LatticeOptions.MaxScanPageDuration"/> -
+    /// neither it nor <see cref="LatticeOptions.BackgroundDrainMaxDuration"/>
+    /// carries an upper bound - once overflowed the Stopwatch-tick deadline cast to
+    /// a negative, past instant, so <see cref="LeafWalkBudget.ShouldYield"/> fired
+    /// on the very first leaf and truncated every scan page to one leaf, the exact
+    /// opposite of the effectively-unbounded budget the value expresses. The
+    /// deadline now saturates, so the budget stays unbounded (siblings of issues
+    /// 2221 and 2342).
+    /// </summary>
+    [Test]
+    public void An_extreme_duration_saturates_instead_of_yielding_on_the_first_leaf()
+    {
+        var budget = new LeafWalkBudget(
+            maxLeaves: int.MaxValue,
+            maxDuration: TimeSpan.MaxValue,
+            startTimestamp: Stopwatch.GetTimestamp());
+        budget.RecordLeafVisited();
+
+        Assert.That(budget.ShouldYield(), Is.False,
+            "an extreme scan-page duration must saturate the deadline, not overflow it " +
+            "to a past instant that truncates every page to one leaf");
+    }
+
     [Test]
     public void LeavesVisited_counts_every_recorded_leaf()
     {

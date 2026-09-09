@@ -62,23 +62,28 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// <param name="workspaceMode">Whether the dynamic multi-repository workspace
     /// tools replace the single-repository onboarding tool.</param>
     /// <param name="workspaceGuarded">Whether an enforcing workspace path guard is
-    /// registered. When <see langword="false"/> in workspace mode the
-    /// <c>repocontext_add_repo</c> tool is not contributed at all, because its
-    /// contract promises a workspace boundary an unconfigured guard cannot enforce.
-    /// The group deliberately does <b>not</b> fall back to
-    /// <c>repocontext_bootstrap</c> here: that tool accepts an equally unbounded
-    /// caller-supplied path, so substituting it would reopen the same hole under a
-    /// different name. <c>repocontext_remove_repo</c> is unaffected - it takes a
-    /// repository id, never a path, and never touches the working tree.</param>
+    /// registered. When <see langword="false"/> <b>neither</b> path-taking
+    /// onboarding tool is contributed: not <c>repocontext_add_repo</c> in
+    /// workspace mode, and not <c>repocontext_bootstrap</c> in single-repository
+    /// mode. Both take an unbounded caller-supplied path straight from the wire,
+    /// so an unconfigured guard would turn either of them into an arbitrary local
+    /// filesystem read whose contents the retrieval tools then serve back; the
+    /// group therefore withholds one exactly as it withholds the other, and never
+    /// substitutes one for the other. <c>repocontext_remove_repo</c> is unaffected
+    /// - it takes a repository id, never a path, and never touches the working
+    /// tree.</param>
     public RepoContextToolGroup(
         bool enableWrites = false,
         bool workspaceMode = false,
         bool workspaceGuarded = true)
     {
         var offerAddRepo = workspaceMode && workspaceGuarded;
+        var offerBootstrap = !workspaceMode && workspaceGuarded;
         var capacity = 13
             + (workspaceMode ? 1 : 0)
-            + (enableWrites ? (workspaceMode ? (offerAddRepo ? 8 : 7) : 7) : 0);
+            + (enableWrites
+                ? 6 + (workspaceMode ? (offerAddRepo ? 3 : 2) : (offerBootstrap ? 1 : 0))
+                : 0);
         var tools = new List<McpServerTool>(capacity)
         {
             McpServerTool.Create(
@@ -128,7 +133,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 tools.Add(BuildRemoveRepoTool());
                 tools.Add(BuildResetIndexTool());
             }
-            else
+            else if (offerBootstrap)
             {
                 tools.Add(BuildBootstrapTool());
             }

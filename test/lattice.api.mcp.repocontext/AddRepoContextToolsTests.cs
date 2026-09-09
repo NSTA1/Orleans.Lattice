@@ -110,7 +110,7 @@ public sealed class AddRepoContextToolsTests
     public void AddRepoContextTools_offers_the_write_tools_when_writes_are_enabled()
     {
         var services = new ServiceCollection();
-        services.AddRepoContextTools(enableWrites: true);
+        services.AddRepoContextTools(enableWrites: true, workspaceRoot: "/workspace");
 
         using var provider = services.BuildServiceProvider();
         var group = (RepoContextToolGroup)provider.GetServices(ToolGroupInterface).Single()!;
@@ -126,6 +126,44 @@ public sealed class AddRepoContextToolsTests
                 "repocontext_bootstrap", "repocontext_remember", "repocontext_update", "repocontext_forget",
                 "repocontext_claim", "repocontext_renew_claim", "repocontext_release_claim",
             }));
+    }
+
+    /// <summary>
+    /// The single-repository counterpart of the workspace-mode withholding below,
+    /// and the regression for the arbitrary-local-read hole:
+    /// <c>repocontext_bootstrap</c> takes its <c>repoRoot</c> from the wire exactly
+    /// as <c>repocontext_add_repo</c> does, so with no workspace root the guard
+    /// admits every absolute path on the host. The mutating repository-context
+    /// tools need only a data-plane write grant - not an administrative one - so
+    /// any caller who may write could have had the server index (and then make
+    /// searchable) any directory it could read.
+    /// <para>
+    /// Every path-free tool must survive: withholding bootstrap fails the
+    /// onboarding path closed, it does not disable the surface.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void AddRepoContextTools_without_a_root_withholds_bootstrap_but_keeps_the_path_free_tools()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools(enableWrites: true);
+
+        using var provider = services.BuildServiceProvider();
+        var group = (RepoContextToolGroup)provider.GetServices(ToolGroupInterface).Single()!;
+        var names = group.Tools.Select(t => t.ProtocolTool.Name).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.GetRequiredService<RepoContextWorkspaceGuard>().IsEnforcing, Is.False);
+            Assert.That(names, Does.Not.Contain("repocontext_bootstrap"));
+
+            // The capture and claim tools key on a repository id, never a path.
+            Assert.That(names, Does.Contain("repocontext_remember"));
+            Assert.That(names, Does.Contain("repocontext_update"));
+            Assert.That(names, Does.Contain("repocontext_forget"));
+            Assert.That(names, Does.Contain("repocontext_claim"));
+            Assert.That(names, Does.Contain("repocontext_search"));
+        });
     }
 
     [Test]

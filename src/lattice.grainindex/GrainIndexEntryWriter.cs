@@ -210,7 +210,13 @@ internal sealed class GrainIndexEntryWriter
 
         if (declaredType.IsEnum)
         {
-            _json.WriteNumberValue(Convert.ToInt64(value, CultureInfo.InvariantCulture));
+            // A ulong-backed enum whose value exceeds long.MaxValue overflows
+            // Convert.ToInt64; read it through its unsigned underlying type so it
+            // is written as the same JSON number a plain ulong property would be.
+            if (Enum.GetUnderlyingType(declaredType) == typeof(ulong))
+                _json.WriteNumberValue(Convert.ToUInt64(value, CultureInfo.InvariantCulture));
+            else
+                _json.WriteNumberValue(Convert.ToInt64(value, CultureInfo.InvariantCulture));
             return;
         }
 

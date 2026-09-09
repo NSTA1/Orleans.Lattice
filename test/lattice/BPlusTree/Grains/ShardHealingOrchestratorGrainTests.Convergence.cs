@@ -188,6 +188,7 @@ public partial class ShardHealingOrchestratorGrainTests
         var h = CreateGrain(physicalShardCount: 16, baseShardCount: 2, virtualShardCount: 64);
 
         var violations = new List<string>();
+        var settled = false;
         for (var sweep = 0; sweep < 500; sweep++)
         {
             await h.Grain.RunHealingPassAsync();
@@ -201,10 +202,28 @@ public partial class ShardHealingOrchestratorGrainTests
                     violations.Add($"sweep {sweep}: slot {slot} routes to retired shard {map.Slots[slot]}");
             }
 
-            if (h.State.State.LastDecision == ShardHealingDecision.NotOverSplit) break;
+            if (h.State.State.LastDecision == ShardHealingDecision.NotOverSplit)
+            {
+                settled = true;
+                break;
+            }
         }
 
-        Assert.That(violations, Is.Empty, string.Join("; ", violations.Take(5)));
+        // The positive control. "No slot ever routed to a retired shard" is
+        // satisfied trivially by a run in which nothing was ever retired, so a
+        // healing pass that silently did no work would leave `violations` empty
+        // and pass this test without exercising routing at all. Assert first
+        // that the fold actually happened - the tree started at 16 physical
+        // shards and must have converged to its pinned base of 2 - so the
+        // emptiness below is evidence about routing rather than about inaction.
+        Assert.Multiple(() =>
+        {
+            Assert.That(settled, Is.True, "healing did not settle within 500 sweeps");
+            Assert.That(h.CurrentMap().GetPhysicalShardIndices(), Has.Count.EqualTo(2),
+                "healing must have folded 16 physical shards down to the base count, "
+                + "otherwise no shard was ever retired and the routing claim is vacuous");
+            Assert.That(violations, Is.Empty, string.Join("; ", violations.Take(5)));
+        });
     }
 
     // --- Oscillation ------------------------------------------------------

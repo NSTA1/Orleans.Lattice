@@ -178,16 +178,20 @@ internal sealed class AggregationApplier(
         // batch could only flip an emptied slot to the empty sentinel; deleting it
         // now keeps storage bounded without needing an atomic delete. Cleanup is
         // driven by the store's actual value (not the computed row), so it is a
-        // safe no-op when the flip was deduped by a replay's saga re-attach.
+        // safe no-op when the flip was deduped by a replay's saga re-attach. The
+        // probes go out as one batched read: `slots` holds the old-group and
+        // new-group slots, whose emptiness decisions are independent of each
+        // other, so there is nothing to gain from reading them one at a time.
         // Iterate the slots dictionary directly rather than through its `.Keys`
         // collection: `slots` is a fresh per-contribution map, so each `.Keys`
-        // access otherwise allocates a throwaway KeyCollection wrapper. The
-        // cleanup below only reads the store per key and never mutates `slots`,
-        // so the struct enumerator is safe here.
+        // access otherwise allocates a throwaway KeyCollection wrapper.
+        var cleanupKeys = new List<string>(slots.Count);
         foreach (var (key, _) in slots)
         {
-            await CleanupIfEmptyAsync(key, cancellationToken);
+            cleanupKeys.Add(key);
         }
+
+        await CleanupIfEmptyAsync(cleanupKeys, cancellationToken);
     }
 
     private async Task RetractNumericAsync(AggregationContribution contribution, CancellationToken cancellationToken)
@@ -220,8 +224,7 @@ internal sealed class AggregationApplier(
 
         // Opportunistic, idempotent cleanup of the sentinels the flip wrote (a
         // store-state-driven no-op when the flip was deduped by a replay).
-        await CleanupIfEmptyAsync(oldKey, cancellationToken);
-        await CleanupIfEmptyAsync(membershipKey, cancellationToken);
+        await CleanupIfEmptyAsync([oldKey, membershipKey], cancellationToken);
     }
 
     private List<KeyValuePair<string, byte[]>> BuildSlotEntries(Dictionary<string, AccumulatorRow> slots)
@@ -235,10 +238,47 @@ internal sealed class AggregationApplier(
         return entries;
     }
 
-    private async Task CleanupIfEmptyAsync(string key, CancellationToken cancellationToken)
+    /// <summary>
+    /// Deletes each of <paramref name="keys"/> that currently holds the empty
+    /// sentinel, probing every candidate in one store read instead of one read
+    /// per key.
+    /// </summary>
+    /// <remarks>
+    /// Every numeric flip ends by probing the keys it may have emptied, and those
+    /// probes are mutually independent - the decision for one key never depends on
+    /// another's value - so issuing them serially spends one round trip per key
+    /// for no ordering benefit. A single <c>GetManyAsync</c> collapses the probe
+    /// phase to one round trip; the deletes that follow remain per-key because the
+    /// store exposes no batched delete, but only genuinely emptied keys reach
+    /// them, and an emptied slot is the uncommon case. Cleanup stays driven by the
+    /// store's actual value rather than the computed row, so it remains a safe
+    /// no-op when a replay's saga re-attach deduped the flip. Keys absent from the
+    /// result were never written, which is already the state cleanup is trying to
+    /// reach, so omitting them matches the per-key form exactly.
+    /// </remarks>
+    private async Task CleanupIfEmptyAsync(List<string> keys, CancellationToken cancellationToken)
     {
-        var bytes = await store.GetAsync(key, cancellationToken);
-        if (bytes is not null && IsEmpty(bytes))
+        if (keys.Count == 0)
+        {
+            return;
+        }
+
+        var rows = await store.GetManyAsync(keys, cancellationToken);
+        List<string>? empties = null;
+        foreach (var (key, bytes) in rows)
+        {
+            if (bytes is not null && IsEmpty(bytes))
+            {
+                (empties ??= []).Add(key);
+            }
+        }
+
+        if (empties is null)
+        {
+            return;
+        }
+
+        foreach (var key in empties)
         {
             await store.DeleteAsync(key, cancellationToken);
         }
@@ -430,14 +470,34 @@ internal sealed class AggregationApplier(
     {
         long totalCount = 0;
         double totalSum = 0;
+
+        // Gather every accumulator shard for the group in one batched read rather
+        // than one store call per slot, matching MaterialiseInverseAsync and
+        // MaterialiseFoldAsync below. Summation is order-independent, so the
+        // arbitrary iteration order of the returned rows is immaterial, and the
+        // pass costs one round trip at any fanout instead of `fanout` of them.
+        var slotKeys = new List<string>(_fanout);
         for (var slot = 0; slot < _fanout; slot++)
         {
-            var row = await ReadAccumulatorAsync(AccumulatorKey(groupKey, slot), cancellationToken);
-            if (row is { } r)
+            slotKeys.Add(AccumulatorKey(groupKey, slot));
+        }
+
+        var shards = await store.GetManyAsync(slotKeys, cancellationToken);
+
+        // GetManyAsync omits absent keys but still returns a slot holding the
+        // empty sentinel, which ReadAccumulatorAsync treats as "no row"; keep the
+        // IsEmpty guard so the batched pass decodes exactly what the per-slot loop
+        // did.
+        foreach (var (_, bytes) in shards)
+        {
+            if (bytes is null || IsEmpty(bytes))
             {
-                totalCount += r.Count;
-                totalSum += r.Sum;
+                continue;
             }
+
+            var r = DecodeAccumulator(bytes);
+            totalCount += r.Count;
+            totalSum += r.Sum;
         }
 
         if (totalCount <= 0)

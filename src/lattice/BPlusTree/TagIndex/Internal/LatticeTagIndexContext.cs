@@ -245,18 +245,104 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     private static string KeyMajorPrefixFor(string treeId, string key) =>
         string.Concat(KeyMajorPrefix, treeId, SepStr, key, SepStr);
 
-    private static bool TryParseRow(string rowKey, out string tag, out string treeId, out string key)
+    /// <summary>
+    /// The segment boundaries of a parsed membership row key
+    /// (<c>{tag}\0{treeId}\0{key}</c>), held as offsets into the row key rather
+    /// than as three materialised substrings.
+    /// </summary>
+    /// <remarks>
+    /// Every membership scan in this type walks one row per index entry and
+    /// discards most of what it parses: the covered-tree self-scan wants only the
+    /// tree id, the tag enumeration wants a tag only when the tag actually
+    /// changes, and the reconcile scan drops every row belonging to another tree
+    /// before it looks at the key. Splitting location from materialisation lets
+    /// each of those call sites cut exactly the substrings it keeps, so a scanned
+    /// row that is filtered out costs no allocation at all.
+    /// </remarks>
+    private readonly record struct RowSegments(int TagLength, int TreeStart, int TreeLength, int KeyStart);
+
+    /// <summary>
+    /// Locates the two separators of a membership row key without allocating.
+    /// Mirrors the acceptance rule of the substring-cutting parser it replaced:
+    /// two separators must be present and the tag segment must be non-empty.
+    /// </summary>
+    private static bool TryLocateRow(string rowKey, out RowSegments segments)
     {
-        tag = treeId = key = string.Empty;
+        segments = default;
         var first = rowKey.IndexOf(Sep);
         if (first < 0) return false;
         var second = rowKey.IndexOf(Sep, first + 1);
         if (second < 0) return false;
-        tag = rowKey[..first];
-        treeId = rowKey.Substring(first + 1, second - first - 1);
-        key = rowKey[(second + 1)..];
-        return tag.Length > 0;
+        if (first == 0) return false;
+        segments = new RowSegments(first, first + 1, second - first - 1, second + 1);
+        return true;
     }
+
+    /// <summary>Materialises the tag segment.</summary>
+    private static string RowTag(string rowKey, in RowSegments segments) => rowKey[..segments.TagLength];
+
+    /// <summary>Materialises the key segment (everything after the second separator).</summary>
+    private static string RowKeySegment(string rowKey, in RowSegments segments) => rowKey[segments.KeyStart..];
+
+    /// <summary>
+    /// Ordinal equality of the tag segment against <paramref name="other"/>
+    /// without cutting the segment out first.
+    /// </summary>
+    private static bool RowTagEquals(string rowKey, in RowSegments segments, string? other) =>
+        other is not null
+        && other.Length == segments.TagLength
+        && rowKey.AsSpan(0, segments.TagLength).SequenceEqual(other.AsSpan());
+
+    /// <summary>
+    /// Ordinal equality of the tree-id segment against <paramref name="other"/>
+    /// without cutting the segment out first.
+    /// </summary>
+    private static bool RowTreeEquals(string rowKey, in RowSegments segments, string other) =>
+        other.Length == segments.TreeLength
+        && rowKey.AsSpan(segments.TreeStart, segments.TreeLength).SequenceEqual(other.AsSpan());
+
+    /// <summary>
+    /// Ordinal comparison of the key segment against <paramref name="other"/>,
+    /// equivalent to <c>string.CompareOrdinal(key, other)</c> in sign. Used for
+    /// the reconcile scan's range bounds, which reject far more rows than they
+    /// accept and so should not have to materialise the key to decide.
+    /// </summary>
+    private static int CompareRowKeyTo(string rowKey, in RowSegments segments, string other) =>
+        rowKey.AsSpan(segments.KeyStart).CompareTo(other.AsSpan(), StringComparison.Ordinal);
+
+    /// <summary>
+    /// For a key-major row <c>\0k\0{treeId}\0{fullKey}\0{tag}</c>, returns the
+    /// trailing tag when the row's full-key segment equals <paramref name="key"/>
+    /// ordinally and the tag is non-empty; otherwise <see langword="null"/>.
+    /// </summary>
+    /// <remarks>
+    /// Synchronous and static so the span work is legal: the caller is an async
+    /// method, where a <see cref="ReadOnlySpan{T}"/> local cannot live across the
+    /// enumerator's state machine.
+    /// </remarks>
+    private static string? TryMatchKeyRowTag(string rowKey, int headLen, string key)
+    {
+        var body = rowKey.AsSpan(headLen);
+        var lastSep = body.LastIndexOf(Sep);
+        if (lastSep < 0)
+        {
+            return null;
+        }
+        if (!body[..lastSep].SequenceEqual(key.AsSpan()))
+        {
+            return null;
+        }
+        var tag = body[(lastSep + 1)..];
+        return tag.Length > 0 ? new string(tag) : null;
+    }
+
+    /// <summary>
+    /// Adds the tree-id segment to <paramref name="set"/>. The tag and key
+    /// segments a membership self-scan never looks at are not cut at all, so the
+    /// row costs one substring instead of three.
+    /// </summary>
+    private static void AddRowTree(SortedSet<string> set, string rowKey, in RowSegments segments) =>
+        set.Add(rowKey.Substring(segments.TreeStart, segments.TreeLength));
 
     // ── Membership write / read strategy (mode-aware) ────────────────
 
@@ -435,19 +521,11 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         {
             // rowKey == `\0k\0{treeId}\0{fullKey}\0{tag}`; tag is the final
             // segment, fullKey is everything between the treeId separator and it.
-            var body = rowKey[headLen..];
-            var lastSep = body.LastIndexOf(Sep);
-            if (lastSep < 0)
-            {
-                continue;
-            }
-            var fullKey = body[..lastSep];
-            if (!string.Equals(fullKey, key, StringComparison.Ordinal))
-            {
-                continue;
-            }
-            var tag = body[(lastSep + 1)..];
-            if (tag.Length > 0)
+            // The full-key comparison runs on the row's own span, so a row for
+            // another key is rejected without cutting a substring; only a row
+            // that actually matches materialises its tag.
+            var tag = TryMatchKeyRowTag(rowKey, headLen, key);
+            if (tag is not null)
             {
                 result.Add(tag);
             }
@@ -472,23 +550,26 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             {
                 continue; // reserved hint row
             }
-            if (!TryParseRow(rowKey, out var tag, out var treeId, out _))
+            if (!TryLocateRow(rowKey, out var segments))
             {
                 continue;
             }
-            if (!string.Equals(tag, currentTag, StringComparison.Ordinal))
+            if (!RowTagEquals(rowKey, segments, currentTag))
             {
-                currentTag = tag;
+                // Only a tag change materialises a tag, so a run of rows sharing
+                // one tag - which is the shape of an ordered membership scan -
+                // costs one substring for the whole run instead of one per row.
+                currentTag = RowTag(rowKey, segments);
                 emitted = false;
             }
             if (emitted)
             {
                 continue;
             }
-            if (onlyTree is null || string.Equals(treeId, onlyTree, StringComparison.Ordinal))
+            if (onlyTree is null || RowTreeEquals(rowKey, segments, onlyTree))
             {
                 emitted = true;
-                yield return tag;
+                yield return currentTag!;
             }
         }
     }
@@ -830,26 +911,33 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             {
                 continue; // reserved hint row
             }
-            if (!TryParseRow(rowKey, out var rowTag, out var rowTree, out var key))
+            if (!TryLocateRow(rowKey, out var segments))
             {
                 continue;
             }
-            if (!string.Equals(rowTree, treeId, StringComparison.Ordinal))
+            // Tree and range filters reject on the row key's own spans, so a row
+            // belonging to another tree - or outside the requested range - is
+            // discarded without cutting a single substring out of it.
+            if (!RowTreeEquals(rowKey, segments, treeId))
             {
                 continue;
             }
-            if (startInclusive is not null && string.CompareOrdinal(key, startInclusive) < 0)
+            if (startInclusive is not null && CompareRowKeyTo(rowKey, segments, startInclusive) < 0)
             {
                 continue;
             }
-            if (endExclusive is not null && string.CompareOrdinal(key, endExclusive) >= 0)
+            if (endExclusive is not null && CompareRowKeyTo(rowKey, segments, endExclusive) >= 0)
             {
                 continue;
             }
             rowsScanned++;
+            var key = RowKeySegment(rowKey, segments);
             if (!live.Contains(key))
             {
-                (candidates ??= []).Add(new OrphanCandidate(rowKey, rowTree, key, rowTag));
+                // The tree segment was just proven equal to treeId, so the
+                // candidate reuses that string rather than cutting an identical
+                // one, and only a genuine orphan pays for its tag.
+                (candidates ??= []).Add(new OrphanCandidate(rowKey, treeId, key, RowTag(rowKey, segments)));
             }
         }
 
@@ -934,9 +1022,9 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             {
                 continue;
             }
-            if (TryParseRow(rowKey, out _, out var treeId, out _))
+            if (TryLocateRow(rowKey, out var segments))
             {
-                set.Add(treeId);
+                AddRowTree(set, rowKey, segments);
             }
         }
         foreach (var treeId in set)

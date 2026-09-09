@@ -419,6 +419,99 @@ public class LatticeTagIndexIntegrationTests
         Assert.That(await Collect(idx.WithAnyTags("red")), Is.EqualTo(new[] { "a" }));
     }
 
+    // ─────────────────── row-segment suffix-collision guards ───────────────────
+    // The membership row key is `{tag}\0{treeId}\0{key}`, and its scan paths
+    // compare the tag, tree, and key segments against a candidate span rather
+    // than cutting each segment into a string first. A span comparison that
+    // forgot to require equal lengths would accept a candidate that is merely a
+    // PREFIX of the segment (or vice versa), so each of the three segments gets a
+    // case where one value is a strict prefix of another.
+
+    [Test]
+    public async Task Tags_enumeration_does_not_conflate_a_tag_with_its_prefix()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("a", Bytes("1"));
+        var idx = TagIndex(tree, $"colors-{sfx}");
+        await idx.Key("a").AddAsync(["a", "ab", "abc"]);
+
+        var tags = new List<string>();
+        await foreach (var tag in idx.TagsAsync())
+        {
+            tags.Add(tag);
+        }
+
+        Assert.That(tags, Is.EqualTo(new[] { "a", "ab", "abc" }),
+            "each prefix-nested tag must be emitted in its own right");
+    }
+
+    [Test]
+    public async Task Key_tags_lookup_does_not_conflate_a_key_with_its_prefix()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("bob", Bytes("1"));
+        await tree.SetAsync("bobby", Bytes("1"));
+        var idx = TagIndex(tree, $"colors-{sfx}");
+        await idx.Key("bob").AddAsync(["red"]);
+        await idx.Key("bobby").AddAsync(["blue"]);
+
+        var bobTags = await idx.Key("bob").GetAsync();
+        var bobbyTags = await idx.Key("bobby").GetAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bobTags, Is.EqualTo(new[] { "red" }));
+            Assert.That(bobbyTags, Is.EqualTo(new[] { "blue" }));
+        });
+    }
+
+    [Test]
+    public async Task MultiTree_query_does_not_conflate_a_tree_id_with_its_prefix()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var indexName = $"colors-{sfx}";
+        var t1 = $"it-{sfx}";
+        var t2 = $"it-{sfx}-long";
+        var tree1 = Tree(t1);
+        var tree2 = Tree(t2);
+        await tree1.SetAsync("a", Bytes("1"));
+        await tree2.SetAsync("b", Bytes("1"));
+        await TagIndex(tree1, indexName).Key("a").AddAsync(["red"]);
+        await TagIndex(tree2, indexName).Key("b").AddAsync(["red"]);
+
+        var multi = MultiTreeTagIndex(indexName);
+        var hits = await Collect(multi.WithAnyTags("red").InTree(t1));
+
+        Assert.That(hits, Is.EqualTo(new[] { new TaggedKey(t1, "a") }),
+            "a tree id that is a strict prefix of another must not match it");
+    }
+
+    [Test]
+    public async Task ReconcileAsync_range_bounds_do_not_conflate_a_key_with_its_prefix()
+    {
+        // The reconcile scan compares the row's key segment against the range
+        // bounds on the row's own span. "b" sorts before "bb", so an exclusive
+        // upper bound of "bb" must keep "b" in range and push "bb" out of it -
+        // which a length-blind prefix comparison would get wrong.
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("b", Bytes("1"));
+        await tree.SetAsync("bb", Bytes("1"));
+        var idx = TagIndex(tree, $"colors-{sfx}");
+        await idx.Key("b").AddAsync(["red"]);
+        await idx.Key("bb").AddAsync(["red"]);
+
+        await tree.DeleteAsync("b");
+        await tree.DeleteAsync("bb");
+        var report = await idx.ReconcileAsync("b", "bb");
+
+        Assert.That(report.OrphanRowsRemoved, Is.EqualTo(1),
+            "only \"b\" lies in [\"b\", \"bb\")");
+        Assert.That(await Collect(idx.WithAnyTags("red")), Is.EqualTo(new[] { "bb" }));
+    }
+
     [Test]
     public async Task MultiTree_CountAsync_counts_across_trees()
     {

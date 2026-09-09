@@ -57,6 +57,7 @@ public class LatticePredicateEvaluatorTests
     public void Evaluator_matches_compiled_lambda_across_allowlist()
     {
         var mismatches = new List<string>();
+        var comparisons = 0;
         foreach (var predicate in Predicates())
         {
             var compiled = predicate.Compile();
@@ -78,11 +79,20 @@ public class LatticePredicateEvaluatorTests
                 }
 
                 var actual = LatticePredicateEvaluator.Matches(Encode(person), ir);
+                comparisons++;
                 if (expected != actual)
                     mismatches.Add($"'{predicate}' on {person.Name}: expected {expected}, got {actual}");
             }
         }
 
+        // Denominator guard. Both loops iterate lazily-yielded sources and the
+        // inner NullReferenceException branch continues without comparing, so
+        // "no mismatches" is satisfied by a run that compared nothing at all -
+        // an empty allowlist, an empty population, or every case diverting into
+        // the null-safe branch would each leave mismatches empty and green.
+        Assert.That(comparisons, Is.GreaterThan(0),
+            "the evaluator was never compared against a compiled lambda, "
+            + "so the mismatch assertion below would pass vacuously");
         Assert.That(mismatches, Is.Empty, string.Join("\n", mismatches));
     }
 
