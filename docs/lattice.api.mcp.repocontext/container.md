@@ -290,9 +290,40 @@ There are three outcomes and the log distinguishes all three, which it did not b
 | Start line, no completion line | The container was killed mid-drain. The grace period is smaller than the drain. | Raise `stop_grace_period` above the host budget. This was issue #2389. |
 | `drain complete ... consuming NN%` at `Information` | The drain finished with headroom. `NN%` is what your corpus needs. | Nothing. |
 | `drain complete ... consuming NN%` at `Warning` | The drain finished, but consumed more than 70% of the budget. | Treat as a lead indicator: the next growth in the index may push it over. |
-| `drain ABANDONED after 90s` at `Error` | The **host** stopped waiting. Deactivation was abandoned part-way. | Raise `RepoContextHostBuilder.ShutdownBudget`, and `stop_grace_period` with it. |
+| `drain ABANDONED after 90s` at `Error`, and the container exits **70** | The **host** stopped waiting. Deactivation was abandoned part-way. | Raise `RepoContextHostBuilder.ShutdownBudget`, and `stop_grace_period` with it. |
 
 The last row is the one that needed issue #2397. A widespread belief - stated in an earlier revision of this very document - is that `ApplicationStopped` fires only after every hosted service has stopped, which would make the completion line self-evidently trustworthy. **It is not true.** `HostShutdownTimeoutBehaviourTests` demonstrates the actual behaviour against a real generic host: when `HostOptions.ShutdownTimeout` expires, the host stops waiting for the services and raises `ApplicationStopped` anyway. Before #2397 the signal was bound to that event and to nothing else, so an abandoned drain emitted `drain complete in 90.0s` - a confident false positive, which is worse than the silence it was assumed to be. The overrun is now reported at `Error`, from an alarm armed when the drain starts, so it is emitted at the instant the budget expires rather than depending on a completion callback that may never arrive.
+
+### The abandoned drain also reports itself in the exit code
+
+An `Error` line only helps somebody who is already reading the log. The layer that acts on a stopped container automatically - your orchestrator - does not read logs, it reads the exit code, and before issue #2401 an abandoned drain did not reliably produce a distinctive one.
+
+Measured against a real generic host rather than assumed, the pre-#2401 outcome was not merely zero, it was **undetermined**, and which of two outcomes you got depended on an internal choice of the silo's hosted service:
+
+- if the service absorbed the cancellation and returned (a force-stop), `RunAsync` returned normally and nothing assigned an exit code, so the process exited **0** - an abandoned drain recorded as a clean stop;
+- if the service rethrew it, the exception escaped `RunAsync` unhandled and the process **aborted**, which is indistinguishable from a genuine crash.
+
+So the host now assigns the code itself, at the moment the overrun latches:
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | The drain completed inside the host shutdown budget. |
+| `70` | The host shutdown budget expired and the drain was abandoned part-way, so leaf activations were torn down without banking their projection checkpoints. |
+
+`70` is `EX_SOFTWARE` in the BSD `sysexits.h` convention. The convention is not something any orchestrator interprets, so the value's job is to be distinct and documented: it avoids `0`, `1` and `2` (success, generic failure, shell misuse), Docker's reserved `125`-`127`, and the whole `128 + signal` band - which is where `137` (`SIGKILL`, the killed-mid-drain case of issue #2389) and `143` (`SIGTERM`) live, and those are precisely the neighbouring conditions this code exists to be told apart from.
+
+**Be clear about what the code does and does not change.** It is an observability signal, not a restart control. This compose file runs the container under `restart: unless-stopped`, and Docker restarts on that policy regardless of exit code, so nothing here suppresses or triggers a restart. What changes is what is *recorded*, which is what an alert can be written against:
+
+```console
+$ docker inspect --format '{{.State.ExitCode}}' repocontext
+70
+$ docker ps -a --filter name=repocontext
+... Exited (70) 12 seconds ago
+```
+
+Under Kubernetes the same container terminates with reason `Error` rather than `Completed`, so an abandoned drain becomes visible in `kubectl get pod` and in `lastState.terminated.exitCode` instead of looking like an ordinary graceful stop.
+
+There is deliberately **no configuration knob to turn this off**. A switch restoring `0` would remove the evidence rather than the problem, and an operator who does not want the signal wants the drain to fit inside its budget instead.
 
 Measured drains for scale, and they are worth reading carefully. The same 400-file rig drained in **33.9s** before its vector trees had landed and in **67.2s** once they had - so drain time scales with resident state, and the second figure is already three quarters of the 90s the host allows. This is why the value to clear is the host budget rather than an observed drain: a `stop_grace_period` tuned to the first measurement would have looked carefully chosen and would have begun killing teardowns as the index grew, reintroducing the defect silently.
 

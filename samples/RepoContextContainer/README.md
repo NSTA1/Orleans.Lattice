@@ -344,10 +344,33 @@ curl -fsS http://localhost:8080/metrics | head -n 20
   - **`drain complete` at `Warning`.** The drain finished but consumed more than
     70% of the budget. Nothing has failed; treat it as a lead indicator, because
     drain time grows with resident state.
-  - **`drain ABANDONED after 90s` at `Error`.** The *host* stopped waiting and
-    deactivation was abandoned part-way. No `stop_grace_period` can rescue this:
+  - **`drain ABANDONED after 90s` at `Error`, and the container exits `70`.** The
+    *host* stopped waiting and deactivation was abandoned part-way. No
+    `stop_grace_period` can rescue this:
     `RepoContextHostBuilder.ShutdownBudget` is the binding ceiling and must rise,
     with `stop_grace_period` raised to stay strictly greater.
+- **The abandoned drain is also visible without reading the log** (issue #2401).
+  An orchestrator does not read logs, it reads the exit code, and before #2401
+  the abandoned case did not reliably produce a distinctive one. Measured against
+  a real generic host, the outcome was not simply zero but *undetermined*: a
+  hosted service that absorbed the shutdown cancellation left `RunAsync`
+  returning normally, so the process exited `0` and the abandonment was recorded
+  as a clean stop; one that rethrew it let the exception escape `RunAsync`
+  unhandled, aborting the process in a way indistinguishable from a real crash.
+  The host now assigns the code itself when the overrun latches: `0` if the drain
+  completed inside the budget, `70` if it was abandoned. `70` is `EX_SOFTWARE` in
+  the `sysexits.h` convention, chosen to avoid `0`/`1`/`2`, Docker's reserved
+  `125`-`127`, and the `128 + signal` band that holds `137` (`SIGKILL`) and `143`
+  (`SIGTERM`) - the neighbouring conditions it exists to be told apart from.
+  - Note what this does **not** do. `docker-compose.yml` uses
+    `restart: unless-stopped`, under which Docker restarts on any exit code, so
+    the code neither triggers nor suppresses a restart. What it changes is what
+    is recorded: `docker inspect --format '{{.State.ExitCode}}'` reports `70`,
+    `docker ps -a` shows `Exited (70)`, and under Kubernetes the container
+    terminates with reason `Error` rather than `Completed`. That is what an alert
+    can be written against.
+  - There is deliberately no way to turn it off. A switch restoring `0` would
+    remove the evidence rather than the problem.
 - That last line exists because of issue #2397, and the reason it is needed is
   not obvious. The host raises `ApplicationStopped` **even when the shutdown
   budget expired and it gave up waiting** - so a signal bound only to that event

@@ -60,6 +60,15 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// </item>
 /// </list>
 /// <para>
+/// An overrun also <b>reports itself to the process</b>, not only to the log: when
+/// the overrun latches, the signal assigns
+/// <see cref="RepoContextExitCode.DrainAbandoned"/> through the reporter its host
+/// supplied, so the container exits non-zero and an orchestrator records the
+/// abandonment as an error rather than as a clean stop (issue #2401). Without that,
+/// the log line above is the only evidence, and it can only be found by a human who
+/// already suspects something went wrong - which is the layer least able to act.
+/// </para>
+/// <para>
 /// Both transitions are idempotent and latch on first call, so a duplicate
 /// registration or a second lifetime callback cannot restart the clock or emit a
 /// second, contradictory duration.
@@ -93,6 +102,7 @@ public sealed class RepoContextDrainSignal : IDisposable
     private readonly Func<long> _timestamp;
     private readonly TimeSpan _shutdownBudget;
     private readonly Func<TimeSpan, CancellationToken, Task> _alarm;
+    private readonly Action<int>? _reportExitCode;
     private readonly Lock _gate = new();
     private CancellationTokenSource? _alarmCancellation;
     private long _startedAt;
@@ -119,18 +129,51 @@ public sealed class RepoContextDrainSignal : IDisposable
     /// Injectable so a test can fire the alarm immediately instead of waiting out a
     /// real budget.
     /// </param>
+    /// <param name="reportExitCode">
+    /// Invoked once, with <see cref="RepoContextExitCode.DrainAbandoned"/>, at the
+    /// moment an overrun latches, so the process reports the abandonment to its
+    /// orchestrator and not only to its log (issue #2401).
+    /// <para>
+    /// <b>It defaults to null, meaning no process exit code is reported</b>, and
+    /// <see cref="RepoContextHostBuilder"/> supplies
+    /// <see cref="RepoContextExitCode.SetProcessExitCode"/> explicitly. That
+    /// direction is deliberate and is not a stylistic preference: the default runs
+    /// in the NUnit host, where several fixtures drive a deliberate overrun, and a
+    /// default that assigned the real <see cref="Environment.ExitCode"/> would make
+    /// the <b>test process itself</b> exit non-zero. The whole suite would pass and
+    /// the run would still be reported as failed - a green that reads as red, which
+    /// is no easier to diagnose than the reverse. Failing safe here and wiring
+    /// explicitly there keeps the hazard out of every fixture that does not opt in.
+    /// </para>
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="logger"/> is null.</exception>
     public RepoContextDrainSignal(
         ILogger<RepoContextDrainSignal> logger,
         TimeSpan shutdownBudget,
         Func<long>? timestamp = null,
-        Func<TimeSpan, CancellationToken, Task>? alarm = null)
+        Func<TimeSpan, CancellationToken, Task>? alarm = null,
+        Action<int>? reportExitCode = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _shutdownBudget = shutdownBudget;
         _timestamp = timestamp ?? Stopwatch.GetTimestamp;
         _alarm = alarm ?? Task.Delay;
+        _reportExitCode = reportExitCode;
     }
+
+    /// <summary>
+    /// Whether this signal was given a process-exit-code reporter, and will
+    /// therefore report an abandoned drain to the orchestrator rather than only to
+    /// the log.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so the host's wiring can be asserted without a test having to trigger
+    /// a real overrun and mutate the test process's own exit code. It reports that a
+    /// reporter was supplied; it does not and cannot report which one, so it is the
+    /// wiring that is under test here, and the behaviour of the production reporter
+    /// itself is pinned separately against <see cref="RepoContextExitCode.SetProcessExitCode"/>.
+    /// </remarks>
+    public bool ReportsProcessExitCode => _reportExitCode is not null;
 
     /// <summary>
     /// Whether the drain has started (the host has begun stopping).
@@ -262,14 +305,45 @@ public sealed class RepoContextDrainSignal : IDisposable
             _overran = true;
         }
 
+        ReportAbandonedExitCode();
+
         _logger.LogError(
             "RepoContext drain ABANDONED after {ShutdownBudgetSeconds:F0}s: the host shutdown budget expired "
             + "before the silo finished deactivating, so the host has stopped waiting and the remaining leaf "
-            + "activations are being torn down without banking their projection checkpoints. The process may "
-            + "still exit reporting success, so this line is the only evidence. Raising the container's "
-            + "stop_grace_period does NOT fix this - RepoContextHostBuilder.ShutdownBudget is the binding "
+            + "activations are being torn down without banking their projection checkpoints. The process will "
+            + "exit {ExitCode} rather than 0, so this is visible to an orchestrator and not only in this log. "
+            + "Raising the container's stop_grace_period does NOT fix this - "
+            + "RepoContextHostBuilder.ShutdownBudget is the binding "
             + "ceiling and must rise, and stop_grace_period must then be raised to stay strictly greater.",
-            _shutdownBudget.TotalSeconds);
+            _shutdownBudget.TotalSeconds,
+            RepoContextExitCode.DrainAbandoned);
+    }
+
+    /// <summary>
+    /// Reports the abandoned-drain exit code to the process, once per latched
+    /// overrun (issue #2401).
+    /// </summary>
+    /// <remarks>
+    /// A fault in the reporter is swallowed for the same reason the alarm swallows
+    /// its own: this is diagnostics, and it must never turn a shutdown that is
+    /// otherwise proceeding into a crash. Swallowing here costs the exit-code
+    /// signal, whereas throwing would cost the remainder of the stop sequence.
+    /// </remarks>
+    private void ReportAbandonedExitCode()
+    {
+        if (_reportExitCode is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _reportExitCode(RepoContextExitCode.DrainAbandoned);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Reporting the RepoContext abandoned-drain exit code failed.");
+        }
     }
 
     /// <summary>
@@ -292,6 +366,7 @@ public sealed class RepoContextDrainSignal : IDisposable
     {
         TimeSpan measured;
         bool overran;
+        bool latchedHere = false;
         CancellationTokenSource? alarmCancellation;
 
         lock (_gate)
@@ -309,9 +384,10 @@ public sealed class RepoContextDrainSignal : IDisposable
             // without the alarm having been observed yet - timer resolution, or a
             // saturated thread pool during teardown - and an overrun that the clock
             // can see must never be reported as a clean drain because of that race.
-            if (_shutdownBudget > TimeSpan.Zero && measured >= _shutdownBudget)
+            if (_shutdownBudget > TimeSpan.Zero && measured >= _shutdownBudget && !_overran)
             {
                 _overran = true;
+                latchedHere = true;
             }
 
             overran = _overran;
@@ -322,15 +398,25 @@ public sealed class RepoContextDrainSignal : IDisposable
         alarmCancellation?.Cancel();
         alarmCancellation?.Dispose();
 
+        // Only when the clock latched the overrun that the alarm had not already
+        // reported, so the exit code is assigned exactly once per drain however the
+        // two paths race.
+        if (latchedHere)
+        {
+            ReportAbandonedExitCode();
+        }
+
         if (overran)
         {
             _logger.LogError(
                 "RepoContext drain ran to {DrainSeconds:F1}s against a {ShutdownBudgetSeconds:F0}s host shutdown "
                 + "budget, so it did NOT complete: the host abandoned deactivation at the budget and this line "
-                + "reports when the stop sequence unwound, not a successful drain. "
+                + "reports when the stop sequence unwound, not a successful drain. The process exits "
+                + "{ExitCode} rather than 0. "
                 + "RepoContextHostBuilder.ShutdownBudget must rise, and the container's stop_grace_period with it.",
                 measured.TotalSeconds,
-                _shutdownBudget.TotalSeconds);
+                _shutdownBudget.TotalSeconds,
+                RepoContextExitCode.DrainAbandoned);
             return;
         }
 
