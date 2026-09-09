@@ -263,7 +263,9 @@ The endpoint exposes every instrument published on a meter whose name starts wit
 Three properties are worth knowing when reading a scrape:
 
 - An instrument that has never recorded a measurement still announces itself with `# HELP` and `# TYPE` lines and no samples, so "the instrument is absent" and "the instrument has not fired yet" are distinguishable from the payload alone.
-- A `Histogram<T>` renders as a Prometheus `summary` carrying `_sum` and `_count`. The listener reports raw measurements and does not surface bucket boundaries, so emitting a `histogram` family would mean inventing buckets.
+- A `Histogram<T>` renders as a Prometheus `summary` carrying `_sum` and `_count`, and **no `_bucket` series**. The listener reports raw measurements and does not surface bucket boundaries, and no instrument in this repository declares bucket-boundary advice, so emitting a `histogram` family would mean inventing buckets and reporting invented quantiles as measurements.
+
+  This has a consequence worth stating plainly, because it fabricates a plausible number rather than an obvious gap. A PromQL `histogram_quantile` over a `_bucket` series returns nothing here, and the common dashboard idiom of appending `or vector(0)` then substitutes a literal **zero**. The shipped `OrleansLatticeCommitPath` dashboard does exactly that for `orleans_lattice_leaf_deactivation_checkpoint_delta`, so scraped from this endpoint its p95 panel reads a flat zero - which is indistinguishable from the sustained-zero cold-arm fault shape that same dashboard tells you to look for. Read `_sum` and `_count` from this endpoint and treat any quantile panel as unavailable, not as measured. A pipeline that needs true quantiles needs a real histogram exporter, not this endpoint.
 - The endpoint self-reports its own limits. `lattice_metrics_series` gauges the live series count and `lattice_metrics_dropped_measurements_total` counts measurements dropped once the series ceiling is reached, so a truncated scrape says so rather than reading as a quiet zero.
 
 ## Graceful shutdown
