@@ -2390,6 +2390,42 @@ public static class LatticeMetrics
             description: "Count of shard-root range-scan page fills abandoned after exceeding MaxScanPageStallDuration.");
 
     /// <summary>
+    /// Count of client-side resilient scans
+    /// (<see cref="Orleans.Lattice.LatticeExtensions.ScanKeysAsync"/> and its
+    /// siblings) that met a
+    /// <see cref="Orleans.Lattice.ScanPageStalledException"/>, tagged with the
+    /// decision the scan took. Tagged with <see cref="TagTree"/>,
+    /// <see cref="TagPhase"/> (carried through from the stall) and
+    /// <see cref="TagOutcome"/>.
+    /// <para>
+    /// The outcome tag is the point of the counter, and each value is a
+    /// distinct operational statement:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><c>resumed</c> - the scan resumed from its last
+    /// continuation token and carried on. The scan still completed in full, so
+    /// without this counter a scan that succeeded only after N resumptions
+    /// would be indistinguishable from one that never stalled, and a worsening
+    /// contention trend would be hidden by its own recovery.</description></item>
+    /// <item><description><c>no-progress</c> - the scan stalled twice at the
+    /// same continuation token, so resuming would re-attack the same parked
+    /// read rather than make progress. The scan gave up and rethrew. This is
+    /// the progress gate firing and is the strongest single contention signal
+    /// here.</description></item>
+    /// <item><description><c>budget-exhausted</c> - the scan had already
+    /// resumed its permitted number of times and rethrew.</description></item>
+    /// </list>
+    /// <para>
+    /// A <c>resumed</c> rate that climbs while the other two stay at zero is
+    /// recovery working. Any <c>no-progress</c> or <c>budget-exhausted</c> is a
+    /// scan that failed, and the caller saw the stall.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanStallResumptions =
+        Meter.CreateCounter<long>("orleans.lattice.scan.stall_resumptions", unit: "{resumption}",
+            description: "Count of resilient client scans that met a scan-page stall, tagged by the decision taken (resumed, no-progress, budget-exhausted).");
+
+    /// <summary>
     /// Count of internal-node digest publishes (the upward
     /// <c>ChildDigestSnapshot</c> propagation from a <c>BPlusInternalGrain</c>
     /// to its parent) that were abandoned because they exceeded

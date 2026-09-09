@@ -19,6 +19,145 @@ public static class LatticeExtensions
     public const int DefaultScanReconnectAttempts = 8;
 
     /// <summary>
+    /// Default resume budget for <see cref="ScanKeysAsync"/> and
+    /// <see cref="ScanEntriesAsync"/> when a shard-root page fill is abandoned
+    /// mid-scan with <see cref="ScanPageStalledException"/> - deliberately far
+    /// smaller than <see cref="DefaultScanReconnectAttempts"/>, and a separate
+    /// counter rather than a share of it.
+    /// <para>
+    /// The two faults cost different amounts, so they must not draw on one
+    /// budget. An <c>EnumerationAbortedException</c> is an enumerator reclaim:
+    /// it is raised the instant the activation goes, so a reopen costs
+    /// essentially nothing and eight of them are cheap. A stall is only raised
+    /// once the whole
+    /// <see cref="LatticeOptions.MaxScanPageStallDuration"/> ceiling has
+    /// elapsed, so each attempt costs that ceiling - on the derived default,
+    /// tens of seconds. Eight of those against one parked leaf read would be
+    /// minutes of repeated shard re-entry, which is the amplification a retry
+    /// under contention is rightly suspected of.
+    /// </para>
+    /// <para>
+    /// There is no separate parameter for it: the effective stall budget is
+    /// <c>min(maxAttempts, DefaultScanStallResumeAttempts)</c>, so
+    /// <c>maxAttempts: 0</c> continues to mean fail-fast for both faults and a
+    /// caller that raises <c>maxAttempts</c> for a long walk does not silently
+    /// raise its tolerance for stalls with it.
+    /// </para>
+    /// </summary>
+    public const int DefaultScanStallResumeAttempts = 2;
+
+    /// <summary>
+    /// Fraction of the ceiling reported by a stall that a resilient scan waits
+    /// before resuming, multiplied by the attempt number.
+    /// <para>
+    /// Derived from the ceiling the stall itself reports
+    /// (<see cref="ScanPageStalledException.TimeoutSeconds"/>) rather than set
+    /// as an absolute duration, so the backoff cannot drift away from
+    /// <see cref="LatticeOptions.MaxScanPageStallDuration"/> when a deployment
+    /// retunes it: the two move together by construction and there is no second
+    /// knob to remember.
+    /// </para>
+    /// <para>
+    /// The fraction itself is conservative and is <em>not</em> tuned against a
+    /// measurement. It is chosen to be on the timescale of the causes a stall
+    /// names - a leaf replaying its WAL window from cold, an activation queued
+    /// behind another call, a contended storage read - which clear in seconds,
+    /// not in the milliseconds that
+    /// <see cref="ComputeReconnectDelayMs"/> waits for an enumerator reclaim.
+    /// Resuming on that millisecond ramp would descend onto the same still-parked
+    /// read and burn another whole ceiling.
+    /// </para>
+    /// </summary>
+    internal const double ScanStallResumeBackoffFraction = 0.25;
+
+    internal const string StallOutcomeResumed = "resumed";
+    internal const string StallOutcomeNoProgress = "no-progress";
+    internal const string StallOutcomeBudgetExhausted = "budget-exhausted";
+
+    /// <summary>
+    /// The stall resume budget in force for a scan whose reconnect budget is
+    /// <paramref name="reconnectBudget"/>. See
+    /// <see cref="DefaultScanStallResumeAttempts"/> for why it is a floor over
+    /// the reconnect budget rather than a parameter of its own.
+    /// </summary>
+    internal static int ComputeScanStallResumeBudget(int reconnectBudget) =>
+        Math.Min(reconnectBudget, DefaultScanStallResumeAttempts);
+
+    /// <summary>
+    /// Whether a scan that has just stalled at continuation position
+    /// <paramref name="lastKey"/> has made progress since the position at which
+    /// it last stalled (<paramref name="lastStallKey"/>), and so may resume.
+    /// <para>
+    /// Both positions are <see langword="null"/> at the scan's start, which is
+    /// what makes the first stall obey the same rule as every later one: a scan
+    /// that stalls before yielding a single key has not advanced from where it
+    /// began, so it is refused. That case is not a corner - it is the most
+    /// likely shape of the fault, because a cold tree whose leaves are replaying
+    /// their WAL windows stalls at or near the origin. Reading an unset
+    /// <paramref name="lastStallKey"/> as "no previous stall, therefore this is
+    /// progress" would hand the full budget to exactly the spin this gate
+    /// exists to prevent.
+    /// </para>
+    /// <para>
+    /// Refusing it also keeps the wrapper honest about what it is doing. A
+    /// resume from a real yielded key re-issues strictly less work than the
+    /// attempt it replaces; a "resume" from the origin is not a resume at all
+    /// but a verbatim re-issue of the request that just stalled, which is the
+    /// restart-from-the-beginning shape that must not retry.
+    /// </para>
+    /// </summary>
+    internal static bool ScanStallResumeMakesProgress(string? lastKey, string? lastStallKey) =>
+        !string.Equals(lastKey, lastStallKey, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The delay before resuming a scan that stalled, derived from the ceiling
+    /// the stall reported. See <see cref="ScanStallResumeBackoffFraction"/>.
+    /// A stall carrying no usable ceiling (a default-constructed instance, or a
+    /// non-finite value) falls back to
+    /// <see cref="LatticeOptions.DefaultMaxScanPageDuration"/> so the wait is
+    /// still derived from a real bound rather than from a literal.
+    /// </summary>
+    internal static int ComputeScanStallResumeDelayMs(double ceilingSeconds, int attempt)
+    {
+        if (attempt < 1)
+        {
+            return 0;
+        }
+
+        var seconds = double.IsFinite(ceilingSeconds) && ceilingSeconds > 0
+            ? ceilingSeconds
+            : LatticeOptions.DefaultMaxScanPageDuration.TotalSeconds;
+
+        var delay = seconds * ScanStallResumeBackoffFraction * attempt;
+
+        // Never wait longer than the ceiling itself: past that point the caller
+        // is spending more time waiting to retry than the stall it is retrying.
+        if (delay > seconds)
+        {
+            delay = seconds;
+        }
+
+        return (int)Math.Ceiling(delay * 1000.0);
+    }
+
+    /// <summary>
+    /// Records the decision a resilient scan took on meeting a stall, so a scan
+    /// that completed only after resuming is distinguishable from one that
+    /// never stalled. See
+    /// <see cref="LatticeMetrics.ScanStallResumptions"/>.
+    /// </summary>
+    internal static void RecordScanStallOutcome(ScanPageStalledException stall, string outcome)
+    {
+        var treeId = stall.TreeId ?? string.Empty;
+        LatticeMetrics.ScanStallResumptions.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, stall.Phase ?? string.Empty),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome),
+            LatticeTenantLabel.ForTree(treeId));
+    }
+
+    /// <summary>
     /// Streams sorted key-value pairs into the tree, partitioning by physical
     /// shard and flushing chunks in parallel across shards. Each shard receives
     /// its entries in key order via <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.BulkAppendAsync"/>,
@@ -295,6 +434,18 @@ public static class LatticeExtensions
         string? lastKey = null;
         var attempt = 0;
 
+        // Stall resumption. A ScanPageStalledException is a different fault from
+        // an EnumerationAbortedException and is resumed on its own budget and its
+        // own backoff; see DefaultScanStallResumeAttempts. lastStallKey is the
+        // continuation position at which this scan last stalled, and both it and
+        // lastKey start null so that a stall before the first yielded key is
+        // correctly read as "no progress" rather than as a first stall entitled to
+        // the whole budget.
+        var stallBudget = ComputeScanStallResumeBudget(budget);
+        var stallAttempt = 0;
+        string? lastStallKey = null;
+        var stallDelayMs = 0;
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -324,6 +475,33 @@ public static class LatticeExtensions
                         shouldReopen = true;
                         break;
                     }
+                    catch (ScanPageStalledException stall)
+                    {
+                        // The shard released itself so its queue could drain, and
+                        // said so: resuming from the last continuation token is the
+                        // recovery the ceiling was designed to enable. Resume only
+                        // while there is budget AND the scan has advanced since it
+                        // last stalled - a second stall at the same position would
+                        // re-attack the same parked read.
+                        if (stallAttempt < stallBudget
+                            && ScanStallResumeMakesProgress(lastKey, lastStallKey))
+                        {
+                            stallAttempt++;
+                            lastStallKey = lastKey;
+                            stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
+                            RecordScanStallOutcome(stall, StallOutcomeResumed);
+                            shouldReopen = true;
+                            break;
+                        }
+
+                        // Not resumable: rethrow the stall verbatim. A scan that
+                        // cannot be finished must never look finished, so there is
+                        // no path here that ends the enumeration normally.
+                        RecordScanStallOutcome(
+                            stall,
+                            stallAttempt < stallBudget ? StallOutcomeNoProgress : StallOutcomeBudgetExhausted);
+                        throw;
+                    }
 
                     if (!hasNext)
                     {
@@ -347,7 +525,8 @@ public static class LatticeExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ComputeReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ComputeReconnectDelayMs(attempt);
+                stallDelayMs = 0;
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
@@ -442,6 +621,14 @@ public static class LatticeExtensions
         string? lastKey = null;
         var attempt = 0;
 
+        // See ScanKeysAsyncCore: stalls resume on their own budget, their own
+        // backoff, and a progress gate that starts null so a stall before the
+        // first yielded key is read as "no progress".
+        var stallBudget = ComputeScanStallResumeBudget(budget);
+        var stallAttempt = 0;
+        string? lastStallKey = null;
+        var stallDelayMs = 0;
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -471,6 +658,25 @@ public static class LatticeExtensions
                         shouldReopen = true;
                         break;
                     }
+                    catch (ScanPageStalledException stall)
+                    {
+                        // See ScanKeysAsyncCore for the reasoning.
+                        if (stallAttempt < stallBudget
+                            && ScanStallResumeMakesProgress(lastKey, lastStallKey))
+                        {
+                            stallAttempt++;
+                            lastStallKey = lastKey;
+                            stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
+                            RecordScanStallOutcome(stall, StallOutcomeResumed);
+                            shouldReopen = true;
+                            break;
+                        }
+
+                        RecordScanStallOutcome(
+                            stall,
+                            stallAttempt < stallBudget ? StallOutcomeNoProgress : StallOutcomeBudgetExhausted);
+                        throw;
+                    }
 
                     if (!hasNext)
                     {
@@ -494,7 +700,8 @@ public static class LatticeExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ComputeReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ComputeReconnectDelayMs(attempt);
+                stallDelayMs = 0;
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
@@ -739,6 +946,33 @@ public static class LatticeExtensions
                         shouldReopen = true;
                         break;
                     }
+
+                    // Deliberately NOT extended to ScanPageStalledException, unlike
+                    // the four resilient read scans above (issue 2398). Three
+                    // reasons, and the first is decisive on its own:
+                    //
+                    // 1. There is no continuation token to resume from. A reopen
+                    //    here re-issues OpenDeleteRangeCursorAsync with the
+                    //    ORIGINAL startInclusive/endExclusive; only `total`, a
+                    //    counter, is carried across. That is safe for an aborted
+                    //    enumerator because the keys the lost cursor tombstoned are
+                    //    already gone, so the reopened cursor lands on the first
+                    //    surviving key - but it means a stall retry is a restart
+                    //    from the beginning of the surviving range, not a resume.
+                    //    The rule the read scans obey is that a scan which can
+                    //    resume from a continuation token may retry and one that
+                    //    would restart must not; this loop is in the second class.
+                    // 2. The exception's own retriability warrant is scoped to
+                    //    reads: a page fill is a pure read of a key range, so
+                    //    nothing is half-applied when it is abandoned. A delete
+                    //    step is not that. Tombstones are idempotent, so a retry is
+                    //    probably harmless - but "probably harmless" is not the bar
+                    //    for silently swallowing a timeout in a destructive drain.
+                    // 3. A stall here is reachable (DeleteRangeBoundedAsync is
+                    //    stall-guarded), so leaving it to propagate is a live,
+                    //    intended behaviour and not an untested corner: the caller
+                    //    sees the stall and decides, which is what a destructive
+                    //    operation should do.
 
                     total += progress.DeletedThisStep;
                     if (progress.IsComplete)

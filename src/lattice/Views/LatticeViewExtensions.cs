@@ -80,6 +80,14 @@ public static class LatticeViewExtensions
         string? lastKey = null;
         var attempt = 0;
 
+        // See LatticeExtensions.ScanKeysAsyncCore: stalls resume on their own
+        // budget, their own backoff, and a progress gate that starts null so a
+        // stall before the first yielded key is read as "no progress".
+        var stallBudget = LatticeExtensions.ComputeScanStallResumeBudget(budget);
+        var stallAttempt = 0;
+        string? lastStallKey = null;
+        var stallDelayMs = 0;
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -106,6 +114,27 @@ public static class LatticeViewExtensions
                         shouldReopen = true;
                         break;
                     }
+                    catch (ScanPageStalledException stall)
+                    {
+                        // See LatticeExtensions.ScanKeysAsyncCore for the reasoning.
+                        if (stallAttempt < stallBudget
+                            && LatticeExtensions.ScanStallResumeMakesProgress(lastKey, lastStallKey))
+                        {
+                            stallAttempt++;
+                            lastStallKey = lastKey;
+                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
+                            LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeResumed);
+                            shouldReopen = true;
+                            break;
+                        }
+
+                        LatticeExtensions.RecordScanStallOutcome(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? LatticeExtensions.StallOutcomeNoProgress
+                                : LatticeExtensions.StallOutcomeBudgetExhausted);
+                        throw;
+                    }
 
                     if (!hasNext)
                     {
@@ -129,7 +158,8 @@ public static class LatticeViewExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ComputeReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ComputeReconnectDelayMs(attempt);
+                stallDelayMs = 0;
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
@@ -181,6 +211,13 @@ public static class LatticeViewExtensions
         string? lastKey = null;
         var attempt = 0;
 
+        // See ScanKeysAsyncCore: stalls resume on their own budget, their own
+        // backoff, and a progress gate that starts null.
+        var stallBudget = LatticeExtensions.ComputeScanStallResumeBudget(budget);
+        var stallAttempt = 0;
+        string? lastStallKey = null;
+        var stallDelayMs = 0;
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -207,6 +244,27 @@ public static class LatticeViewExtensions
                         shouldReopen = true;
                         break;
                     }
+                    catch (ScanPageStalledException stall)
+                    {
+                        // See LatticeExtensions.ScanKeysAsyncCore for the reasoning.
+                        if (stallAttempt < stallBudget
+                            && LatticeExtensions.ScanStallResumeMakesProgress(lastKey, lastStallKey))
+                        {
+                            stallAttempt++;
+                            lastStallKey = lastKey;
+                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
+                            LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeResumed);
+                            shouldReopen = true;
+                            break;
+                        }
+
+                        LatticeExtensions.RecordScanStallOutcome(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? LatticeExtensions.StallOutcomeNoProgress
+                                : LatticeExtensions.StallOutcomeBudgetExhausted);
+                        throw;
+                    }
 
                     if (!hasNext)
                     {
@@ -230,7 +288,8 @@ public static class LatticeViewExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ComputeReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ComputeReconnectDelayMs(attempt);
+                stallDelayMs = 0;
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);

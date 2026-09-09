@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Tests.Views;
 /// wrappers. The view surface enumerates forward only, so there is no reverse
 /// coverage.
 /// </summary>
-public class ResilientViewScanExtensionsTests
+public partial class ResilientViewScanExtensionsTests
 {
     private record TestItem(string Name, int Score);
 
