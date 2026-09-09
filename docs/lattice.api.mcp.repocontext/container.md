@@ -280,11 +280,28 @@ The drain is observable rather than inferred, so the budget can be derived inste
 
 ```text
 RepoContext drain started: ... The host shutdown budget is 90s; ...
-RepoContext drain complete in 33.9s (host shutdown budget 90s). ...
+RepoContext drain complete in 33.9s, consuming 37.7% of the 90s host shutdown budget. ...
 ```
 
-Read the second line's duration to learn what your corpus actually needs. Its **absence** is the signal that matters: `ApplicationStopped` fires only after every hosted service has stopped, so a log that ends with the start line and no completion line means the container was killed mid-drain and the grace period is too small. That is worth having because the exit code cannot tell you: a killed container reports `137`, but the next `docker start` overwrites it, so by the time anyone looks the evidence is gone.
+There are three outcomes and the log distinguishes all three, which it did not before issue #2397.
+
+| What you see | What happened | What to do |
+| --- | --- | --- |
+| Start line, no completion line | The container was killed mid-drain. The grace period is smaller than the drain. | Raise `stop_grace_period` above the host budget. This was issue #2389. |
+| `drain complete ... consuming NN%` at `Information` | The drain finished with headroom. `NN%` is what your corpus needs. | Nothing. |
+| `drain complete ... consuming NN%` at `Warning` | The drain finished, but consumed more than 70% of the budget. | Treat as a lead indicator: the next growth in the index may push it over. |
+| `drain ABANDONED after 90s` at `Error` | The **host** stopped waiting. Deactivation was abandoned part-way. | Raise `RepoContextHostBuilder.ShutdownBudget`, and `stop_grace_period` with it. |
+
+The last row is the one that needed issue #2397. A widespread belief - stated in an earlier revision of this very document - is that `ApplicationStopped` fires only after every hosted service has stopped, which would make the completion line self-evidently trustworthy. **It is not true.** `HostShutdownTimeoutBehaviourTests` demonstrates the actual behaviour against a real generic host: when `HostOptions.ShutdownTimeout` expires, the host stops waiting for the services and raises `ApplicationStopped` anyway. Before #2397 the signal was bound to that event and to nothing else, so an abandoned drain emitted `drain complete in 90.0s` - a confident false positive, which is worse than the silence it was assumed to be. The overrun is now reported at `Error`, from an alarm armed when the drain starts, so it is emitted at the instant the budget expires rather than depending on a completion callback that may never arrive.
 
 Measured drains for scale, and they are worth reading carefully. The same 400-file rig drained in **33.9s** before its vector trees had landed and in **67.2s** once they had - so drain time scales with resident state, and the second figure is already three quarters of the 90s the host allows. This is why the value to clear is the host budget rather than an observed drain: a `stop_grace_period` tuned to the first measurement would have looked carefully chosen and would have begun killing teardowns as the index grew, reintroducing the defect silently.
 
-It also means the host budget itself is a finite resource, not merely a formality. If a drain ever exceeds 90s the **host** abandons it, and no `stop_grace_period` can rescue that - `ShutdownBudget` would have to rise, and this compose value with it. A drain-complete line reporting a duration close to 90s is the signal to do so.
+It also means the host budget itself is a finite resource, not merely a formality. If a drain ever exceeds 90s the **host** abandons it, and no `stop_grace_period` can rescue that - `ShutdownBudget` would have to rise, and this compose value with it.
+
+### Why the 90s budget is not raised to some larger fixed number
+
+The obvious response to a drain at 74.7% of budget is to raise the budget. Issue #2397 investigated that and deliberately did not, because the measurements do not support any particular replacement value, and a value that is not supported is worse than none: it looks chosen.
+
+What the instrumentation on a live, actively-indexing box shows is that the quantity driving drain time has no observed ceiling. Over a three-hour window that box logged 135 idle-deactivation sweeps whose sizes ranged from **1 to 4,418 activations**, with the high-water mark still rising between successive readings taken minutes apart. Per-leaf persistence cost over the same period had a marginal mean of roughly **520 ms** (`orleans_lattice_leaf_write_duration`), sustained at about **2.6x** concurrency. A drain must flush the resident dirty set, so its duration tracks that set - and a fixed ceiling on an unbounded quantity is the wrong shape of fix regardless of which fixed value is chosen. Raising 90s to 150s or 300s would move the threshold without changing the failure mode.
+
+That is why issue #2397 shipped the diagnostic and not the number. If your own box reports the `Error` line, the immediate remedy is to raise `ShutdownBudget` and `stop_grace_period` past your observed drain - but understand that as buying time, not as a fix, and note that the durable fix is to bound the resident set rather than to keep raising the ceiling.
