@@ -145,10 +145,18 @@ From this directory:
 # 1. Start both containers. The host waits for the embedder to become healthy.
 docker compose up -d --build
 
-# 2. Wait for readiness. /health/ready reports 200 only once the silo has joined,
-#    the activation-time WAL replay is done, the durable stores are proven
-#    reachable, and MCP is serving. It is 503 during startup replay and during drain.
-curl -fsS http://localhost:8080/health/ready
+# 2. Wait for the host to come up. /health/live returns 200 once the process and
+#    the silo host are alive, which is what the remaining steps actually need.
+curl -fsS http://localhost:8080/health/live
+
+#    /health/ready is a stricter, orchestrator-facing probe, and this walkthrough
+#    deliberately does NOT gate on it. It is the conjunction of the lifecycle phase
+#    AND the vector plane having demonstrated a working semantic query, so it can
+#    stay 503 long after the box is up and answering MCP calls. Observe it, but do
+#    not wait on it or treat a 503 as a failed deployment - read "Interpreting a
+#    persistent 503" below first. The -o/-w form reports the code without failing
+#    the shell, which `curl -fsS` would do on any non-2xx.
+curl -sS -o /dev/null -w 'ready: %{http_code}\n' http://localhost:8080/health/ready
 
 # 3. Register a repository under the mounted workspace over MCP (repocontext_add_repo
 #    with a path under /workspace). Use your MCP client of choice against
@@ -166,7 +174,9 @@ curl -fsS http://localhost:8080/health/ready
 # 5. Restart the container - a FULL recreation that evicts the in-memory projection
 #    and forces a WAL replay / cold rebuild on next access.
 docker compose restart repocontext
-curl -fsS http://localhost:8080/health/ready
+curl -fsS http://localhost:8080/health/live
+#    As in step 2, /health/ready may stay 503 after the restart without meaning the
+#    restart failed. Step 6, not the probe, is the proof that the data survived.
 
 # 6. Recall again. The context is still present: it was replayed from the WAL and
 #    SQLite state on the /data volume, proving durability across a restart.
@@ -232,9 +242,46 @@ docker compose down -v       # also deletes durable state (start clean)
 The runtime image is distroless and shell-less, so probing is HTTP-only - there is
 no shell-exec healthcheck:
 
-- `GET /health/live` - process + silo host alive (liveness).
-- `GET /health/ready` - silo joined, replay done, stores reachable, MCP serving
-  (readiness). Not-ready during startup replay and during drain.
+- `GET /health/live` - process + silo host alive (liveness). This is the probe the
+  walkthrough gates on, and the one an orchestrator uses to decide whether to
+  restart the container.
+- `GET /health/ready` - readiness (routing). It is the **conjunction of two
+  independent components**, and both must be healthy for a 200:
+  - **lifecycle** - the silo has joined, the activation-time WAL replay is done, the
+    durable stores were proven reachable, and MCP is serving;
+  - **vector plane** - semantic retrieval has been demonstrated to work. A
+    deployment with no embedder bound (keyword-only), and a host with no repository
+    registered yet, both count as ready here: there is no vector plane to wait for
+    in the first case and nothing to serve in the second.
+
+  So it is not-ready during startup replay and during drain, but those are not the
+  only causes, and a sustained 503 is far more likely to be the vector-plane
+  component than either of them.
+
+### Interpreting a persistent 503
+
+A `/health/ready` 503 that does not clear, on a container that is otherwise up,
+does **not** on its own mean the deployment is broken, and must not be used by
+itself as a rollback signal. The endpoint returns a bare `Unhealthy` with no
+per-component breakdown, so a 503 is ambiguous until you narrow it. Three steps,
+cheapest first:
+
+1. `curl -fsS http://localhost:8080/health/live`. A 200 says the process and the
+   silo host are alive, so whatever is unhealthy is not the process. If this also
+   fails, the container really is unhealthy - that is the case to act on.
+2. Make any MCP call against `http://localhost:8080` (`repocontext_list_repos` is
+   the cheapest). If it answers, the MCP surface is serving, which satisfies the
+   lifecycle component and leaves the vector plane as the one holding readiness
+   down.
+3. Run a `repocontext_search` and read the `retrievalPath` on the result. A value
+   of `keyword.vector_plane_unavailable` confirms it: semantic retrieval is
+   unavailable and the box has fallen back to deterministic keyword recall.
+
+In that state **the box is still usable and the whole walkthrough still completes**:
+registration, keyword search, `repocontext_context`, and durability across a restart
+all work, and steps 3 to 6 demonstrate exactly that. What is degraded is semantic
+ranking, not the service. Treat it as a capability to restore, not as a deployment
+to roll back.
 
 ## Notes on durability and shutdown
 
