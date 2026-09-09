@@ -18,42 +18,48 @@
 # each), so defaulting them low is right and the packages that matter are all
 # named below.
 #
-# PROVENANCE. The package rows are MEASURED, read off the per-package group
-# timestamps in the CI log of the 40-minute run on the branch
-# perf/aggregation-materialise-and-tag-index-trims, where the dependency
-# closure selected all 46 packages. The `lattice` shard rows are ESTIMATES:
-# the measured totals for that package (9.1 deterministic, 0.2 coyote, 8.6
-# chaos) split across the shards by fixture count and by whether the fixtures
-# spin up an Orleans TestCluster. They are guesses and are expected to be
-# wrong; replace them with the per-shard figures the first matrix run reports.
+# PROVENANCE. Every row below is MEASURED, from the first full-fan-out run of
+# the matrix prototype (run 34378766327, 46 packages selected, all legs green).
+# The figures are the wall-clock a work item took on its leg, which is test time
+# plus that invocation's own process start, and they are what the aggregate
+# report emits at the end of each run in exactly this format.
+#
+# The `bplustree` deterministic row is the critical path and the reason
+# `bplustree-publicapi` was later split out of it: the trx for that leg showed
+# 245s of test time, of which 66s was the 339 reflection-driven assertions in
+# PublicApiContract alone. Its row here is a projection of the remainder and is
+# the one number in this file that has not been directly observed.
 
-# -- lattice, sharded (ESTIMATES, see above; tier totals are measured) --------
-lattice	bplustree	deterministic	4.5
-lattice	bplustree-grains	deterministic	2.0
-lattice	crdt-views-wal	deterministic	1.0
-lattice	rest	deterministic	0.9
-lattice	primitives	deterministic	0.5
-lattice	bplustree-state	deterministic	0.2
+# -- lattice, sharded --------------------------------------------------------
+lattice	bplustree	deterministic	4.0
+lattice	bplustree-publicapi	deterministic	1.3
 lattice	bplustree	chaos	3.6
-lattice	bplustree-chaos	chaos	2.6
+lattice	bplustree-chaos	chaos	2.7
 lattice	bplustree-chaos-predicate	chaos	2.4
+lattice	bplustree-grains	deterministic	2.4
+lattice	crdt-views-wal	deterministic	1.0
+lattice	rest	deterministic	0.6
+lattice	crdt-views-wal	chaos	0.3
 lattice	bplustree	coyote	0.2
 
-# -- other packages, unsharded (MEASURED, tiers summed) ----------------------
-lattice.replication	-	all	2.6
-lattice.api.mcp.repocontext	-	all	2.5
+# -- other packages, unsharded -----------------------------------------------
+lattice.replication	-	all	3.0
+lattice.api.mcp.repocontext	-	all	2.4
+lattice.backup	-	all	1.9
 lattice.api.state	-	all	1.8
-lattice.backup	-	all	1.7
-lattice.storage.azuretable	-	all	1.0
-lattice.api.backup	-	all	0.8
-lattice.api.state.grpc	-	all	0.7
-lattice.auth	-	all	0.6
-lattice.tenancy	-	all	0.4
+lattice.storage.azuretable	-	all	1.4
+lattice.api.backup	-	all	1.4
+lattice.api.state.grpc	-	all	0.9
+lattice.backup.azureblob	-	all	0.8
+lattice.auth	-	all	0.7
+lattice.tenancy	-	all	0.5
+lattice.grainindex	-	all	0.4
 lattice.api.backup.grpc	-	all	0.3
-lattice.explorer	-	all	0.3
-lattice.grainindex	-	all	0.3
 lattice.vector	-	all	0.3
-lattice.api.data	-	all	0.2
+lattice.explorer	-	all	0.3
+lattice.replication.grpc	-	all	0.3
 lattice.membership.oidc	-	all	0.2
-lattice.replication.grpc	-	all	0.2
 lattice.schema	-	all	0.2
+lattice.api.data	-	all	0.2
+lattice.membership	-	all	0.2
+lattice.api.mcp	-	all	0.2

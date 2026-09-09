@@ -56,6 +56,11 @@
         "note": "Persistent state POCO tests."
       },
       {
+        "shard": "bplustree-publicapi",
+        "include": ["BPlusTree.PublicApiContract."],
+        "note": "339 reflection-driven contract assertions, 66s of the BPlusTree root's 245s. Split out because it was the single largest contributor to the critical path leg."
+      },
+      {
         "shard": "bplustree",
         "include": ["BPlusTree."],
         "note": "Topology, restart, durability and Coyote fixtures in the BPlusTree root."
