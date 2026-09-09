@@ -1068,43 +1068,69 @@ internal sealed partial class BPlusLeafGrain
         // [0, checkpoint_p] survives - the from-zero replay rebuilds it
         // intact. (Coverage is monotonic and we always load the latest blob,
         // so an ever-covered partition would carry perPartition[p] >= 0.)
+        //
+        // The reset must span the leaf's WHOLE partition space, not only the
+        // slots the blob happens to carry (#2404). LeafSnapshotStorageGrain's
+        // HasUsableSnapshot gate is sound and deliberately NOT tightened: it
+        // answers "can this blob be rehydrated at all", and must not also demand
+        // full coverage, because rejecting an under-covering blob would discard
+        // the sole durable copy of a prefix the coverage gate has already let
+        // the WAL GC trim. Usable therefore does not mean complete, and it is
+        // this consumer's job to honour that. A loop bounded by the blob's array
+        // left a partition the blob carries NO SLOT for holding its old, higher
+        // checkpoint over the cleared cache - the same silent skip of
+        // [0, checkpoint_p] the -1 sentinel reset above exists to prevent, just
+        // reached by an absent slot rather than a present one. Two shapes reach
+        // it: a legacy blob with a null array (multi-partition WALs predate the
+        // per-partition field, whose own doc notes the scalar describes
+        // partition 0 only), and a blob captured before WalPartitions was raised
+        // (the leaf's own checkpoint array never shrinks, so it is strictly
+        // longer). An absent slot is exactly as uncovered as a -1 one, so the
+        // same loss-free argument applies unchanged:
+        // DurableSnapshotCoverageForPartition reports -1 outside the recorded
+        // coverage array, so the partition held a Zero block pin and its full
+        // WAL survives for the from-zero replay.
         var perPartition = blob.SnapshotOffsetsByPartition;
-        if (perPartition is not null && perPartition.Length > 0)
+        var blobSlots = perPartition is { Length: > 0 } ? perPartition.Length : 0;
+        var resetSlots = Math.Max(
+            Math.Max(blobSlots, state.State.ProjectionCheckpointOffsetsByPartition?.Length ?? 0),
+            Math.Max(1, hydrationOptions.WalPartitions));
+        for (var p = 0; p < resetSlots; p++)
         {
-            for (var p = 0; p < perPartition.Length; p++)
+            // A slot the blob carries is authoritative. Beyond its array the
+            // blob claims nothing, so partition 0 falls back to the legacy
+            // scalar (which describes partition 0 alone) and every other
+            // partition is uncovered, hence -1.
+            var covered = p < blobSlots
+                ? perPartition![p]
+                : (p == 0 ? blob.ScalarOffsetOrSentinel() : -1L);
+            // Frozen-leaf livelock detector (#2220). When this partition's
+            // durable checkpoint sits AHEAD of the snapshot offset we are
+            // about to write, the leaf is activating with a durable
+            // checkpoint the snapshot does not cover - the snapshot froze
+            // behind the checkpoint (an over-budget leaf that never captured
+            // a fresh one). The rollback below is still REQUIRED for cache
+            // coherence (the Cache.Clear above dropped the (snapshot,
+            // checkpoint] rows, so the tail replay MUST resume from the
+            // snapshot offset to rebuild them; keeping the higher checkpoint
+            // over the cleared cache would silently skip them). But without
+            // banking fresh coverage this activation, the leaf reloads the
+            // same stale snapshot next activation and rolls this partition
+            // back forever - a livelock whose WAL pin never lifts. Latch the
+            // deficit so the first post-replay checkpoint flush captures a
+            // snapshot covering the re-advanced checkpoint off the periodic
+            // cadence (which a short over-budget activation never reaches)
+            // and off the deactivation deadline. Only a genuine lowering of
+            // a real (>= 0) prior checkpoint counts: resetting an uncovered
+            // partition to -1 is the loss-free reset the coverage gate
+            // already guarantees, not a deficit, and the ordinary cadence
+            // handles a busy partition that merely advanced past its
+            // coverage.
+            if (covered >= 0 && covered < GetPersistedCheckpointForPartition(p))
             {
-                // Frozen-leaf livelock detector (#2220). When this partition's
-                // durable checkpoint sits AHEAD of the snapshot offset we are
-                // about to write, the leaf is activating with a durable
-                // checkpoint the snapshot does not cover - the snapshot froze
-                // behind the checkpoint (an over-budget leaf that never captured
-                // a fresh one). The rollback below is still REQUIRED for cache
-                // coherence (the Cache.Clear above dropped the (snapshot,
-                // checkpoint] rows, so the tail replay MUST resume from the
-                // snapshot offset to rebuild them; keeping the higher checkpoint
-                // over the cleared cache would silently skip them). But without
-                // banking fresh coverage this activation, the leaf reloads the
-                // same stale snapshot next activation and rolls this partition
-                // back forever - a livelock whose WAL pin never lifts. Latch the
-                // deficit so the first post-replay checkpoint flush captures a
-                // snapshot covering the re-advanced checkpoint off the periodic
-                // cadence (which a short over-budget activation never reaches)
-                // and off the deactivation deadline. Only a genuine lowering of
-                // a real (>= 0) prior checkpoint counts: resetting an uncovered
-                // partition to -1 is the loss-free reset the coverage gate
-                // already guarantees, not a deficit, and the ordinary cadence
-                // handles a busy partition that merely advanced past its
-                // coverage.
-                if (perPartition[p] >= 0 && perPartition[p] < GetPersistedCheckpointForPartition(p))
-                {
-                    _snapshotCoverageDeficitAtActivation = true;
-                }
-                SetPersistedCheckpointForPartition(p, perPartition[p]);
+                _snapshotCoverageDeficitAtActivation = true;
             }
-        }
-        else
-        {
-            state.State.ProjectionCheckpointOffset = blob.ScalarOffsetOrSentinel();
+            SetPersistedCheckpointForPartition(p, covered);
         }
 
         // Invalidate the digest so EnsureProjectionHashInitialized's
