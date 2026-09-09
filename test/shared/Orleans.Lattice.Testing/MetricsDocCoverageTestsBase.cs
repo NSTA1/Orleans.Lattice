@@ -15,8 +15,9 @@ namespace Orleans.Lattice.Testing;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Enumeration is a deterministic scan of the <c>"orleans.lattice.&lt;...&gt;"</c>
-/// string literals in the package's <c>.cs</c> sources, NOT a live
+/// Enumeration is a deterministic scan of the package's <c>.cs</c> sources for
+/// string literals matching <see cref="InstrumentNamePrefix"/> followed by dotted
+/// segments, NOT a live
 /// <see cref="System.Diagnostics.Metrics.MeterListener"/> snapshot. A live snapshot
 /// is order-dependent: instruments whose factories run only when a subsystem starts
 /// (for example an internal grain that creates its counters at type-initialisation)
@@ -38,11 +39,25 @@ namespace Orleans.Lattice.Testing;
 /// </remarks>
 public abstract class MetricsDocCoverageTestsBase
 {
-    private static readonly Regex SourceLiteralRegex =
-        new("\"(orleans\\.lattice(?:\\.[a-z0-9_]+)+)\"", RegexOptions.Compiled);
+    private Regex? _sourceLiteralRegex;
+    private Regex? _docNameRegex;
 
-    private static readonly Regex DocNameRegex =
-        new(@"\borleans\.lattice(?:\.[a-z0-9_]+)+\b", RegexOptions.Compiled);
+    /// <summary>
+    /// The dotted prefix every instrument under test shares. Defaults to
+    /// <c>orleans.lattice</c>, the core meter's naming scheme. A package whose
+    /// instruments are published under a different prefix - for example the
+    /// repository-context surface's <c>repocontext.*</c> - overrides this, without
+    /// which the scan matches nothing in that package and the guard cannot cover it.
+    /// </summary>
+    protected virtual string InstrumentNamePrefix => "orleans.lattice";
+
+    private Regex SourceLiteralRegex =>
+        _sourceLiteralRegex ??= new Regex(
+            "\"(" + Regex.Escape(InstrumentNamePrefix) + "(?:\\.[a-z0-9_]+)+)\"", RegexOptions.Compiled);
+
+    private Regex DocNameRegex =>
+        _docNameRegex ??= new Regex(
+            @"\b" + Regex.Escape(InstrumentNamePrefix) + @"(?:\.[a-z0-9_]+)+\b", RegexOptions.Compiled);
 
     /// <summary>
     /// Repository-root-relative directories (forward-slash separated) whose
@@ -88,7 +103,10 @@ public abstract class MetricsDocCoverageTestsBase
             .ToList();
 
         Assert.That(instruments, Is.Not.Empty,
-            "The source scan found no instrument literals - check that SourceRoots points at the package's src directory.");
+            $"The source scan found no '{InstrumentNamePrefix}.*' instrument literals - check that SourceRoots "
+            + "points at the package's src directory and that InstrumentNamePrefix matches its naming scheme. "
+            + "This is the anti-vacuity floor: a scan that silently matches nothing must fail here rather than "
+            + "report a fully documented package it never examined.");
 
         var missing = new List<string>();
         foreach (var rel in DocRelativePaths)
@@ -135,7 +153,7 @@ public abstract class MetricsDocCoverageTestsBase
         return names;
     }
 
-    private static HashSet<string> DocumentedNames(string text)
+    private HashSet<string> DocumentedNames(string text)
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (Match m in DocNameRegex.Matches(text))
