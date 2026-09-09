@@ -106,6 +106,37 @@ public sealed class RepoTreeWalkerPruningTests
     }
 
     [Test]
+    public void Walk_drops_a_snapshot_directory_that_is_ignored_now()
+    {
+        // Prime a snapshot with no .gitignore at all, so the build output under
+        // src/app is walked and recorded as known - the state a deployed index is
+        // left in by a matcher that wrongly admitted it.
+        Write("src/app/Plugin.cs", "p");
+        Write("src/app/bin/Debug/out.json", "{}");
+        var (previous, known) = Prime();
+
+        // Now the rules exclude it. src/app is unchanged, so the walk prunes it and
+        // re-derives its subdirectories from the snapshot - which still names bin.
+        Write(".gitignore", "bin/\n");
+        var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = previous };
+        var entries = RepoTreeWalker.Walk(
+                _root, null, null, respectGitignore: true, knownFiles: known, pruning: pruning)
+            .Select(e => e.RelativePath)
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            // The re-derived child is re-tested and dropped, so its carried-forward
+            // files are never emitted. Absent from the walk is what makes them removals
+            // on the next reconcile, which is what retires their vectors.
+            Assert.That(entries, Does.Not.Contain("src/app/bin/Debug/out.json"));
+            // A sibling that is still admitted keeps being carried forward, so the
+            // gate prunes the ignored subtree and nothing else.
+            Assert.That(entries, Does.Contain("src/app/Plugin.cs"));
+        });
+    }
+
+    [Test]
     public void Walk_with_ForceFull_ignores_the_snapshot_and_reads_every_file()
     {
         Write("a/x.cs", "x");

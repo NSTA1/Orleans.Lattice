@@ -100,6 +100,46 @@ public sealed class GitignoreScopeTests
     }
 
     [Test]
+    public void A_directory_negation_does_not_re_include_build_output_beneath_it()
+    {
+        // This is the shape of the repository's own .gitignore: the conventional
+        // '[Bb]in/' and '[Oo]bj/' build-output rules, a broad 'Backup*/' rule meant
+        // for Visual Studio upgrade junk, and a later negation re-including one real
+        // source directory the broad rule caught. Git re-includes only the named
+        // directory; '[Bb]in/' still matches the build output beneath it, so that
+        // output stays ignored. Re-including the whole subtree would silently admit
+        // every build artefact under every negated directory.
+        var scope = GitignoreScope.Empty.Add(
+            string.Empty, "[Bb]in/\n[Oo]bj/\nBackup*/\n!/src/app/Backups/\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.IsIgnored("src/app/Backups", isDirectory: true), Is.False);
+            Assert.That(scope.IsIgnored("src/app/Backups/Plugin.cs", isDirectory: false), Is.False);
+            Assert.That(scope.IsIgnored("src/app/Backups/bin", isDirectory: true), Is.True);
+            Assert.That(scope.IsIgnored("src/app/Backups/obj", isDirectory: true), Is.True);
+            Assert.That(
+                scope.IsIgnored("src/app/Backups/obj/project.assets.json", isDirectory: false),
+                Is.True);
+            Assert.That(
+                scope.IsIgnored(
+                    "src/app/Backups/bin/Debug/net10.0/Plugin.deps.json", isDirectory: false),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void A_file_under_an_ignored_directory_cannot_be_re_included()
+    {
+        // Git: "It is not possible to re-include a file if a parent directory of
+        // that file is excluded." The excluded directory decides for its whole
+        // subtree, so a later negation naming a file inside it has no effect.
+        var scope = GitignoreScope.Empty.Add(string.Empty, "bin/\n!bin/keep.txt\n");
+
+        Assert.That(scope.IsIgnored("bin/keep.txt", isDirectory: false), Is.True);
+    }
+
+    [Test]
     public void A_deeper_layer_overrides_a_shallower_one()
     {
         var scope = GitignoreScope.Empty

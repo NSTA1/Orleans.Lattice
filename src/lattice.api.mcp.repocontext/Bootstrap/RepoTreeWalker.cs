@@ -361,11 +361,21 @@ internal static class RepoTreeWalker
                 // Re-derive this directory's subdirectories from the prior snapshot and
                 // descend each one so a nested change is still detected. The scope layers
                 // each child's own .gitignore on top of this directory's scope, exactly as
-                // the full branch does, so descendants keep a correct ignore scope.
+                // the full branch does, so descendants keep a correct ignore scope, and
+                // each child is gated by the same ignore check the full branch applies.
+                // Gating here is what makes the snapshot self-healing: a directory that
+                // was walked before but is ignored now - because the rules changed, or
+                // because they are being honoured correctly now - is dropped rather than
+                // carried forward, so a stale snapshot cannot readmit a pruned subtree.
                 if (childDirsByParent!.TryGetValue(relativeDir, out var childDirs))
                 {
                     foreach (var childRelativeDir in childDirs)
                     {
+                        if (respectGitignore && scope.IsEntryIgnored(childRelativeDir, isDirectory: true))
+                        {
+                            continue;
+                        }
+
                         var childAbsolute = ToAbsolute(root, childRelativeDir);
                         var childScope = respectGitignore
                             ? scope.Add(childRelativeDir, ReadGitignore(childAbsolute))
@@ -397,7 +407,9 @@ internal static class RepoTreeWalker
 
                     // Prune an ignored directory: never descend it, so its whole
                     // subtree is excluded by a single stat rather than a deep walk.
-                    if (respectGitignore && scope.IsIgnored(childRelativeDir, isDirectory: true))
+                    // The entry-only check is sound because every ancestor of this
+                    // directory was itself tested here and found not ignored.
+                    if (respectGitignore && scope.IsEntryIgnored(childRelativeDir, isDirectory: true))
                     {
                         continue;
                     }
@@ -418,7 +430,7 @@ internal static class RepoTreeWalker
                     continue;
                 }
 
-                if (respectGitignore && scope.IsIgnored(relativePath, isDirectory: false))
+                if (respectGitignore && scope.IsEntryIgnored(relativePath, isDirectory: false))
                 {
                     continue;
                 }

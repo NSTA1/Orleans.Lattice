@@ -73,6 +73,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.wal.gc.passes` | counter (`{pass}`) | `tree`, `outcome` | Replication | WAL GC pass rate by outcome |
 | `orleans.lattice.wal.gc.interval` | histogram (`s`) | `tree` | Replication | WAL GC adaptive interval |
 | `orleans.lattice.wal.gc.backlog_bytes` | histogram (`By`) | `tree` | Replication | WAL GC retained backlog after pass |
+| `orleans.lattice.wal.gc.offset_floor_unavailable` | counter (`{pass}`) | `tree` | Replication | WAL GC offset floor unavailable (pin store unreachable) |
 | `orleans.lattice.admission.live_keys` | observable gauge (`{key}`) | `tree` | Overview | Admission - live keys by tree |
 | `orleans.lattice.admission.estimated_bytes` | observable gauge (`By`) | `tree` | Overview | Admission - estimated bytes by tree |
 | `orleans.lattice.admission.over_advisory` | observable gauge (0/1) | `tree` | Overview | Admission - trees over advisory ceiling |
@@ -116,7 +117,10 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.materialiser.pin.durable_writes` | counter | `tree`, `outcome` | CommitPath | Leaf-materialiser durable pin path (issue #1030) |
 | `orleans.lattice.leaf.activation_replays` | counter | `tree`, `activation_temperature` | CommitPath | Leaf-materialiser durable pin path (issue #1030); the `cold`/`warm` arms give the activation-temperature ratio (issue #2148) |
 | `orleans.lattice.leaf.activation_replays_over_budget` | counter | `tree`, `partition` | CommitPath | Per-leaf post-filter replay cost over budget against an intact WAL (issues #1738, #2149) |
+| `orleans.lattice.leaf.activation_stalled_replays` | counter | `tree`, `partition` | CommitPath | Leaf replay re-entered from a checkpoint that did not advance; fault arm, alert on persistence not appearance (issue #2285) |
 | `orleans.lattice.leaf.activation_cursor_publish_failures` | counter | `tree` | CommitPath | Leaf-materialiser durable pin path (issue #1030) |
+| `orleans.lattice.leaf.deactivation.checkpoint_delta` | histogram | `tree`, `deactivation_reason`, `activation_temperature` | CommitPath | Checkpoint offsets banked by an activation during graceful deactivation (issue #2280). LOWER BOUND, not a census: crash teardowns bypass the hook and a failed activation never reaches it. A zero on the `cold` arm is arithmetically forced, not symptomatic |
+| `orleans.lattice.leaf.activation.failures` | counter | `tree`, `activation_temperature`, `reason` | CommitPath | Leaf activations that threw out of `OnActivateAsync`, by `canceled`/`canceled_awaiting_permit`/`faulted` (issue #2280). Counts the population the deactivation histogram is structurally blind to; read the two together |
 | `orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap` | counter | `tree`, `partition` | CommitPath | Resident unresolved prepares recorded beyond `MaxDurableUnresolvedReplayWork` (issue #2183); benign on the SQLite `local` profile, a persist hazard on Azure Table (1MB entity cap) - alert there |
 | `orleans.lattice.materialiser.drain_lag` | histogram (ms) | `tree` | CommitPath | Leaf-materialiser drain lag p50/p95 (issue #1030 back-pressure) |
 | `orleans.lattice.materialiser.pin.durable_write_latency` | histogram (ms) | `tree` | CommitPath | Durable pin-write latency: the only materialiser instrument that observes the retention floor rather than in-memory progress (issue #2015) |

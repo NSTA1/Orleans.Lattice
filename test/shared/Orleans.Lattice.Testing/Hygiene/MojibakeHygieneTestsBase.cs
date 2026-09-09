@@ -72,6 +72,7 @@ public abstract class MojibakeHygieneTestsBase
         var repoRoot = HygieneRepository.FindRepoRoot();
 
         var violations = new List<string>();
+        var scanned = 0;
         foreach (var file in HygieneFiles.EnumerateTextFiles(repoRoot, Scope))
         {
             string text;
@@ -84,6 +85,7 @@ public abstract class MojibakeHygieneTestsBase
                 continue; // unreadable / truly binary -> skip
             }
 
+            scanned++;
             foreach (var (needle, description) in Needles)
             {
                 var idx = text.IndexOf(needle, StringComparison.Ordinal);
@@ -99,6 +101,17 @@ public abstract class MojibakeHygieneTestsBase
                 }
             }
         }
+
+        // Anti-vacuity control (issue #2275). NOTE this is a DIFFERENT control
+        // from the needle self-test below, and neither substitutes for the
+        // other: the self-test proves the MATCHER still fires, this proves the
+        // scan had something to fire against. A gate can have a perfect
+        // detector and still examine zero files.
+        //
+        // Counted after the read, so an unreadable file is not credited as
+        // examined - the denominator is files actually decoded and searched.
+        HygieneDenominator.RequireExamined(
+            scanned, nameof(MojibakeHygieneTestsBase), "readable text files", HygieneDenominator.Describe(Scope));
 
         Assert.That(violations, Is.Empty,
             "Mojibake (UTF-8-bytes-decoded-as-CP1252-or-CP437) sequences are not permitted in tracked files. "

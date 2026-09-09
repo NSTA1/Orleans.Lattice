@@ -19,6 +19,12 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// standing up no silo and touching no store, so it needs no slow category and runs in
 /// the fast dev loop. The keys are opaque to the history, so arbitrary strings stand in
 /// for canonical source keys without loss.
+/// <para>
+/// Every pass here observes no coverage, so the entrant partition added for issue #2292
+/// classifies the whole entered fringe as <c>NoPriorCoverage</c> and these tests keep
+/// pinning exactly what they always pinned. The partition itself is pinned separately by
+/// <see cref="EmbeddingRepoContextVectorIngestorEntrantPartitionTests"/>.
+/// </para>
 /// </remarks>
 [TestFixture]
 public sealed class EmbeddingRepoContextVectorIngestorFileGapHistoryTests
@@ -33,7 +39,7 @@ public sealed class EmbeddingRepoContextVectorIngestorFileGapHistoryTests
     {
         var history = new EmbeddingRepoContextVectorIngestor.FileGapHistory();
 
-        var stats = history.Observe(Set("a", "b", "c"), Set("a", "b", "c"), WalkedFiles);
+        var stats = history.Observe(Set("a", "b", "c"), Set("a", "b", "c"), RepoContextEmbeddingCoverage.Empty, changedFileCount: 0, WalkedFiles);
 
         Assert.Multiple(() =>
         {
@@ -55,9 +61,9 @@ public sealed class EmbeddingRepoContextVectorIngestorFileGapHistoryTests
     public void An_identical_second_pass_fully_overlaps_and_grows_no_union()
     {
         var history = new EmbeddingRepoContextVectorIngestor.FileGapHistory();
-        history.Observe(Set("a", "b", "c"), Set("a", "b", "c"), WalkedFiles);
+        history.Observe(Set("a", "b", "c"), Set("a", "b", "c"), RepoContextEmbeddingCoverage.Empty, changedFileCount: 0, WalkedFiles);
 
-        var stats = history.Observe(Set("a", "b", "c"), Set("a", "b", "c"), WalkedFiles);
+        var stats = history.Observe(Set("a", "b", "c"), Set("a", "b", "c"), RepoContextEmbeddingCoverage.Empty, changedFileCount: 0, WalkedFiles);
 
         // The pathological steady-state: the same files re-selected every quiet pass.
         Assert.Multiple(() =>
@@ -75,12 +81,12 @@ public sealed class EmbeddingRepoContextVectorIngestorFileGapHistoryTests
     public void A_rotating_fringe_is_reported_as_entered_and_left_against_a_high_overlap()
     {
         var history = new EmbeddingRepoContextVectorIngestor.FileGapHistory();
-        history.Observe(Set("a", "b", "c"), Set("a", "b", "c"), WalkedFiles);
+        history.Observe(Set("a", "b", "c"), Set("a", "b", "c"), RepoContextEmbeddingCoverage.Empty, changedFileCount: 0, WalkedFiles);
 
         // Same core {a,b}, drop c, add d: exactly the "high overlap with a small
         // rotating fringe" shape the PM flagged as a boundary condition in the
         // presence check rather than wholesale loss.
-        var stats = history.Observe(Set("a", "b", "d"), Set("a", "b", "d"), WalkedFiles);
+        var stats = history.Observe(Set("a", "b", "d"), Set("a", "b", "d"), RepoContextEmbeddingCoverage.Empty, changedFileCount: 0, WalkedFiles);
 
         Assert.Multiple(() =>
         {
@@ -97,13 +103,13 @@ public sealed class EmbeddingRepoContextVectorIngestorFileGapHistoryTests
         var history = new EmbeddingRepoContextVectorIngestor.FileGapHistory();
 
         // Pass one selects {a,b,c} but only {a,b} land (c's batch failed, say).
-        history.Observe(Set("a", "b", "c"), Set("a", "b"), WalkedFiles);
+        history.Observe(Set("a", "b", "c"), Set("a", "b"), RepoContextEmbeddingCoverage.Empty, changedFileCount: 0, WalkedFiles);
 
         // Pass two re-selects a (landed) and c (never landed) plus new d. Of the two
         // previously-landed files a and b, only a is re-selected, so the loop
         // signature is 1 - not 2 (b is not re-selected) and not 3 (c never landed, so
         // re-selecting it is honest, not a repeat of landed work).
-        var stats = history.Observe(Set("a", "c", "d"), Set("a", "c", "d"), WalkedFiles);
+        var stats = history.Observe(Set("a", "c", "d"), Set("a", "c", "d"), RepoContextEmbeddingCoverage.Empty, changedFileCount: 0, WalkedFiles);
 
         Assert.Multiple(() =>
         {
@@ -120,9 +126,9 @@ public sealed class EmbeddingRepoContextVectorIngestorFileGapHistoryTests
         // Every pass selects entirely fresh files: no overlap, and the union climbs
         // without bound - the "store is losing writes across the whole repository"
         // shape that points at durability loss rather than a confined presence bug.
-        var first = history.Observe(Set("a", "b"), Set("a", "b"), WalkedFiles);
-        var second = history.Observe(Set("c", "d"), Set("c", "d"), WalkedFiles);
-        var third = history.Observe(Set("e", "f"), Set("e", "f"), WalkedFiles);
+        var first = history.Observe(Set("a", "b"), Set("a", "b"), RepoContextEmbeddingCoverage.Empty, changedFileCount: 0, WalkedFiles);
+        var second = history.Observe(Set("c", "d"), Set("c", "d"), RepoContextEmbeddingCoverage.Empty, changedFileCount: 0, WalkedFiles);
+        var third = history.Observe(Set("e", "f"), Set("e", "f"), RepoContextEmbeddingCoverage.Empty, changedFileCount: 0, WalkedFiles);
 
         Assert.Multiple(() =>
         {

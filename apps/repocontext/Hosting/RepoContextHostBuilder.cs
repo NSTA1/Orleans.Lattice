@@ -118,6 +118,13 @@ public static class RepoContextHostBuilder
             // it. Global (not per-tree) by design - see RepoContextPinBucketing.
             silo.ConfigureRepoContextPinBucketing(builder.Configuration);
 
+            // Let a constrained deployment pin the per-silo concurrent leaf WAL
+            // replay ceiling instead of inheriting Environment.ProcessorCount,
+            // which reports whatever DOTNET_PROCESSOR_COUNT says rather than the
+            // container's CPU quota. Inert unless the variable is set - see
+            // RepoContextReplayConcurrency.
+            silo.ConfigureRepoContextReplayConcurrency(builder.Configuration);
+
             // Raise the named-lock lease ceiling above the library's five-minute
             // maximum. Backlog claims are held across a full build-and-test cycle,
             // which routinely exceeds it - see RepoContextClaimLeases.
@@ -207,6 +214,15 @@ public static class RepoContextHostBuilder
 
         // Warmup + graceful-drain coordinator (flips readiness).
         builder.Services.AddHostedService<RepoContextStartupService>();
+
+        // State the configuration this process actually resolved, once, at startup. The
+        // deployment's real settings arrive from an untracked compose override, so reading
+        // the repository does not tell you what the container runs - and the only reason
+        // that divergence was ever noticed is that one subsystem already reports its own
+        // resolved cadence. This generalises that to every supplied variable plus the
+        // runtime facts (ProcessorCount) that are not variables at all. Observability
+        // only; it validates nothing. See issue #2294, and #2075 for the precedent.
+        builder.Services.AddHostedService<RepoContextEffectiveConfigurationReporter>();
 
         // Vector-plane warmup driver: issues the first semantic query itself so the
         // retrieval readiness component reports demonstrated capability instead of

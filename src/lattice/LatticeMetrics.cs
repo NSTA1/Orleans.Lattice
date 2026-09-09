@@ -199,6 +199,44 @@ public static class LatticeMetrics
     public static readonly KeyValuePair<string, object?> ActivationTemperatureWarm = new(TagActivationTemperature, "warm");
 
     /// <summary>
+    /// Tag key for the Orleans <c>DeactivationReasonCode</c> observed on a
+    /// grain's deactivation hook, used by
+    /// <see cref="LeafDeactivationCheckpointDelta"/>. Cardinality is bounded by
+    /// the Orleans enum, so it is safe to tag with.
+    /// <para>
+    /// Deliberately DISTINCT from <see cref="TagReason"/>. The two carry
+    /// unrelated value vocabularies - this one names how a grain was torn down,
+    /// while <see cref="TagReason"/> on
+    /// <see cref="LeafActivationFailures"/> names how an activation failed
+    /// (<c>canceled</c> / <c>faulted</c>). Sharing one key would invite a
+    /// reader to join two series that have no value in common.
+    /// </para>
+    /// </summary>
+    public const string TagDeactivationReason = "deactivation_reason";
+
+    /// <summary><see cref="TagReason"/> = <c>canceled</c> on <see cref="LeafActivationFailures"/>.</summary>
+    public static readonly KeyValuePair<string, object?> ActivationFailureCanceled = new(TagReason, "canceled");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>canceled_awaiting_permit</c> on
+    /// <see cref="LeafActivationFailures"/>: the activation was cancelled while
+    /// still queued for the per-silo replay concurrency permit, so it never
+    /// began replaying and had no in-progress work to lose.
+    /// <para>
+    /// Kept distinct from <see cref="ActivationFailureCanceled"/> deliberately.
+    /// The two describe different events - one lost work in flight, the other
+    /// never started - and the width of this queue window is set by the same
+    /// replay saturation under investigation, so folding them together would
+    /// let a rise in queueing masquerade as a rise in abandoned replays.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ActivationFailureCanceledAwaitingPermit =
+        new(TagReason, "canceled_awaiting_permit");
+
+    /// <summary><see cref="TagReason"/> = <c>faulted</c> on <see cref="LeafActivationFailures"/>.</summary>
+    public static readonly KeyValuePair<string, object?> ActivationFailureFaulted = new(TagReason, "faulted");
+
+    /// <summary>
     /// Tag key for the storage-provider commit phase
     /// (e.g. <c>phase1</c> = per-batch partition transaction,
     /// <c>phase2</c> = manifest partition transaction). Emitted on
@@ -1078,6 +1116,38 @@ public static class LatticeMetrics
         Meter.CreateHistogram<long>("orleans.lattice.wal.gc.backlog_bytes", unit: "By",
             description: "Retained WAL bytes remaining after a garbage-collection pass, tagged by tree.");
 
+    /// <summary>
+    /// Counter of WAL garbage-collection passes for which the durable
+    /// leaf-materialiser <em>offset</em> floor could not be computed because the
+    /// pin store was unreachable, tagged with <see cref="TagTree"/>. Emitted from
+    /// <see cref="LatticeWalGc"/> whenever the offset-floor read
+    /// (<c>IWalMaterialiserPinGrain.GetPinOffsetsAsync</c>) throws and the GC
+    /// falls back to no offset floor for that pass.
+    /// <para>
+    /// The fallback is safe for that pass (the HLC floor still constrains the
+    /// trim), but it was previously <b>completely silent</b>: a persistently
+    /// unreachable pin store removed the offset floor on <em>every</em> pass with
+    /// no signal, indistinguishable from a tree that legitimately has no offset
+    /// floor to apply. The healthy "no offset floor" outcomes - a host that never
+    /// wired the durable pin store, or a store that is reachable but reports no
+    /// offsets - do <b>not</b> reach the swallowing catch and so do <b>not</b>
+    /// increment this counter, which is what makes "no floor because unreachable"
+    /// separable from "no floor because none needed" (issue #2314).
+    /// </para>
+    /// <para>
+    /// A <b>transient</b> tick is expected and benign - the next pass retries once
+    /// the store is reachable - and this counter also ticks during a rolling
+    /// upgrade where an older pin grain has no <c>GetPinOffsetsAsync</c>. A
+    /// <em>sustained</em> non-zero rate is the operational signal: the offset
+    /// floor is not being applied and the low-HLC/high-offset reap class it exists
+    /// to retain (see <see cref="WalGcPasses"/>) is protected only by the HLC
+    /// floor until the store recovers.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcOffsetFloorUnavailable =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.offset_floor_unavailable", unit: "{pass}",
+            description: "WAL GC passes that could not compute the durable offset floor because the pin store was unreachable, tagged by tree.");
+
     /// <summary><see cref="TagOutcome"/> = <c>reclaimed</c> (a WAL GC pass that trimmed at least one entry).</summary>
     public static readonly KeyValuePair<string, object?> OutcomeReclaimed = new(TagOutcome, "reclaimed");
 
@@ -1252,6 +1322,44 @@ public static class LatticeMetrics
             description: "Activation-time leaf replays whose own post-range-filter applied-entry count exceeded the configured replay budget with an intact WAL, tagged by tree and WAL partition.");
 
     /// <summary>
+    /// Counter of activation-time leaf replays that re-entered from a persisted
+    /// checkpoint which had <b>not advanced</b> since the same leaf partition's
+    /// previous replay on this silo, emitted by <c>BPlusLeafGrain</c>'s
+    /// stalled-replay check (issue #2285). A non-zero value means the previous
+    /// activation banked no durable forward progress at all for that leaf
+    /// partition.
+    /// <para>
+    /// This is the <b>fault</b> arm, and it is a different condition from
+    /// <see cref="LeafActivationOverBudgetReplays"/>, which is a capacity
+    /// signal. An over-budget replay converges, just slowly; a non-advancing
+    /// replay has not converged at all. Before this counter existed the fault
+    /// arm was reported <b>only</b> by a warning log, which is throttled to one
+    /// line per (tree, leaf, partition) per minute, so the observable rate was
+    /// the throttle's rate and not the condition's. This counter records every
+    /// occurrence and is the exact census; the log is a bounded sample of it.
+    /// </para>
+    /// <para>
+    /// <b>Read it as a rate over time, not as a level.</b> The condition is
+    /// transient whenever an activation is torn down mid-replay - a burst of
+    /// cancellations or timeouts produces a cluster of these and then stops -
+    /// and it is persistent only when the same leaf partition keeps reporting
+    /// across many minutes. The two are indistinguishable in a single sample
+    /// and were conflated in issue #2285, where a 70-second burst of 47
+    /// occurrences was read as a permanent convergence defect. Alert on the
+    /// condition <i>continuing</i>, not on its appearance.
+    /// </para>
+    /// <para>
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// Deliberately <b>not</b> tagged by leaf: leaf count is unbounded, so it
+    /// cannot be a time-series dimension. The accompanying warning names the
+    /// leaf.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafActivationStalledReplays =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.activation_stalled_replays", unit: "{replay}",
+            description: "Activation-time leaf replays that re-entered from a persisted checkpoint that had not advanced since the previous replay, tagged by tree and WAL partition.");
+
+    /// <summary>
     /// Counter of activation-time eager cursor-publish failures, emitted by
     /// <c>BPlusLeafGrain.OnActivateAsync</c> when the post-replay cursor report
     /// throws (a non-fatal failure the next foreground flush recovers from).
@@ -1266,6 +1374,94 @@ public static class LatticeMetrics
             description: "Activation-time eager cursor-publish failures, tagged by tree.");
 
     /// <summary>
+    /// Histogram of the projection-checkpoint offsets a leaf activation banked
+    /// during its graceful deactivation - the sum across WAL partitions of
+    /// (checkpoint on leaving the hook - checkpoint on entering it), recorded
+    /// exactly once per <c>BPlusLeafGrain.OnDeactivateAsync</c> call. Tagged
+    /// with <see cref="TagTree"/>, <see cref="TagDeactivationReason"/> and
+    /// <see cref="TagActivationTemperature"/>. Never tagged by leaf: the leaf
+    /// population is unbounded, so per-leaf detail goes to the accompanying log
+    /// line instead (issue #2280).
+    /// <para>
+    /// <b>THIS IS A LOWER BOUND, NOT A CENSUS. Do not quote it as one.</b>
+    /// Three populations are structurally invisible to it, and each absence is
+    /// indistinguishable from a healthy zero:
+    /// </para>
+    /// <list type="number">
+    ///   <item>Crash, process kill and silo failure bypass the deactivation
+    ///   hook by design, so a leaf lost that way is never counted.</item>
+    ///   <item>An activation that FAILED never reaches this hook at all.
+    ///   Orleans does not run <c>OnDeactivateAsync</c> when
+    ///   <c>OnActivateAsync</c> throws - measured, with a positive control, on
+    ///   Orleans 10.2.2 - and a cancelled cold replay throws
+    ///   <see cref="OperationCanceledException"/> out of activation by design
+    ///   ("failures propagate"). That population is counted by
+    ///   <see cref="LeafActivationFailures"/> instead, and reading either
+    ///   series alone understates the whole.</item>
+    ///   <item>A deactivation whose flush throws is swallowed by the hook's
+    ///   catch, so its exit checkpoint reflects whatever was banked before the
+    ///   failure rather than a completed flush.</item>
+    /// </list>
+    /// <para>
+    /// A ZERO observation on the <c>cold</c> arm is EXPECTED and is not by
+    /// itself a fault (issue #2280). A cold replay restarts from the -1
+    /// sentinel and
+    /// <see cref="Orleans.Lattice.BPlusTree.ILeafProjection.SetCheckpointOffsetAsync(long, CancellationToken)"/>
+    /// enforces strict monotonicity, so a cold activation cannot bank anything
+    /// at all until its scanned-through offset passes the checkpoint it started
+    /// above. Progress below that mark is not discarded, it is UNREPRESENTABLE.
+    /// Read a zero as "did not pass the existing mark", never as "did no work".
+    /// </para>
+    /// <para>
+    /// The offsets counted here are SCANNED-THROUGH, not applied-through
+    /// (issue #2270): replay advances the checkpoint over entries it skips as
+    /// another leaf's work, deliberately, because the WAL retention floor is
+    /// the MINIMUM of these offsets and a leaf that owns no key in a partition
+    /// would otherwise pin truncation for the whole tree. A non-zero delta here
+    /// is therefore durable forward progress through the log, which is the
+    /// quantity issue #2280 is about, and NOT a count of mutations this leaf
+    /// applied. For that, read the <c>entriesApplied</c> field on the
+    /// accompanying log line, which is taken at the
+    /// <c>ILeafProjection.Apply</c> seam.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> LeafDeactivationCheckpointDelta =
+        Meter.CreateHistogram<long>("orleans.lattice.leaf.deactivation.checkpoint_delta", unit: "{offset}",
+            description: "Projection-checkpoint offsets banked by a leaf activation during graceful deactivation, tagged by tree, deactivation reason and activation temperature. LOWER BOUND: crash teardowns and failed activations never reach the hook.");
+
+    /// <summary>
+    /// Counter of leaf activations that ended by THROWING out of
+    /// <c>BPlusLeafGrain.OnActivateAsync</c> rather than coming online. Tagged
+    /// with <see cref="TagTree"/>, <see cref="TagActivationTemperature"/> and
+    /// <see cref="TagReason"/>: <c>canceled</c> when a replay in progress was
+    /// cancelled, <c>canceled_awaiting_permit</c> when the cancellation arrived
+    /// while the activation was still queued for the replay permit and no
+    /// replay had begun, and <c>faulted</c> for any other failure.
+    /// <para>
+    /// This exists because <see cref="LeafDeactivationCheckpointDelta"/> is
+    /// structurally blind to it (issue #2280). A failed activation never runs
+    /// the deactivation hook, so without this counter a cancelled cold replay
+    /// would be reported as zero at EVERY rate of occurrence, including the
+    /// highest - an absence indistinguishable from health. The two series are
+    /// complementary and must be read together: this one counts activations
+    /// that never completed, the other measures what completed activations
+    /// banked on the way out.
+    /// </para>
+    /// <para>
+    /// <b>Still a lower bound, though a much tighter one.</b> The permit
+    /// acquisition was moved inside the guarded region so the queue-wait window
+    /// is covered, which matters because that window's width is set by the very
+    /// replay saturation under investigation. What remains uncounted is any
+    /// failure raised before the guarded region is entered at all - the
+    /// snapshot rehydrate and the coherence reset that precede it - and a
+    /// process killed outright, which reaches no observation site anywhere.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafActivationFailures =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.activation.failures", unit: "{activation}",
+            description: "Leaf activations that threw out of OnActivateAsync, tagged by tree, activation temperature and reason (canceled/canceled_awaiting_permit/faulted). LOWER BOUND: faults raised before the guarded replay region, and outright process kills, are not counted.");
+
+    /// <summary>
     /// Counter of resident unresolved saga prepares recorded into
     /// <c>LeafNodeState.UnresolvedReplayWork</c> <b>beyond</b> the
     /// <see cref="LatticeOptions.MaxDurableUnresolvedReplayWork"/> cap, emitted
@@ -1275,8 +1471,10 @@ public static class LatticeMetrics
     /// This exists for a PROVIDER-DEPENDENT hazard, not for the deployment this
     /// repository runs. A resident prepare must never be dropped (dropping it
     /// pins the flush ceiling forever - the #2183 livelock), so past the cap it
-    /// is recorded unconditionally and the row is allowed to grow while the
-    /// #2208 saga-terminal leak is unfixed. On the default <c>local</c>
+    /// is recorded unconditionally and the row is allowed to grow for as long
+    /// as a saga leaves a prepare unresolved (registry status InFlight: the
+    /// residual population after issue #2190's self-terminalisation, whose
+    /// orphan source is tracked as issue #2304). On the default <c>local</c>
     /// durability profile that row is backed by SQLite (~1GB BLOB), so the
     /// growth is a write-amplification cost, not a correctness one. On an
     /// <c>Orleans.Lattice.Storage.AzureTable</c> deployment the 1MB entity cap

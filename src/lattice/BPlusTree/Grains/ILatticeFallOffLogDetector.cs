@@ -97,15 +97,29 @@ internal interface ILatticeFallOffLogDetector
     /// <param name="treeId">Logical tree id.</param>
     /// <param name="shardIndex">WAL shard index.</param>
     /// <param name="checkpointOffset">
-    /// The leaf''s persisted projection checkpoint offset under
-    /// "applied through offset N inclusive" semantics. The next entry
-    /// the materialiser will read is at <c>checkpointOffset + 1</c>.
-    /// Pass <c>-1</c> as the "nothing applied" sentinel - a freshly
-    /// activated leaf with no persisted state, or a leaf whose
-    /// projection was reset via the operator rebuild seam - so the
-    /// next replay starts at WAL offset <c>0</c> inclusive. Pass a
-    /// real WAL offset (<c>0</c> or greater) for a leaf that has
-    /// applied entries up to and including that offset.
+    /// The leaf's persisted projection checkpoint offset, under
+    /// "SCANNED through offset N inclusive" semantics rather than
+    /// "applied through" (issue #2270). Replay advances it over every
+    /// entry it READS, including entries it deliberately skips as
+    /// belonging to another leaf's key range or shard, so it is not a
+    /// count of entries this leaf applied. That is load-bearing rather
+    /// than an oversight, and
+    /// <c>BPlusLeafGrain.RebuildProjectionFromWalAsync</c> carries the
+    /// reason: <c>LatticeWalGc.ComputeMaterialiserOffsetFloorAsync</c>
+    /// takes the MINIMUM of these offsets as the WAL retention floor,
+    /// so advancing only over applied entries would let one leaf that
+    /// owns no key in a partition pin WAL truncation for the whole
+    /// tree. The distinction does not change this classifier's
+    /// arithmetic - it compares the offset against the readable WAL
+    /// window either way - but reading it as "applied through" is what
+    /// makes that advance look like a defect worth removing.
+    /// The next entry the materialiser will read is at
+    /// <c>checkpointOffset + 1</c>. Pass <c>-1</c> as the "nothing
+    /// scanned" sentinel - a freshly activated leaf with no persisted
+    /// state, or a leaf whose projection was reset via the operator
+    /// rebuild seam - so the next replay starts at WAL offset <c>0</c>
+    /// inclusive. Pass a real WAL offset (<c>0</c> or greater) for a
+    /// leaf whose replay has scanned up to and including that offset.
     /// </param>
     /// <param name="checkpointAge">The wall-clock age of the persisted projection checkpoint, or <see cref="TimeSpan.Zero"/> when not tracked.</param>
     /// <param name="options">The resolved options for the tree.</param>

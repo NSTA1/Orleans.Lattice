@@ -104,9 +104,11 @@ public sealed class ShardMap
     /// The result is memoized on first call.
     /// <para>
     /// Implementation note. The values stored in <see cref="Slots"/> are
-    /// physical shard indices bounded by the <i>physical</i> shard count
-    /// (typically 1..16), not the virtual count (default 4096) of the slot
-    /// array itself. A bool-bitmap of size <c>max(Slots)+1</c> dedupes in
+    /// physical shard indices bounded by the tree's pinned <i>physical</i>
+    /// shard count (64 by default, and at most
+    /// <see cref="LatticeOptions.MaxPhysicalShardsPerTree"/> - 256 by
+    /// default - under autonomic splitting), not the virtual count
+    /// (default 4096) of the slot array itself. A bool-bitmap of size <c>max(Slots)+1</c> dedupes in
     /// O(Slots.Length) time and O(max+1) bytes, vs the prior
     /// <c>new HashSet&lt;int&gt;(Slots.Length)</c> which pre-allocated
     /// <c>_buckets</c> and <c>_entries</c> sized to the virtual count and

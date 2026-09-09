@@ -1,0 +1,30 @@
+<Project>
+
+  <!--
+    Repository-wide build configuration imported by every project (MSBuild
+    imports the nearest Directory.Build.props above each project). The nested
+    Directory.Build.props files under test/, samples/, and benchmark/ would
+    otherwise shadow this root file, so each of them explicitly imports its
+    parent via GetPathOfFileAbove; that chain guarantees the properties below
+    reach every project in the solution, not only those under src/.
+
+    WarningsAsErrors promotes two Microsoft.CodeAnalysis.NetAnalyzers rules that
+    already run (as warnings) on every net5.0+ project to build-breaking errors:
+
+      CA2017 - logging message template placeholder / argument-count mismatch.
+               An ILogger call whose message template placeholder count does not
+               match the number of arguments passed. This is a statement about
+               the code (the template) that the code (the argument list) does not
+               satisfy, invisible to review and previously only a warning nobody
+               listened to.
+
+      CA2241 - format-string argument-count mismatch (string.Format and friends).
+
+    Only the severity is changed here; both detectors already exist and already
+    run, so this listens to a signal the build was already producing.
+  -->
+  <PropertyGroup>
+    <WarningsAsErrors>$(WarningsAsErrors);CA2017;CA2241</WarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

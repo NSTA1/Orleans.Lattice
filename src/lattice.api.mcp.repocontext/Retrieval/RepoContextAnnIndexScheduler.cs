@@ -57,6 +57,47 @@ internal sealed class RepoContextAnnIndexScheduler
     public bool CanSchedule => _options.AnnIndexSchedulingEnabled && _embedder is not null;
 
     /// <summary>
+    /// Describes <see cref="CanSchedule"/> in words, naming <b>every</b> condition
+    /// that currently blocks scheduling rather than the first one found.
+    /// <para>
+    /// Reporting all of them is the point. The single sentence this replaced said
+    /// scheduling was off because of "switch disabled, exact retrieval configured,
+    /// or no embedding provider bound", which named the disjunction and left an
+    /// operator to work out which disjunct held - and, having fixed one, to
+    /// discover only on the next restart that another did too. Three causes
+    /// collapsed into one observation is the same defect this whole surface keeps
+    /// producing, just at configuration scale.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// <c>"on"</c> when a build can be scheduled, otherwise <c>"off because ..."</c>
+    /// listing every blocking condition.
+    /// </returns>
+    public string DescribeSchedulingState()
+    {
+        var blockers = new List<string>(3);
+        if (_embedder is null)
+        {
+            blockers.Add("no embedding provider is bound, so nothing is embedded and there is no index to build");
+        }
+
+        if (!_options.AnnIndexScheduling)
+        {
+            blockers.Add($"the '{RepoContextIndexingOptions.AnnIndexSchedulingKey}' switch is off");
+        }
+
+        if (_options.SemanticRetrieval != RepoContextSemanticRetrievalMode.Approximate)
+        {
+            blockers.Add(
+                $"'{RepoContextIndexingOptions.SemanticRetrievalKey}' selects "
+                + $"'{RepoContextIndexingOptions.SemanticRetrievalExact}' retrieval, which maintains no "
+                + "approximate index by design");
+        }
+
+        return blockers.Count == 0 ? "on" : "off because " + string.Join("; and ", blockers);
+    }
+
+    /// <summary>
     /// Arms the build coordinator for one repository's index in the live embedding
     /// space. A no-op when <see cref="CanSchedule"/> is <see langword="false"/>.
     /// </summary>

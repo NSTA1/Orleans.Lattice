@@ -216,9 +216,20 @@ public sealed class LatticeWalGc(
         // low-HLC / high-offset WAL entry (a tombstone-compaction reap re-emits
         // an old timestamp at a new offset, so the WAL is not HLC-monotonic in
         // offset): such an entry is HLC-eligible under any positive cursor yet
-        // sits above a lagging leaf's applied checkpoint offset. Flooring the
-        // trim at the lowest durably-applied offset keeps every not-yet-applied
-        // entry readable so the leaf never falls off its own log.
+        // sits above a lagging leaf's projection checkpoint offset. Flooring
+        // the trim at the lowest such offset keeps every entry the lagging leaf
+        // has not yet read readable, so the leaf never falls off its own log.
+        //
+        // Those offsets are SCANNED-through, not applied-through (issue #2270):
+        // replay advances a leaf's checkpoint over entries it skips as another
+        // leaf's, so a checkpoint here can sit above entries this leaf never
+        // applied. Taking the MINIMUM is exactly what makes that safe. Skipping
+        // only ever inflates the checkpoint of a leaf that does NOT own the
+        // entry; the single leaf that does own it cannot skip it, so it holds
+        // the minimum below that offset until it genuinely applies, and the
+        // entry is retained. See BPlusLeafGrain.RebuildProjectionFromWalAsync,
+        // which names this floor as the reason scanned-through advance is
+        // load-bearing rather than an oversight.
         var offsetFloor = await ComputeMaterialiserOffsetFloorAsync(treeName).ConfigureAwait(false);
         var causalStable = await cursors.GetCausalStableAsync(treeName, cancellationToken).ConfigureAwait(false);
         var blockedFloor = await cursors.GetBlockedFloorAsync(treeName, cancellationToken).ConfigureAwait(false);
@@ -468,11 +479,23 @@ public sealed class LatticeWalGc(
 
     /// <summary>
     /// Computes the offset-space retention floor for <paramref name="treeName"/>:
-    /// the lowest durably-applied leaf-materialiser checkpoint offset across every
-    /// pin shard. The WAL GC must never trim an entry at or above this offset,
-    /// because a leaf whose applied checkpoint sits there has not yet consumed the
-    /// entries above it - including a low-HLC / high-offset tombstone-compaction
-    /// reap that the HLC floor alone would wrongly consider trim-eligible.
+    /// the lowest leaf-materialiser checkpoint offset across every pin shard. The
+    /// WAL GC must never trim an entry at or above this offset, because a leaf
+    /// whose checkpoint sits there has not yet consumed the entries above it -
+    /// including a low-HLC / high-offset tombstone-compaction reap that the HLC
+    /// floor alone would wrongly consider trim-eligible.
+    /// <para>
+    /// Note the reported checkpoints are SCANNED-through, not applied-through
+    /// (issue #2270): a leaf advances its checkpoint over entries it skips as
+    /// another leaf's work. That is safe HERE, and only because this is a
+    /// MINIMUM. Skipping inflates the checkpoint of leaves that do not own the
+    /// entry, while the one leaf that does own it cannot skip it and so holds the
+    /// minimum below that offset until it truly applies. Do not re-derive this
+    /// floor from any per-leaf quantity that is not minimised over the owning
+    /// population, and do not "tighten" the leaf-side advance to applied-only:
+    /// a leaf owning nothing in a partition would then never advance and would
+    /// pin this floor permanently.
+    /// </para>
     /// Returns <see langword="null"/> when the durable pin store is unavailable,
     /// carries no offsets (state predating this field, or a host that never
     /// reports offsets), so the GC degrades cleanly to the pre-existing HLC-only
@@ -506,7 +529,7 @@ public sealed class LatticeWalGc(
                 // entirely) or a split sibling that received its data via an
                 // in-memory handoff rather than WAL replay. Letting a -1 collapse
                 // the floor would wedge the trim for the whole tree; only real
-                // applied checkpoints (offset >= 0) constrain the offset floor.
+                // checkpoints (offset >= 0) constrain the offset floor.
                 if (offset < 0)
                 {
                     continue;
@@ -526,6 +549,34 @@ public sealed class LatticeWalGc(
             // pin grain without GetPinOffsetsAsync during a rolling upgrade):
             // fall back to no offset floor. The HLC floor still constrains the
             // trim, and the next pass retries once the store is reachable.
+            //
+            // This fallback was previously completely silent (issue #2314): a
+            // persistently unreachable pin store removes the offset floor on
+            // EVERY pass indefinitely, with no signal, indistinguishable from a
+            // tree that legitimately has no offset floor to apply. The counter
+            // makes "no floor because unreachable" (this catch) separable from
+            // "no floor because none needed" (factory null / empty offsets,
+            // which return null WITHOUT reaching here). It changes no trim
+            // behaviour - it only makes the swallowed failure observable.
+            //
+            // Note the deeper population caveat this counter deliberately does
+            // NOT try to fix (also #2314): the floor below is a minimum over the
+            // leaves that REPORTED an offset, not over the leaves that OWE
+            // entries. A leaf absent from the pin set does not constrain the
+            // floor at all, and absence is NOT the same state as a reported -1:
+            // a reported -1 always arrives paired with a Zero HLC block pin that
+            // disables the cursor trim (ResolveDurablePinForPartition guarantees
+            // it), whereas an absent leaf - one whose birth block-pin seed was
+            // swallowed, or that predates the durable pin store being wired -
+            // carries no such HLC cover. Making absence constrain the floor
+            // conservatively (e.g. treating absence as offset 0) would pin the
+            // WAL forever for any permanently-departed leaf, so it is NOT done
+            // here; distinguishing absent from reported -1 needs an independent
+            // owner census this seam does not have.
+            LatticeMetrics.WalGcOffsetFloorUnavailable.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
+                LatticeTenantLabel.ForTree(treeName));
             return null;
         }
     }

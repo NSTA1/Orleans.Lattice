@@ -3227,7 +3227,9 @@ internal sealed partial class LatticeGrain(
         // secondary Array.Sort is needed.
         //
         // The values in Slots are *physical* shard indices - small, dense and
-        // non-negative (typically 1..16) - while the slot array itself is
+        // non-negative, bounded by the tree's pinned physical shard count (64
+        // by default, and at most MaxPhysicalShardsPerTree - 256 by default -
+        // under autonomic splitting) - while the slot array itself is
         // sized to the *virtual* shard count (default 4096). Bucketing by
         // owner into owner-indexed arrays therefore replaces five dictionary
         // hash probes per virtual slot (the count read and write of the
@@ -3332,7 +3334,9 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     /// <remarks>
     /// Owners are <em>physical</em> shard indices - small, dense and
-    /// non-negative (typically 1..16) - so a counting pass into an
+    /// non-negative, bounded by the tree's pinned physical shard count (64 by
+    /// default, and at most <see cref="LatticeOptions.MaxPhysicalShardsPerTree"/>
+    /// - 256 by default - under autonomic splitting) - so a counting pass into an
     /// owner-indexed <c>int[]</c> replaces two dictionary hash probes per
     /// requested slot. Counting first also sizes every bucket exactly, which
     /// drops the <c>List&lt;int&gt;</c> growth chain and the separate

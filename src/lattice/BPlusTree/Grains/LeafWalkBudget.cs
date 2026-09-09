@@ -141,15 +141,28 @@ internal struct LeafWalkBudget
     /// <summary>
     /// Builds the budget for a background pass whose leaf cap is a
     /// coordinator-specific option rather than the shared background default -
-    /// the tombstone compactor's <see cref="LatticeOptions.CompactionLeafBatchSize"/>
-    /// and the shard consolidator's
-    /// <see cref="LatticeOptions.ConsolidationDrainLeavesPerPass"/>. Both keep
-    /// their own long-standing knob and inherit the shared wall-clock net.
+    /// the tombstone compactor's <see cref="LatticeOptions.CompactionLeafBatchSize"/>,
+    /// the shard consolidator's
+    /// <see cref="LatticeOptions.ConsolidationDrainLeavesPerPass"/>, and the
+    /// empty-leaf reclaim walk's derived probe budget. Each keeps its own
+    /// long-standing knob and inherits the shared wall-clock net.
+    /// <para>
+    /// Pass a stamp from <see cref="StartClock"/> taken where the pass began
+    /// holding its turn to make the deadline cover the whole hold rather than
+    /// only the walk loop. Reclaim needs this: it prepares the grain and
+    /// resolves its resume position before it reaches the loop, and on a cold
+    /// activation that prologue is itself a run of grain calls. Omit it to
+    /// measure from now, which is what the coordinator drains do because they
+    /// build the budget at the top of the pass anyway.
+    /// </para>
     /// </summary>
-    internal static LeafWalkBudget ForBackgroundDrain(int maxLeaves, LatticeOptions options)
+    internal static LeafWalkBudget ForBackgroundDrain(
+        int maxLeaves,
+        LatticeOptions options,
+        long startTimestamp = 0L)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return new LeafWalkBudget(maxLeaves, options.BackgroundDrainMaxDuration);
+        return new LeafWalkBudget(maxLeaves, options.BackgroundDrainMaxDuration, startTimestamp);
     }
 
     /// <summary>

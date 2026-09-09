@@ -419,3 +419,17 @@ benchmark/diagnostic-report.pilot.md
 # Local machine-specific RepoContext deploy overrides (REPO_PATH etc.)
 samples/RepoContextContainer/.env
 
+# The compose override layer is legitimate and expected: it is how a local
+# deployment supplies machine-specific settings. It is declared here, next to
+# the .env override it sits beside, rather than in .git/info/exclude, because
+# that file lives in the common git directory - shared by every worktree of one
+# clone and invisible to every other clone and to code review. An override
+# nobody can see the repository expects is how the tracked compose file came to
+# state a reconcile interval the container does not run. See issue #2294.
+#
+# This makes the layer's EXISTENCE reviewable. It does not make its CONTENTS
+# reviewable - nothing tracked can, since the file is deliberately local. The
+# effective values are recovered instead from the startup report the host emits
+# (RepoContextEffectiveConfigurationReporter).
+samples/RepoContextContainer/docker-compose.override.yml
+

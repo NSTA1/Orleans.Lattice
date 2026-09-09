@@ -40,32 +40,67 @@ internal sealed class RepoContextAnnIndexSweepService(
     /// </summary>
     private static readonly TimeSpan MinimumSweepInterval = TimeSpan.FromMinutes(1);
 
+    private readonly RepoContextAnnIndexSweepReporter _reporter = new();
+
+    /// <summary>
+    /// The sweep's outcome counters, cumulative since process start. Exposed so a
+    /// test can assert on the partition without standing up a meter listener.
+    /// </summary>
+    internal RepoContextAnnIndexSweepReporter Reporter => _reporter;
+
+    /// <inheritdoc />
+    public override void Dispose()
+    {
+        _reporter.Dispose();
+        base.Dispose();
+    }
+
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!scheduler.CanSchedule)
-        {
-            logger.LogInformation(
-                "Repository-context approximate-index build scheduling is off (switch disabled, exact retrieval "
-                + "configured, or no embedding provider bound); no build coordinator will be armed.");
-            return;
-        }
-
         var interval = options.ReconcileInterval > MinimumSweepInterval
             ? options.ReconcileInterval
             : MinimumSweepInterval;
 
+        // Unconditional, and deliberately ahead of every branch. This is the only
+        // signal that can separate "the sweep loop never started" from "it started
+        // and has armed nothing yet": a counter cannot, because a loop that never
+        // runs emits no measurements, so all of its series read zero exactly as they
+        // do on a host that has only just come up. Emitting the line before the
+        // branch rather than inside one also makes it structurally impossible for a
+        // later edit to add a path that returns silently.
+        logger.LogInformation(
+            "Repository-context approximate-index build sweep entered. Scheduling is {SchedulingDecision}. "
+            + "Configured sweep cadence {SweepInterval}. Outcomes are counted onto '{Instrument}'; the absence "
+            + "of this line from a host's log means the sweep service never executed.",
+            scheduler.DescribeSchedulingState(),
+            interval,
+            RepoContextAnnIndexSweepReporter.SweepInstrumentName);
+
+        if (!scheduler.CanSchedule)
+        {
+            return;
+        }
+
         var delay = InitialRetryDelay;
         while (!stoppingToken.IsCancellationRequested)
         {
-            var armed = await TrySweepAsync(stoppingToken).ConfigureAwait(false);
+            var outcome = await TrySweepAsync(stoppingToken).ConfigureAwait(false);
+            if (outcome is null)
+            {
+                // Shutdown cancelled the sweep. Not an outcome, so nothing is
+                // recorded: counting it would put a phantom success on the series.
+                return;
+            }
 
             // A failed sweep backs off and retries promptly, because until it gets
-            // through nothing is scheduled at all. A successful one waits a full
+            // through nothing is scheduled at all. A completed one waits a full
             // interval, since re-arming a coordinator that is already running buys
-            // nothing.
-            var wait = armed ? interval : delay;
-            if (!armed)
+            // nothing - and that includes a sweep that found nothing to arm, whose
+            // remedy is a repository being registered, not a faster retry.
+            var faulted = outcome == RepoContextAnnSweepOutcome.Faulted;
+            var wait = faulted ? delay : interval;
+            if (faulted)
             {
                 delay = delay < MaxRetryDelay
                     ? TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, MaxRetryDelay.Ticks))
@@ -88,12 +123,25 @@ internal sealed class RepoContextAnnIndexSweepService(
     }
 
     /// <summary>
-    /// Runs one sweep, returning whether it completed. A fault is logged and
-    /// reported as an incomplete sweep so the caller retries rather than settling
-    /// into the long cadence with nothing scheduled.
+    /// Runs one sweep, records its outcome, and announces the transitions worth a
+    /// log line.
+    /// <para>
+    /// The fault arm used to log at debug and return a bare <see langword="false"/>.
+    /// A deployment running at information level therefore emitted nothing at all
+    /// for a sweep that threw on every attempt, forever - and nothing for a sweep
+    /// that worked, and nothing for a sweep that never ran, which is three states
+    /// behind one observation. Raising it to warning on the first fault of each run
+    /// and counting the repetitions keeps the fault visible without writing a line
+    /// every thirty seconds for as long as it lasts.
+    /// </para>
     /// </summary>
-    private async Task<bool> TrySweepAsync(CancellationToken stoppingToken)
+    /// <returns>
+    /// The outcome, or <see langword="null"/> when shutdown cancelled the sweep -
+    /// which is not an outcome and is deliberately not recorded.
+    /// </returns>
+    private async Task<RepoContextAnnSweepOutcome?> TrySweepAsync(CancellationToken stoppingToken)
     {
+        var armed = 0;
         try
         {
             // Only the ids are needed to arm a coordinator, so this deliberately
@@ -104,21 +152,73 @@ internal sealed class RepoContextAnnIndexSweepService(
             foreach (var repoId in repoIds)
             {
                 stoppingToken.ThrowIfCancellationRequested();
-                await scheduler.TryArmAsync(repoId, stoppingToken).ConfigureAwait(false);
+                if (await scheduler.TryArmAsync(repoId, stoppingToken).ConfigureAwait(false))
+                {
+                    armed++;
+                }
             }
-
-            return true;
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            return true;
+            return null;
         }
         catch (Exception ex)
         {
-            logger.LogDebug(
-                ex,
-                "Repository-context approximate-index sweep could not arm the build coordinators yet; retrying.");
-            return false;
+            Announce(RepoContextAnnSweepOutcome.Faulted, armed, ex);
+            return RepoContextAnnSweepOutcome.Faulted;
+        }
+
+        var outcome = armed > 0 ? RepoContextAnnSweepOutcome.Armed : RepoContextAnnSweepOutcome.Empty;
+        Announce(outcome, armed, exception: null);
+        return outcome;
+    }
+
+    /// <summary>Records one outcome and writes the log line its transition warrants.</summary>
+    private void Announce(RepoContextAnnSweepOutcome outcome, int armed, Exception? exception)
+    {
+        var report = _reporter.Record(outcome);
+        switch (report.Announcement)
+        {
+            case RepoContextAnnSweepAnnouncement.FaultBegan:
+                logger.LogWarning(
+                    exception,
+                    "Repository-context approximate-index sweep failed to arm the build coordinators; retrying "
+                    + "with backoff up to {MaxRetryDelay}. Until a sweep gets through, no build is scheduled and "
+                    + "semantic search cannot leave its bootstrapping fallback. Repeats of this fault are counted "
+                    + "onto '{Instrument}' with outcome '{Outcome}' rather than logged per attempt.",
+                    MaxRetryDelay,
+                    RepoContextAnnIndexSweepReporter.SweepInstrumentName,
+                    RepoContextAnnIndexSweepReporter.OutcomeFaultedTag);
+                break;
+
+            case RepoContextAnnSweepAnnouncement.Recovered:
+                logger.LogInformation(
+                    "Repository-context approximate-index sweep recovered after {ConsecutiveFaults} consecutive "
+                    + "failed attempt(s) and armed {ArmedCount} build coordinator(s).",
+                    report.ConsecutiveFaults,
+                    armed);
+                break;
+
+            case RepoContextAnnSweepAnnouncement.FirstArmed:
+                logger.LogInformation(
+                    "Repository-context approximate-index sweep armed {ArmedCount} build coordinator(s) for the "
+                    + "first time in this process. Later sweeps are counted onto '{Instrument}' rather than logged.",
+                    armed,
+                    RepoContextAnnIndexSweepReporter.SweepInstrumentName);
+                break;
+
+            case RepoContextAnnSweepAnnouncement.NoRepositories:
+                logger.LogInformation(
+                    "Repository-context approximate-index sweep completed with no repository to arm, so no build "
+                    + "is scheduled. This is a successful sweep with nothing to do rather than a failure, and it "
+                    + "reads identically to a working one in every signal except this line and the '{Outcome}' "
+                    + "arm of '{Instrument}'.",
+                    RepoContextAnnIndexSweepReporter.OutcomeEmptyTag,
+                    RepoContextAnnIndexSweepReporter.SweepInstrumentName);
+                break;
+
+            default:
+                break;
         }
     }
 }

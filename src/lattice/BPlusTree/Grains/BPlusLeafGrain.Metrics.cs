@@ -106,6 +106,31 @@ internal sealed partial class BPlusLeafGrain
                 : (state.Etag.Length > 32 ? state.Etag.Substring(0, 32) + ".." : state.Etag);
             Console.WriteLine($"[diag persist] kind=leaf caller={caller} gid={context.GrainId} treeId='{state.State.TreeId ?? "<null>"}' shard={state.State.ShardIndex} recordExists={state.RecordExists} etag={etag}");
         }
+        // #2312: resolve the histogram's tree tag HERE, before the write, and
+        // never let resolving it fail the persist. `state.State` throws
+        // `InvalidOperationException: Attempt to access an invalid activation`
+        // once this activation has been invalidated, and a read of it from the
+        // finally below throws AFTER the durable write has already committed.
+        // That has two independent harms, and this capture removes both:
+        //
+        //   1. A committed write reported as failed. PersistAsync would
+        //      complete exceptionally for a write that landed, and every
+        //      caller - including FlushPendingCheckpointAsync - would believe
+        //      the persist failed. That is the #2220 class reached through the
+        //      telemetry arm, which is the last place a reader looks for a
+        //      durability escape.
+        //   2. A destroyed diagnostic. An exception thrown from a finally
+        //      supersedes the one in flight, so when the persist itself fails
+        //      on an invalid activation, the genuine persist exception is
+        //      discarded and replaced by the failure of the code recording how
+        //      long the persist took.
+        //
+        // Entry is also the correct TIME to read the tag: it describes the work
+        // this call is about to perform. The one path that can change TreeId
+        // across the await is the benign first-create adopt inside
+        // TopologySeedPersist, and by that helper's own contract the adopted row
+        // carries an identical topology seed, so entry and exit agree.
+        var treeIdTag = ResolveTreeIdTagForPersist();
         var startTicks = Stopwatch.GetTimestamp();
         try
         {
@@ -121,8 +146,8 @@ internal sealed partial class BPlusLeafGrain
         {
             var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
             LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
-                LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeIdTag),
+                LatticeTenantLabel.ForTree(treeIdTag));
         }
 
         // Best-effort byte-footprint publish to the owning shard root so the
@@ -135,6 +160,38 @@ internal sealed partial class BPlusLeafGrain
         // means a subsequent GetStorageUsageAsync against the shard root
         // observes this leaf's contribution deterministically.
         await TryPublishByteFootprintAsync();
+    }
+
+    /// <summary>
+    /// Resolves the tree-id tag for <see cref="PersistAsync"/>'s latency
+    /// histogram, yielding the empty tag when the activation has been
+    /// invalidated (#2312).
+    /// <para>
+    /// Telemetry must never decide whether a durable write is reported as
+    /// having succeeded, so a read that only exists to label a measurement is
+    /// not allowed to propagate. The empty fallback is the value this
+    /// histogram already records for a leaf whose tree has not yet been
+    /// registered, so an invalid activation introduces no new tag value and no
+    /// new cardinality.
+    /// </para>
+    /// <para>
+    /// The catch is deliberately narrow: <see cref="InvalidOperationException"/>
+    /// is what the Orleans runtime raises for "Attempt to access an invalid
+    /// activation", and for state that was never loaded. Anything else from the
+    /// state accessor is not an expected lifecycle condition and still
+    /// surfaces.
+    /// </para>
+    /// </summary>
+    private string ResolveTreeIdTagForPersist()
+    {
+        try
+        {
+            return state.State.TreeId ?? string.Empty;
+        }
+        catch (InvalidOperationException)
+        {
+            return string.Empty;
+        }
     }
 
     private long _lastPublishedStateBytes = long.MinValue;
@@ -152,18 +209,53 @@ internal sealed partial class BPlusLeafGrain
     /// does not fail the user-visible mutation; the next publish (or the
     /// operator-driven <c>RefreshLeafByteFootprintsAsync</c>) re-anchors
     /// the totals.
+    /// <para>
+    /// No path out of this method throws, which its only two call sites
+    /// rely on (issue #2264): both piggyback it on work that has already
+    /// committed, so an escaping exception aborts the caller after its
+    /// real work succeeded. The activation-validity guard below covers
+    /// the <c>state.State</c> and <c>Cache</c> reads; the <c>catch</c>
+    /// further down covers the shard-root hop. They are deliberately
+    /// separate - see the comment on the guard.
+    /// </para>
     /// </summary>
     private async Task TryPublishByteFootprintAsync()
     {
-        var treeId = state.State.TreeId;
-        if (treeId is null || state.State.ShardIndex is not int shardIndex)
+        string? treeId;
+        int shardIndex;
+        long stateBytes;
+        long snapshotBytes;
+        long liveKeys;
+        try
         {
+            treeId = state.State.TreeId;
+            if (treeId is null || state.State.ShardIndex is not int resolvedShardIndex)
+            {
+                return;
+            }
+
+            shardIndex = resolvedShardIndex;
+            stateBytes = Cache.StateBytes;
+            snapshotBytes = _lastCapturedSnapshotBytes;
+            liveKeys = Cache.LiveCount;
+        }
+        catch (InvalidOperationException)
+        {
+            // Issue #2264: the activation was invalidated while an await
+            // in the caller was in flight - reachably, the parent hop
+            // inside PublishCurrentDigestAsync, which is the only call
+            // site with an await between its own state reads and this
+            // one - so state.State now throws "Attempt to access an
+            // invalid activation". Deliberately NOT folded into the
+            // publish catch below: an invalid activation is a lifecycle
+            // condition, not a transient shard-root fault, and
+            // conflating the two would swallow genuine publish failures
+            // the existing catch is careful to keep re-publishable. The
+            // footprint is best-effort and re-anchors on the next
+            // activation's first publish.
             return;
         }
 
-        var stateBytes = Cache.StateBytes;
-        var snapshotBytes = _lastCapturedSnapshotBytes;
-        var liveKeys = Cache.LiveCount;
         if (stateBytes == _lastPublishedStateBytes
             && snapshotBytes == _lastPublishedSnapshotBytes
             && liveKeys == _lastPublishedLiveKeys)

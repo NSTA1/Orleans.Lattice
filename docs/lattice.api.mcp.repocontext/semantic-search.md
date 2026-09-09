@@ -121,6 +121,27 @@ Arming is idempotent. A coordinator that finds its index already built still per
 
 **Multi-silo note.** A coordinator is a single cluster-wide activation, and the in-memory index a query is served from is per silo. On a multi-silo host the coordinator's silo is warmed with no query; another silo opens its own handle on its first query, which is a **reload** of the already-built index rather than a rebuild. The expensive half - streaming the corpus - is paid once, off the request path, whichever silo hosts the coordinator.
 
+### Observing whether the sweep is running
+
+The sweep is the sole backstop for an already-onboarded host: the self-index grain arms a coordinator directly only on an indexing pass, so a container restored from a volume with nothing left to index depends entirely on the periodic sweep. That made its silence expensive. Every state of the sweep used to log at debug or not at all, so a host running at information level emitted **nothing** whether the sweep was arming successfully, throwing on every attempt and backing off forever, or had never started - three states behind one observation. On the deployed container that presented as a plane that never left `bootstrapping`, with no signal anywhere able to say which state produced it.
+
+Two signals separate them, and neither does alone:
+
+| Signal | Kind | What it settles |
+| --- | --- | --- |
+| `Repository-context approximate-index build sweep entered` | one information line, written unconditionally ahead of every branch | **Whether the loop started at all.** Present means the service executed, and the line names the scheduling decision; absent means it never ran. |
+| `repocontext.ann.sweep` | counter, tag `outcome` = `armed` \| `empty` \| `faulted` | **What the loop is doing.** Every sweep that runs is counted, so the total advances once per sweep - at the sweep interval while sweeps complete, and at the faster retry cadence while they fault. |
+
+The counter deliberately cannot answer the first question. A loop that never runs emits no measurements, so all three of its series read zero exactly as they do on a host that has only just come up. That gap is closed by the startup line, not by any counter the loop could carry, which is why the line is emitted before the scheduling branch rather than inside one.
+
+Because the partition is total, a zero is readable. `armed` at zero beside a rising `faulted` is a **measured** absence of arming - the sweep is alive, it is throwing, and nothing is being scheduled - which is a different and much stronger claim than `armed` reading zero on its own. The `empty` arm exists for its own reason: a sweep that finds no repository to arm completes cleanly, settles into the long cadence and schedules nothing, so folding it into `armed` would leave "the plane never builds because nothing is registered" indistinguishable from "the plane never builds for some other reason".
+
+Read that rising `faulted` arm against the right denominator. The loop waits the sweep interval after a sweep that completes but the retry backoff after one that faults, and that backoff starts at 250 ms and doubles to a 30-second ceiling, so the faulting arm advances faster than the interval rather than at it. Against the 15-minute default reconcile interval a fault episode records nine sweeps in its first 62 seconds - at 0.0, 0.25, 0.75, 1.75, 3.75, 7.75, 15.75, 31.75 and 61.75 seconds - and settles to 30 per interval once the backoff tops out; against the one-minute floor that steady-state ratio is 2. An expected rate derived from the sweep interval therefore misprices a fault by that factor. It errs towards the arm reading louder than predicted rather than quieter, so it does not hide a fault, but the denominator to use is the total across all three arms.
+
+The scheduling decision the startup line carries names **every** condition currently blocking scheduling rather than the first one found. The sentence it replaced named the disjunction - switch disabled, exact retrieval configured, or no embedding provider bound - which left an operator to work out which disjunct held, and then to discover only on the next restart that another had held too.
+
+Faults are announced once per episode rather than once per attempt. The first fault of a run is a warning carrying the exception; its repetitions go to the counter, because the retry backoff tops out at thirty seconds and an unconditional line would write roughly 2,880 of them a day for as long as the fault lasted. A sweep that completes after one or more faults logs a closing line reporting how long the episode ran, so an episode that has ended is distinguishable from one still in progress.
+
 ### When the exact fallback is declined
 
 The exact fallback is bounded rather than unconditional, because on a large corpus it can cost more than it is worth while the build holds the same tree. The gather range-scans the whole vector-metadata prefix a page at a time, and while the build is streaming into those same shards a page fill can queue behind the build's writes on non-reentrant shard roots until it exceeds `LatticeOptions.MaxScanPageStallDuration` and the shard root abandons it. The query then reaches keyword recall anyway, having spent the full ceiling first, and having spent it loading the very tree whose build completing is the only thing that would end the condition.
@@ -133,6 +154,56 @@ Two guards bound it, and it is worth being precise about what each one can and c
 A declined or abandoned gather is reported as `keyword.vector_plane_unavailable` - a plane that is still building - and never as `keyword.index_degraded`, which would claim a capability loss that is not present. No result is ever wrong either way: the same keyword recall is returned.
 
 Below the corpus bound nothing changes and the exact gather still answers with complete recall, which is the regime a small repository sits in permanently. Because the derived threshold lands above `RepoContextAnnOptions.MinimumTrainingCount`, a corpus too small to train a partitioning is answered exhaustively by the plane itself and never reaches the fallback at all.
+
+## Observing which path actually answered
+
+The plane's own state is reported per query, because a path nobody can observe is
+indistinguishable from one that is dead - and that is not hypothetical here. Issue
+#2252 was filed after four deployments in which semantic retrieval had never been
+*seen* serving from the approximate plane, and the reason it could not be seen is
+that the serving state was computed per query and then discarded: the caller tested
+only "did the plane answer at all", which collapses a plane warming up and a plane
+in its steady state into one count.
+
+Three states are kept apart, and the distinction between the last two is the one
+that matters:
+
+- **`bootstrapping`** - no usable index exists for this repository and embedding
+  space yet, so the fallback ladder ran.
+- **`exhaustive`** - the plane answered, but by scanning the vectors it holds,
+  because its corpus is below `MinimumTrainingCount` or training has not run.
+  Recall over the indexed corpus is complete; the index is warming, not degraded.
+- **`approximate`** - the plane answered from its trained partitioning. This is the
+  steady state the index exists to reach, and the only one of the three that means
+  the acceleration is delivering.
+
+They surface three ways:
+
+- **`repocontext.retrieval.ann.search`**, a counter tagged `state` with those three
+  values. It counts **every** outcome, not only the serving ones, and that is
+  deliberate: a counter that rose only when the trained path served would read zero
+  at the highest rate of the very hazard it exists to catch, which manufactures
+  reassurance rather than removing it. Counting the whole partition means a zero on
+  `state=approximate` alongside a climbing `state=bootstrapping` is a *measured
+  absence* - "queries are being served and none of them by the trained plane" -
+  rather than an absent measurement. The one case it cannot distinguish is no
+  traffic at all, where every series is legitimately zero; `/health/ready` covers
+  that, because the readiness probe converges without waiting for a query.
+- **An information-level line the first time each state is reached** for a
+  repository, carrying what the state means. The first `approximate` answer is the
+  transition #2252 says has never been observed, so it is announced rather than left
+  to be inferred. Repetitions are counted, not logged.
+- **The periodic retrieval-ladder guard summary**, which reports the trained and
+  exhaustive answers apart from each other and from the total.
+
+**`index_status` does not answer this question and never did.** It reports the
+*ingest* job - files scanned, embedded, and committed - which is a different
+subsystem from the approximate plane, built by a different coordinator. A host can
+therefore report `status: Completed` while every query is answered by keyword
+recall, with neither signal wrong about what it measures. For "can this host serve
+semantic retrieval", read `retrievalPath` on the search response, the
+`repocontext.retrieval.ann.search` instrument, or `/health/ready` - all three of
+which derive from what retrieval actually did.
 
 ## How a superseded index is retired
 

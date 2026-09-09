@@ -49,6 +49,7 @@ public class ScanPageStalledExceptionTests
             Assert.That(ex.Phase, Is.Empty);
             Assert.That(ex.ShardIndex, Is.Zero);
             Assert.That(ex.LeavesVisited, Is.Zero);
+            Assert.That(ex.LeafInFlight, Is.Null);
             Assert.That(ex.TimeoutSeconds, Is.Zero);
         });
     }
@@ -126,6 +127,7 @@ public class ScanPageStalledExceptionTests
             Operation = "GetSortedEntriesBatchAsync",
             Phase = "leaf-walk",
             LeavesVisited = 41,
+            LeafInFlight = "bplusleaf/7b16d935344e4206bc6e0d161f52ff6b",
             TimeoutSeconds = 30d,
         };
 
@@ -141,6 +143,10 @@ public class ScanPageStalledExceptionTests
             Assert.That(restored.Operation, Is.EqualTo("GetSortedEntriesBatchAsync"));
             Assert.That(restored.Phase, Is.EqualTo("leaf-walk"));
             Assert.That(restored.LeavesVisited, Is.EqualTo(41));
+            Assert.That(restored.LeafInFlight,
+                Is.EqualTo("bplusleaf/7b16d935344e4206bc6e0d161f52ff6b"),
+                "the leaf identity must survive the wire, or a stall observed on the calling "
+                + "silo is attributable to a shard but not to a leaf (issue 2278)");
             Assert.That(restored.TimeoutSeconds, Is.EqualTo(30d));
         });
     }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -74,11 +75,25 @@ internal sealed partial class ShardRootGrain
     /// <b>Coupling warning.</b> That bound is a multiple of an operator-tunable
     /// knob. Raising <see cref="LatticeOptions.CompactionLeafBatchSize"/> to
     /// 625 or beyond saturates <see cref="MaxLeafReclaimWalk"/>, making a
-    /// single pass walk 10,000 leaves sequentially while holding the turn -
-    /// which on cold storage will exceed the Orleans response timeout of the
-    /// caller and fail the pass outright. The knob reads as a compaction
-    /// batch size and does not look like it controls a non-reentrant walk, so
-    /// the coupling is recorded at both ends.
+    /// single pass eligible to walk 10,000 leaves sequentially while holding
+    /// the turn. The knob reads as a compaction batch size and does not look
+    /// like it controls a non-reentrant walk, so the coupling is recorded at
+    /// both ends.
+    /// </para>
+    /// <para>
+    /// <b>That coupling no longer reaches the caller's response timeout,
+    /// because the probe count is no longer the only bound.</b> A pass also
+    /// stops on <see cref="LatticeOptions.BackgroundDrainMaxDuration"/>,
+    /// whichever binds first (issue 2131). The distinction is that a probe
+    /// count bounds the WORK a pass does while the deadline bounds how long it
+    /// HOLDS the shard, and only the second is denominated in the same quantity
+    /// as the timeout it has to stay inside. A probe is not a fixed cost - warm
+    /// and co-located it is sub-millisecond, cold against remote storage it is
+    /// a state read - so one probe budget is a sub-second pass in one
+    /// deployment and a timeout in another, and no value of it is correct for
+    /// both. Raising the knob now buys a longer pass only where a pass is cheap
+    /// enough to finish, and is truncated into a resumable partial pass where
+    /// it is not.
     /// </para>
     /// </summary>
     private const int LeafReclaimProbesPerFold = 16;
@@ -97,6 +112,14 @@ internal sealed partial class ShardRootGrain
     /// state field that has to be migrated.
     /// </para>
     /// <para>
+    /// The cursor serves both of the walk's bounds identically. A pass that
+    /// stops on the probe budget and a pass that stops on
+    /// <see cref="LatticeOptions.BackgroundDrainMaxDuration"/> are standing on
+    /// the same thing - a leaf they have finished with and a chain that
+    /// continues past it - so the stop point is derived from that leaf's probe
+    /// in one place, with no branch per bound (issue 2131).
+    /// </para>
+    /// <para>
     /// The one case where that trade bites, stated as a threshold an operator
     /// can actually evaluate rather than as an adjective. A pass probes at
     /// most <c>maxLeaves * LeafReclaimProbesPerFold</c> leaves from the
@@ -105,7 +128,10 @@ internal sealed partial class ShardRootGrain
     /// the reach is <b>1024 leaves at default settings</b> (64 x 16).
     /// <see cref="MaxLeafReclaimWalk"/> is a cycle guard and an upper clamp,
     /// not the operative number - it only binds once a caller passes 625 or
-    /// more, which no default path does. Do not read 10,000 as the reach.
+    /// more, which no default path does. Do not read 10,000 as the reach, and
+    /// note the reach is now a ceiling rather than a promise: the deadline can
+    /// stop a pass short of it, which is a shorter prefix per pass but never a
+    /// re-walked one, because the cursor advances either way.
     /// </para>
     /// <para>
     /// The stall condition is therefore <b>distributional, not a matter of
@@ -151,8 +177,17 @@ internal sealed partial class ShardRootGrain
         if (Interlocked.CompareExchange(ref _leafReclaimInProgress, 1, 0) != 0) return 0;
         try
         {
+            // Start the deadline where the pass starts HOLDING the turn, not
+            // where it reaches its walk loop. Preparing the grain and resolving
+            // the resume position are both runs of grain calls on a cold
+            // activation, and time spent in them head-of-line-blocks the shard
+            // exactly as time spent probing does. Measuring only the loop is
+            // the hole issue 1992 closed for the page fills; reclaim inherits
+            // the fix rather than repeating the mistake.
+            var startTimestamp = LeafWalkBudget.StartClock();
+
             await PrepareForOperationAsync();
-            return await ReclaimEmptyLeavesCoreAsync(maxLeaves);
+            return await ReclaimEmptyLeavesCoreAsync(maxLeaves, startTimestamp);
         }
         finally
         {
@@ -160,7 +195,7 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    private async Task<int> ReclaimEmptyLeavesCoreAsync(int maxLeaves)
+    private async Task<int> ReclaimEmptyLeavesCoreAsync(int maxLeaves, long startTimestamp)
     {
         // Hoisted out of the walk: the descent path is scratch space reused
         // for every candidate rather than a fresh allocation per leaf, which
@@ -168,10 +203,11 @@ internal sealed partial class ShardRootGrain
         // thousands.
         var path = new Stack<GrainId>();
 
+        var options = await GetOptionsAsync();
+
         var (prevId, prevProbe) = await StartLeafReclaimWalkAsync(path);
 
         var reclaimed = 0;
-        var visited = 0;
 
         // The walk is allowed to run past its candidates, but not to the end
         // of a long chain: every probe activates a leaf and counts its rows,
@@ -185,12 +221,25 @@ internal sealed partial class ShardRootGrain
             LeafReclaimProbesPerFold,
             MaxLeafReclaimWalk);
 
+        // Two independent bounds, whichever binds first. The probe count bounds
+        // the WORK a pass does; the wall clock bounds how long it HOLDS the
+        // shard, and only the second is denominated in the quantity the caller's
+        // Orleans response timeout is also denominated in. A probe count cannot
+        // stand in for it, because the cost of a probe is not a constant: warm
+        // and co-located it is sub-millisecond, cold against remote storage it
+        // is a state read, and the same 1024-probe budget is therefore a
+        // sub-second pass in one deployment and a timeout in another. That is
+        // the cliff issue 2131 closes - below the timeout the pass succeeds,
+        // above it the pass fails outright and reclaims nothing, precisely on
+        // the large cold trees reclaim exists to tidy.
+        var budget = LeafWalkBudget.ForBackgroundDrain(visitBudget, options, startTimestamp);
+
         // The head leaf is never a reclaim candidate: it owns the range below
         // the first separator in the tree and has no predecessor to inherit
         // it. The walk therefore always considers the leaf AFTER prevId.
-        while (prevProbe.NextSibling is { } currentId && visited < visitBudget)
+        while (prevProbe.NextSibling is { } currentId && !budget.ShouldYield())
         {
-            visited++;
+            budget.RecordLeafVisited();
 
             var currentProbe = await ResolveLeafGrain(currentId).GetReclaimProbeAsync();
 
@@ -242,23 +291,65 @@ internal sealed partial class ShardRootGrain
 
         // Record where to resume. A walk that ran out of chain reached the
         // tail, so the next pass starts at the head again and re-examines
-        // whatever has emptied since. A walk that stopped on a budget has
+        // whatever has emptied since. A walk that stopped on EITHER bound has
         // chain left to its right, and resuming there is what stops successive
         // passes re-walking the same prefix forever and never reaching the
         // tail of a chain longer than one pass's budget.
+        //
+        // The time-stop needs no branch of its own here, and that is the whole
+        // reason a wall-clock bound composes with this design rather than
+        // complicating it: both bounds leave the walk standing on a leaf it has
+        // finished with, so the cursor is derived from the same probe either
+        // way and a partial pass is already correct.
         _leafReclaimResumeLowKey = prevProbe.NextSibling is null
             ? null
             : prevProbe.HighKeyExclusive;
 
-        if (reclaimed > 0)
-        {
-            logger.LogInformation(
-                "Shard {ShardIndex} of tree '{TreeId}' reclaimed {Reclaimed} empty leaf/leaves from the leaf chain after probing {Visited}.",
-                MyShardIndex,
-                TreeId,
-                reclaimed,
-                visited);
-        }
+        // Which of the four exits the walk took. The two bounds are reported
+        // apart rather than as one "budget" because they answer different
+        // operator questions: probe-budget says raise CompactionLeafBatchSize,
+        // deadline says the shard is slow enough that a pass cannot finish and
+        // raising the batch size would achieve nothing. Collapsing them would
+        // make the log unable to distinguish the case this bound exists for.
+        var stopReason =
+            prevProbe.NextSibling is null ? "end-of-chain"
+            : reclaimed >= maxLeaves ? "fold-budget"
+            : budget.LeavesVisited >= visitBudget ? "probe-budget"
+            : "deadline";
+
+        // Every pass reports, including the ones that folded nothing.
+        //
+        // This line used to be gated on `reclaimed > 0`, which silenced the
+        // single most expensive case there is. A pass that folds nothing does
+        // not stop early - the early break fires only when reclaimed reaches
+        // maxLeaves - so a fruitless pass probes its ENTIRE budget and then
+        // returns without a trace, while a pass that folded on its second
+        // probe and stopped logs a line. The instrument was therefore
+        // anti-correlated with cost: the cheaper the pass, the more likely it
+        // was to be visible. Any count of reclaim lines in a log is a floor on
+        // the passes that ran, never a census of them, and reading it as a
+        // census understates long passes specifically.
+        //
+        // That matters more now than it did, because this method acquired a
+        // wall-clock bound (issue 2131) and a bound nobody can observe firing
+        // is not a bound anyone can validate. Elapsed time, leaves probed,
+        // leaves folded and the reason the walk stopped are reported together
+        // so that a field measurement can answer "did the deadline fire, and
+        // on what" from the log alone, rather than by inference from a silence
+        // that has two indistinguishable causes.
+        //
+        // Credit for spotting the gate belongs to the worker on issue 2278;
+        // it lands here because this method was already being changed.
+        logger.LogInformation(
+            "Shard {ShardIndex} of tree '{TreeId}' finished an empty-leaf reclaim pass in {ElapsedMs}ms: "
+            + "folded {Reclaimed}, probed {Visited} of a {ProbeBudget}-probe budget, stopped on {StopReason}.",
+            MyShardIndex,
+            TreeId,
+            (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
+            reclaimed,
+            budget.LeavesVisited,
+            visitBudget,
+            stopReason);
 
         return reclaimed;
     }

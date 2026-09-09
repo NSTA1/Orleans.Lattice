@@ -78,6 +78,28 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class BPlusLeafGrain
 {
     /// <summary>
+    /// Whether THIS activation replayed the whole readable WAL window (cold)
+    /// rather than resuming above a snapshot or cache anchor (warm). Latched
+    /// from the same replay-start override that tags
+    /// <see cref="LatticeMetrics.LeafActivationReplays"/>, so the deactivation
+    /// observation and the activation counter can never disagree about which
+    /// arm an activation belongs to (issue #2280). Defaults to <c>false</c>:
+    /// an activation that took no replay permit is counted on neither arm by
+    /// the activation counter and is reported as warm here.
+    /// </summary>
+    private bool _activationWasCold;
+
+    /// <summary>
+    /// Exact post-filter count of entries THIS activation took through the
+    /// projection rebuild seam, accumulated across every WAL partition it
+    /// replayed. Reported on the deactivation log line (issue #2280) so a
+    /// reader can tell "banked nothing because it did no work" from "banked
+    /// nothing because it did not pass its existing checkpoint" - which on a
+    /// cold replay is the arithmetically forced case, not a fault.
+    /// </summary>
+    private long _replayEntriesAppliedThisActivation;
+
+    /// <summary>
     /// Maximum number of WAL entries the activation-time replay reads
     /// per <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync"/>
     /// invocation. Bounds the worst-case replay memory footprint for a
@@ -128,24 +150,129 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> resolves
     /// to <see cref="Environment.ProcessorCount"/>. The gate is sized once on
     /// first use and is a process-wide structural constant thereafter.
+    /// <para>
+    /// <b><see cref="Environment.ProcessorCount"/> does not always honour the
+    /// container CPU quota, and this gate is where that bites (issue #2278).</b>
+    /// It is cgroup-aware <em>by default</em>, but <c>DOTNET_PROCESSOR_COUNT</c>
+    /// (and <c>System.GC.HeapCount</c> under a configured heap count) is an
+    /// explicit override that takes precedence over the cgroup-derived value.
+    /// A host that sets it higher than the quota - which is an ordinary thing to
+    /// do, and invisible from inside the process - sizes this gate above the CPU
+    /// the process can actually obtain, and every permit it hands out is a
+    /// concurrent WHOLE-WINDOW replay: a CPU-bound deserialise-and-apply loop.
+    /// Observed in the deployed repo-context host at 16 permits against a
+    /// 6-CPU quota (2.67x) under workstation GC, which produced thread-pool
+    /// starvation, activations cancelled by the runtime mid-replay, and - because
+    /// an interrupted rebuild latches neither capture signal in
+    /// <c>TryCaptureSnapshotOnDeactivateAsync</c> - leaves that could never bank
+    /// a snapshot and so re-entered a cold whole-window replay on every
+    /// activation. Oversubscribing this gate is therefore not merely slow: it is
+    /// self-reinforcing, because the replay it makes too slow is the very work
+    /// whose completion would have made the next one cheap.
+    /// </para>
+    /// <para>
+    /// Nothing here can read the cgroup quota portably, and it deliberately does
+    /// not try: <c>DOTNET_PROCESSOR_COUNT</c> is a documented, supported override
+    /// doing exactly what it is specified to do, so library code that reached
+    /// past it would silently defeat an operator instruction that every other
+    /// .NET subsystem in the process obeys, leaving the process holding two
+    /// conflicting beliefs about its own CPU count (ruled out on issue #2279).
+    /// What this does instead is make the number <em>observable</em>: the
+    /// resolved ceiling is logged once alongside the configured option and
+    /// <see cref="Environment.ProcessorCount"/>, so an operator diagnosing a
+    /// replay storm can read the figure the process actually chose rather than
+    /// inferring it from the host's vCPU count. The sizing remedy needs no code
+    /// at all - pin
+    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>
+    /// explicitly wherever the quota and <see cref="Environment.ProcessorCount"/>
+    /// can disagree, since it already takes precedence over the default.
+    /// </para>
     /// </summary>
-    private static SemaphoreSlim ResolveReplayConcurrencyGate(LatticeOptions options)
+    private static SemaphoreSlim ResolveReplayConcurrencyGate(LatticeOptions options, Func<ILogger?> loggerAccessor)
     {
         var existing = Volatile.Read(ref _replayConcurrencyGate);
         if (existing is not null)
             return existing;
 
+        bool sizedHere;
+        int max;
         lock (_replayConcurrencyGateLock)
         {
             if (_replayConcurrencyGate is null)
             {
-                var max = options.WalMaterialiserMaxConcurrentReplays;
+                max = options.WalMaterialiserMaxConcurrentReplays;
                 if (max <= 0)
                     max = Environment.ProcessorCount;
                 _replayConcurrencyGate = new SemaphoreSlim(max, max);
+                sizedHere = true;
             }
+            else
+            {
+                (sizedHere, max) = (false, 0);
+            }
+        }
 
-            return _replayConcurrencyGate;
+        if (sizedHere)
+            LogResolvedReplayConcurrencyGate(max, options.WalMaterialiserMaxConcurrentReplays, loggerAccessor);
+
+        return Volatile.Read(ref _replayConcurrencyGate)!;
+    }
+
+    /// <summary>
+    /// Emits the one-per-process record of the resolved gate ceiling.
+    /// <para>
+    /// Three properties of this method are load-bearing rather than stylistic.
+    /// It runs <b>outside</b> the initialisation lock, because a logging sink is
+    /// arbitrary code and holding the lock across it would serialise every other
+    /// activation racing to resolve the same gate behind a slow sink. It takes
+    /// the logger as a <see cref="Func{TResult}"/> and invokes it only on the
+    /// sizing path, so the overwhelming majority of activations - which find the
+    /// gate already built and return before reaching here - never resolve a
+    /// logger for it at all; that also keeps the permit-leak regression fixture
+    /// for issue #2256 measuring what it claims to, since resolving a logger
+    /// earlier on the acquisition path would move that fixture's injected fault
+    /// to before the permit is taken and quietly void its instrument. And it
+    /// swallows everything, because issue #2256 established here that a throwing
+    /// logging sink is a real environmental fault on this exact path; an
+    /// observability improvement that can itself fail an activation is a
+    /// regression, not an improvement.
+    /// </para>
+    /// <para>
+    /// Exposed as <c>internal</c> rather than <c>private</c> so the swallow can
+    /// be pinned by a test. The gate itself is sized once per process and has no
+    /// reset seam, so a fixture that tried to observe this line by driving a
+    /// real activation would pass or fail on test-execution order - the same
+    /// order-dependent flake shape the meter-field convention exists to prevent.
+    /// Calling the emitter directly is deterministic and tests the property that
+    /// can actually regress.
+    /// </para>
+    /// </summary>
+    internal static void LogResolvedReplayConcurrencyGate(int max, int configured, Func<ILogger?> loggerAccessor)
+    {
+        try
+        {
+            var logger = loggerAccessor();
+            if (logger is null || !logger.IsEnabled(LogLevel.Information))
+                return;
+
+            logger.LogInformation(
+                "Leaf WAL replay concurrency gate sized to {MaxConcurrentReplays} permit(s) for this silo. "
+                + "Configured WalMaterialiserMaxConcurrentReplays={ConfiguredMaxConcurrentReplays} "
+                + "(non-positive means unset, in which case the ceiling follows Environment.ProcessorCount), "
+                + "and Environment.ProcessorCount reports {ProcessorCount}. Each permit admits one whole-window "
+                + "WAL replay, which is CPU bound, so a ceiling above the CPU this process can actually obtain "
+                + "oversubscribes it. Environment.ProcessorCount honours a container CPU quota only while "
+                + "DOTNET_PROCESSOR_COUNT does not override it, so compare these figures against the container's "
+                + "real quota rather than assuming the runtime already reflects it, and pin "
+                + "WalMaterialiserMaxConcurrentReplays explicitly on a constrained host. The gate is sized once "
+                + "per process and is never re-created or topped up.",
+                max,
+                configured,
+                Environment.ProcessorCount);
+        }
+        catch
+        {
+            // Deliberately swallowed - see the summary above.
         }
     }
 
@@ -169,7 +296,7 @@ internal sealed partial class BPlusLeafGrain
             return null;
 
         var options = await GetOptionsAsync();
-        var gate = ResolveReplayConcurrencyGate(options);
+        var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
         await gate.WaitAsync(cancellationToken);
         return gate;
     }
@@ -238,22 +365,37 @@ internal sealed partial class BPlusLeafGrain
         // reactivation storm degrades into a bounded queue. A no-op
         // activation (no tree id) takes no permit.
         bool advanced;
-        var replayPermit = await AcquireReplayPermitAsync(cancellationToken);
+        SemaphoreSlim? replayPermit = null;
 
-        // Nothing may sit between the acquisition above and this try, whose
-        // finally is the only thing that returns the permit (issue #2256). The
-        // observation block below used to run outside it, so a throw from the
-        // metric add, the tenant-label lookup, the totals sample, the logger
-        // resolution, the IsEnabled probe or the templated call itself lost the
-        // permit for the lifetime of the process: the gate is sized once by
+        // The acquisition sits INSIDE the try, whose finally is the only thing
+        // that returns the permit (issue #2256). The observation block below
+        // used to run outside it, so a throw from the metric add, the
+        // tenant-label lookup, the totals sample, the logger resolution, the
+        // IsEnabled probe or the templated call itself lost the permit for the
+        // lifetime of the process: the gate is sized once by
         // ResolveReplayConcurrencyGate and is never re-created or topped up. It
-        // defaults to Environment.ProcessorCount, which honours a container CPU
-        // quota, so on a 2-vCPU host two such throws - ever - stop the silo
-        // activating leaves entirely, and the symptom is a silent wait on
-        // WaitAsync rather than an error. A throwing logging sink is transient
-        // and environmental, which is exactly the fault a unit test never sees.
+        // defaults to Environment.ProcessorCount, which is cgroup-aware only
+        // when DOTNET_PROCESSOR_COUNT does not override it (issue #2278), so on
+        // a 2-vCPU host two such throws - ever - stop the silo activating
+        // leaves entirely, and the symptom is a silent wait on WaitAsync rather
+        // than an error. Note the override cuts both ways: it can also size the
+        // gate ABOVE the quota, which does not exhaust it but oversubscribes
+        // the CPU behind it. A throwing logging sink is transient and
+        // environmental, which is exactly the fault a unit test never sees.
+        //
+        // The acquisition moved inside the try for issue #2280 and this
+        // STRENGTHENS the #2256 invariant rather than relaxing it: there is now
+        // no window at all between acquiring the permit and the region that
+        // releases it, where before there was a one-statement gap. It is done
+        // so a cancellation delivered while QUEUED ON the permit is observed.
+        // That window is not incidental - its width is set by the very
+        // saturation issue #2280 is about, so under the conditions of interest
+        // it is plausibly the DOMINANT one, and leaving it uncounted would
+        // reproduce in the instrument the same blindness it was built to end.
         try
         {
+            replayPermit = await AcquireReplayPermitAsync(cancellationToken);
+
             if (replayPermit is not null)
             {
                 // The cold/warm discriminator is precisely the replay-start
@@ -270,6 +412,7 @@ internal sealed partial class BPlusLeafGrain
                 // sits inside the guarded region because being inside it is what
                 // makes the release unconditional, not because it needs the gate.
                 var cold = replayCheckpointOverride == -1L;
+                _activationWasCold = cold;
                 var replayTreeId = state.State.TreeId!;
                 LatticeMetrics.LeafActivationReplays.Add(
                     1,
@@ -283,7 +426,8 @@ internal sealed partial class BPlusLeafGrain
                 // (issue #2148). Observe unconditionally - before any logger or
                 // level check - so the totals account for every permitted replay
                 // whether or not a line is emitted for it.
-                var temperatureSample = ObserveLeafActivationReplay(replayTreeId, cold, Stopwatch.GetTimestamp());
+                var temperatureSample = ObserveLeafActivationReplay(
+                    replayTreeId, cold, this.GetGrainId(), Stopwatch.GetTimestamp());
                 if (temperatureSample is { } totals)
                 {
                     // Gate on IsEnabled as the over-budget warning does: the
@@ -295,14 +439,25 @@ internal sealed partial class BPlusLeafGrain
                         temperatureLogger.LogInformation(
                             "Leaf activation replays for tree '{TreeId}' since this silo started: {ColdReplays} cold "
                             + "(no snapshot rehydrate and an empty entry cache, so the whole readable WAL window is "
-                            + "replayed) and {WarmReplays} warm (resumed above a snapshot or cache anchor). These are "
+                            + "replayed) across {DistinctColdQualifier}{DistinctColdLeaves} distinct leaves, and "
+                            + "{WarmReplays} warm (resumed above a snapshot or cache anchor). These are "
                             + "CUMULATIVE process-wide totals, not a count since the previous line: the line is "
                             + "rate-limited to one per tree per {IntervalSeconds}s, so any single line yields the "
                             + "cold:warm ratio and any two yield the rate between them. Activations of a leaf with no "
-                            + "tree id bound take no replay permit and are counted on neither arm. Informational: a "
+                            + "tree id bound take no replay permit and are counted on neither arm. Compare the cold "
+                            + "total against the distinct count to read the arm's SHAPE: roughly equal means a "
+                            + "one-time first-activation cost spread broadly, whereas a cold total far above the "
+                            + "distinct count means the same few leaves are going cold repeatedly, which is a "
+                            + "snapshot or rehydrate defect rather than an expected cost. Informational: a "
                             + "cold replay is correct, just more expensive than a warm one.",
                             replayTreeId,
                             totals.Cold,
+                            // "at least" is load-bearing: past the cap the
+                            // distinct count is a floor, and a reader who took
+                            // it as exact would compute a cold:distinct ratio
+                            // that is too high and read a broad arm as a loop.
+                            totals.DistinctColdLeavesSaturated ? "at least " : string.Empty,
+                            totals.DistinctColdLeaves,
                             totals.Warm,
                             (long)ActivationTemperatureLogInterval.TotalSeconds);
                     }
@@ -310,6 +465,55 @@ internal sealed partial class BPlusLeafGrain
             }
 
             advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Activation-failure observation (issue #2280). OBSERVE AND
+            // RETHROW - never swallow. "Failures propagate" above is
+            // load-bearing: an activation that ate its cancellation would come
+            // online over a half-applied projection, which is exactly the
+            // #1535 no-loss violation the snapshot coverage gate exists to
+            // prevent. This catch adds a counter and changes nothing else.
+            //
+            // This site exists because the deactivation-time observation is
+            // STRUCTURALLY BLIND to the population #2280 is about. Orleans
+            // does not run OnDeactivateAsync when OnActivateAsync throws
+            // (measured on 10.2.2 with a positive control), and a cancelled
+            // cold replay throws OperationCanceledException out of activation
+            // via ThrowIfCancellationRequested below. Without this counter a
+            // cancelled cold replay would read as zero at every rate of
+            // occurrence, including the highest.
+            //
+            // A cancellation delivered while still QUEUED ON the replay permit
+            // is now counted too, under its own reason value rather than folded
+            // in with a cancellation that had actually begun replaying. The two
+            // are different events - one lost work in progress, the other never
+            // started - and blurring them would leave the instrument unable to
+            // answer the question it exists for. The queue window matters
+            // because its width is set by the saturation issue #2280 is about,
+            // so under the conditions of interest it is plausibly the larger of
+            // the two.
+            if (state.State.TreeId is { Length: > 0 } failedTreeId)
+            {
+                // replayPermit is still null exactly when the acquisition
+                // itself did not return - and a null permit cannot mean "no
+                // tree id" here, because that case is excluded by the guard
+                // above.
+                var reason = ex is not OperationCanceledException
+                    ? LatticeMetrics.ActivationFailureFaulted
+                    : replayPermit is null
+                        ? LatticeMetrics.ActivationFailureCanceledAwaitingPermit
+                        : LatticeMetrics.ActivationFailureCanceled;
+
+                LatticeMetrics.LeafActivationFailures.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, failedTreeId),
+                    replayCheckpointOverride == -1L ? LatticeMetrics.ActivationTemperatureCold : LatticeMetrics.ActivationTemperatureWarm,
+                    reason,
+                    LatticeTenantLabel.ForTree(failedTreeId));
+            }
+
+            throw;
         }
         finally
         {
@@ -708,16 +912,6 @@ internal sealed partial class BPlusLeafGrain
                 $"checkpoint={checkpoint} entryCount={Cache.Count}");
 #endif
 
-            // Whether the detector elected this partition an OVER-BUDGET
-            // CANDIDATE. It is a candidate and not a verdict because the
-            // detector compares a partition-wide, pre-filter offset gap
-            // against a per-leaf, post-filter budget (issue #2149); the gap
-            // is a sound upper bound on this leaf's own work, so it can only
-            // over-elect, never under-elect. ReplayPartitionAsync confirms it
-            // below against the exact count of entries this leaf actually
-            // applies.
-            var overBudgetCandidate = false;
-
             if (detector is not null)
             {
                 var decision = await detector.ClassifyAsync(
@@ -771,13 +965,14 @@ internal sealed partial class BPlusLeafGrain
                         // actually applies are counted for free during the
                         // replay that is happening anyway.
                         //
-                        // The candidate is still load-bearing: it is a sound
-                        // upper bound (applied <= gap), so it can only
-                        // over-elect. That is exactly what makes it safe to
-                        // use as the gate on the STALL check downstream - the
-                        // new fault line can never fire anywhere the old line
-                        // did not.
-                        overBudgetCandidate = true;
+                        // NOTHING IS ELECTED HERE EITHER (issue #2291). This
+                        // arm used to raise an over-budget CANDIDATE that gated
+                        // the stall check in ReplayPartitionAsync. Doing so
+                        // conjoined a partition-wide quantity onto a per-leaf
+                        // convergence fault, which made that fault unreportable
+                        // on any partition shallower than MaxLeafReplayEntries -
+                        // see the STALL (FAULT) CHECK there for why no budget
+                        // value could have closed that blind spot.
                         break;
                     case FallOffLogDecision.SnapshotThenWal:
                     case FallOffLogDecision.FullRebuildFromWal:
@@ -793,7 +988,7 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, overBudgetCandidate, cancellationToken);
+            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, cancellationToken);
             partitionsAbsorbed++;
             if (advanced)
                 anyAdvanced = true;
@@ -1743,6 +1938,27 @@ internal sealed partial class BPlusLeafGrain
     private const int ActivationTemperatureLogStampCapacity = 4096;
 
     /// <summary>
+    /// Hard cap on the per-tree distinct-cold-leaf set. Reaching it stops the
+    /// set growing and latches the reported count as a floor, so the memory a
+    /// pathological tree can cost is fixed rather than one entry per leaf.
+    /// <para>
+    /// 512 is chosen so the distinction the count exists to draw survives at
+    /// realistic sizes: the deployed cold arm that prompted issue #2278 was 254
+    /// replays on one tree, which resolves exactly here instead of saturating
+    /// and collapsing to "at least N". A cap below the arm being diagnosed
+    /// would report a floor in precisely the case the reader cares about, which
+    /// is the one shape that cannot distinguish a broad arm from a loop.
+    /// </para>
+    /// <para>
+    /// Deliberately not a metric dimension. The distinct population is
+    /// unbounded in principle and leaf identity is high-cardinality, so it is
+    /// carried in the sample line only - which is also where it is useful,
+    /// since the deployed host exposes no metrics endpoint (issue #2148).
+    /// </para>
+    /// </summary>
+    private const int DistinctColdLeafCapacity = 512;
+
+    /// <summary>
     /// Last-emitted timestamps for the activation-temperature sample line,
     /// keyed by <b>tree only</b>. Static for the same reason as
     /// <see cref="OverBudgetLogStamps"/> - the point is to suppress across
@@ -1782,27 +1998,86 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private sealed class ActivationTemperatureTotals
     {
+        private readonly HashSet<GrainId> _coldLeaves = [];
         private long _cold;
         private long _warm;
+        private bool _coldLeavesSaturated;
 
         /// <summary>
         /// Records one replay on the arm selected by <paramref name="cold"/>
         /// and returns the totals as observed immediately afterwards.
         /// </summary>
-        public (long Cold, long Warm) Add(bool cold)
+        /// <param name="cold">Whether this replay was a cold one.</param>
+        /// <param name="leafId">
+        /// The activating leaf, used to accumulate the distinct-cold-leaf
+        /// population. Only consulted on the cold arm.
+        /// </param>
+        public ActivationTemperatureSample Add(bool cold, GrainId leafId)
         {
-            if (cold)
+            long coldTotal;
+            long warmTotal;
+            int distinctCold;
+            bool saturated;
+
+            // The distinct set is not lock-free, so the whole update is taken
+            // under one lock rather than mixing Interlocked with a guarded set
+            // and reading a torn combination out the other side. This runs once
+            // per permitted activation replay, which is orders of magnitude
+            // rarer than a read.
+            lock (_coldLeaves)
             {
-                Interlocked.Increment(ref _cold);
-            }
-            else
-            {
-                Interlocked.Increment(ref _warm);
+                if (cold)
+                {
+                    _cold++;
+
+                    // Bounded on purpose (see the field's capacity constant):
+                    // once saturated the set stops growing and the count is
+                    // reported as a floor, so a pathological tree costs a fixed
+                    // amount of memory rather than one entry per leaf.
+                    if (!_coldLeavesSaturated)
+                    {
+                        _coldLeaves.Add(leafId);
+                        if (_coldLeaves.Count >= DistinctColdLeafCapacity)
+                        {
+                            _coldLeavesSaturated = true;
+                        }
+                    }
+                }
+                else
+                {
+                    _warm++;
+                }
+
+                coldTotal = _cold;
+                warmTotal = _warm;
+                distinctCold = _coldLeaves.Count;
+                saturated = _coldLeavesSaturated;
             }
 
-            return (Interlocked.Read(ref _cold), Interlocked.Read(ref _warm));
+            return new ActivationTemperatureSample(coldTotal, warmTotal, distinctCold, saturated);
         }
     }
+
+    /// <summary>
+    /// A tree's cumulative activation-replay totals, plus the shape of its cold
+    /// arm.
+    /// </summary>
+    /// <param name="Cold">Cumulative cold replays for the tree.</param>
+    /// <param name="Warm">Cumulative warm replays for the tree.</param>
+    /// <param name="DistinctColdLeaves">
+    /// How many <em>distinct</em> leaves make up <paramref name="Cold"/>, capped
+    /// at <see cref="DistinctColdLeafCapacity"/>.
+    /// </param>
+    /// <param name="DistinctColdLeavesSaturated">
+    /// <see langword="true"/> when the cap was reached, so
+    /// <paramref name="DistinctColdLeaves"/> is a floor rather than an exact
+    /// count.
+    /// </param>
+    internal readonly record struct ActivationTemperatureSample(
+        long Cold,
+        long Warm,
+        int DistinctColdLeaves,
+        bool DistinctColdLeavesSaturated);
 
     /// <summary>
     /// Records one permitted activation replay against its tree's cumulative
@@ -1841,11 +2116,12 @@ internal sealed partial class BPlusLeafGrain
     /// The tree's cumulative <c>(cold, warm)</c> totals when a line is due,
     /// otherwise <see langword="null"/>.
     /// </returns>
-    internal static (long Cold, long Warm)? ObserveLeafActivationReplay(string treeId, bool cold, long now)
+    internal static ActivationTemperatureSample? ObserveLeafActivationReplay(
+        string treeId, bool cold, GrainId leafId, long now)
     {
         var totals = ActivationTemperatureTotalsByTree
             .GetOrAdd(treeId, static _ => new ActivationTemperatureTotals())
-            .Add(cold);
+            .Add(cold, leafId);
 
         return ShouldLogActivationTemperature(treeId, now) ? totals : null;
     }
@@ -1912,18 +2188,67 @@ internal sealed partial class BPlusLeafGrain
     /// map performs it in the process instead.
     /// </para>
     /// </summary>
-    private static readonly ConcurrentDictionary<(string TreeId, string LeafId, int Partition), long> ReplayCheckpointObservations = new();
+    private static readonly ConcurrentDictionary<(string TreeId, string LeafId, int Partition), ReplayCheckpointObservation> ReplayCheckpointObservations = new();
+
+    /// <summary>
+    /// One leaf partition's most recent replay-checkpoint observation: the
+    /// checkpoint itself, when this silo first saw that value for this leaf
+    /// partition, and how many consecutive replays have re-entered from it
+    /// without it moving.
+    /// </summary>
+    /// <param name="Checkpoint">The persisted checkpoint last observed.</param>
+    /// <param name="FirstObservedAt">
+    /// <see cref="Stopwatch.GetTimestamp"/> at the first observation of this
+    /// checkpoint value, which is where the current stall run starts.
+    /// </param>
+    /// <param name="Repeats">
+    /// Consecutive re-entries from an unchanged checkpoint. Zero on the first
+    /// observation, which is not yet evidence of anything.
+    /// </param>
+    private readonly record struct ReplayCheckpointObservation(long Checkpoint, long FirstObservedAt, int Repeats);
+
+    /// <summary>
+    /// The verdict on one replay-checkpoint observation: whether the leaf
+    /// partition re-entered replay from an unchanged checkpoint, and if so how
+    /// many consecutive times and over what span.
+    /// <para>
+    /// <see cref="Repeats"/> and <see cref="Span"/> exist because a single
+    /// repeat and a permanent freeze are the same event in isolation and must
+    /// not read the same (issue #2285). An activation torn down mid-replay by a
+    /// cancellation or a timeout produces a short burst that then stops; a leaf
+    /// that genuinely cannot converge keeps reporting with a rising count over
+    /// a widening span.
+    /// </para>
+    /// </summary>
+    /// <param name="IsStall">Whether the checkpoint was unchanged on a repeat.</param>
+    /// <param name="Repeats">Consecutive unchanged re-entries, 1 on the first stall.</param>
+    /// <param name="Span">Elapsed time since this checkpoint was first observed.</param>
+    internal readonly record struct ReplayStallObservation(bool IsStall, int Repeats, TimeSpan Span);
 
     /// <summary>
     /// Soft cap on <see cref="ReplayCheckpointObservations"/>. Unlike the log
     /// stamps there is no age at which an observation is free to drop - a stall
     /// is detected by comparing against an ARBITRARILY old prior observation -
-    /// so the map is cleared wholesale when it overflows rather than pruned.
-    /// Clearing loses at most one repeat of the fault warning per affected leaf:
-    /// a genuinely stuck leaf re-activates continuously and is re-observed on
-    /// its next attempt.
+    /// so overflow is handled by shedding entries rather than by pruning old
+    /// ones. Which entries are shed is not arbitrary; see
+    /// <see cref="EvictReplayCheckpointObservations"/>.
     /// </summary>
-    private const int ReplayCheckpointObservationCapacity = 8192;
+    internal const int ReplayCheckpointObservationCapacity = 8192;
+
+    /// <summary>
+    /// The point overflow eviction must get the map back below, so that the
+    /// next eviction is at least this many insertions away. Without a low-water
+    /// mark an eviction that freed only a handful of entries would leave the map
+    /// at capacity and re-run its full scan on nearly every subsequent insert.
+    /// </summary>
+    private const int ReplayCheckpointObservationLowWater = ReplayCheckpointObservationCapacity / 2;
+
+    /// <summary>
+    /// Live entry count of <see cref="ReplayCheckpointObservations"/>. Test seam
+    /// only, so the memory bound the capacity exists to enforce can be asserted
+    /// rather than assumed.
+    /// </summary>
+    internal static int ReplayCheckpointObservationCountForTests => ReplayCheckpointObservations.Count;
 
     /// <summary>
     /// Records the checkpoint this leaf partition is replaying from and reports
@@ -1936,22 +2261,94 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="partition">The WAL partition ordinal being replayed.</param>
     /// <param name="checkpoint">The persisted checkpoint this replay starts from.</param>
     /// <returns>
+    /// A <see cref="ReplayStallObservation"/> whose <c>IsStall</c> is
     /// <see langword="true"/> when a previous observation exists for this leaf
-    /// partition and its checkpoint is identical, so the leaf is stalled.
-    /// <see langword="false"/> on the first observation (nothing to compare
-    /// against) and whenever the checkpoint has advanced.
+    /// partition and its checkpoint is identical, carrying the consecutive
+    /// repeat count and the span since that checkpoint was first seen.
+    /// <c>IsStall</c> is <see langword="false"/> on the first observation
+    /// (nothing to compare against) and whenever the checkpoint has advanced.
     /// </returns>
-    internal static bool NoteReplayCheckpointObservation(string treeId, string leafId, int partition, long checkpoint)
+    internal static ReplayStallObservation NoteReplayCheckpointObservation(string treeId, string leafId, int partition, long checkpoint)
     {
         var key = (treeId, leafId, partition);
-        var stalled = ReplayCheckpointObservations.TryGetValue(key, out var previous) && previous == checkpoint;
-        if (!stalled && ReplayCheckpointObservations.Count >= ReplayCheckpointObservationCapacity)
+        var now = Stopwatch.GetTimestamp();
+        var stalled = ReplayCheckpointObservations.TryGetValue(key, out var previous)
+            && previous.Checkpoint == checkpoint;
+
+        if (!stalled)
+        {
+            if (ReplayCheckpointObservations.Count >= ReplayCheckpointObservationCapacity)
+            {
+                EvictReplayCheckpointObservations();
+            }
+
+            ReplayCheckpointObservations[key] = new ReplayCheckpointObservation(checkpoint, now, 0);
+            return default;
+        }
+
+        var repeats = previous.Repeats + 1;
+        ReplayCheckpointObservations[key] = previous with { Repeats = repeats };
+        return new ReplayStallObservation(
+            true,
+            repeats,
+            Stopwatch.GetElapsedTime(previous.FirstObservedAt, now));
+    }
+
+    /// <summary>
+    /// Sheds observations when the map overflows, preferring the entries that
+    /// carry NO stall run.
+    /// <para>
+    /// The map previously shed everything wholesale, on the ground that
+    /// "clearing loses at most one repeat of the fault warning per affected
+    /// leaf: a genuinely stuck leaf re-activates continuously and is re-observed
+    /// on its next attempt". That was true when an observation held only a
+    /// checkpoint. It stopped being true when issue #2285 added
+    /// <see cref="ReplayCheckpointObservation.Repeats"/> and
+    /// <see cref="ReplayCheckpointObservation.FirstObservedAt"/>: those are the
+    /// two quantities the stall line now instructs an operator to judge a freeze
+    /// by, and a wholesale clear restarts both, so the stuck leaf re-presents at
+    /// repeat 1 over a zero span - wearing the exact signature of the transient
+    /// burst that #2285 was mistakenly filed over. The observation immediately
+    /// after a clear also compares against nothing, so it reports no stall and
+    /// the counter the same line advertises as "the exact census of the
+    /// condition" is not incremented.
+    /// </para>
+    /// <para>
+    /// The asymmetry that fixes it: a converging entry is fully reconstructed by
+    /// its very next observation, and a stall run is not reconstructible at all -
+    /// it is the accumulated history. So evict the reconstructible entries and
+    /// keep the rest. On a healthy silo virtually every entry is converging, so
+    /// this sheds virtually everything, exactly as before.
+    /// </para>
+    /// <para>
+    /// The wholesale clear survives as the fallback, which is what keeps the cap
+    /// a real bound: if too few entries were reclaimable the map is emptied
+    /// anyway, so a silo whose tracked leaf partitions are overwhelmingly
+    /// stalling degrades to precisely today's behaviour and never grows past
+    /// capacity. The low-water mark is what stops the scan being quadratic - it
+    /// guarantees at least <see cref="ReplayCheckpointObservationLowWater"/>
+    /// insertions before the next eviction, rather than letting an eviction that
+    /// freed a handful of entries leave the map at capacity to re-scan on the
+    /// next insert.
+    /// </para>
+    /// </summary>
+    private static void EvictReplayCheckpointObservations()
+    {
+        foreach (var observation in ReplayCheckpointObservations)
+        {
+            if (observation.Value.Repeats == 0)
+            {
+                // Pair-wise removal, so an entry that acquired a stall run
+                // between this scan reading it and removing it is left alone
+                // rather than silently discarded.
+                ReplayCheckpointObservations.TryRemove(observation);
+            }
+        }
+
+        if (ReplayCheckpointObservations.Count > ReplayCheckpointObservationLowWater)
         {
             ReplayCheckpointObservations.Clear();
         }
-
-        ReplayCheckpointObservations[key] = checkpoint;
-        return stalled;
     }
 
     /// <summary>
@@ -2357,7 +2754,6 @@ internal sealed partial class BPlusLeafGrain
         int maxDurableUnresolvedWork,
         long? probedHead,
         int maxLeafReplayEntries,
-        bool overBudgetCandidate,
         CancellationToken cancellationToken)
     {
         var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
@@ -2382,56 +2778,152 @@ internal sealed partial class BPlusLeafGrain
         // work (issue #2149) - every sibling leaf pinned to this WAL partition
         // contributes to it, ~1,350 of them on the measured deployment - but it
         // IS a sound upper bound on it, and it is the quantity the detector
-        // compared against MaxLeafReplayEntries. Both warnings below report it
-        // alongside the quantity actually compared so the two can never again
-        // be conflated from the log alone.
+        // compared against MaxLeafReplayEntries. The OVER-BUDGET warning below
+        // reports it alongside the quantity actually compared so the two can
+        // never again be conflated from the log alone. The STALL warning does
+        // NOT print the budget at all (issue #2285): that warning is not about
+        // the budget, the budget is advisory and does not bound replay, and
+        // printing the two side by side manufactured exactly the comparison
+        // its own trailing disclaimer forbade - which is how #2285 came to be
+        // filed, by a reader who quoted the line and truncated the disclaimer.
+        // A disclaimer that must survive quotation to work is not a control;
+        // omitting the quantity is. The budget does still ROUTE that line
+        // (issue #2291): it selects the level, which is a decision about
+        // warning volume and not a claim about this leaf's work. Keeping it out
+        // of the message is exactly what stops it being read as one.
         var gap = head - checkpoint;
 
-        // STALL (FAULT) CHECK - issue #2149, fault shape of issue #2165.
+        // STALL (FAULT) CHECK - issue #2149, fault shape of issue #2165,
+        // sensitivity corrected by issue #2291.
         //
         // Run BEFORE the scan, so a replay torn down by the activation deadline
         // - which is precisely the fault being detected - still reports it.
-        //
-        // Gated on the detector's over-budget CANDIDATE. That gate is what
-        // makes this line a strict SUBSET of where the old unconditional cost
-        // warning fired: this fix can silence noise but can never move the
-        // signal to somewhere an operator was not already looking. It is also
-        // sound on its own terms - a frozen checkpoint whose partition gap fits
-        // inside the budget is an idle leaf, not a livelock - and the #2165
-        // leaf's gap was >= 30,639 against a 10,000 budget, three times over.
         //
         // The criterion is the one the old warning stated in prose and left an
         // operator to evaluate by hand: the checkpoint does not advance across
         // repeats for the SAME leaf and partition. n >= 2 by construction, so
         // a single cold activation never trips it.
-        if (NoteReplayCheckpointObservation(treeId, ReplicaId, partition, checkpoint) && overBudgetCandidate)
+        //
+        // NOT gated on the detector's over-budget candidate any more (issue
+        // #2291). Nothing about the budget decides whether this fault is
+        // detected, counted, or reported; it selects only the LOG LEVEL.
+        //
+        // That gate was defended on two grounds. The first was a strict-subset
+        // safety property: the new line can never fire where the old cost line
+        // did not. The second was that it was sound on its own terms, because
+        // "a frozen checkpoint whose partition gap fits inside the budget is an
+        // idle leaf, not a livelock". The second claim is false, and the code a
+        // few lines above is what refutes it: an idle leaf returns on the
+        // head <= checkpoint check and never arrives here, so past this point
+        // there is unreplayed work by construction and a frozen checkpoint is a
+        // livelock at ANY gap.
+        //
+        // The first claim was true but bought the wrong thing. The gap is
+        // partition-wide and pre-filter, shared with ~1,350 sibling leaves,
+        // while convergence is a property of THIS leaf; conjoining them made a
+        // permanent stall silent wherever the partition happened to be shallow.
+        // That blind spot is arithmetic rather than a matter of threshold: the
+        // gap can never exceed its partition's readable WAL depth, so on a
+        // partition holding at most MaxLeafReplayEntries entries the
+        // conjunction is UNSATISFIABLE and no leaf pinned to it could be
+        // reported however completely it was stuck. No value of
+        // MaxLeafReplayEntries closes that. Measured on the deployed container,
+        // the visible population sat between 2.64x and 8.18x the configured cap
+        // of 10,000, with not one observation inside 164% of it, so the whole
+        // under-cap region was unlit.
+        //
+        // THE COUNTER IS WHERE THIS BIT HARDEST. The line below tells an
+        // operator in as many words that the exact census of the condition is
+        // orleans.lattice.leaf.activation_stalled_replays (issue #2285). While
+        // the counter sat inside the over-budget conjunction that claim was
+        // false: it was an exact census of the over-cap SUBSET, undercounting by
+        // an amount nothing in the system could observe, and it was documented
+        // as a census in the very message an operator would use to check it.
+        // Counting on the convergence predicate alone is what makes the shipped
+        // claim true.
+        //
+        // The budget survives only as a volume governor on the WARNING stream,
+        // and only because the size of the under-cap population is still
+        // unknown: it has never been observable, so it cannot be estimated from
+        // the visible one without reading a population off the very filter that
+        // hid it. Over-cap keeps Warning, so warning volume is exactly what it
+        // is today; under-cap emits at Information. When the distribution is
+        // unknown, prefer the option whose worst case is bounded. The counter,
+        // now un-gated, is what supplies the missing number, after which
+        // promoting the under-cap arm is a one-line change decided on evidence.
+        //
+        // Volume stays bounded where it always actually was: ShouldLogStalledReplay
+        // throttles per (tree, leaf, partition) on OverBudgetLogInterval, behind
+        // a capacity cap with pruning, and it throttles BOTH levels.
+        if (NoteReplayCheckpointObservation(treeId, ReplicaId, partition, checkpoint) is { IsStall: true } stall)
         {
+            // Counted BEFORE the log throttle, and outside it, so the counter is
+            // the exact census of the condition while the warning below stays a
+            // bounded sample of it (issue #2285). Inside the throttle this would
+            // have measured the throttle's rate - one per (tree, leaf, partition)
+            // per minute - and a burst would have been indistinguishable from a
+            // steady trickle, which is the distinction the counter exists to
+            // make. The leaf is deliberately not a tag: leaf count is unbounded,
+            // so per-leaf detail belongs in the warning, not in a time series.
+            //
+            // It is outside the BUDGET too (issue #2291), which is what makes
+            // "exact census" true rather than merely intended.
+            LatticeMetrics.LeafActivationStalledReplays.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+                LatticeTenantLabel.ForTree(treeId));
+
+            var stalledLevel = gap > maxLeafReplayEntries
+                ? LogLevel.Warning
+                : LogLevel.Information;
             var stalledLogger = ResolveLogger();
             if (stalledLogger is not null
-                && stalledLogger.IsEnabled(LogLevel.Warning)
+                && stalledLogger.IsEnabled(stalledLevel)
                 && ShouldLogStalledReplay(treeId, ReplicaId, partition))
             {
-                stalledLogger.LogWarning(
+                stalledLogger.Log(
+                    stalledLevel,
                     "Leaf projection for tree '{TreeId}' leaf '{Leaf}' WAL partition {Partition} re-entered "
                     + "replay WITHOUT its persisted checkpoint having advanced (persistedCheckpoint "
-                    + "{Checkpoint}, unchanged since this leaf partition's previous replay on this silo; WAL "
-                    + "partition head {Head}, partition gap {Gap} entries, MaxLeafReplayEntries {Budget}). "
-                    + "This is a FAULT, not a slow replay: the previous activation banked no durable forward "
-                    + "progress at all, so this leaf is not converging and writes routed to it are being lost "
-                    + "for as long as it repeats. Note the gap is the whole PARTITION's extent, shared with "
-                    + "every sibling leaf pinned to it, so it is an upper bound on this leaf's work and not a "
-                    + "measurement of it.",
+                    + "{Checkpoint}, unchanged across {Repeats} consecutive replay(s) of this leaf partition "
+                    + "on this silo, spanning {Span}; WAL partition head {Head}, partition gap {Gap} "
+                    + "entries). The previous activation banked no durable forward progress at all for this "
+                    + "partition. Judge it by the repeat count and the span, NOT by this line's existence: a "
+                    + "short run of repeats over a few seconds is commonly transient, an activation torn down "
+                    + "mid-replay by a cancellation or a timeout, and stops on its own; a leaf that cannot "
+                    + "converge keeps reporting with a rising count over a widening span, and for as long as "
+                    + "that continues writes routed to it are being lost. Note the gap is the whole "
+                    + "PARTITION's extent, shared with every sibling leaf pinned to it, so it is an upper "
+                    + "bound on this leaf's work and not a measurement of it. This line is throttled and is "
+                    + "therefore a SAMPLE; the exact census of the condition is the counter "
+                    + "orleans.lattice.leaf.activation_stalled_replays.",
                     treeId,
                     ReplicaId,
                     partition,
                     checkpoint,
+                    stall.Repeats,
+                    stall.Span,
                     head,
-                    gap,
-                    maxLeafReplayEntries);
+                    gap);
             }
         }
 
         var fromExclusive = checkpoint;
+
+        // NAMING (issue #2270): this tracks the highest offset SCANNED, not
+        // applied. It is bumped below for every entry the loop reads,
+        // including entries ShouldApplyDuringReplay rejects as another
+        // leaf's work. The name is a known misnomer, retained here only to
+        // keep this change off the merge path of concurrent work in this
+        // file; the semantics it feeds (ProjectionCheckpointOffset) are
+        // documented on BPlusLeafGrain.ProjectionAdmin.cs and pinned by
+        // BPlusLeafGrainTests.CheckpointScanSemantics. Do NOT "correct" the
+        // behaviour to match the name: advancing only over applied entries
+        // would strand a leaf that owns nothing in this partition at its old
+        // checkpoint forever and pin the WAL GC retention floor
+        // (LatticeWalGc.ComputeMaterialiserOffsetFloorAsync) for the whole
+        // tree.
         long maxApplied = checkpoint;
 
         // Exact, POST-filter count of the entries THIS leaf takes through the
@@ -2780,6 +3272,13 @@ internal sealed partial class BPlusLeafGrain
                 }
 #endif
 
+                // SCANNED-through advance (issue #2270). Deliberately OUTSIDE
+                // the ShouldApplyDuringReplay block above: an entry this leaf
+                // skipped as another leaf's work still moves the checkpoint,
+                // because the checkpoint records how far this leaf has READ
+                // the partition, not how much of it was its own. Moving this
+                // inside the filter is a severe regression, not a tightening -
+                // see the declaration of maxApplied above.
                 if (entry.Offset > maxApplied)
                     maxApplied = entry.Offset;
 
@@ -2835,6 +3334,14 @@ internal sealed partial class BPlusLeafGrain
         // gap > budget && applied <= budget permanently un-retired.
         if (!overBudgetWarned && maxLeafReplayEntries > 0 && appliedEntries <= maxLeafReplayEntries)
             RetireOverBudgetLogStamp(treeId, ReplicaId, partition);
+
+        // Accumulate this partition's exact post-filter work into the
+        // per-activation total reported on the deactivation log line (#2280).
+        // Accumulated even when the replay is later cancelled, because the
+        // whole point is to distinguish "banked nothing having done nothing"
+        // from "banked nothing having applied a great many entries below the
+        // existing checkpoint mark".
+        _replayEntriesAppliedThisActivation += appliedEntries;
 
         return (Advanced: maxApplied > checkpoint, MaxApplied: maxApplied);
     }

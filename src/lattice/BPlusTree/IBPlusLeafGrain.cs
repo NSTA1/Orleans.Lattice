@@ -818,13 +818,18 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>
     /// Returns the persisted projection-checkpoint offset for this leaf -
-    /// the highest WAL offset whose mutation has been durably applied to
-    /// the in-memory projection via
+    /// the highest WAL offset this leaf's activation-time replay has
+    /// SCANNED, which includes entries it skipped as another leaf's work
+    /// rather than applied through
+    /// <c>ILeafProjection.Apply</c> (issue #2270). See
     /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionCheckpointOffset"/>.
     /// Read-only diagnostic accessor used by the operator-facing
     /// materialiser-lag surface (<c>ILattice.GetMaterialiserLagAsync</c>)
     /// to compute the shard-wide <c>WAL_head - min(leaf.checkpoint)</c>
-    /// back-pressure metric without forcing a checkpoint flush.
+    /// back-pressure metric without forcing a checkpoint flush. Read the
+    /// resulting lag as "WAL this leaf has not yet read", not "work this
+    /// leaf still owes": an idle leaf that owns none of the traffic keeps
+    /// pace with the head while applying nothing.
     /// </summary>
     Task<long> GetProjectionCheckpointOffsetAsync();
 

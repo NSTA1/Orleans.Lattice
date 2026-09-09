@@ -1571,6 +1571,18 @@
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_wal_gc_backlog_bytes_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
       ]
+    },
+    {
+      "id": 68,
+      "title": "WAL GC offset floor unavailable (ops/s)",
+      "description": "Rate of WAL garbage-collection passes that could not compute the durable leaf-materialiser offset floor because the pin-store read threw, so the pass fell back to no offset floor (orleans.lattice.wal.gc.offset_floor_unavailable). The fallback is safe for a single pass because the HLC floor still constrains the trim, but the failure was otherwise silent (issue #2314): a persistently unreachable pin store removes the offset floor on every pass indefinitely, indistinguishable from a tree that legitimately has no offset floor. The healthy no-floor outcomes - no durable pin store wired, or a reachable store reporting no offsets - do not reach this catch and do not increment the counter, so a sustained non-zero rate here means the offset floor is not being applied and the low-HLC/high-offset reap class it retains is protected only by the HLC floor until the store recovers. Read against the pass-outcome panel: a tree collecting normally but ticking this series is losing its offset floor.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 225 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_wal_gc_offset_floor_unavailable_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+      ]
     }
   ]
 }

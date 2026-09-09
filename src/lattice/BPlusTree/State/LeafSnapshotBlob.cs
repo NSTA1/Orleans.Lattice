@@ -24,12 +24,17 @@ namespace Orleans.Lattice.BPlusTree.State;
 internal sealed class LeafSnapshotBlob
 {
     /// <summary>
-    /// WAL offset (under "applied through offset N inclusive"
-    /// semantics) at which the projection in <see cref="Rows"/> is
-    /// consistent, or <see langword="null"/> when partition 0 has no
-    /// captured prefix. A reactivation that prefers this snapshot must
-    /// resume WAL replay strictly after this offset
-    /// (<c>SnapshotOffset + 1</c>).
+    /// WAL offset (under "SCANNED through offset N inclusive"
+    /// semantics, matching the projection checkpoint it is captured
+    /// from - issue #2270, not "applied through") at which the
+    /// projection in <see cref="Rows"/> is consistent, or
+    /// <see langword="null"/> when partition 0 has no captured prefix.
+    /// The projection is nonetheless consistent through that offset:
+    /// the entries replay advanced over without applying are, by
+    /// construction, ones outside this leaf's key range or shard, so
+    /// they could not have changed <see cref="Rows"/>. A reactivation
+    /// that prefers this snapshot must resume WAL replay strictly
+    /// after this offset (<c>SnapshotOffset + 1</c>).
     /// <para>
     /// Nullable rather than a <c>-1</c> sentinel (issue 1888). A grain-storage
     /// serializer omits any member equal to <c>default(T)</c>, so under a
@@ -117,12 +122,13 @@ internal sealed class LeafSnapshotBlob
 
     /// <summary>
     /// Per-partition WAL offset the projection in <see cref="Rows"/> is
-    /// consistent through, under the same "applied through offset N
-    /// inclusive" semantics as the scalar <see cref="SnapshotOffset"/>.
+    /// consistent through, under the same "SCANNED through offset N
+    /// inclusive" semantics as the scalar <see cref="SnapshotOffset"/>
+    /// (issue #2270).
     /// Slot <c>p</c> holds the checkpoint offset partition <c>p</c> was
     /// captured at; slot <c>0</c> mirrors <see cref="SnapshotOffset"/>.
     /// A partition that had never checkpointed at capture time holds the
-    /// <c>-1</c> "nothing applied" sentinel.
+    /// <c>-1</c> "nothing scanned" sentinel.
     /// <para>
     /// This exists because under the default <c>WalPartitions = 8</c> the
     /// scalar <see cref="SnapshotOffset"/> only describes partition 0; the

@@ -378,22 +378,94 @@ public sealed partial class LatticeBackupControlTenancyTests
         Assert.That(caps.Scope, Is.SameAs(scope));
     }
 
+    // ---- Reserved and already-qualified names ---------------------------
+    //
+    // These three replace a single earlier test that asserted a caller-supplied
+    // 'sys-' name reached the gate verbatim under an active tenant. #2250 closed
+    // that escape in LatticeTenantResolution, so the tree now follows the reading
+    // that a CONFINED TENANT MAY NOT ADDRESS 'sys-' AT ALL, while a system-origin
+    // caller still gets the un-composed pass-through the original test protected.
+    //
+    // That reading was adopted on evidence, not to quiet the failure. No shipped
+    // first-party path reaches the tenancy composition helper with a 'sys-' name:
+    // LatticeBackupCatalogStore addresses the catalog as
+    // grainFactory.GetGrain<ILattice>(BackupConstants.CatalogTree) inside an
+    // EnterSystemOrigin scope, bypassing the tenant-composing facade entirely, and
+    // the only two facade methods that name the catalog tree
+    // (RebuildCatalogFromSinkAsync / ScrubCatalogAgainstSinkAsync) deliberately do
+    // not compose it - pinned under an active tenant by the two
+    // '..._authorizes_the_catalog_tree_verbatim' tests in the ManifestScopes
+    // partial. So the closure costs first-party backup nothing, and the shape the
+    // old test exercised was a tenant naming the reserved namespace: the escape
+    // itself, not a control-plane path.
+
     [Test]
-    public async Task A_reserved_tree_name_is_never_composed_even_under_an_active_tenant()
+    public async Task An_already_qualified_tenant_id_is_never_composed_under_an_active_tenant()
     {
         await _fixture.InitializeAsync();
 
         var gate = new RecordingAccessGate();
         var control = ControlFor(Acme, gate);
 
-        // Already-qualified names and the system-data namespace are governed by
-        // their own guards and must pass through untouched (never double-composed).
+        // A well-formed t/{other}/{name} is deliberately NOT refused at the
+        // resolution seam: it must reach the access gate, which is the component
+        // that adjudicates the crossing against the owning tenant's grants.
+        // Resolution only has to leave it alone rather than double-compose it.
         await control.ProbeCapabilitiesAsync(BackupScopeSelector.WholeTree("t/globex/orders"));
-        await control.ProbeCapabilitiesAsync(BackupScopeSelector.WholeTree("sys-backup-catalog"));
 
         Assert.That(
             gate.TreeIdsFor(LatticeOperation.Backup),
-            Is.EqualTo(new[] { "t/globex/orders", "sys-backup-catalog" }));
+            Is.EqualTo(new[] { "t/globex/orders" }));
+    }
+
+    [Test]
+    public async Task A_confined_tenant_may_not_address_the_reserved_system_data_namespace()
+    {
+        await _fixture.InitializeAsync();
+
+        var gate = new RecordingAccessGate();
+        var control = ControlFor(Acme, gate);
+
+        // 'sys-' holds first-party add-on state and sits outside every tenant, so
+        // it is never composed into the caller's namespace. Left readable, it was a
+        // shared, accounting-invisible, cross-tenant namespace, so resolution
+        // refuses it outright for a confined tenant rather than serving the escape.
+        Assert.That(
+            async () => await control.ProbeCapabilitiesAsync(
+                BackupScopeSelector.WholeTree(BackupConstants.CatalogTree)),
+            Throws.TypeOf<LatticeTenantAccessDeniedException>());
+
+        // Composition runs before authorization, so the refused name never reaches
+        // the gate and the tenant never learns anything about the reserved tree.
+        Assert.That(gate.Requests, Is.Empty);
+    }
+
+    [Test]
+    public async Task A_reserved_tree_name_is_not_composed_under_a_system_origin_scope()
+    {
+        await _fixture.InitializeAsync();
+
+        var scope = BackupScopeSelector.WholeTree(BackupConstants.CatalogTree);
+        var control = ControlFor(Acme, new RecordingAccessGate());
+
+        // First-party add-ons administering their own stores run system-origin and
+        // are exempt from the refusal above. For them the reserved namespace still
+        // passes through un-composed, so a 'sys-' tree keeps addressing the one
+        // cluster-global tree it names rather than a per-tenant copy of it. The
+        // scope is returned by reference, which is the strongest available proof
+        // that nothing was composed. A system-origin turn also bypasses the access
+        // gate outright, so the returned scope - not the gate - is what records it.
+        BackupScopeCapabilities caps;
+        using (LatticeSystemOrigin.Enter())
+        {
+            caps = await control.ProbeCapabilitiesAsync(scope);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.Scope.TreeId, Is.EqualTo(BackupConstants.CatalogTree));
+            Assert.That(caps.Scope, Is.SameAs(scope));
+        });
     }
 
     // ---- Resolver contract ----------------------------------------------

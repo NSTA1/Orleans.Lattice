@@ -282,13 +282,27 @@ public class LatticeOptions
     /// <b>This also sizes the empty-leaf reclaim walk, which is not obvious
     /// from the name.</b> The compactor passes this value to
     /// <c>ReclaimEmptyLeavesAsync</c> as its fold budget, and that pass probes
-    /// up to sixteen leaves for every leaf it may fold - so a pass walks up to
-    /// <c>CompactionLeafBatchSize * 16</c> leaves sequentially, 1024 at this
-    /// default, while holding the shard root's non-reentrant turn. Raising
-    /// this to 625 or beyond saturates the reclaim walk's own 10,000-leaf
-    /// clamp, and 10,000 sequential leaf activations in one turn will exceed
-    /// the caller's Orleans response timeout against cold storage. Treat a
-    /// large value here as a change to two subsystems, not one.
+    /// up to sixteen leaves for every leaf it may fold - so a pass is eligible
+    /// to walk up to <c>CompactionLeafBatchSize * 16</c> leaves sequentially,
+    /// 1024 at this default, while holding the shard root's non-reentrant
+    /// turn. Raising this to 625 or beyond saturates the reclaim walk's own
+    /// 10,000-leaf clamp. Treat a large value here as a change to two
+    /// subsystems, not one.
+    /// </para>
+    /// <para>
+    /// That walk is bounded a second time by
+    /// <see cref="BackgroundDrainMaxDuration"/>, whichever binds first, so a
+    /// raised value here can no longer run a pass past the caller's Orleans
+    /// response timeout (issue 2131). The reason the wall clock is the bound
+    /// that keeps that promise, and this knob is not, is that the cost of a
+    /// probe is not a constant: warm and co-located it is sub-millisecond,
+    /// cold against remote storage it is a state read. No probe count is
+    /// therefore correct for both deployments, whereas a deadline is
+    /// denominated in the same quantity as the timeout it has to stay inside.
+    /// A pass that runs out of time stops on the leaf it is standing on and
+    /// records it, so the next pass resumes rather than restarting; raising
+    /// this knob buys a longer pass where a pass is cheap enough to finish,
+    /// and yields a resumable partial pass where it is not.
     /// </para>
     /// </summary>
     public int CompactionLeafBatchSize { get; set; } = DefaultCompactionLeafBatchSize;

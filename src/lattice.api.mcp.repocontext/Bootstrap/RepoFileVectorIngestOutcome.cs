@@ -17,10 +17,18 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// the provider is unreachable, or when the coverage probe failed and the gap sweep
 /// was deferred - in which case <see cref="GapsSelected"/> being zero says nothing
 /// about the repository and must not be read as convergence.</param>
+/// <param name="Deferred">Whether the pass gave up early because the vector plane
+/// looked saturated, leaving batches it had not reached unembedded. Without this the
+/// arm's one saturation signal was computed and then discarded, so a pass that
+/// deferred work was indistinguishable from one that had none to do (issue #2272).
+/// The deferred sources stay unmarked and are retried on the next reconcile, so this
+/// reports incompleteness, not loss.</param>
 internal readonly record struct RepoFileVectorIngestOutcome(
     int FilesEmbedded,
     int GapsSelected,
-    bool CoverageEstablished)
+    bool CoverageEstablished,
+    bool Deferred = false,
+    bool GapScanSkipped = false)
 {
     /// <summary>
     /// A pass that embedded nothing and established nothing, which is what a binding
@@ -30,7 +38,16 @@ internal readonly record struct RepoFileVectorIngestOutcome(
 
     /// <summary>
     /// Whether this pass proved the repository's embedding coverage complete: it
-    /// established coverage and found no unchanged file missing a vector.
+    /// established coverage, found no unchanged file missing a vector, did not defer
+    /// any batch, and actually ran the gap scan.
+    /// <para>
+    /// The last two exclusions are the same rule twice. A saturated pass can reach
+    /// zero selected gaps simply by giving up before it looked at them; a pass that
+    /// skipped its gap scan under the back-fill backoff reaches zero the same way,
+    /// having never asked. Both satisfy <see cref="GapsSelected"/> being zero
+    /// without establishing anything, so convergence has to exclude both, or
+    /// "converged" silently comes to mean "did not look" (issue #2208).
+    /// </para>
     /// </summary>
-    public bool Converged => CoverageEstablished && GapsSelected == 0;
+    public bool Converged => CoverageEstablished && GapsSelected == 0 && !Deferred && !GapScanSkipped;
 }

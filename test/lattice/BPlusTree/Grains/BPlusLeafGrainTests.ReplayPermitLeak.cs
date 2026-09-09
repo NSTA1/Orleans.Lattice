@@ -20,9 +20,10 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// window lost the permit for the lifetime of the process, because the gate is
 /// a <see cref="SemaphoreSlim"/> sized once on first use and never re-created
 /// or topped up. The gate defaults to <see cref="Environment.ProcessorCount"/>,
-/// which honours a container CPU quota, so on a 2-vCPU host two such throws -
-/// ever - permanently stop the silo activating leaves, and the symptom is a
-/// silent hang rather than an error.
+/// which honours a container CPU quota only while <c>DOTNET_PROCESSOR_COUNT</c>
+/// does not override it (issue #2278 found a deployed host where it did), so on
+/// a 2-vCPU host two such throws - ever - permanently stop the silo activating
+/// leaves, and the symptom is a silent hang rather than an error.
 /// </para>
 /// <para>
 /// The injection point is a throwing <see cref="ILoggerFactory"/>, which is the

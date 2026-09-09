@@ -236,6 +236,96 @@ public sealed class RepoContextAnnIndexSweepServiceTests
     }
 
     [Test]
+    public async Task A_failing_sweep_counts_every_attempt_onto_the_faulted_arm()
+    {
+        // The wiring that matters in deployment: the swallow used to log at debug and
+        // return a bare false, so a sweep throwing forever produced no observation at
+        // all at information level. The counter must rise per attempt, and 'armed'
+        // must stay at zero beside it, so the absence of arming is denominated by a
+        // total that is visibly advancing rather than being an absent measurement.
+        var tree = Substitute.For<ILattice>();
+        tree.KeysAsync().ReturnsForAnyArgs(_ => throw new InvalidOperationException("silo not dispatch-ready yet"));
+        tree.EntriesAsync().ReturnsForAnyArgs(_ => throw new InvalidOperationException("silo not dispatch-ready yet"));
+
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<ILattice>(Arg.Any<string>()).ReturnsForAnyArgs(tree);
+
+        var sweep = Sweep(Store(grainFactory), Scheduler(grainFactory));
+        await sweep.StartAsync(Ct);
+        try
+        {
+            var counted = await WaitForAsync(() => sweep.Reporter.Read().Faulted >= 3, Ct);
+            Assert.Multiple(() =>
+            {
+                Assert.That(counted, Is.True,
+                    $"every failed attempt must be counted (observed {sweep.Reporter.Read().Faulted})");
+                Assert.That(sweep.Reporter.Read().Armed, Is.Zero,
+                    "'armed' must read zero against a rising total, which is what makes the zero evidence");
+                Assert.That(sweep.Reporter.Read().ConsecutiveFaults, Is.GreaterThanOrEqualTo(3));
+            });
+        }
+        finally
+        {
+            await sweep.StopAsync(Ct);
+        }
+    }
+
+    [Test]
+    public async Task A_sweep_that_arms_a_coordinator_counts_onto_the_armed_arm()
+    {
+        var space = EmbeddingSpaceTag.FromSpace(StubEmbedder.Instance.Space);
+        var alpha = Substitute.For<IRepoContextAnnIndexBuildGrain>();
+        var grainFactory = GrainFactoryListing("alpha");
+        grainFactory.GetGrain<IRepoContextAnnIndexBuildGrain>(
+            RepoContextAnnIndexKeys.BuildGrainKey("alpha", space)).Returns(alpha);
+
+        var sweep = Sweep(Store(grainFactory), Scheduler(grainFactory));
+        await sweep.StartAsync(Ct);
+        try
+        {
+            var counted = await WaitForAsync(() => sweep.Reporter.Read().Armed >= 1, Ct);
+            Assert.Multiple(() =>
+            {
+                Assert.That(counted, Is.True,
+                    "a sweep that arms a coordinator must leave a positive observable behind it");
+                Assert.That(sweep.Reporter.Read().Faulted, Is.Zero);
+                Assert.That(sweep.Reporter.Read().Empty, Is.Zero);
+            });
+        }
+        finally
+        {
+            await sweep.StopAsync(Ct);
+        }
+    }
+
+    [Test]
+    public async Task A_sweep_with_no_registered_repository_counts_as_empty_rather_than_armed()
+    {
+        // A sweep with nothing to arm completes cleanly, settles into the long
+        // cadence, and schedules nothing - identical to a working sweep in every
+        // signal except this partition. Counting it as 'armed' would have made "the
+        // plane never builds because no repository is registered" indistinguishable
+        // from "the plane never builds for some other reason".
+        var grainFactory = GrainFactoryListing();
+        var sweep = Sweep(Store(grainFactory), Scheduler(grainFactory));
+        await sweep.StartAsync(Ct);
+        try
+        {
+            var counted = await WaitForAsync(() => sweep.Reporter.Read().Empty >= 1, Ct);
+            Assert.Multiple(() =>
+            {
+                Assert.That(counted, Is.True, "a sweep with nothing to arm must still be counted");
+                Assert.That(sweep.Reporter.Read().Armed, Is.Zero);
+                Assert.That(sweep.Reporter.Read().Faulted, Is.Zero);
+            });
+        }
+        finally
+        {
+            await sweep.StopAsync(Ct);
+        }
+    }
+
+    [Test]
     public async Task The_sweep_arms_nothing_when_scheduling_is_off()
     {
         // Exact retrieval, the switch off, or no embedding provider: there is no
