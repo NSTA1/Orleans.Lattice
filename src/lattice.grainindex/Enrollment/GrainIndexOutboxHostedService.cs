@@ -31,6 +31,17 @@ internal sealed class GrainIndexOutboxHostedService : IHostedService, IDisposabl
     private readonly CancellationTokenSource _stopping = new();
     private Task? _loop;
 
+    /// <summary>
+    /// Longest period <see cref="PeriodicTimer"/> accepts; a larger value throws
+    /// <see cref="ArgumentOutOfRangeException"/> from its constructor.
+    /// <see cref="GrainIndexOutboxOptions.RetryInterval"/> is not validated, so a
+    /// configured value above this is clamped rather than allowed to throw out of
+    /// <see cref="RunAsync"/> before the drain loop starts - which would leave the
+    /// outbox permanently undrained and contradict this service's guarantee that a
+    /// failed index write eventually converges.
+    /// </summary>
+    private static readonly TimeSpan MaxTimerPeriod = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     /// <summary>Initialises the service.</summary>
     /// <param name="drainer">The drain to run. Must not be <c>null</c>.</param>
     /// <param name="options">The outbox settings. Must not be <c>null</c>.</param>
@@ -91,6 +102,10 @@ internal sealed class GrainIndexOutboxHostedService : IHostedService, IDisposabl
         var interval = _options.RetryInterval > TimeSpan.Zero
             ? _options.RetryInterval
             : GrainIndexOutboxOptions.DefaultRetryInterval;
+        if (interval > MaxTimerPeriod)
+        {
+            interval = MaxTimerPeriod;
+        }
 
         using var timer = new PeriodicTimer(interval);
 
