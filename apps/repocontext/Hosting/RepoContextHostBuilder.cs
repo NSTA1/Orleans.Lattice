@@ -128,7 +128,13 @@ public static class RepoContextHostBuilder
         builder.Services.AddSingleton<RepoContextReadinessState>();
         builder.Services.AddSingleton(sp => new RepoContextDrainSignal(
             sp.GetRequiredService<ILogger<RepoContextDrainSignal>>(),
-            ShutdownBudget));
+            ShutdownBudget,
+            // The production process-exit-code reporter, supplied explicitly because
+            // the signal deliberately defaults to reporting nothing: this is the one
+            // composition root where assigning the real Environment.ExitCode is
+            // correct, and every test host that drives a deliberate overrun would be
+            // poisoned by a default that did it everywhere (issue #2401).
+            reportExitCode: RepoContextExitCode.SetProcessExitCode));
 
         // Constructed here rather than resolved lazily on the first scrape: the
         // listener starts accumulating from this point, so an instrument that
