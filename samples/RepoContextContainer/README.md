@@ -263,8 +263,8 @@ no shell-exec healthcheck:
 A `/health/ready` 503 that does not clear, on a container that is otherwise up,
 does **not** on its own mean the deployment is broken, and must not be used by
 itself as a rollback signal. The endpoint returns a bare `Unhealthy` with no
-per-component breakdown, so a 503 is ambiguous until you narrow it. Three steps,
-cheapest first:
+per-component breakdown, so a 503 is ambiguous until you narrow it. Four steps,
+each one ruling out a cause the previous step left open:
 
 1. `curl -fsS http://localhost:8080/health/live`. A 200 says the process and the
    silo host are alive, so whatever is unhealthy is not the process. If this also
@@ -276,6 +276,14 @@ cheapest first:
 3. Run a `repocontext_search` and read the `retrievalPath` on the result. A value
    of `keyword.vector_plane_unavailable` confirms it: semantic retrieval is
    unavailable and the box has fallen back to deterministic keyword recall.
+4. Check the embedder with `docker compose ps`. Step 3 tells you the vector plane
+   is at fault but not which side of it, and the two sides need opposite responses.
+   An `embedder` container that is missing, exited, or `(unhealthy)` is itself the
+   cause, and is directly actionable: restore it and readiness can recover on its
+   own. An `embedder` reporting `(healthy)` while readiness stays 503 rules the
+   embedder out and places the fault host-side, in the vector plane, where
+   restarting the embedder achieves nothing. Use `docker compose ps` rather than
+   probing the embedder directly - its port is not published to the host.
 
 In that state **the box is still usable and the whole walkthrough still completes**:
 registration, keyword search, `repocontext_context`, and durability across a restart
