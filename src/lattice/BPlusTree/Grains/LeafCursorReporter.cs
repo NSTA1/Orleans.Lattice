@@ -851,18 +851,36 @@ internal sealed class LeafCursorReporter(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        try
+
+        // Remove from every key the GC reads, not only the one the current
+        // build writes. Routing composes the write key from the current
+        // separator and shard count, so a pin persisted under an earlier
+        // routing lives at a key this path would never address - and the GC
+        // still reads it. Removing only the write key leaves that row behind
+        // to floor the tree's trim forever (issue #2433). The tree-deletion
+        // purge above already clears every read key for exactly this reason;
+        // this is the same rule applied to the single-consumer path. Each key
+        // is attempted independently so one failure cannot abandon the rest.
+        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
+        var keys = WalMaterialiserPinRouting.EnumerateReadKeys(treeName, shardCount);
+        for (var i = 0; i < keys.Count; i++)
         {
-            await PinGrain(treeName, consumerId).RemoveAsync(consumerId).ConfigureAwait(false);
-            _durableDebounce.TryRemove((treeName, consumerId), out _);
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await grainFactory.GetGrain<IWalMaterialiserPinGrain>(keys[i]).RemoveAsync(consumerId).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(
+                    ex,
+                    "Failed to remove durable WAL materialiser pin for tree {TreeId} consumer {ConsumerId} at shard key {GrainKey}.",
+                    treeName,
+                    consumerId,
+                    keys[i]);
+            }
         }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(
-                ex,
-                "Failed to remove durable WAL materialiser pin for tree {TreeId} consumer {ConsumerId}.",
-                treeName,
-                consumerId);
-        }
+
+        _durableDebounce.TryRemove((treeName, consumerId), out _);
     }
 }
