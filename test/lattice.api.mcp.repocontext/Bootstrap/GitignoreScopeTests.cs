@@ -284,4 +284,48 @@ public sealed class GitignoreScopeTests
             Assert.Throws<ArgumentNullException>(() => GitignoreScope.Empty.IsIgnored(null!, false));
         });
     }
+
+    /// <summary>
+    /// Regression: a <c>.gitignore</c> rule is authored by whoever wrote the
+    /// <em>indexed repository</em>, not by an authorized operator, and it is
+    /// evaluated against every path discovered under its directory. The translation
+    /// emits <c>(?:.*/)?</c> per <c>**/</c> segment, so under the backtracking
+    /// engine a single committed line was exponential in its segment count on a
+    /// non-matching path and could pin the indexer thread indefinitely (CWE-1333).
+    /// This is the lower trust boundary of the two wildcard sites - it needs no
+    /// authorized caller at all, only a checked-in file - which is why the matcher
+    /// gives up <c>RegexOptions.Compiled</c> for the linear-time engine.
+    /// </summary>
+    [Test]
+    public void A_rule_dense_in_recursive_wildcards_is_evaluated_in_bounded_time()
+    {
+        var rule = string.Concat(Enumerable.Repeat("**/", 12)) + "x\n";
+        var nonMatchingPath = string.Concat(Enumerable.Repeat("a/", 22)) + "b";
+        var scope = GitignoreScope.Empty.Add(string.Empty, rule);
+
+        bool? ignored = null;
+        var probe = Task.Run(() => ignored = scope.IsIgnored(nonMatchingPath, isDirectory: false));
+
+        Assert.That(
+            probe.Wait(TimeSpan.FromSeconds(10)),
+            Is.True,
+            "A recursive-wildcard-dense .gitignore rule must not backtrack exponentially on a non-matching path.");
+        Assert.That(ignored, Is.False);
+    }
+
+    [Test]
+    public void A_rule_dense_in_recursive_wildcards_still_ignores_what_it_should()
+    {
+        // The bound above must not have been bought by narrowing the grammar.
+        var scope = GitignoreScope.Empty.Add(
+            string.Empty,
+            string.Concat(Enumerable.Repeat("**/", 12)) + "x\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.IsIgnored("x", isDirectory: false), Is.True);
+            Assert.That(scope.IsIgnored("a/b/c/x", isDirectory: false), Is.True);
+            Assert.That(scope.IsIgnored("a/b/c/y", isDirectory: false), Is.False);
+        });
+    }
 }

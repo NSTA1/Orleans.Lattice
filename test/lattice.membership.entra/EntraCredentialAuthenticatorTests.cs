@@ -240,6 +240,26 @@ public class EntraCredentialAuthenticatorTests
     }
 
     [Test]
+    public async Task AuthenticateAsync_empty_pinned_set_denies_rather_than_accepting_anything()
+    {
+        // Regression: an empty ValidAlgorithms is read by the token validator as
+        // "no restriction", not as "allow nothing", so clearing the pin without
+        // repopulating it silently removed algorithm enforcement altogether
+        // (CWE-347) - the one branch that must never fail open. The authenticator
+        // now installs an explicit deny-all validator for the empty pin, exactly
+        // as the OidcCredentialAuthenticator sibling does, so a token the authority
+        // itself minted is refused rather than admitted.
+        using var authority = new EntraTestAuthority();
+        var options = CreateOptions();
+        options.Algorithms.Clear();
+        var authenticator = new EntraCredentialAuthenticator(options, authority.ConfigurationSource);
+
+        var principal = await authenticator.AuthenticateAsync(new LatticeCredential(authority.MintToken()));
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
     public async Task AuthenticateAsync_wildcard_common_issuer_token_is_rejected()
     {
         // A token whose tenant id is on the allow-list but whose issuer is the

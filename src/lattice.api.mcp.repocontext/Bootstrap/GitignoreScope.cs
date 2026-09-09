@@ -278,11 +278,23 @@ internal sealed class GitignoreScope
                 return null;
             }
 
-            // Compiled: a single .gitignore rule is evaluated against every path
-            // discovered under its directory - thousands of times on a real tree -
-            // so the one-off JIT cost of a compiled matcher is repaid many times
-            // over and keeps the per-path match allocation-free.
-            const RegexOptions options = RegexOptions.CultureInvariant | RegexOptions.Compiled;
+            // The non-backtracking engine, not the compiled one. A .gitignore rule
+            // is evaluated against every path discovered under its directory, so
+            // this is the hottest matcher in the walk - but the pattern is authored
+            // by whoever wrote the indexed repository, not by an authorized
+            // operator, and Translate emits "(?:.*/)?" per "**/" segment. Under the
+            // backtracking engine a committed line such as "**/**/**/.../x" is
+            // exponential in its segment count on a non-matching path, so a single
+            // checked-in file could pin the indexer thread indefinitely (CWE-1333).
+            // NonBacktracking evaluates the same language in time linear in the
+            // path, which bounds that cost for every rule and every path, and it is
+            // mutually exclusive with Compiled so the JIT-compiled engine is given
+            // up deliberately: a linear-time guarantee on attacker-authored input
+            // outranks a constant-factor win on trusted input. The emitted grammar
+            // (literals, character classes, '.', '*', '?', anchors, non-capturing
+            // groups) carries no backreference, lookaround, or atomic group, so it
+            // is compatible by construction.
+            const RegexOptions options = RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
             return new GitignoreRule(
                 new Regex(Translate(line, anchored) + "$", options),
                 negated,
