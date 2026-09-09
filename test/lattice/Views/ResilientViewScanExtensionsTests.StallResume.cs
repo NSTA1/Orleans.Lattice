@@ -56,49 +56,56 @@ public partial class ResilientViewScanExtensionsTests
     }
 
     [Test]
-    public void ScanKeysAsync_rethrows_a_stall_that_fires_before_any_key_is_yielded()
+    public async Task ScanKeysAsync_resumes_a_stall_that_fires_before_any_key_is_yielded()
     {
+        // The view mirror of the core fix (issue 2456): a stall at the origin,
+        // where no key has been yielded yet, is resumed on budget rather than
+        // refused for having made no progress.
         var view = Substitute.For<ILatticeView>();
         var calls = 0;
-        StubKeys(view, _ =>
-        {
-            calls++;
-            return StalledKeys(Array.Empty<string>(), stallAfter: 0);
-        });
-
-        Assert.ThrowsAsync<ScanPageStalledException>(async () =>
-        {
-            await foreach (var _ in view.ScanKeysAsync())
+        var callIndex = 0;
+        view.KeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
             {
-            }
-        });
-        Assert.That(calls, Is.EqualTo(1), "no budget is spent restarting from the origin");
+                calls++;
+                return callIndex++ == 0
+                    ? StalledKeys(Array.Empty<string>(), stallAfter: 0)
+                    : ScriptedKeys(new[] { "a", "b" }, abortAfter: int.MaxValue);
+            });
+
+        var keys = await CollectAsync(view.ScanKeysAsync());
+
+        Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
+        Assert.That(calls, Is.EqualTo(2), "the origin stall spends budget instead of aborting the scan");
     }
 
     [Test]
-    public void ScanEntriesAsync_rethrows_a_stall_that_fires_before_any_entry_is_yielded()
+    public async Task ScanEntriesAsync_resumes_a_stall_that_fires_before_any_entry_is_yielded()
     {
         var view = Substitute.For<ILatticeView>();
         var calls = 0;
+        var callIndex = 0;
         view.EntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 calls++;
-                return StalledEntries(Array.Empty<(string, int)>(), stallAfter: 0);
+                return callIndex++ == 0
+                    ? StalledEntries(Array.Empty<(string, int)>(), stallAfter: 0)
+                    : ScriptedEntries(new[] { ("a", 1) }, abortAfter: int.MaxValue);
             });
 
-        Assert.ThrowsAsync<ScanPageStalledException>(async () =>
-        {
-            await foreach (var _ in view.ScanEntriesAsync())
-            {
-            }
-        });
-        Assert.That(calls, Is.EqualTo(1));
+        var entries = await CollectAsync(view.ScanEntriesAsync());
+
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "a" }));
+        Assert.That(calls, Is.EqualTo(2));
     }
 
     [Test]
-    public void ScanKeysAsync_rethrows_when_a_stall_repeats_at_an_unchanged_continuation_token()
+    public void ScanKeysAsync_exhausts_the_budget_when_a_stall_repeats_at_an_unchanged_continuation_token()
     {
+        // A scan that stalls again at the position it last stalled at is no
+        // longer refused outright. It spends the whole budget and then throws,
+        // so a scan that cannot finish still never looks finished.
         var view = Substitute.For<ILatticeView>();
         var calls = 0;
         var callIndex = 0;
@@ -117,7 +124,10 @@ public partial class ResilientViewScanExtensionsTests
             {
             }
         });
-        Assert.That(calls, Is.EqualTo(2));
+        Assert.That(
+            calls,
+            Is.EqualTo(1 + LatticeExtensions.DefaultScanStallResumeAttempts),
+            "every resume attempt is spent before the stall is rethrown");
     }
 
     [Test]

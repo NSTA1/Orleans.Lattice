@@ -94,62 +94,66 @@ public partial class ResilientScanExtensionsTests
         Assert.That(callEnds[1], Is.EqualTo("c"));
     }
 
-    // ── refusals ───────────────────────────────────────────────
+    // ── resume from the origin (issue 2456) ────────────────────
 
     [Test]
-    public void ScanKeysAsync_rethrows_a_stall_that_fires_before_any_key_is_yielded()
+    public async Task ScanKeysAsync_resumes_a_stall_that_fires_before_any_key_is_yielded()
     {
-        // The origin case, and the one that most needs pinning. There is no
-        // continuation token yet, so a "resume" here would re-issue the exact
-        // request that just stalled - a restart, not a resume - and would do it
-        // on the full budget. It is also the most likely shape of the fault: a
-        // cold tree whose leaves are replaying their WAL windows stalls at or
-        // near the origin.
+        // The origin case, and the one that most needs pinning, because it is
+        // the population that actually occurs: a cold tree whose leaves are
+        // replaying their WAL windows stalls at or near the origin, so there is
+        // no continuation token yet. It was once refused outright, which made
+        // the resume path unreachable in production - 38 of 38 stalls on the
+        // deployed build took the refusal branch and the budget was never
+        // consulted. It now spends budget and backs off like any other stall.
         var lattice = Substitute.For<ILattice>();
         var calls = 0;
+        var callIndex = 0;
         StubKeys(lattice, _ =>
         {
             calls++;
-            return StalledKeys(Array.Empty<string>(), stallAfter: 0);
+            return callIndex++ == 0
+                ? StalledKeys(Array.Empty<string>(), stallAfter: 0)
+                : ScriptedKeys(new[] { "a", "b" }, abortAfter: int.MaxValue);
         });
 
-        Assert.ThrowsAsync<ScanPageStalledException>(async () =>
-        {
-            await foreach (var _ in lattice.ScanKeysAsync())
-            {
-            }
-        });
-        Assert.That(calls, Is.EqualTo(1), "no budget is spent restarting from the origin");
+        var keys = await CollectAsync(lattice.ScanKeysAsync());
+
+        Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
+        Assert.That(calls, Is.EqualTo(2), "the origin stall spends budget instead of being refused");
     }
 
     [Test]
-    public void ScanEntriesAsync_rethrows_a_stall_that_fires_before_any_entry_is_yielded()
+    public async Task ScanEntriesAsync_resumes_a_stall_that_fires_before_any_entry_is_yielded()
     {
         var lattice = Substitute.For<ILattice>();
         var calls = 0;
+        var callIndex = 0;
         lattice.EntriesAsync(
             Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 calls++;
-                return StalledEntries(Array.Empty<(string, int)>(), stallAfter: 0);
+                return callIndex++ == 0
+                    ? StalledEntries(Array.Empty<(string, int)>(), stallAfter: 0)
+                    : ScriptedEntries(new[] { ("a", 1) }, abortAfter: int.MaxValue);
             });
 
-        Assert.ThrowsAsync<ScanPageStalledException>(async () =>
-        {
-            await foreach (var _ in lattice.ScanEntriesAsync())
-            {
-            }
-        });
-        Assert.That(calls, Is.EqualTo(1));
+        var entries = await CollectAsync(lattice.ScanEntriesAsync());
+
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "a" }));
+        Assert.That(calls, Is.EqualTo(2));
     }
 
+    // ── termination ─────────────────────────────────────────────
+
     [Test]
-    public void ScanKeysAsync_rethrows_when_a_stall_repeats_at_an_unchanged_continuation_token()
+    public void ScanKeysAsync_exhausts_the_budget_when_a_stall_repeats_at_an_unchanged_continuation_token()
     {
-        // The no-progress spin. The budget alone would allow a second attempt,
-        // but the second attempt would descend on the same parked read and burn
-        // another whole ceiling for nothing.
+        // The position not advancing is no longer a veto. The ceiling exists so
+        // the shard stops being held and its queue can drain, so after a backoff
+        // the same position is not the same conditions. What bounds the retry is
+        // the budget, which this scan runs out of, and it still throws.
         var lattice = Substitute.For<ILattice>();
         var calls = 0;
         var callIndex = 0;
@@ -172,8 +176,43 @@ public partial class ResilientScanExtensionsTests
             }
         });
 
-        Assert.That(calls, Is.EqualTo(2), "one resume, then the position had not advanced");
+        Assert.That(
+            calls,
+            Is.EqualTo(1 + LatticeExtensions.DefaultScanStallResumeAttempts),
+            "an unchanged position spends budget rather than being refused outright");
         Assert.That(yielded, Is.EqualTo(new[] { "a", "b" }));
+    }
+
+    [Test]
+    public void ScanKeysAsync_rethrows_a_scan_that_stalls_at_the_origin_every_time()
+    {
+        // The invariant the old refusal was protecting is unchanged: a scan that
+        // cannot be finished must never look finished. It now terminates by
+        // running out of budget rather than by being refused up front.
+        var lattice = Substitute.For<ILattice>();
+        var calls = 0;
+        StubKeys(lattice, _ =>
+        {
+            calls++;
+            return StalledKeys(Array.Empty<string>(), stallAfter: 0);
+        });
+
+        var yielded = new List<string>();
+        var completedNormally = false;
+
+        Assert.ThrowsAsync<ScanPageStalledException>(async () =>
+        {
+            await foreach (var k in lattice.ScanKeysAsync())
+            {
+                yielded.Add(k);
+            }
+
+            completedNormally = true;
+        });
+
+        Assert.That(completedNormally, Is.False, "a scan that never advanced must not look complete");
+        Assert.That(yielded, Is.Empty);
+        Assert.That(calls, Is.EqualTo(1 + LatticeExtensions.DefaultScanStallResumeAttempts));
     }
 
     [Test]
@@ -328,7 +367,7 @@ public partial class ResilientScanExtensionsTests
     }
 
     [Test]
-    public void ScanKeysAsync_records_a_refused_origin_stall_as_no_progress()
+    public void ScanKeysAsync_records_a_repeated_origin_stall_as_budget_exhausted()
     {
         var outcomes = new List<string>();
         using var listener = MeterListening.StartForInstrument(
@@ -356,7 +395,15 @@ public partial class ResilientScanExtensionsTests
 
         listener.Dispose();
 
-        Assert.That(outcomes, Is.EqualTo(new[] { "no-progress" }));
+        // Every attempt within budget is a resume, and the terminal outcome is
+        // budget exhaustion. "no-progress" is retired: it can no longer be
+        // recorded, so a scrape that lacks it says the code no longer emits it
+        // rather than that no stall ever failed that way.
+        Assert.That(
+            outcomes.Count(o => o == "resumed"),
+            Is.EqualTo(LatticeExtensions.DefaultScanStallResumeAttempts));
+        Assert.That(outcomes, Has.Exactly(1).EqualTo("budget-exhausted"));
+        Assert.That(outcomes, Has.None.EqualTo("no-progress"));
     }
 
     // ── helpers under test ─────────────────────────────────────
@@ -377,17 +424,6 @@ public partial class ResilientScanExtensionsTests
         });
     }
 
-    [Test]
-    public void ScanStallResumeMakesProgress_treats_an_unstarted_scan_as_no_progress()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(LatticeExtensions.ScanStallResumeMakesProgress(null, null), Is.False);
-            Assert.That(LatticeExtensions.ScanStallResumeMakesProgress("a", null), Is.True);
-            Assert.That(LatticeExtensions.ScanStallResumeMakesProgress("a", "a"), Is.False);
-            Assert.That(LatticeExtensions.ScanStallResumeMakesProgress("b", "a"), Is.True);
-        });
-    }
 
     [Test]
     public void ComputeScanStallResumeDelayMs_derives_the_backoff_from_the_reported_ceiling()

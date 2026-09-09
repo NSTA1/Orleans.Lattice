@@ -81,11 +81,9 @@ public static class LatticeViewExtensions
         var attempt = 0;
 
         // See LatticeExtensions.ScanKeysAsyncCore: stalls resume on their own
-        // budget, their own backoff, and a progress gate that starts null so a
-        // stall before the first yielded key is read as "no progress".
+        // budget and their own backoff, gated by that budget alone.
         var stallBudget = LatticeExtensions.ComputeScanStallResumeBudget(budget);
         var stallAttempt = 0;
-        string? lastStallKey = null;
         var stallDelayMs = 0;
 
         while (true)
@@ -116,23 +114,20 @@ public static class LatticeViewExtensions
                     }
                     catch (ScanPageStalledException stall)
                     {
-                        // See LatticeExtensions.ScanKeysAsyncCore for the reasoning.
-                        if (stallAttempt < stallBudget
-                            && LatticeExtensions.ScanStallResumeMakesProgress(lastKey, lastStallKey))
+                        // See LatticeExtensions.ScanKeysAsyncCore for the
+                        // reasoning, including why an unchanged continuation
+                        // position neither refuses the resume nor lengthens its
+                        // backoff.
+                        if (stallAttempt < stallBudget)
                         {
                             stallAttempt++;
-                            lastStallKey = lastKey;
                             stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
                             LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeResumed);
                             shouldReopen = true;
                             break;
                         }
 
-                        LatticeExtensions.RecordScanStallOutcome(
-                            stall,
-                            stallAttempt < stallBudget
-                                ? LatticeExtensions.StallOutcomeNoProgress
-                                : LatticeExtensions.StallOutcomeBudgetExhausted);
+                        LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeBudgetExhausted);
                         throw;
                     }
 
@@ -211,11 +206,10 @@ public static class LatticeViewExtensions
         string? lastKey = null;
         var attempt = 0;
 
-        // See ScanKeysAsyncCore: stalls resume on their own budget, their own
-        // backoff, and a progress gate that starts null.
+        // See LatticeExtensions.ScanKeysAsyncCore: stalls resume on their own
+        // budget and their own backoff, gated by that budget alone.
         var stallBudget = LatticeExtensions.ComputeScanStallResumeBudget(budget);
         var stallAttempt = 0;
-        string? lastStallKey = null;
         var stallDelayMs = 0;
 
         while (true)
@@ -246,23 +240,20 @@ public static class LatticeViewExtensions
                     }
                     catch (ScanPageStalledException stall)
                     {
-                        // See LatticeExtensions.ScanKeysAsyncCore for the reasoning.
-                        if (stallAttempt < stallBudget
-                            && LatticeExtensions.ScanStallResumeMakesProgress(lastKey, lastStallKey))
+                        // See LatticeExtensions.ScanKeysAsyncCore for the
+                        // reasoning, including why an unchanged continuation
+                        // position neither refuses the resume nor lengthens its
+                        // backoff.
+                        if (stallAttempt < stallBudget)
                         {
                             stallAttempt++;
-                            lastStallKey = lastKey;
                             stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
                             LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeResumed);
                             shouldReopen = true;
                             break;
                         }
 
-                        LatticeExtensions.RecordScanStallOutcome(
-                            stall,
-                            stallAttempt < stallBudget
-                                ? LatticeExtensions.StallOutcomeNoProgress
-                                : LatticeExtensions.StallOutcomeBudgetExhausted);
+                        LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeBudgetExhausted);
                         throw;
                     }
 
