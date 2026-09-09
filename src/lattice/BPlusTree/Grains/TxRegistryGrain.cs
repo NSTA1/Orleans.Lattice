@@ -707,18 +707,30 @@ internal sealed class TxRegistryGrain(
 
         // Return a defensive copy so callers cannot mutate the
         // registry's persisted state through the returned reference.
-        // Expired tombstones are filtered out so the snapshot reflects
-        // observable status (consistent with GetStatusAsync), not the
-        // raw persisted footprint. Active tombstones (within retention)
-        // are included with their recorded outcome - they're still
-        // queryable and the snapshot must agree with the per-txid API.
+        //
+        // An expired tombstone is reported as Indeterminate rather than
+        // omitted. Omission was the bug: this dictionary is the payload a
+        // bootstrapping cluster's snapshot export is built from, and the
+        // receiver's contract reads an absent txid as "InFlight or absent".
+        // So an aged-out COMMITTED saga arrived at the receiver
+        // indistinguishable from one still preparing - and because the
+        // terminal is outside the incremental stream that follows the
+        // snapshot, nothing later corrected it. Carrying the row with an
+        // explicit "cannot determine" value gives the receiver (and every
+        // local reader resolving against an ambient snapshot) the vocabulary
+        // to hide the key instead of falling through to its pre-saga value.
+        //
+        // Active tombstones (within retention) are still included with their
+        // recorded outcome - they are queryable and the snapshot must agree
+        // with the per-txid API, which reports them the same way.
         var now = TimeProvider.GetUtcNow();
         var retention = Retention;
         var result = new Dictionary<Guid, TxStatus>(state.State.Decisions.Count);
         foreach (var (txid, status) in state.State.Decisions)
         {
-            if (IsTombstoneExpiredAt(txid, now, retention)) continue;
-            result[txid] = status;
+            result[txid] = IsTombstoneExpiredAt(txid, now, retention)
+                ? TxStatus.Indeterminate
+                : status;
         }
         return result;
     }
@@ -745,8 +757,14 @@ internal sealed class TxRegistryGrain(
         var dict = new Dictionary<Guid, TxStatus>(state.State.Decisions.Count);
         foreach (var (txid, status) in state.State.Decisions)
         {
-            if (IsTombstoneExpiredAt(txid, now, retention)) continue;
-            dict[txid] = status;
+            // Expired rows are carried as Indeterminate, not dropped - see
+            // SnapshotAsync for why omission was unsound. The revision term
+            // below counts exactly these rows, so the token still moves when a
+            // row crosses into the masked state and a reader holding the older
+            // snapshot is still invalidated on the fast path.
+            dict[txid] = IsTombstoneExpiredAt(txid, now, retention)
+                ? TxStatus.Indeterminate
+                : status;
         }
         return new TxRegistrySnapshot
         {

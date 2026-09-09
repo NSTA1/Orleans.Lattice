@@ -1132,12 +1132,15 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
         {
-            // Defensive: no tree id means we cannot consult the
-            // registry. Treat every pending entry as InFlight - the
-            // strict-isolation default keeps the prepared keys hidden
-            // until activation completes its tree-id stamp.
+            // Defensive: no tree id means we cannot consult the registry, so we
+            // do not know these sagas' outcomes and must not claim to. Report
+            // Indeterminate, which the visibility gate hides. InFlight would
+            // have been wrong for the stated intent: it falls through to the
+            // pre-saga value rather than hiding, so the comment's promise to
+            // keep the prepared keys hidden until activation completes its
+            // tree-id stamp was not what the code did.
             var hidden = new Dictionary<Guid, TxStatus>(txids.Count);
-            foreach (var t in txids) hidden[t] = TxStatus.InFlight;
+            foreach (var t in txids) hidden[t] = TxStatus.Indeterminate;
             return (hidden, pendingKeys);
         }
 

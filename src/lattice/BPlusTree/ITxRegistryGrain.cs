@@ -141,6 +141,20 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// returned map default to <see cref="TxStatus.InFlight"/> at the
     /// caller - consistent with "decision not yet recorded as of this
     /// snapshot's wall-clock moment".
+    /// <para>
+    /// A decision whose tombstone has outlived
+    /// <see cref="LatticeOptions.TxDecisionRetention"/> is present in the map as
+    /// <see cref="TxStatus.Indeterminate"/>, <b>not</b> omitted from it. That
+    /// distinction is load-bearing for any consumer that treats the map as a
+    /// transferable payload rather than a local read: this dictionary is what a
+    /// cross-cluster snapshot export is built from, and while aged-out rows were
+    /// dropped, an aged-out <see cref="TxStatus.Committed"/> saga reached the
+    /// receiver as absence, was read as "still preparing", and could never be
+    /// corrected - its terminal was already behind the incremental stream the
+    /// receiver drains next. Callers must therefore keep the default for a
+    /// genuinely absent txid at <see cref="TxStatus.InFlight"/> and must not
+    /// re-collapse <see cref="TxStatus.Indeterminate"/> onto it.
+    /// </para>
     /// </summary>
     Task<Dictionary<Guid, TxStatus>> SnapshotAsync();
 
@@ -175,10 +189,12 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// serialization is elided.
     /// <para>
     /// The readable surface is <em>not</em> the recorded-decisions map
-    /// alone. <see cref="SnapshotAsync"/> masks any decision whose
-    /// tombstone has outlived <c>TxDecisionRetention</c>, so a row
-    /// leaves the surface purely because the clock advanced, with no
-    /// mutation anywhere to hang a counter bump on. The returned value
+    /// alone. <see cref="SnapshotAsync"/> reports any decision whose
+    /// tombstone has outlived <c>TxDecisionRetention</c> as
+    /// <see cref="TxStatus.Indeterminate"/> rather than at its recorded
+    /// outcome, so a row changes what it says purely because the clock
+    /// advanced, with no mutation anywhere to hang a counter bump on. The
+    /// returned value
     /// is therefore a <em>composite</em>: the persisted
     /// decisions counter, plus the number of tombstones currently past
     /// their retention boundary, plus a persisted count of tombstones
@@ -490,24 +506,54 @@ internal readonly record struct TerminalTallyResult
 /// <summary>
 /// Outcome of an atomic-write saga, as recorded by
 /// <see cref="ITxRegistryGrain"/>.
+/// <para>
+/// The four cases split along two independent axes, and conflating them is the
+/// defect this type was widened to remove. <see cref="Committed"/> and
+/// <see cref="Aborted"/> are <i>decided</i>. <see cref="InFlight"/> is
+/// <i>undecided</i> - a positive claim that no decision exists as of the read's
+/// moment. <see cref="Indeterminate"/> is neither: it is a refusal to answer,
+/// asserting only that the registry cannot currently establish which of the
+/// other three holds. A consumer that treats <c>Indeterminate</c> as
+/// <c>InFlight</c> is asserting "not committed" on the registry's behalf when
+/// the registry said no such thing, which is exactly how a committed write comes
+/// to be served at its pre-saga value.
+/// </para>
 /// </summary>
+/// <remarks>
+/// <b>Wire compatibility.</b> The cases are additive by value, so a node running
+/// an older build that receives <see cref="Indeterminate"/> deserializes an enum
+/// value it has no name for. Every consumer in this repository tests for
+/// <see cref="Committed"/> (or for <see cref="Committed"/> / <see cref="Aborted"/>
+/// explicitly) rather than switching exhaustively, so an unknown value takes the
+/// same conservative branch <see cref="InFlight"/> takes - which is precisely the
+/// pre-widening behaviour. A rolling upgrade therefore degrades to today's
+/// semantics on the old nodes and gains the corrected semantics on the new ones,
+/// with no mixed-version case that is worse than the status quo.
+/// </remarks>
 [GenerateSerializer]
 [Alias(TypeAliases.TxStatus)]
 internal enum TxStatus
 {
     /// <summary>
-    /// No commit/abort decision is currently visible for this saga. The
-    /// saga is either still preparing (no <c>MarkCommittedAsync</c> /
-    /// <c>MarkAbortedAsync</c> has been issued yet), or its decision
-    /// was previously recorded and has been forgotten by
-    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.ForgetAsync(Guid)"/> long enough ago
-    /// that the registry's tombstone TTL
-    /// (<see cref="LatticeOptions.TxDecisionRetention"/>) has elapsed
-    /// and the entry has been pruned. A decision that was forgotten
-    /// <i>within</i> the retention window remains queryable as
-    /// <see cref="Committed"/> / <see cref="Aborted"/> so concurrent
-    /// shard-split sweeps can resolve orphan pending buckets they
-    /// install on destination shards after the saga's terminal fan-out.
+    /// No commit/abort decision exists for this saga as of the read's moment:
+    /// the saga is still preparing (no <c>MarkCommittedAsync</c> /
+    /// <c>MarkAbortedAsync</c> has been issued yet), or no such txid was ever
+    /// registered on this tree.
+    /// <para>
+    /// This is a positive claim of absence, and it is only sound when the
+    /// registry actually established it. The aged-out-decision case - a decision
+    /// forgotten by
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.ForgetAsync(Guid)"/>
+    /// long enough ago that the tombstone TTL
+    /// (<see cref="LatticeOptions.TxDecisionRetention"/>) has elapsed while the
+    /// row is still physically stored - is <b>not</b> reported here. It reports
+    /// as <see cref="Indeterminate"/>, because the registry is masking a
+    /// decision it still holds rather than establishing that none exists. A
+    /// decision forgotten <i>within</i> the retention window remains queryable as
+    /// <see cref="Committed"/> / <see cref="Aborted"/> so concurrent shard-split
+    /// sweeps can resolve orphan pending buckets they install on destination
+    /// shards after the saga's terminal fan-out.
+    /// </para>
     /// </summary>
     InFlight = 0,
 
@@ -522,4 +568,54 @@ internal enum TxStatus
     /// bucket should surface the pre-saga value to readers.
     /// </summary>
     Aborted = 2,
+
+    /// <summary>
+    /// The saga's outcome is <b>not currently determinable</b> by this registry.
+    /// A decision may exist - it may even be recorded in this registry's own
+    /// state - but the registry cannot establish it at this moment, so it
+    /// declines to answer rather than guessing.
+    /// <para>
+    /// Produced by exactly three conditions, each of which previously reported as
+    /// <see cref="InFlight"/> and so claimed "no decision exists" on evidence
+    /// that established nothing of the kind:
+    /// </para>
+    /// <list type="number">
+    ///   <item>
+    ///     An <b>aged-out decision tombstone</b>. The retention window elapsed so
+    ///     the read masks the row, but the row itself is still stored and still
+    ///     says what it always said. The mask is a visibility policy, not a
+    ///     finding of absence.
+    ///   </item>
+    ///   <item>
+    ///     A <b>cross-tree coordinator that could not be reached</b>. The
+    ///     coordinator holds the single global verdict; a failed dial establishes
+    ///     nothing about what that verdict is. Reporting the fault as
+    ///     "still preparing" makes a routine rolling restart look like healthy
+    ///     pipelining while readers flap.
+    ///   </item>
+    ///   <item>
+    ///     A <b>leaf that cannot consult its registry at all</b> - no tree id
+    ///     stamped yet, so there is nothing to ask.
+    ///   </item>
+    /// </list>
+    /// <para>
+    /// <b>How readers must treat it.</b> As <i>hidden</i>, never as fall-through
+    /// to the pre-saga value. See
+    /// <see cref="Orleans.Lattice.BPlusTree.AtomicVisibilityGate.ResolveKey"/>:
+    /// falling through asserts the saga did not commit, and if it did, the reader
+    /// is served a stale value for a write that was acknowledged. Hiding the key
+    /// asserts nothing, and resolves to the correct value the moment the outcome
+    /// becomes determinable again.
+    /// </para>
+    /// <para>
+    /// <b>How writers and sweeps must treat it.</b> As "do not act": it
+    /// authorises neither draining a prepared bucket nor discarding one. A sweep
+    /// that needs to resolve a prepare whose decision has aged out must ask for
+    /// the recorded row explicitly through
+    /// <c>ITxRegistryGrain.GetRecordedStatusAsync</c>,
+    /// which is a deliberate, narrowly-scoped bypass of the retention mask and
+    /// not something a read path may do.
+    /// </para>
+    /// </summary>
+    Indeterminate = 3,
 }

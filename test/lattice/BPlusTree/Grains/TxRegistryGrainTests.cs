@@ -675,7 +675,7 @@ public partial class TxRegistryGrainTests
     }
 
     [Test]
-    public async Task SnapshotAsync_filters_expired_tombstones()
+    public async Task SnapshotAsync_masks_expired_tombstones()
     {
         var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
         var retention = TimeSpan.FromSeconds(30);
@@ -692,10 +692,14 @@ public partial class TxRegistryGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(snapshot, Has.Count.EqualTo(1));
+            Assert.That(snapshot, Has.Count.EqualTo(2));
             Assert.That(snapshot[fresh], Is.EqualTo(TxStatus.Committed));
-            Assert.That(snapshot, Does.Not.ContainKey(expired),
-                "Expired tombstones must be filtered from snapshots so the snapshot agrees with GetStatusAsync.");
+            Assert.That(snapshot[expired], Is.EqualTo(TxStatus.Indeterminate),
+                "An expired tombstone must stop reporting its recorded outcome. It is "
+                + "carried as Indeterminate rather than dropped so a snapshot consumer "
+                + "can still tell it apart from a saga the registry never recorded - "
+                + "dropping it made an aged-out commit arrive at a bootstrapping peer "
+                + "as 'still preparing', with no later record able to correct it.");
         });
     }
 

@@ -119,7 +119,7 @@ public partial class TxRegistryGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(snap.Decisions, Does.Not.ContainKey(txid),
+            Assert.That(snap.Decisions[txid], Is.EqualTo(TxStatus.Indeterminate),
                 "Precondition: the snapshot masks the expired tombstone.");
             Assert.That(snap.Revision, Is.EqualTo(probe),
                 "The stamp and a probe at the same instant must agree, or a "
@@ -264,8 +264,8 @@ public partial class TxRegistryGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(snapshotBefore, Does.Not.ContainKey(txid));
-            Assert.That(snapshotAfter, Does.ContainKey(txid),
+            Assert.That(snapshotBefore[txid], Is.EqualTo(TxStatus.Indeterminate));
+            Assert.That(snapshotAfter[txid], Is.EqualTo(TxStatus.Aborted),
                 "Precondition: the clear must have unmasked the saga.");
             Assert.That(after, Is.GreaterThan(before));
         });

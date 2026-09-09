@@ -189,6 +189,14 @@ internal sealed partial class LatticeCursorGrain(
                     // they later commit or abort, the cursor falls
                     // back to the snapshot's InFlight reading anyway,
                     // which masks the post-snapshot transition.
+                    //
+                    // Indeterminate entries ARE pinned, and deliberately so:
+                    // an indeterminate reading means an aged-out tombstone whose
+                    // decision row is still stored, which is exactly the row a
+                    // pin exists to keep from being pruned out from under a
+                    // cursor mid-walk. Pinning it also restores the recorded
+                    // outcome to this cursor, because the retention mask is
+                    // pin-aware.
                     var pinned = new List<Guid>(snapshot.Count);
                     foreach (var (txid, status) in snapshot)
                     {
