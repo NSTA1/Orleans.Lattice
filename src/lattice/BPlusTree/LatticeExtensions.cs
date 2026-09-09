@@ -43,6 +43,18 @@ public static class LatticeExtensions
     /// caller that raises <c>maxAttempts</c> for a long walk does not silently
     /// raise its tolerance for stalls with it.
     /// </para>
+    /// <para>
+    /// It is also the only bound on the resume's total wall-clock cost, which
+    /// is why it is left deliberately small rather than widened now that the
+    /// resume actually runs (issue 2456). There is no separate time budget: at
+    /// N resume attempts a scan can spend roughly N+1 ceilings failing, plus
+    /// the backoff between them, before it gives up. Callers here are driven by
+    /// interval reminders rather than by a hard per-pass deadline, so an
+    /// over-generous budget would not be cut off by anything - it would simply
+    /// make each doomed pass slower. Two was chosen conservatively on that
+    /// basis: enough to clear a transient queue, not enough to turn a scan that
+    /// cannot finish into a long one.
+    /// </para>
     /// </summary>
     public const int DefaultScanStallResumeAttempts = 2;
 
@@ -71,7 +83,22 @@ public static class LatticeExtensions
     internal const double ScanStallResumeBackoffFraction = 0.25;
 
     internal const string StallOutcomeResumed = "resumed";
-    internal const string StallOutcomeNoProgress = "no-progress";
+
+    /// <summary>
+    /// The terminal stall outcome. It is the only one, because the resume is
+    /// bounded by budget alone: see the resume site in
+    /// <c>ScanKeysAsyncCore</c>.
+    /// <para>
+    /// There was a second terminal outcome, <c>no-progress</c>, recorded when a
+    /// progress gate refused a stall that still had budget. That gate is gone
+    /// and the label is deliberately not retained as an unrecordable constant.
+    /// An instrument that has never recorded is <em>absent</em> from a scrape
+    /// rather than zero, so a documented outcome that can no longer occur reads
+    /// to an operator as a fact about the workload ("no stall ever failed this
+    /// way") when it is really a fact about the code. Removing the label makes
+    /// its disappearance a code change somebody can find, instead of a silence.
+    /// </para>
+    /// </summary>
     internal const string StallOutcomeBudgetExhausted = "budget-exhausted";
 
     /// <summary>
@@ -82,32 +109,6 @@ public static class LatticeExtensions
     /// </summary>
     internal static int ComputeScanStallResumeBudget(int reconnectBudget) =>
         Math.Min(reconnectBudget, DefaultScanStallResumeAttempts);
-
-    /// <summary>
-    /// Whether a scan that has just stalled at continuation position
-    /// <paramref name="lastKey"/> has made progress since the position at which
-    /// it last stalled (<paramref name="lastStallKey"/>), and so may resume.
-    /// <para>
-    /// Both positions are <see langword="null"/> at the scan's start, which is
-    /// what makes the first stall obey the same rule as every later one: a scan
-    /// that stalls before yielding a single key has not advanced from where it
-    /// began, so it is refused. That case is not a corner - it is the most
-    /// likely shape of the fault, because a cold tree whose leaves are replaying
-    /// their WAL windows stalls at or near the origin. Reading an unset
-    /// <paramref name="lastStallKey"/> as "no previous stall, therefore this is
-    /// progress" would hand the full budget to exactly the spin this gate
-    /// exists to prevent.
-    /// </para>
-    /// <para>
-    /// Refusing it also keeps the wrapper honest about what it is doing. A
-    /// resume from a real yielded key re-issues strictly less work than the
-    /// attempt it replaces; a "resume" from the origin is not a resume at all
-    /// but a verbatim re-issue of the request that just stalled, which is the
-    /// restart-from-the-beginning shape that must not retry.
-    /// </para>
-    /// </summary>
-    internal static bool ScanStallResumeMakesProgress(string? lastKey, string? lastStallKey) =>
-        !string.Equals(lastKey, lastStallKey, StringComparison.Ordinal);
 
     /// <summary>
     /// The delay before resuming a scan that stalled, derived from the ceiling
@@ -436,14 +437,10 @@ public static class LatticeExtensions
 
         // Stall resumption. A ScanPageStalledException is a different fault from
         // an EnumerationAbortedException and is resumed on its own budget and its
-        // own backoff; see DefaultScanStallResumeAttempts. lastStallKey is the
-        // continuation position at which this scan last stalled, and both it and
-        // lastKey start null so that a stall before the first yielded key is
-        // correctly read as "no progress" rather than as a first stall entitled to
-        // the whole budget.
+        // own backoff; see DefaultScanStallResumeAttempts. The resume is gated
+        // by that budget alone; see the catch below.
         var stallBudget = ComputeScanStallResumeBudget(budget);
         var stallAttempt = 0;
-        string? lastStallKey = null;
         var stallDelayMs = 0;
 
         while (true)
@@ -479,27 +476,68 @@ public static class LatticeExtensions
                     {
                         // The shard released itself so its queue could drain, and
                         // said so: resuming from the last continuation token is the
-                        // recovery the ceiling was designed to enable. Resume only
-                        // while there is budget AND the scan has advanced since it
-                        // last stalled - a second stall at the same position would
-                        // re-attack the same parked read.
-                        if (stallAttempt < stallBudget
-                            && ScanStallResumeMakesProgress(lastKey, lastStallKey))
+                        // recovery the ceiling was designed to enable. Resume while
+                        // there is budget - and on budget alone.
+                        //
+                        // This deliberately does NOT also require the scan to have
+                        // advanced since it last stalled. That gate was tried
+                        // (issue 2398) and then measured (issue 2456): on the
+                        // deployed build it refused 38 of 38 stalls, the budget was
+                        // never once consulted, and the resume branch below
+                        // executed zero times, so the indexing job still aborted
+                        // and re-scanned the whole corpus. The gate is unreachable
+                        // for the population that actually occurs - a cold tree
+                        // replaying its WAL windows stalls at or near the origin,
+                        // where lastKey is still null and no advance can have
+                        // happened. Issue 2278 measured leaves read before the
+                        // ceiling fired as 0,0,0,0,0,0,1,4,5.
+                        //
+                        // The gate's stated fear - that a second stall at the same
+                        // position re-attacks the same parked read - conflates the
+                        // same position with the same conditions. The ceiling
+                        // exists precisely so the shard stops being held and its
+                        // queue can drain, so after a backoff the position is
+                        // unchanged but the shard is not. What bounds the retry is
+                        // the budget and the backoff, both already present here.
+                        // The gate was a third bound that only ever fired first.
+                        //
+                        // WHAT THIS DOES NOT DO, recorded here because the metric
+                        // it corrects is easy to mistake for a cure. Where the
+                        // stall is downstream of the cold WAL replay loop (issues
+                        // 2280 and 2433) - a leaf that has never checkpointed and
+                        // must replay a WAL window that GC cannot trim because the
+                        // materialiser is behind - a resume lands back on the same
+                        // leaf in the same state and will exhaust its budget. The
+                        // gain there is a correct classification, not a completed
+                        // scan: the scan reports budget-exhausted, meaning "tried
+                        // and could not", instead of no-progress, meaning "refused
+                        // to try". Do not read a fall in no-progress as recovery.
+                        //
+                        // WHY THE BACKOFF IS NOT ESCALATED FOR AN UNCHANGED
+                        // POSITION. Charging a repeated same-position stall extra
+                        // backoff was considered and rejected. It assumes the
+                        // previous wait was merely too short, which is true of a
+                        // transient queue but false of the replay deadlock above,
+                        // where no wait of any length helps. Each attempt already
+                        // costs a whole ceiling, so on the derived default the
+                        // worst case is roughly three ceilings of work plus the
+                        // backoff between them; escalating would add most of
+                        // another ceiling of pure waiting to the case that cannot
+                        // benefit from it. The budget stays deliberately small for
+                        // the same reason - see DefaultScanStallResumeAttempts.
+                        if (stallAttempt < stallBudget)
                         {
                             stallAttempt++;
-                            lastStallKey = lastKey;
                             stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
                             RecordScanStallOutcome(stall, StallOutcomeResumed);
                             shouldReopen = true;
                             break;
                         }
 
-                        // Not resumable: rethrow the stall verbatim. A scan that
+                        // Out of budget: rethrow the stall verbatim. A scan that
                         // cannot be finished must never look finished, so there is
                         // no path here that ends the enumeration normally.
-                        RecordScanStallOutcome(
-                            stall,
-                            stallAttempt < stallBudget ? StallOutcomeNoProgress : StallOutcomeBudgetExhausted);
+                        RecordScanStallOutcome(stall, StallOutcomeBudgetExhausted);
                         throw;
                     }
 
@@ -621,12 +659,10 @@ public static class LatticeExtensions
         string? lastKey = null;
         var attempt = 0;
 
-        // See ScanKeysAsyncCore: stalls resume on their own budget, their own
-        // backoff, and a progress gate that starts null so a stall before the
-        // first yielded key is read as "no progress".
+        // See ScanKeysAsyncCore: stalls resume on their own budget and their own
+        // backoff, gated by that budget alone.
         var stallBudget = ComputeScanStallResumeBudget(budget);
         var stallAttempt = 0;
-        string? lastStallKey = null;
         var stallDelayMs = 0;
 
         while (true)
@@ -660,21 +696,19 @@ public static class LatticeExtensions
                     }
                     catch (ScanPageStalledException stall)
                     {
-                        // See ScanKeysAsyncCore for the reasoning.
-                        if (stallAttempt < stallBudget
-                            && ScanStallResumeMakesProgress(lastKey, lastStallKey))
+                        // See ScanKeysAsyncCore for the reasoning, including why
+                        // an unchanged continuation position neither refuses the
+                        // resume nor lengthens its backoff.
+                        if (stallAttempt < stallBudget)
                         {
                             stallAttempt++;
-                            lastStallKey = lastKey;
                             stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
                             RecordScanStallOutcome(stall, StallOutcomeResumed);
                             shouldReopen = true;
                             break;
                         }
 
-                        RecordScanStallOutcome(
-                            stall,
-                            stallAttempt < stallBudget ? StallOutcomeNoProgress : StallOutcomeBudgetExhausted);
+                        RecordScanStallOutcome(stall, StallOutcomeBudgetExhausted);
                         throw;
                     }
 

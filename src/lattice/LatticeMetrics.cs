@@ -2428,23 +2428,33 @@ public static class LatticeMetrics
     /// without this counter a scan that succeeded only after N resumptions
     /// would be indistinguishable from one that never stalled, and a worsening
     /// contention trend would be hidden by its own recovery.</description></item>
-    /// <item><description><c>no-progress</c> - the scan stalled twice at the
-    /// same continuation token, so resuming would re-attack the same parked
-    /// read rather than make progress. The scan gave up and rethrew. This is
-    /// the progress gate firing and is the strongest single contention signal
-    /// here.</description></item>
     /// <item><description><c>budget-exhausted</c> - the scan had already
-    /// resumed its permitted number of times and rethrew.</description></item>
+    /// resumed its permitted number of times
+    /// (<see cref="Orleans.Lattice.LatticeExtensions.DefaultScanStallResumeAttempts"/>,
+    /// or a lower caller <c>maxAttempts</c>) and rethrew. It is the only
+    /// terminal outcome and the strongest single contention signal here.
+    /// </description></item>
     /// </list>
     /// <para>
-    /// A <c>resumed</c> rate that climbs while the other two stay at zero is
-    /// recovery working. Any <c>no-progress</c> or <c>budget-exhausted</c> is a
-    /// scan that failed, and the caller saw the stall.
+    /// A <c>resumed</c> rate that climbs while <c>budget-exhausted</c> stays at
+    /// zero is recovery working. Every <c>budget-exhausted</c> is a scan that
+    /// failed, and the caller saw the stall: a resumption never truncates, so
+    /// the scan either yields its full range or rethrows the last stall
+    /// verbatim.
+    /// </para>
+    /// <para>
+    /// Earlier builds emitted a third value, <c>no-progress</c>, when a
+    /// progress gate refused a stall that still had resume budget. That gate
+    /// refused every stall that occurred in practice, so the resume it guarded
+    /// never ran; it has been removed and the label can no longer be recorded.
+    /// It is named here only so a reader meeting it in historical data knows
+    /// what it meant. See
+    /// <see cref="Orleans.Lattice.LatticeExtensions.DefaultScanStallResumeAttempts"/>.
     /// </para>
     /// </summary>
     public static readonly Counter<long> ScanStallResumptions =
         Meter.CreateCounter<long>("orleans.lattice.scan.stall_resumptions", unit: "{resumption}",
-            description: "Count of resilient client scans that met a scan-page stall, tagged by the decision taken (resumed, no-progress, budget-exhausted).");
+            description: "Count of resilient client scans that met a scan-page stall, tagged by the decision taken (resumed, budget-exhausted).");
 
     /// <summary>
     /// Count of internal-node digest publishes (the upward
