@@ -26,6 +26,14 @@ internal enum PendingReadOutcome
     /// The saga committed and this is not an already-terminal orphan bucket, but
     /// the prepared value is a tombstone or has expired, so the key is absent to
     /// the reader (it does <b>not</b> fall through to the pre-saga value).
+    /// <para>
+    /// Also the outcome for a saga whose status is
+    /// <see cref="TxStatus.Indeterminate"/>: the registry cannot say whether the
+    /// saga committed, so the reader is shown neither candidate value. Absence is
+    /// the only answer that asserts nothing, and it is the reason this case
+    /// exists separately from <see cref="FallThroughToPreSaga"/> rather than
+    /// being folded into it.
+    /// </para>
     /// </summary>
     Hidden,
 
@@ -72,11 +80,51 @@ internal static class AtomicVisibilityGate
     /// <see langword="true"/> when the prepared value is a tombstone or has
     /// expired as of the read's wall-clock moment.
     /// </param>
+    /// <remarks>
+    /// <para>
+    /// <b>Why <see cref="TxStatus.Indeterminate"/> hides rather than falls
+    /// through.</b> Falling through to the pre-saga value is not a neutral
+    /// default - it is a positive assertion that the saga did not commit. When
+    /// the registry has told us it cannot determine the outcome, making that
+    /// assertion on its behalf is how an acknowledged, committed write comes to
+    /// be served at its pre-saga value: the reader sees a stale value with no
+    /// error, no log, and no metric, and (under the aged-out-decision trigger)
+    /// keeps seeing it. Hiding the key asserts nothing. It is a strictly weaker
+    /// answer, it is never wrong about a value, and it self-corrects the moment
+    /// the outcome becomes determinable again.
+    /// </para>
+    /// <para>
+    /// The cost is real and is accepted deliberately: a key whose saga in fact
+    /// <i>aborted</i> reads as absent for the duration of the indeterminacy,
+    /// where it would previously have read at its pre-saga value. That trades a
+    /// temporary, self-announcing absence for a silent, possibly permanent
+    /// stale read, on a surface whose whole purpose is all-or-nothing
+    /// visibility. Absence is also already in this rule's vocabulary, so
+    /// nothing downstream has to learn a new outcome.
+    /// </para>
+    /// <para>
+    /// <b>Old nodes.</b> An older build that receives the unknown enum value
+    /// takes this method's <c>status == Committed</c> test as false and returns
+    /// <see cref="PendingReadOutcome.FallThroughToPreSaga"/> - the pre-widening
+    /// behaviour, which is the correct degradation for a mixed-version cluster.
+    /// </para>
+    /// </remarks>
     public static PendingReadOutcome ResolveKey(
         TxStatus status,
         bool alreadyTerminal,
         bool preparedHiddenByTombstoneOrExpiry)
     {
+        if (status == TxStatus.Indeterminate)
+        {
+            // Checked ahead of the Committed test so the orphan guard cannot
+            // reroute it: alreadyTerminal means this leaf already applied the
+            // saga's terminal, which is a claim about THIS leaf's projection,
+            // not about the saga's outcome. Under an indeterminate outcome we
+            // have no basis to prefer the projected value over the prepared one,
+            // and serving either would assert what the registry declined to.
+            return PendingReadOutcome.Hidden;
+        }
+
         if (status == TxStatus.Committed && !alreadyTerminal)
         {
             return preparedHiddenByTombstoneOrExpiry
@@ -103,6 +151,16 @@ internal static class AtomicVisibilityGate
 /// the strict-isolation default, consistent with "no decision recorded as of
 /// this view's moment". The struct holds a reference to the caller's decision
 /// map without copying; callers must not mutate that map after handing it in.
+/// <para>
+/// That default is only sound because the registry's snapshot APIs no longer
+/// use omission to mean two different things. A decision whose retention window
+/// has elapsed is present in the map as <see cref="TxStatus.Indeterminate"/>
+/// rather than dropped from it, so absence here now means what it says.
+/// Previously an aged-out <see cref="TxStatus.Committed"/> decision was omitted
+/// and therefore arrived at this method indistinguishable from a saga that had
+/// never been decided at all - and on a snapshot exported to a bootstrapping
+/// cluster there was no later message able to correct it.
+/// </para>
 /// </remarks>
 internal readonly struct TxDecisionView
 {

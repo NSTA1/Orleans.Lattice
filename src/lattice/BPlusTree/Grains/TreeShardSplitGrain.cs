@@ -1021,7 +1021,15 @@ internal sealed class TreeShardSplitGrain(
                 var statuses = await registry.GetStatusManyAsync(txids);
                 foreach (var (txid, status) in statuses)
                 {
-                    if (status == TxStatus.InFlight) continue;
+                    // Only a DECIDED status authorises acting. Anything else -
+                    // genuinely in flight, or a decision the registry currently
+                    // cannot determine - leaves the entry pending. Testing for
+                    // the decided cases rather than excluding InFlight matters:
+                    // the `committed` flag below is derived by elimination, so
+                    // an undecided status that slipped past this guard would be
+                    // silently treated as an abort and the prepared entry
+                    // discarded.
+                    if (status is not (TxStatus.Committed or TxStatus.Aborted)) continue;
 
                     var committed = status == TxStatus.Committed;
                     Dictionary<string, byte[]>? committedValues = null;

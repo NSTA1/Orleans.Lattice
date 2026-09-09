@@ -25,7 +25,7 @@ public class TxRegistryGrainTerminalArrivalTests
         var optionsMonitor = NSubstitute.Substitute.For<Microsoft.Extensions.Options.IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(NSubstitute.Arg.Any<string>()).Returns(options);
         var grainFactory = NSubstitute.Substitute.For<IGrainFactory>();
-        var grain = new TxRegistryGrain(context, grainFactory, optionsMonitor, state);
+        var grain = new TxRegistryGrain(context, grainFactory, optionsMonitor, Microsoft.Extensions.Logging.Abstractions.NullLogger<TxRegistryGrain>.Instance, state);
         return (grain, state);
     }
 

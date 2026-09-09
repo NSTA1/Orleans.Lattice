@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -38,7 +39,7 @@ public partial class TxRegistryGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(effectiveOptions);
         grainFactory ??= Substitute.For<IGrainFactory>();
-        var grain = new TxRegistryGrain(context, grainFactory, optionsMonitor, state);
+        var grain = new TxRegistryGrain(context, grainFactory, optionsMonitor, NullLogger<TxRegistryGrain>.Instance, state);
         if (timeProvider is not null) grain.TimeProvider = timeProvider;
         return (grain, state);
     }
@@ -524,7 +525,7 @@ public partial class TxRegistryGrainTests
     }
 
     [Test]
-    public async Task GetStatusAsync_returns_InFlight_after_tombstone_TTL_elapses()
+    public async Task GetStatusAsync_reports_indeterminate_after_tombstone_TTL_elapses()
     {
         var start = DateTimeOffset.UtcNow;
         var clock = new ManualTimeProvider(start);
@@ -538,8 +539,9 @@ public partial class TxRegistryGrainTests
         clock.Advance(retention + TimeSpan.FromSeconds(1));
 
         var status = await grain.GetStatusAsync(txid);
-        Assert.That(status, Is.EqualTo(TxStatus.InFlight),
-            "Expired tombstones must be masked from GetStatusAsync so the orphan-resolution path stops surfacing forgotten outcomes indefinitely.");
+        Assert.That(status, Is.EqualTo(TxStatus.Indeterminate),
+            "Expired tombstones must stop surfacing the forgotten outcome, but the registry still holds "
+            + "the row and so must say it cannot answer rather than claim the saga never decided (#2318).");
     }
 
     [Test]
@@ -562,9 +564,11 @@ public partial class TxRegistryGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(result[fresh], Is.EqualTo(TxStatus.Committed));
-            Assert.That(result[tombstoned], Is.EqualTo(TxStatus.InFlight),
-                "Expired tombstone must be masked even when read via the batch API.");
-            Assert.That(result[unknown], Is.EqualTo(TxStatus.InFlight));
+            Assert.That(result[tombstoned], Is.EqualTo(TxStatus.Indeterminate),
+                "Expired tombstone must be masked even when read via the batch API, and masked to "
+                + "Indeterminate rather than InFlight - the batch API must not disagree with the single-key one.");
+            Assert.That(result[unknown], Is.EqualTo(TxStatus.InFlight),
+                "A txid with no stored row is genuinely absent, which is still InFlight.");
         });
     }
 
@@ -619,7 +623,39 @@ public partial class TxRegistryGrainTests
     }
 
     [Test]
-    public async Task MarkCommittedAsync_clears_tombstone_and_records_fresh_decision()
+    public async Task MarkCommittedAsync_same_outcome_repeat_leaves_a_tombstone_intact()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (grain, state) = CreateGrain(
+            retention: TimeSpan.FromMinutes(1),
+            timeProvider: clock);
+        var txid = Guid.NewGuid();
+        await grain.MarkCommittedAsync(txid);
+        await grain.ForgetAsync(txid);
+        var stampedAt = state.State.ForgottenAt[txid];
+        var writesBefore = state.WriteCount;
+
+        // Re-marking with the SAME outcome is the documented no-op. Clearing
+        // the tombstone here would resurrect a decision this tree had already
+        // forgotten and restart its retention window - a state change on the
+        // path that promises none. The opposite-outcome case still clears (see
+        // MarkAbortedAsync_conflicting_outcome_after_forget_clears_the_tombstone).
+        await grain.MarkCommittedAsync(txid);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ForgottenAt, Does.ContainKey(txid),
+                "A same-outcome repeat must not resurrect a forgotten decision.");
+            Assert.That(state.State.ForgottenAt[txid], Is.EqualTo(stampedAt),
+                "A same-outcome repeat must not restart the retention window.");
+            Assert.That(state.State.Decisions[txid], Is.EqualTo(TxStatus.Committed));
+            Assert.That(state.WriteCount, Is.EqualTo(writesBefore),
+                "A no-op must not persist.");
+        });
+    }
+
+    [Test]
+    public async Task MarkAbortedAsync_conflicting_outcome_after_forget_clears_the_tombstone()
     {
         var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
         var (grain, state) = CreateGrain(
@@ -629,22 +665,21 @@ public partial class TxRegistryGrainTests
         await grain.MarkCommittedAsync(txid);
         await grain.ForgetAsync(txid);
 
-        // Re-marking with the same outcome must clear the tombstone
-        // (so the conflict-detection guard does not block a subsequent
-        // opposite-outcome remark - the existing Mark_then_Forget_then_Mark
-        // test exercises that path).
-        await grain.MarkCommittedAsync(txid);
+        // A tombstoned saga has completed its post-fan-out cleanup, so a fresh
+        // Mark carrying a DIFFERENT verdict is a new authoritative outcome
+        // rather than a write-once violation. That is the case the
+        // tombstone-clearing prologue exists for, and it is unchanged.
+        await grain.MarkAbortedAsync(txid);
 
         Assert.Multiple(() =>
         {
-            Assert.That(state.State.ForgottenAt, Does.Not.ContainKey(txid),
-                "MarkCommittedAsync must clear the tombstone on a previously-forgotten txid.");
-            Assert.That(state.State.Decisions[txid], Is.EqualTo(TxStatus.Committed));
+            Assert.That(state.State.ForgottenAt, Does.Not.ContainKey(txid));
+            Assert.That(state.State.Decisions[txid], Is.EqualTo(TxStatus.Aborted));
         });
     }
 
     [Test]
-    public async Task SnapshotAsync_filters_expired_tombstones()
+    public async Task SnapshotAsync_masks_expired_tombstones()
     {
         var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
         var retention = TimeSpan.FromSeconds(30);
@@ -661,10 +696,14 @@ public partial class TxRegistryGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(snapshot, Has.Count.EqualTo(1));
+            Assert.That(snapshot, Has.Count.EqualTo(2));
             Assert.That(snapshot[fresh], Is.EqualTo(TxStatus.Committed));
-            Assert.That(snapshot, Does.Not.ContainKey(expired),
-                "Expired tombstones must be filtered from snapshots so the snapshot agrees with GetStatusAsync.");
+            Assert.That(snapshot[expired], Is.EqualTo(TxStatus.Indeterminate),
+                "An expired tombstone must stop reporting its recorded outcome. It is "
+                + "carried as Indeterminate rather than dropped so a snapshot consumer "
+                + "can still tell it apart from a saga the registry never recorded - "
+                + "dropping it made an aged-out commit arrive at a bootstrapping peer "
+                + "as 'still preparing', with no later record able to correct it.");
         });
     }
 

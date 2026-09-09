@@ -1071,7 +1071,12 @@ public class LatticeMicroBenchmarks
         if (_txRegistries.TryGetValue(treeId, out var existing)) return existing;
         var ctx = new FakeGrainContext(GrainId.Create("tx-registry", treeId));
         var registryState = new FakePersistentState<TxRegistryState>();
-        var registry = new TxRegistryGrain(ctx, _grainFactory, _optionsMonitor, registryState);
+        var registry = new TxRegistryGrain(
+            ctx,
+            _grainFactory,
+            _optionsMonitor,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TxRegistryGrain>.Instance,
+            registryState);
         _txRegistries[treeId] = registry;
         return registry;
     }
@@ -1096,6 +1101,7 @@ public class LatticeMicroBenchmarks
             _grainFactory,
             _crossTreeReminderRegistry,
             _optionsMonitor,
+            new DefaultLatticeOriginClusterIdResolver(),
             NullLogger<LatticeCrossTreeTxGrain>.Instance,
             coordinatorState);
         _crossTreeCoordinators[operationId] = coordinator;

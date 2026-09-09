@@ -309,7 +309,17 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// WAL append re-stamps the source cluster's terminal HLC and
     /// origin verbatim. Idempotent on repeated delivery via the
     /// per-leaf <c>_recentlyTerminal</c> dedup and the registry's
-    /// repeat-same-outcome no-op. Pairs with
+    /// write-once guard, which classifies a same-outcome repeat as
+    /// <c>Idempotent</c> and mutates nothing.
+    /// <para>
+    /// Note the bound on that second guarantee: it holds only while the
+    /// decision is still recorded. Nothing on this path is sequenced
+    /// behind the local saga's lifecycle, so a duplicate arriving after
+    /// the local tree has forgotten the saga and its tombstone has been
+    /// pruned is a fresh record, not a no-op. Treat "idempotent" here as
+    /// scoped to the retention window, not unconditional.
+    /// </para>
+    /// Pairs with
     /// <see cref="ApplyPreparedSetAsync"/> /
     /// <see cref="ApplyPreparedDeleteAsync"/> to deliver cross-cluster
     /// atomic visibility on the receiver side.
@@ -378,9 +388,19 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// the <see cref="ILatticeCrossTreeReceiverGrain"/> barrier's coordinating
     /// <c>LatticeGrain</c> (after <c>NotifyTerminalAsync</c> returns a decision)
     /// for every <i>sibling</i> participating tree; the coordinating tree
-    /// materializes its own slice inline. Idempotent on redelivery (the registry
-    /// repeat-same-outcome no-op and per-leaf terminal dedup), so re-invoking it
-    /// for an already-finalized tree is safe.
+    /// materializes its own slice inline. Idempotent on redelivery while the
+    /// decision is still recorded: the registry's write-once guard classifies a
+    /// same-outcome repeat as <c>Idempotent</c> and the per-leaf terminal dedup
+    /// absorbs the fan-out.
+    /// <para>
+    /// Re-invoking it for an <em>already-finalized</em> tree is the case that
+    /// guarantee does not cover, not the case it covers. Finalization is exactly
+    /// what leads to the saga being forgotten, and once its tombstone has been
+    /// pruned the registry has nothing left to recognise the repeat against, so
+    /// a late redelivery records the verdict afresh rather than absorbing it.
+    /// The safe redelivery window is the retention window, and callers that can
+    /// retry arbitrarily far behind must not rely on this being unconditional.
+    /// </para>
     /// </summary>
     /// <param name="transactionId">The replicated sub-saga's transaction id on this tree.</param>
     /// <param name="committed">The global cross-tree verdict to record on this tree.</param>
