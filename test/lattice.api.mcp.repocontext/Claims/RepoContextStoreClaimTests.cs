@@ -249,6 +249,139 @@ public sealed class RepoContextStoreClaimTests
     }
 
     [Test]
+    public async Task A_forged_token_ahead_of_the_fence_cannot_overwrite_a_claimed_record()
+    {
+        // The exclusion the claim surface sells is worth exactly as much as the
+        // weakest thing that can produce an admitted token. Comparing only against
+        // the record's stamp made that "any integer the caller can name", so a peer
+        // agent could stomp a live claim without ever taking the lock.
+        await SeedAsync();
+        var claim = await ClaimAsync("agent-a");
+
+        var error = Assert.ThrowsAsync<RepoContextClaimConflictException>(
+            () => WriteBodyAsync("stomp", long.MaxValue));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(error!.Reason, Is.EqualTo(nameof(RepoContextFenceVerdict.UnissuedToken)));
+            Assert.That(error.Key, Is.EqualTo(Key));
+            Assert.That(error.PresentedFencingToken, Is.EqualTo(long.MaxValue));
+            Assert.That(error.CurrentFencingToken, Is.EqualTo(claim.FencingToken));
+            Assert.That(error.Owner, Is.EqualTo("agent-a"));
+            Assert.That(BodyOf(Key), Is.EqualTo("seed"));
+        });
+    }
+
+    [Test]
+    public async Task A_forged_token_ahead_of_the_fence_is_refused_by_update_and_forget_too()
+    {
+        // Every write verb shares one gate, so the guarantee has to hold on all of
+        // them rather than only on the one that is easiest to test.
+        await SeedAsync();
+        await ClaimAsync("agent-a");
+
+        var update = Assert.ThrowsAsync<RepoContextClaimConflictException>(
+            () => _store.UpdateAsync(
+                Key, new Dictionary<string, string> { ["body"] = "stomp" }, null, null, null, null,
+                long.MaxValue, CancellationToken.None));
+        var forget = Assert.ThrowsAsync<RepoContextClaimConflictException>(
+            () => _store.ForgetAsync(Key, false, null, long.MaxValue, CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(update!.Reason, Is.EqualTo(nameof(RepoContextFenceVerdict.UnissuedToken)));
+            Assert.That(forget!.Reason, Is.EqualTo(nameof(RepoContextFenceVerdict.UnissuedToken)));
+            Assert.That(BodyOf(Key), Is.EqualTo("seed"));
+        });
+    }
+
+    [Test]
+    public async Task Release_of_a_token_ahead_of_the_fence_cannot_poison_the_released_mark()
+    {
+        // The released mark is a monotone register that can be raised but never
+        // lowered, and liveness is "released < fence". Stamping a release for a
+        // token the record never issued would raise it past every fence the record
+        // could ever reach, permanently disabling the claim surface for this key
+        // with no operation able to undo it.
+        await SeedAsync();
+        var claim = await ClaimAsync("agent-a");
+
+        var release = await _store.ReleaseClaimAsync(Key, long.MaxValue, CancellationToken.None);
+        var status = await _store.ClaimStatusAsync(Key, CancellationToken.None);
+        var error = Assert.ThrowsAsync<RepoContextClaimConflictException>(
+            () => WriteBodyAsync("stomp", fencingToken: null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(release.Released, Is.False);
+            Assert.That(release.Reason, Is.EqualTo("stale"));
+            Assert.That(status.ReleasedFencingToken, Is.Null);
+            Assert.That(status.Claimed, Is.True, "the claim must survive a forged release");
+            Assert.That(status.FencingToken, Is.EqualTo(claim.FencingToken));
+            Assert.That(error!.Reason, Is.EqualTo(nameof(RepoContextFenceVerdict.ClaimRequired)));
+            Assert.That(BodyOf(Key), Is.EqualTo("seed"));
+        });
+    }
+
+    [Test]
+    public async Task Release_against_a_never_claimed_record_is_refused()
+    {
+        // The old guard short-circuited on a null fence, so an unclaimed record
+        // would accept a release for any token at all - the same poisoning, reached
+        // without needing a claim to exist first.
+        await SeedAsync();
+
+        var release = await _store.ReleaseClaimAsync(Key, long.MaxValue, CancellationToken.None);
+        var status = await _store.ClaimStatusAsync(Key, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(release.Released, Is.False);
+            Assert.That(release.Reason, Is.EqualTo("unclaimed"));
+            Assert.That(status.ReleasedFencingToken, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task A_claimed_record_still_admits_a_release_and_reclaim_after_a_forged_release()
+    {
+        // The surface has to stay fully usable afterwards: refusing the forged
+        // release is only worth anything if the legitimate lifecycle still runs.
+        await SeedAsync();
+        var first = await ClaimAsync("agent-a");
+        await _store.ReleaseClaimAsync(Key, long.MaxValue, CancellationToken.None);
+
+        var released = await _store.ReleaseClaimAsync(Key, first.FencingToken!.Value, CancellationToken.None);
+        var second = await ClaimAsync("agent-b");
+        await WriteBodyAsync("owned by b", second.FencingToken);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(released.Released, Is.True);
+            Assert.That(second.Granted, Is.True);
+            Assert.That(second.FencingToken!.Value, Is.GreaterThan(first.FencingToken!.Value));
+            Assert.That(BodyOf(Key), Is.EqualTo("owned by b"));
+        });
+    }
+
+    [Test]
+    public async Task A_released_record_refuses_a_forged_token_ahead_of_its_fence()
+    {
+        await SeedAsync();
+        var claim = await ClaimAsync("agent-a");
+        await _store.ReleaseClaimAsync(Key, claim.FencingToken!.Value, CancellationToken.None);
+
+        var error = Assert.ThrowsAsync<RepoContextClaimConflictException>(
+            () => WriteBodyAsync("stomp", long.MaxValue));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(error!.Reason, Is.EqualTo(nameof(RepoContextFenceVerdict.UnissuedToken)));
+            Assert.That(BodyOf(Key), Is.EqualTo("seed"));
+        });
+    }
+
+    [Test]
     public async Task A_claim_taken_in_another_region_refuses_a_local_write()
     {
         await SeedAsync();

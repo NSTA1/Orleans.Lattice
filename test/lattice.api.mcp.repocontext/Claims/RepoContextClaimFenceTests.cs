@@ -292,14 +292,36 @@ public sealed class RepoContextClaimFenceTests
             Is.EqualTo(RepoContextFenceVerdict.StaleToken));
 
     [Test]
-    public void A_claimed_record_admits_a_token_ahead_of_its_stamp()
+    public void A_claimed_record_admits_a_token_ahead_of_its_stamp_when_the_lock_confirms_it()
     {
         // The grant is authoritative and the record's stamp trails it: a holder
         // whose claim stamp has not landed yet must not be locked out of its own
-        // record.
+        // record. The lock is what makes the grant authoritative, so the token is
+        // admitted on the lock's confirmation, not on the caller's assertion.
+        Assert.That(
+            RepoContextClaimFence.Evaluate(Claimed(4L), presentedToken: 5L, Region, lockCurrentToken: 5L),
+            Is.EqualTo(RepoContextFenceVerdict.Accepted));
+    }
+
+    [Test]
+    public void A_claimed_record_refuses_a_token_ahead_of_its_stamp_that_the_lock_never_issued()
+    {
+        // Without this, the fence is decorative: any caller able to reach the write
+        // path can name an integer above the stamp and write over another agent's
+        // claimed record.
+        Assert.That(
+            RepoContextClaimFence.Evaluate(Claimed(4L), presentedToken: long.MaxValue, Region, lockCurrentToken: 5L),
+            Is.EqualTo(RepoContextFenceVerdict.UnissuedToken));
+    }
+
+    [Test]
+    public void A_claimed_record_refuses_a_token_ahead_of_its_stamp_when_the_lock_is_not_consulted()
+    {
+        // The default reading is the fail-closed one, so a caller that cannot
+        // consult the lock cannot reopen the hole simply by omitting the argument.
         Assert.That(
             RepoContextClaimFence.Evaluate(Claimed(4L), presentedToken: 5L, Region),
-            Is.EqualTo(RepoContextFenceVerdict.Accepted));
+            Is.EqualTo(RepoContextFenceVerdict.UnissuedToken));
     }
 
     [Test]

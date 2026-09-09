@@ -143,8 +143,11 @@ internal sealed class RepoContextGraphService
     /// report to. Resolved through the workspace guard. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the walk and reads.</param>
     /// <returns>The added, updated, removed, and dependent file lists.</returns>
-    /// <exception cref="RepoContextWorkspaceViolationException">The path resolves outside the workspace.</exception>
-    /// <exception cref="ArgumentException">The path is null, empty, or whitespace, or resolves outside the indexed repository root.</exception>
+    /// <exception cref="RepoContextWorkspaceViolationException">The path resolves outside the
+    /// workspace, or no workspace root is configured at all - an inert guard admits every
+    /// absolute path on the host, so it is never handed a caller-supplied one.</exception>
+    /// <exception cref="ArgumentException">The path is null, empty, or whitespace, or resolves
+    /// outside the indexed repository root, or the repository has no stored index request.</exception>
     /// <exception cref="DirectoryNotFoundException">The resolved path is not an existing directory.</exception>
     public async Task<RepoContextChangedResult> ChangedAsync(
         string repoId, string workspacePath, CancellationToken cancellationToken)
@@ -152,34 +155,47 @@ internal sealed class RepoContextGraphService
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(workspacePath);
 
+        // An inert guard admits every absolute path on the host, so it may not be handed a
+        // wire-supplied one - the same rule the two onboarding tools already funnel through
+        // StartIndexAsync to obey. This path is equally a tool parameter, and the drift
+        // report names every file it walks, so admitting it under an inert guard would turn
+        // the tool into an arbitrary local directory listing.
+        if (!_workspaceGuard.IsEnforcing)
+        {
+            throw new RepoContextWorkspaceViolationException(
+                "The repository-context workspace boundary is not configured, so comparing a caller-supplied "
+                + "path against the index is refused. The host must supply a workspace root "
+                + "(AddRepoContextTools(workspaceRoot: ...)) before a drift report can be requested.");
+        }
+
         var requestedPath = _workspaceGuard.Resolve(workspacePath);
 
-        // The durable index request is the authority for how this repository was walked.
-        // Without it the caller's path is all we have, so the legacy behaviour (walk the
-        // supplied path as the root, with default filters) is kept for a repository that
-        // was never indexed through the job grain.
+        // The durable index request is the authority for how this repository was walked, and
+        // it is the only source the walk root is ever taken from. A repository with no stored
+        // request has no indexed path space to compare against, so the report is refused
+        // rather than falling back to walking whatever path the caller named: that fallback
+        // let an unknown repository id turn the requested path into the walk root, escaping
+        // the scope check below by never reaching it.
         var indexRequest = await _grainFactory
             .GetGrain<IRepoIndexJobGrain>(repoId).GetRequestAsync().ConfigureAwait(false);
 
-        var walkRoot = requestedPath;
-        string? scopePrefix = null;
-        IReadOnlyList<string>? includeGlobs = null;
-        IReadOnlyList<string>? excludeGlobs = null;
-        var respectGitignore = true;
-        var excludeBinary = true;
-
-        if (indexRequest is not null && !string.IsNullOrWhiteSpace(indexRequest.RepoRoot))
+        if (indexRequest is null || string.IsNullOrWhiteSpace(indexRequest.RepoRoot))
         {
-            // Re-resolve the persisted root through the guard rather than trusting it: the
-            // mount may have changed since the repository was indexed, and the walk must stay
-            // inside the workspace boundary regardless of what was persisted.
-            walkRoot = _workspaceGuard.Resolve(indexRequest.RepoRoot);
-            scopePrefix = ResolveScopePrefix(walkRoot, requestedPath);
-            includeGlobs = indexRequest.IncludeGlobs;
-            excludeGlobs = indexRequest.ExcludeGlobs;
-            respectGitignore = indexRequest.RespectGitignore;
-            excludeBinary = indexRequest.ExcludeBinary;
+            throw new ArgumentException(
+                $"The repository '{repoId}' has no stored index request, so there is no indexed path space to "
+                + "compare against. Onboard the repository before requesting a drift report.",
+                nameof(repoId));
         }
+
+        // Re-resolve the persisted root through the guard rather than trusting it: the
+        // mount may have changed since the repository was indexed, and the walk must stay
+        // inside the workspace boundary regardless of what was persisted.
+        var walkRoot = _workspaceGuard.Resolve(indexRequest.RepoRoot);
+        var scopePrefix = ResolveScopePrefix(walkRoot, requestedPath);
+        var includeGlobs = indexRequest.IncludeGlobs;
+        var excludeGlobs = indexRequest.ExcludeGlobs;
+        var respectGitignore = indexRequest.RespectGitignore;
+        var excludeBinary = indexRequest.ExcludeBinary;
 
         var stored = await ReadStoredFilesAsync(repoId, cancellationToken).ConfigureAwait(false);
 

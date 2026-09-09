@@ -101,7 +101,7 @@ public sealed class AddRepoContextToolsTests
             {
                 "repocontext_health", "repocontext_recall", "repocontext_scan", "repocontext_list_topics",
                 "repocontext_search", "repocontext_index_status", "repocontext_neighbors",
-                "repocontext_outline", "repocontext_changed", "repocontext_related", "repocontext_context",
+                "repocontext_outline", "repocontext_related", "repocontext_context",
                 "repocontext_stats", "repocontext_claim_status",
             }));
     }
@@ -138,8 +138,16 @@ public sealed class AddRepoContextToolsTests
     /// any caller who may write could have had the server index (and then make
     /// searchable) any directory it could read.
     /// <para>
-    /// Every path-free tool must survive: withholding bootstrap fails the
-    /// onboarding path closed, it does not disable the surface.
+    /// The read-only <c>repocontext_changed</c> is withheld on the same ground and
+    /// was for a long time the exception that undid the rule. It takes an equally
+    /// unbounded caller-supplied <c>path</c>, and it answers with the names of every
+    /// file it walked, so leaving it advertised under an inert guard left a read
+    /// primitive open beside two closed write ones - and it needs no write grant at
+    /// all to reach.
+    /// </para>
+    /// <para>
+    /// Every path-free tool must survive: withholding these fails the path-taking
+    /// surface closed, it does not disable the server.
     /// </para>
     /// </summary>
     [Test]
@@ -156,6 +164,7 @@ public sealed class AddRepoContextToolsTests
         {
             Assert.That(provider.GetRequiredService<RepoContextWorkspaceGuard>().IsEnforcing, Is.False);
             Assert.That(names, Does.Not.Contain("repocontext_bootstrap"));
+            Assert.That(names, Does.Not.Contain("repocontext_changed"));
 
             // The capture and claim tools key on a repository id, never a path.
             Assert.That(names, Does.Contain("repocontext_remember"));
@@ -163,6 +172,11 @@ public sealed class AddRepoContextToolsTests
             Assert.That(names, Does.Contain("repocontext_forget"));
             Assert.That(names, Does.Contain("repocontext_claim"));
             Assert.That(names, Does.Contain("repocontext_search"));
+
+            // The other two graph verbs project stored records for an indexed path
+            // and never walk the filesystem, so they are unaffected.
+            Assert.That(names, Does.Contain("repocontext_outline"));
+            Assert.That(names, Does.Contain("repocontext_related"));
         });
     }
 

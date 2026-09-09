@@ -62,14 +62,15 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// <param name="workspaceMode">Whether the dynamic multi-repository workspace
     /// tools replace the single-repository onboarding tool.</param>
     /// <param name="workspaceGuarded">Whether an enforcing workspace path guard is
-    /// registered. When <see langword="false"/> <b>neither</b> path-taking
-    /// onboarding tool is contributed: not <c>repocontext_add_repo</c> in
-    /// workspace mode, and not <c>repocontext_bootstrap</c> in single-repository
-    /// mode. Both take an unbounded caller-supplied path straight from the wire,
-    /// so an unconfigured guard would turn either of them into an arbitrary local
-    /// filesystem read whose contents the retrieval tools then serve back; the
-    /// group therefore withholds one exactly as it withholds the other, and never
-    /// substitutes one for the other. <c>repocontext_remove_repo</c> is unaffected
+    /// registered. When <see langword="false"/> <b>no</b> path-taking tool is
+    /// contributed: not <c>repocontext_add_repo</c> in workspace mode, not
+    /// <c>repocontext_bootstrap</c> in single-repository mode, and not the
+    /// read-only <c>repocontext_changed</c>. All three take an unbounded
+    /// caller-supplied path straight from the wire, so an unconfigured guard would
+    /// turn any of them into an arbitrary local filesystem read whose contents (or,
+    /// for the drift report, whose file names) the caller then receives; the group
+    /// therefore withholds each exactly as it withholds the others, and never
+    /// substitutes one for another. <c>repocontext_remove_repo</c> is unaffected
     /// - it takes a repository id, never a path, and never touches the working
     /// tree.</param>
     public RepoContextToolGroup(
@@ -79,7 +80,8 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     {
         var offerAddRepo = workspaceMode && workspaceGuarded;
         var offerBootstrap = !workspaceMode && workspaceGuarded;
-        var capacity = 13
+        var capacity = 12
+            + (workspaceGuarded ? 1 : 0)
             + (workspaceMode ? 1 : 0)
             + (enableWrites
                 ? 6 + (workspaceMode ? (offerAddRepo ? 3 : 2) : (offerBootstrap ? 1 : 0))
@@ -109,12 +111,20 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             BuildIndexStatusTool(),
             BuildNeighborsTool(),
             BuildOutlineTool(),
-            BuildChangedTool(),
             BuildRelatedTool(),
             BuildContextTool(),
             BuildStatsTool(),
             BuildClaimStatusTool(),
         };
+
+        // Advertisement follows enforcement. repocontext_changed takes a caller-supplied
+        // filesystem path exactly as the two onboarding tools do, and an inert guard bounds
+        // none of them, so it is withheld on the same flag rather than being offered as a
+        // call that can only be refused.
+        if (workspaceGuarded)
+        {
+            tools.Add(BuildChangedTool());
+        }
 
         if (workspaceMode)
         {
