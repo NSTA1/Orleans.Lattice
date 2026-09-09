@@ -27,7 +27,8 @@ public partial class LatticeCrossTreeTxGrainTests
                     Dictionary<string, IAtomicWriteGrain> participants) CreateGrain(
         IEnumerable<string>? treeIds = null,
         FakePersistentState<CrossTreeTxState>? existingState = null,
-        IServiceProvider? activationServices = null)
+        IServiceProvider? activationServices = null,
+        IReadOnlyDictionary<string, string>? clusterIds = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("cross-tree-tx", OperationId));
@@ -61,8 +62,17 @@ public partial class LatticeCrossTreeTxGrainTests
         optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
 
         var state = existingState ?? new FakePersistentState<CrossTreeTxState>();
+
+        // Mirrors the core default resolver (uniform empty cluster id) unless a
+        // test deliberately configures divergence.
+        var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
+        clusterIdResolver.Resolve(Arg.Any<string>()).Returns(call =>
+            clusterIds is not null && clusterIds.TryGetValue(call.Arg<string>(), out var id)
+                ? id
+                : string.Empty);
+
         var grain = new LatticeCrossTreeTxGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor,
+            context, grainFactory, reminderRegistry, optionsMonitor, clusterIdResolver,
             new LoggerFactory().CreateLogger<LatticeCrossTreeTxGrain>(), state);
         return (grain, state, grainFactory, participants);
     }

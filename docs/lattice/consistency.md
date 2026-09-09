@@ -160,14 +160,19 @@ participating tree's `ITxRegistryGrain` *delegates* the status of its
 prepared txid to that coordinator until the decision lands. Before the
 decision, every tree returns `InFlight` for the saga (prepared keys are
 invisible, indistinguishable from pre-saga); after it, every tree
-returns the same global verdict. The coordinator's single decision write
+returns the same global verdict. A tree that cannot reach the
+coordinator at all returns `Indeterminate` instead, which keeps the
+prepared keys invisible without asserting that the saga did not commit.
+The coordinator's single decision write
 is the cross-tree linearization point.
 
 This is **atomicity**, not cross-tree read isolation, and the two are easy
 to conflate. The atomic guarantee is anchored to the coordinator's single
 decision write as one global linearization point: at any single instant the
-saga is either undecided (every participating tree returns `InFlight`, every
-prepared key invisible and indistinguishable from pre-saga) or decided (every
+saga is either undecided (no participating tree reports a verdict - `InFlight`
+when the coordinator answers that it is still preparing, `Indeterminate` when
+the coordinator cannot be reached - and every
+prepared key invisible) or decided (every
 tree returns the same global verdict). There is no instant at which the commit
 is durably half-applied, so an observer that could sample every participating
 tree *at one instant* always sees all-pre or all-post. What the design does

@@ -1041,7 +1041,68 @@ internal sealed partial class BPlusLeafGrain
                 case TxStatus.Aborted:
                     ApplyTxAbort(txid);
                     break;
+                case TxStatus.Indeterminate:
+                    // The registry holds a decision it will no longer report on
+                    // the read path - typically the tombstone outlived
+                    // TxDecisionRetention while this leaf was down. The read
+                    // path is right to hide the key, but this sweep is not a
+                    // read: the prepare is work this leaf already owns and is
+                    // still holding open, and leaving it resident forever
+                    // pins the flush ceiling and leaks the bucket. Ask for the
+                    // recorded row explicitly.
+                    //
+                    // A failure here (older registry, unreachable grain) leaves
+                    // the prepare exactly as it was, which is the same outcome
+                    // as the resolve failure handled above, so the sweep simply
+                    // retries on a later activation.
+                    await SelfTerminaliseFromRecordedStatusAsync(txid);
+                    break;
             }
+        }
+    }
+
+    /// <summary>
+    /// Retention-mask bypass for the self-terminalisation sweep: asks the
+    /// registry for the physically recorded verdict behind an
+    /// <see cref="TxStatus.Indeterminate"/> answer and applies it locally.
+    /// Silently gives up when the registry cannot answer, leaving the prepare
+    /// resident for a later sweep.
+    /// </summary>
+    private async ValueTask SelfTerminaliseFromRecordedStatusAsync(Guid txid)
+    {
+        var treeId = state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId)) return;
+
+        TxStatus recorded;
+        try
+        {
+            registry ??= grainFactory.GetGrain<ITxRegistryGrain>(treeId);
+            recorded = await registry.GetRecordedStatusAsync(txid);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var logger = ResolveLogger();
+            if (logger is not null && logger.IsEnabled(LogLevel.Debug))
+            {
+                logger.LogDebug(
+                    ex,
+                    "Self-terminalise could not read the recorded outcome for saga '{TxId}' on tree '{TreeId}'; "
+                    + "leaving the prepare resident and retrying the heal on a later activation.",
+                    txid,
+                    treeId);
+            }
+
+            return;
+        }
+
+        switch (recorded)
+        {
+            case TxStatus.Committed:
+                ApplyTxCommit(txid);
+                break;
+            case TxStatus.Aborted:
+                ApplyTxAbort(txid);
+                break;
         }
     }
 
@@ -1063,10 +1124,15 @@ internal sealed partial class BPlusLeafGrain
     /// registry call collapses N per-key dial-backs into one round
     /// trip. Callers iterate the runtime entry cache as usual and,
     /// for each key found in <c>pendingKeys</c>, branch on
-    /// the resolved outcome: <see cref="TxStatus.Committed"/> surfaces
-    /// the prepared value, <see cref="TxStatus.InFlight"/> hides the
-    /// key, and <see cref="TxStatus.Aborted"/> falls through to the
-    /// pre-saga cache value.
+    /// the resolved outcome through
+    /// <see cref="AtomicVisibilityGate.ResolveKey"/>:
+    /// <see cref="TxStatus.Committed"/> surfaces the prepared value,
+    /// <see cref="TxStatus.Indeterminate"/> hides the key, and
+    /// <see cref="TxStatus.InFlight"/> / <see cref="TxStatus.Aborted"/>
+    /// fall through to the pre-saga cache value. (An in-flight saga
+    /// falling through rather than hiding is the strict-isolation
+    /// contract: the prepared value is invisible until the registry
+    /// records a commit, so the reader sees the last committed one.)
     /// </para>
     /// </summary>
     private async ValueTask<(
@@ -1114,12 +1180,15 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
         {
-            // Defensive: no tree id means we cannot consult the
-            // registry. Treat every pending entry as InFlight - the
-            // strict-isolation default keeps the prepared keys hidden
-            // until activation completes its tree-id stamp.
+            // Defensive: no tree id means we cannot consult the registry, so we
+            // do not know these sagas' outcomes and must not claim to. Report
+            // Indeterminate, which the visibility gate hides. InFlight would
+            // have been wrong for the stated intent: it falls through to the
+            // pre-saga value rather than hiding, so the comment's promise to
+            // keep the prepared keys hidden until activation completes its
+            // tree-id stamp was not what the code did.
             var hidden = new Dictionary<Guid, TxStatus>(txids.Count);
-            foreach (var t in txids) hidden[t] = TxStatus.InFlight;
+            foreach (var t in txids) hidden[t] = TxStatus.Indeterminate;
             return (hidden, pendingKeys);
         }
 
@@ -1864,6 +1933,14 @@ internal sealed partial class BPlusLeafGrain
     ///     against any sibling leaf whose backstop has already landed.
     ///     Returns <c>false</c> so the caller raises
     ///     <see cref="StaleShardRoutingException"/>.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="TxStatus.Indeterminate"/>: resolved exactly as
+    ///     <see cref="TxStatus.Committed"/> is. Passing through would
+    ///     assert the saga did not commit, which is precisely what an
+    ///     indeterminate reading does not know; with the backstop
+    ///     already applied the projected value is correct either way,
+    ///     and without it the read gates.
     ///   </description></item>
     /// </list>
     /// </summary>

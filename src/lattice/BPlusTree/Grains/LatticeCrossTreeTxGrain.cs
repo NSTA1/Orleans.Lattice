@@ -40,6 +40,7 @@ internal sealed class LatticeCrossTreeTxGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    ILatticeOriginClusterIdResolver originClusterIdResolver,
     ILogger<LatticeCrossTreeTxGrain> logger,
     [PersistentState("cross-tree-tx", LatticeOptions.StorageProviderName)]
     IPersistentState<CrossTreeTxState> state)
@@ -162,6 +163,15 @@ internal sealed class LatticeCrossTreeTxGrain(
         if (state.State.Phase == CrossTreeTxPhase.NotStarted)
         {
             var participants = BuildParticipants(batches);
+
+            // Every argument that carries a guard verdict reached on one
+            // participating tree across the tree boundary to another is licensed
+            // only by the two trees agreeing on cluster identity, and that
+            // agreement is a relation BETWEEN two trees' configurations. No
+            // per-tree options validator can observe it - it is handed one tree's
+            // options at a time - so it is checked here, at the one place in the
+            // system that holds every participating tree at once.
+            ThrowIfParticipantClusterIdsDisagree(participants);
 
             // Empty cross-tree batch (no trees, or every tree empty): vacuous
             // commit. Nothing to stage, decide, or finalize.
@@ -563,6 +573,67 @@ internal sealed class LatticeCrossTreeTxGrain(
         }
 
         return copy;
+    }
+
+    /// <summary>
+    /// Rejects a cross-tree saga whose participating trees do not all resolve
+    /// the same origin cluster id, before anything is staged, persisted, or
+    /// dispatched.
+    /// <para>
+    /// <b>Why here and nowhere else.</b> Cross-cluster reasoning across this
+    /// system repeatedly takes the form "the guard holds on T1, therefore the
+    /// entry is safe on T2", and that step is licensed only by
+    /// <c>ClusterId(T1) == ClusterId(T2)</c>. The property was assumed by those
+    /// arguments, asserted in prose by
+    /// <c>LatticeReplicationOptions</c>'s validator, and checked by nothing:
+    /// the validator is structurally unable to check it, because a relation
+    /// between two trees' configurations is not observable from one tree's
+    /// options instance. The coordinator's admission point is the first place a
+    /// participant set exists, so it is where the relation becomes expressible.
+    /// </para>
+    /// <para>
+    /// <b>Why this is not a no-op on a core-only host.</b> The check is on
+    /// <em>agreement</em>, not on any particular value, so the core default
+    /// resolver's uniform <see cref="string.Empty"/> satisfies it for every
+    /// tree and a single-cluster deployment is unaffected. That is the correct
+    /// verdict rather than a vacuous pass: a host with no replication configured
+    /// genuinely has one cluster identity, and every transitivity argument the
+    /// premise licenses is sound there.
+    /// </para>
+    /// <para>
+    /// <b>Why only on the fresh-admission path.</b> A resumed or re-attached
+    /// saga has already been admitted, and its participants are mid-flight with
+    /// staged writes parked in hidden buckets. Re-checking there would let a
+    /// configuration edit made after prepare strand a saga that must still be
+    /// driven to a terminal decision, which is strictly worse than the drift it
+    /// would report.
+    /// </para>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Two participating trees resolve different cluster ids.
+    /// </exception>
+    private void ThrowIfParticipantClusterIdsDisagree(List<CrossTreeParticipant> participants)
+    {
+        if (participants.Count < 2) return;
+
+        var expected = originClusterIdResolver.Resolve(participants[0].TreeId);
+        for (var i = 1; i < participants.Count; i++)
+        {
+            var actual = originClusterIdResolver.Resolve(participants[i].TreeId);
+            if (string.Equals(expected, actual, StringComparison.Ordinal)) continue;
+
+            throw new InvalidOperationException(
+                $"Cross-tree saga '{OperationId}' spans trees that resolve different origin cluster ids: "
+                + $"tree '{participants[0].TreeId}' resolves '{expected}' but tree "
+                + $"'{participants[i].TreeId}' resolves '{actual}'. Every tree in one cross-tree "
+                + "transaction must resolve the same cluster id, because the protocol carries a guard "
+                + "verdict reached on one participating tree across the tree boundary to another and that "
+                + "step is sound only when the two agree on cluster identity. This is a configuration "
+                + "fault: LatticeReplicationOptions.ClusterId is a per-tree option, so a named override "
+                + "for one participating tree silently defeats the cluster-wide value the other trees "
+                + "inherit. Configure ClusterId cluster-wide (AddLatticeReplication does this) and remove "
+                + "the per-tree override, or do not span these trees in one cross-tree write.");
+        }
     }
 
     /// <summary>

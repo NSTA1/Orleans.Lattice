@@ -25,16 +25,20 @@ internal enum ShadowedReadDecision : byte
     PassThrough,
 
     /// <summary>
-    /// The saga <see cref="TxStatus.Committed"/> and its terminal has already
-    /// landed on this leaf, so <c>Entries[K]</c> now holds the authoritative
-    /// post-saga value (drained or backstopped) and the read is safe.
+    /// The saga is <see cref="TxStatus.Committed"/> (or
+    /// <see cref="TxStatus.Indeterminate"/>, which may yet turn out to have
+    /// committed) and its terminal has already landed on this leaf, so
+    /// <c>Entries[K]</c> now holds the authoritative post-saga value (drained or
+    /// backstopped) and the read is safe whichever way the decision went.
     /// </summary>
     ServeProjected,
 
     /// <summary>
-    /// The saga <see cref="TxStatus.Committed"/> but its terminal has <b>not</b>
-    /// landed on this leaf yet, so serving the migrated pre-saga value would tear
-    /// atomic visibility against a sibling leaf whose backstop has already landed.
+    /// The saga is <see cref="TxStatus.Committed"/> - or
+    /// <see cref="TxStatus.Indeterminate"/>, which cannot be ruled out as
+    /// committed - but its terminal has <b>not</b> landed on this leaf yet, so
+    /// serving the migrated pre-saga value would tear atomic visibility against
+    /// a sibling leaf whose backstop has already landed.
     /// The read must gate: the caller raises <c>StaleShardRoutingException</c> so
     /// its deadline-bounded retry loop re-fans under fresh routing.
     /// </summary>
@@ -71,9 +75,26 @@ internal static class ShadowedMigrationReadGuard
     /// <see langword="true"/> when the saga's terminal has already landed on this
     /// leaf (the saga is in the leaf's <c>_recentlyTerminal</c> set).
     /// </param>
+    /// <remarks>
+    /// <see cref="TxStatus.Indeterminate"/> is resolved exactly as
+    /// <see cref="TxStatus.Committed"/> is, and deliberately not as a
+    /// pass-through. Passing through serves the migrated pre-saga value, which is
+    /// an <i>affirmative claim that the shadowing saga did not commit</i> - the
+    /// one thing an indeterminate reading says nobody knows. The same reasoning
+    /// makes <see cref="AtomicVisibilityGate.ResolveKey"/> hide an indeterminate
+    /// saga's keys rather than fall through to their pre-saga values.
+    /// <para>
+    /// Folding it onto the committed arm rather than gating unconditionally
+    /// keeps the common case available: once the terminal has landed here,
+    /// <c>Entries[K]</c> holds the post-saga value whichever way the decision
+    /// went, so the read is safe without knowing the decision at all. Only the
+    /// genuinely ambiguous combination - might have committed, terminal not yet
+    /// applied here - gates.
+    /// </para>
+    /// </remarks>
     public static ShadowedReadDecision ResolveSaga(TxStatus status, bool terminalApplied)
     {
-        if (status != TxStatus.Committed)
+        if (status is TxStatus.InFlight or TxStatus.Aborted)
         {
             return ShadowedReadDecision.PassThrough;
         }
@@ -84,11 +105,13 @@ internal static class ShadowedMigrationReadGuard
     }
 
     /// <summary>
-    /// Folds <see cref="ResolveSaga"/> over the set of sagas shadowing a key: the
-    /// migrated value is safe to serve iff <b>no</b> shadowing saga resolves to
+    /// The per-saga safety predicate the caller folds over the set of sagas
+    /// shadowing a key: the migrated value is safe to serve iff <b>no</b>
+    /// shadowing saga resolves to
     /// <see cref="ShadowedReadDecision.GateStaleRouting"/>. A single committed
-    /// saga whose terminal has not yet landed is decisive and gates the read.
-    /// This is a per-saga step so the caller can drive it over its own saga
+    /// (or indeterminate) saga whose terminal has not yet landed is decisive and
+    /// gates the read.
+    /// The fold is left to the caller so it can drive this over its own saga
     /// enumeration (resolving each status asynchronously) without allocating an
     /// intermediate collection.
     /// </summary>

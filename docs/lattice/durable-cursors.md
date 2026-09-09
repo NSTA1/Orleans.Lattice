@@ -211,13 +211,20 @@ finally
 1. **Capture at open.** `OpenAsync` calls
    `ITxRegistryGrain.SnapshotAsync()` once and persists the resulting
    `Dictionary<Guid, TxStatus>` in `LatticeCursorState.PointInTimeSnapshot`.
-2. **Pin retention.** If the snapshot contains any decisions, the cursor
-   calls `ITxRegistryGrain.PinSnapshotAsync(snapshot, ttl)` to ask the
+2. **Pin retention.** If the snapshot recorded a decision for any txid
+   (entries the snapshot read as `InFlight` are excluded - they have no
+   tombstone to protect yet), the cursor mints a pin id and calls
+   `ITxRegistryGrain.PinSnapshotAsync(pinId, txids, ttl)` to ask the
    registry to retain every observed decision (including any
    `ForgetAsync`'d tombstones) for the cursor's lifetime. The
    registry's `LatticeOptions.MaxCursorSnapshotPinTtl` (default 7 days)
-   is the hard upper bound. The returned `Guid` handle is persisted in
-   `LatticeCursorState.SnapshotPinId`.
+   is the hard upper bound. The pin id is persisted in
+   `LatticeCursorState.SnapshotPinId`. Entries the snapshot read as
+   `Indeterminate` are pinned too: an indeterminate reading is an
+   aged-out tombstone whose decision row is still stored, which is
+   exactly the row a pin exists to protect, and because the retention
+   mask is pin-aware the pin also restores the recorded outcome to this
+   cursor.
 3. **Per-step replay.** Every `NextKeysAsync` / `NextEntriesAsync`
    re-enters the captured snapshot via
    `LatticeRegistrySnapshotContext.BeginScope(...)` before fanning out

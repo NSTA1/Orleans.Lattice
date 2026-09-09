@@ -2256,11 +2256,35 @@ internal sealed class AtomicWriteGrain(
     /// dials back through the registry to resolve the read against the
     /// already-recorded outcome, so the post-fan-out window in which
     /// some leaves have flipped and others have not is invisible to
-    /// readers. Idempotent - reminder-driven re-entry after a crash
-    /// between the registry write and the saga's Completed flip is
-    /// safe because both <c>MarkCommittedAsync</c> and
-    /// <c>MarkAbortedAsync</c> treat repeated same-outcome calls as
-    /// no-ops.
+    /// readers. Idempotent for reminder-driven re-entry after a crash
+    /// between the registry write and the saga's Completed flip: a
+    /// same-outcome repeat is classified <c>Idempotent</c> by the
+    /// registry's write-once guard and mutates nothing, including the
+    /// tombstone map.
+    /// <para>
+    /// That guard is necessary but not by itself sufficient, because it
+    /// only holds while the decision is still recorded. Once the saga's
+    /// cleanup has forgotten it and the tombstone has been physically
+    /// pruned, a repeat would be classified <c>Record</c> and would
+    /// resurrect a decision the tree had retired. What rules that out is
+    /// ordering, not idempotence: <c>ForgetAsync</c> is only reached
+    /// from the cleanup that runs after the <c>Phase = Completed</c>
+    /// flip, and re-entry past that flip short-circuits at the top of
+    /// the saga entry points before it can reach this method. Do not
+    /// weaken either half - the write-once guard alone does not survive
+    /// retention expiry, and the ordering alone does not survive a
+    /// duplicate delivery inside the live window.
+    /// </para>
+    /// <para>
+    /// Neither argument extends to a <em>replicated</em> terminal. Two of
+    /// the three producers of <c>MarkCommittedAsync</c> /
+    /// <c>MarkAbortedAsync</c> live on the replication-apply path of a
+    /// different grain and are not sequenced behind this saga's
+    /// <c>Phase</c> at all, so a peer-originated terminal arriving after
+    /// local cleanup is subject to the resurrection case above. That is
+    /// the cross-cluster hazard, and it is a property of the apply path,
+    /// not of this method.
+    /// </para>
     /// </summary>
     private Task RecordTerminalDecisionAsync(bool committed)
     {

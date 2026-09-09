@@ -7,7 +7,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Leaf node grain implementation. Stores key → <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> entries
+/// Leaf node grain implementation. Stores key -> <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> entries
 /// in a sorted dictionary. Splits when the entry count exceeds the leaf-sizing
 /// pin in the tree registry.
 /// </summary>
@@ -301,7 +301,8 @@ internal sealed partial class BPlusLeafGrain(
     /// would surface a migrated entry but carries a destination-side
     /// shadow marker. Resolves every shadowing saga through the
     /// registry and either passes the migrated value through
-    /// (InFlight / Aborted / Committed-with-backstop) or raises
+    /// (InFlight / Aborted, or a decided-or-indeterminate saga whose
+    /// backstop terminal has already landed here) or raises
     /// <see cref="StaleShardRoutingException"/> with a sentinel
     /// <c>(-1, -1, -1)</c> tuple so the caller's deadline-bounded
     /// retry loop re-fans under a fresh snapshot.
@@ -569,9 +570,10 @@ internal sealed partial class BPlusLeafGrain(
                 // full rationale: when the surfacing entry is a
                 // destination-side migration (IsMigrated=true) and
                 // the split coordinator installed a shadow marker
-                // naming a committed-no-backstop saga as the owner
-                // of this key, raise StaleShardRoutingException so
-                // the LatticeGrain retry loop re-fans under a fresh
+                // naming a saga that is not known to be undecided,
+                // and whose backstop terminal has not landed here,
+                // as the owner of this key, raise
+                // StaleShardRoutingException so the LatticeGrain retry loop re-fans under a fresh
                 // snapshot. Cheap on the steady-state path: a single
                 // null check plus a dictionary miss when no marker
                 // is installed.

@@ -559,6 +559,28 @@ internal sealed partial class LatticeGrain
     {
         EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
+
+        // Trust boundary on originClusterId, stated because two things that
+        // look like validation are not:
+        //
+        //  - EnsureInternalOrigin gates WHO may call this seam. It never
+        //    constrains WHAT origin the caller claims, and it is itself a no-op
+        //    unless LatticeInternalOriginEnforcementMarker is registered - i.e.
+        //    unless the host called AddLatticeAuth.
+        //  - ThrowIfNullOrEmpty checks the argument is present. It is compared
+        //    against nothing; the core holds no local cluster identity to
+        //    compare it against (ILatticeOriginClusterIdResolver's core default
+        //    resolves to string.Empty, so a comparison built on it would pass
+        //    vacuously in exactly the deployment with no replication package).
+        //
+        // So this method trusts its caller's originClusterId. The bundled
+        // transport binding (ReplicationApplier) rejects a local-origin entry
+        // before it ever reaches here, which is what makes a foreign origin the
+        // only one that arrives in practice - but that is one binding, and this
+        // seam is public. A caller supplying a local origin is the sole
+        // remaining route by which a txid could end up delegated through both
+        // registry authority maps at once; the registry rejects that at its own
+        // registration sites rather than relying on this seam to prevent it.
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
         if (transactionId == Guid.Empty)
         {
