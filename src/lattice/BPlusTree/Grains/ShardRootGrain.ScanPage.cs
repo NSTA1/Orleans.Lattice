@@ -62,7 +62,11 @@ internal sealed partial class ShardRootGrain
 
         /// <summary>
         /// The leaf whose read this walk most recently issued, or
-        /// <see langword="null"/> before the walk has issued one.
+        /// <see langword="null"/> before the walk has issued one. Written only
+        /// by <see cref="StandDownIfCeilingFired(ScanPageWalk, GrainId)"/>, so
+        /// it is recorded on every leaf-walk path and on none of the fold pass.
+        /// Read through <see cref="LeafInFlight"/>, never directly: on its own
+        /// this is "last issued", not "still outstanding".
         /// </summary>
         internal GrainId? LeafInFlightId;
 
@@ -76,7 +80,7 @@ internal sealed partial class ShardRootGrain
 
         /// <summary>
         /// The leaf whose read is genuinely still outstanding, or
-        /// <see langword="null"/> when the walk is between reads.
+        /// <see langword="null"/> when no leaf read is outstanding.
         /// <para>
         /// A leaf read is outstanding exactly when no completion has been
         /// recorded since it was issued, which is why the ordinal is captured
@@ -88,6 +92,22 @@ internal sealed partial class ShardRootGrain
         /// either while a read is parked (the case this exists to attribute)
         /// or at the stand-down between two reads, and in the second the last
         /// identity recorded names a leaf that already answered.
+        /// </para>
+        /// <para>
+        /// <see langword="null"/> has exactly three meanings, and issue 2365
+        /// removed a fourth. In <see cref="ScanPagePhase.Prologue"/> and
+        /// <see cref="ScanPagePhase.Descent"/> no leaf read has been issued at
+        /// all; in <see cref="ScanPagePhase.LeafWalk"/> it means the walk is
+        /// between reads, and that reading is now trustworthy on every
+        /// leaf-walk path because all of them record through
+        /// <see cref="StandDownIfCeilingFired(ScanPageWalk, GrainId)"/>; and in
+        /// <see cref="ScanPagePhase.BaselineFold"/> it means no identity is
+        /// recorded by design - see that overload's sibling for why the fold
+        /// pass cannot use this mechanism. The fourth meaning was "this call
+        /// site never records an identity", which held on five of the six
+        /// leaf-walk stand-downs and rendered identically to "between reads",
+        /// so a stall from a projection-admin or diagnostics walk looked like a
+        /// measured negative when the diagnostic had simply never been applied.
         /// </para>
         /// </summary>
         internal GrainId? LeafInFlight =>
@@ -311,6 +331,23 @@ internal sealed partial class ShardRootGrain
     /// stops has not overrun any leaf, row or byte bound - it is stopped
     /// because the wall clock the ceiling set has elapsed, which is the only
     /// quantity that moves when the fault is a read that will not return.
+    /// </para>
+    /// <para>
+    /// This overload records no leaf identity, so a leaf-walk site must call
+    /// <see cref="StandDownIfCeilingFired(ScanPageWalk, GrainId)"/> instead
+    /// (issue 2365): a stand-down that records nothing leaves
+    /// <see cref="ScanPageWalk.LeafInFlight"/> permanently
+    /// <see langword="null"/>, which a stall reader cannot distinguish from
+    /// the documented "between reads". The one legitimate caller is the
+    /// <see cref="ScanPagePhase.BaselineFold"/> pass, and the reason is
+    /// structural rather than a matter of effort: the freshness test that
+    /// makes a recorded identity trustworthy is
+    /// <c>LeafInFlightOrdinal == Budget.LeavesVisited</c>, and the fold pass
+    /// never calls <see cref="LeafWalkBudget.RecordLeafVisited"/>, so an
+    /// identity recorded there would compare equal forever and go on naming a
+    /// leaf that had already answered. That is strictly worse than naming
+    /// none, which is why the fold pass reports its fan-out through the phase
+    /// instead.
     /// </para>
     /// </summary>
     private static void StandDownIfCeilingFired(ScanPageWalk scan) =>
