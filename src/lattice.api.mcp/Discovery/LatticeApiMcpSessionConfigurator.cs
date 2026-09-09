@@ -318,17 +318,12 @@ internal sealed class LatticeApiMcpSessionConfigurator
         return new LatticeApiMcpCapabilities
         {
             Authenticated = credential is not null,
-            SubjectId = credential is null ? null : SubjectIdOf(credential.Value),
+            SubjectId = credential is null ? null : LatticeApiMcpSubjectId.Resolve(credential.Value),
             ClusterId = clusterInfo?.ClusterId ?? string.Empty,
             ServiceId = clusterInfo?.ServiceId ?? string.Empty,
             Groups = groups,
         };
     }
-
-    private static string? SubjectIdOf(LatticeCredential credential)
-        => !string.IsNullOrEmpty(credential.PrincipalId) ? credential.PrincipalId
-            : !string.IsNullOrEmpty(credential.Token) ? credential.Token
-            : null;
 
     private static McpServerTool CreateCapabilitiesTool(LatticeApiMcpCapabilities capabilities)
         => McpServerTool.Create(

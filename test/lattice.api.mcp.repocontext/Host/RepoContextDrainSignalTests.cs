@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// container was killed mid-drain.
 /// </summary>
 [TestFixture]
-public sealed class RepoContextDrainSignalTests
+public sealed partial class RepoContextDrainSignalTests
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(90);
 

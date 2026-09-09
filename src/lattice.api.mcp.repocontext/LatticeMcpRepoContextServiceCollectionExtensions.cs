@@ -58,21 +58,23 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     /// <c>repocontext_add_repo</c> and <c>repocontext_remove_repo</c>.
     /// </param>
     /// <param name="workspaceRoot">
-    /// The read-only workspace root that runtime-added repositories must resolve
-    /// under. When supplied, a fail-closed path guard rejects any
-    /// <c>repocontext_add_repo</c> path that escapes the root (via <c>..</c> or a
-    /// symbolic link). When <see langword="null"/> or empty, a disabled guard is
-    /// registered that permits any path (the single-repository default). Ignored
-    /// unless a host registers no guard of its own first.
+    /// The read-only workspace root that repositories onboarded from the wire must
+    /// resolve under. When supplied, a fail-closed path guard rejects any
+    /// <c>repocontext_add_repo</c> or <c>repocontext_bootstrap</c> path that
+    /// escapes the root (via <c>..</c> or a symbolic link). When
+    /// <see langword="null"/> or empty, a disabled guard is registered that
+    /// normalises but does not bound a path. Ignored unless a host registers no
+    /// guard of its own first.
     /// <para>
-    /// <b>Required by workspace mode.</b> A disabled guard admits every path, so
-    /// <c>repocontext_add_repo</c> - whose path comes from the wire - refuses at
-    /// invocation unless the effective guard is enforcing. Supply a root here, or
-    /// register an enforcing <c>RepoContextWorkspaceGuard</c> before this call,
-    /// whenever <paramref name="workspaceMode"/> is <see langword="true"/>. The
-    /// disabled guard remains the intended shape for the single-repository
-    /// <c>repocontext_bootstrap</c> surface, where the path is host configuration
-    /// rather than caller input.
+    /// <b>Required by both onboarding tools.</b> A disabled guard admits every
+    /// path, so neither <c>repocontext_add_repo</c> nor
+    /// <c>repocontext_bootstrap</c> - whose paths both come from the wire - is
+    /// contributed without a root, and both refuse at invocation unless the
+    /// effective guard is enforcing. Supply a root here, or register an enforcing
+    /// <c>RepoContextWorkspaceGuard</c> before this call, whenever writes are
+    /// enabled. Without one, the write opt-in still contributes the capture and
+    /// maintenance tools (<c>repocontext_remember</c> and friends), which take no
+    /// path.
     /// </para>
     /// </param>
     /// <returns>The service collection for chaining.</returns>
@@ -111,10 +113,11 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
             }
         }
 
-        // Advertisement must match enforcement: workspace mode without a root
-        // cannot honour repocontext_add_repo's promised boundary, so the tool is
-        // not offered at all. The handler re-checks the *effective* DI-resolved
-        // guard at invocation, which is what covers a host that registered its own
+        // Advertisement must match enforcement: neither onboarding tool can honour
+        // the workspace boundary its own description promises without a configured
+        // root, and both take their path from the wire, so without one neither is
+        // offered. The handler re-checks the *effective* DI-resolved guard at
+        // invocation, which is what covers a host that registered its own
         // non-enforcing guard here despite passing a root.
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup>(

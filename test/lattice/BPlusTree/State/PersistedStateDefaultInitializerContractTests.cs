@@ -85,6 +85,7 @@ public sealed class PersistedStateDefaultInitializerContractTests
     public void Persisted_state_value_members_must_equal_the_type_default_on_a_fresh_instance()
     {
         var violations = new List<string>();
+        var inspected = 0;
 
         foreach (var type in PersistedStateTypes())
         {
@@ -97,6 +98,7 @@ public sealed class PersistedStateDefaultInitializerContractTests
                 if (!property.CanRead) continue;
                 if (!property.PropertyType.IsValueType) continue;
 
+                inspected++;
                 var actual = property.GetValue(instance);
                 var expected = Activator.CreateInstance(property.PropertyType);
                 if (!Equals(actual, expected))
@@ -110,6 +112,16 @@ public sealed class PersistedStateDefaultInitializerContractTests
                 }
             }
         }
+
+        // Denominator guard. This gate "carries no exemptions", but a scan that
+        // discovered no serialized value-typed member would be the broadest
+        // exemption of all: `violations` stays empty and the gate passes having
+        // checked nothing. Counted at member level rather than type level, since
+        // the three `continue` filters above are where the denominator can
+        // silently collapse.
+        Assert.That(inspected, Is.GreaterThan(0),
+            "the persisted-state scan inspected no serialized value-typed members, "
+            + "so the violation assertion below would pass vacuously");
 
         Assert.That(violations, Is.Empty,
             "Persisted-state members with a non-default initializer:"

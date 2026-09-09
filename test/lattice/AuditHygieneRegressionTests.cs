@@ -28,6 +28,13 @@ public class AuditHygieneRegressionTests
                         && typeof(IGrainBase).IsAssignableFrom(t))
             .ToList();
 
+        // Denominator guard. "No offenders" is satisfied trivially by a run in
+        // which no grain was discovered at all, so if this predicate ever stops
+        // matching (IGrainBase moves, grains become abstract or are relocated to
+        // another assembly) the audit would go green having inspected nothing.
+        Assert.That(grainTypes, Is.Not.Empty,
+            "the grain scan found no types to audit, so the offender assertion below would pass vacuously");
+
         var offenders = new List<string>();
         foreach (var grainType in grainTypes)
         {

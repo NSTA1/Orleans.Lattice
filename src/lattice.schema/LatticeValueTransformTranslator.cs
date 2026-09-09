@@ -187,9 +187,25 @@ public static class LatticeValueTransformTranslator
             ulong ul => ul <= long.MaxValue ? LatticeConstant.Integer((long)ul) : LatticeConstant.Real(ul),
             float or double => LatticeConstant.Real(Convert.ToDouble(value)),
             decimal d => LatticeConstant.Real((double)d),
-            Enum e => LatticeConstant.Integer(Convert.ToInt64(e)),
+            Enum e => CaptureEnum(e),
             _ => LatticeConstant.Text(value.ToString() ?? string.Empty),
         };
+    }
+
+    private static LatticeConstant CaptureEnum(Enum value)
+    {
+        // An enum with a ulong underlying type can hold a value above
+        // long.MaxValue, where Convert.ToInt64 would overflow. Read it through
+        // the unsigned underlying type and capture it exactly as the sibling
+        // plain-ulong arm does: an exact integer when it fits a long, a double
+        // above it, so a lowered transform constant stays consistent.
+        if (value.GetTypeCode() == TypeCode.UInt64)
+        {
+            var wide = Convert.ToUInt64(value);
+            return wide <= long.MaxValue ? LatticeConstant.Integer((long)wide) : LatticeConstant.Real(wide);
+        }
+
+        return LatticeConstant.Integer(Convert.ToInt64(value));
     }
 
     private static Expression Unwrap(Expression expression)
