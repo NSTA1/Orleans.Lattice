@@ -11,6 +11,17 @@ namespace Orleans.Lattice.Replication;
 /// without setting <see cref="LatticeReplicationOptions.ClusterId"/> sees a
 /// clear validation error rather than producing
 /// <see cref="WalRecord"/> records with no attributable origin.
+/// <para>
+/// <b>What this validator cannot check.</b> It is handed one options instance
+/// at a time, so it can assert per-instance well-formedness only. The
+/// cross-tree saga protocol additionally requires every tree in one cross-tree
+/// transaction to resolve the <em>same</em>
+/// <see cref="LatticeReplicationOptions.ClusterId"/>, and that is a relation
+/// <b>between</b> two trees' configurations - not observable from here at any
+/// cost. It is enforced instead where a participant set first exists: at
+/// cross-tree saga admission in the coordinator, and at the replicated
+/// cross-tree barrier's wait-set freeze on the receiver.
+/// </para>
 /// </summary>
 internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<LatticeReplicationOptions>
 {
@@ -30,7 +41,6 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "origin and break replication cycles; an empty value would produce unattributable "
                 + "change-feed entries and is rejected.");
         }
-
         if (options.ReplogPartitions < 1)
         {
             return ValidateOptionsResult.Fail(

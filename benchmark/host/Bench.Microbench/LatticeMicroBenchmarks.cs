@@ -1096,6 +1096,7 @@ public class LatticeMicroBenchmarks
             _grainFactory,
             _crossTreeReminderRegistry,
             _optionsMonitor,
+            new DefaultLatticeOriginClusterIdResolver(),
             NullLogger<LatticeCrossTreeTxGrain>.Instance,
             coordinatorState);
         _crossTreeCoordinators[operationId] = coordinator;
