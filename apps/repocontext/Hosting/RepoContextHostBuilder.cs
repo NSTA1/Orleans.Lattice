@@ -60,6 +60,26 @@ public static class RepoContextHostBuilder
     public const string ReadinessTag = "ready";
 
     /// <summary>
+    /// The host's own shutdown budget: how long the generic host will wait for
+    /// every hosted service - the silo, and with it the WAL commit-log drainer - to
+    /// stop before it abandons the drain and exits.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This value is <b>only reachable if the container grants at least this long
+    /// between SIGTERM and SIGKILL</b>. Docker's default <c>stop_grace_period</c> is
+    /// 10 seconds, which is a ninth of it, so a deployment that leaves the default
+    /// in place can never exercise this budget: every teardown is a crash teardown,
+    /// the graceful deactivation path never completes, and the documented behaviour
+    /// silently does not hold. That is the defect recorded as issue #2389, and it is
+    /// why this budget is a named constant rather than a literal buried in a lambda
+    /// - the sample compose file's <c>stop_grace_period</c> is asserted against it,
+    /// so the two numbers cannot drift apart unnoticed.
+    /// </para>
+    /// </remarks>
+    public static readonly TimeSpan ShutdownBudget = TimeSpan.FromSeconds(90);
+
+    /// <summary>
     /// Builds the fully-wired <see cref="WebApplication"/> from the ambient
     /// configuration (environment variables). Resolves and validates the durability
     /// profile (failing fast on a missing credential), applies the local schema and
@@ -99,12 +119,16 @@ public static class RepoContextHostBuilder
         builder.WebHost.UseUrls($"http://0.0.0.0:{config.McpPort}");
 
         // A generous shutdown budget so the silo's WAL commit-log drainer can flush
-        // buffered records before the process exits on SIGTERM.
+        // buffered records before the process exits on SIGTERM. It is only reachable
+        // if the container's stop_grace_period exceeds it - see ShutdownBudget.
         builder.Services.Configure<HostOptions>(options =>
-            options.ShutdownTimeout = TimeSpan.FromSeconds(90));
+            options.ShutdownTimeout = ShutdownBudget);
 
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton<RepoContextReadinessState>();
+        builder.Services.AddSingleton(sp => new RepoContextDrainSignal(
+            sp.GetRequiredService<ILogger<RepoContextDrainSignal>>(),
+            ShutdownBudget));
 
         // Constructed here rather than resolved lazily on the first scrape: the
         // listener starts accumulating from this point, so an instrument that
@@ -291,6 +315,14 @@ public static class RepoContextHostBuilder
         // Dispose is idempotent, so registering it here is safe whether or not the
         // service provider also disposes the instance it did not create.
         app.Lifetime.ApplicationStopped.Register(metricsCollector.Dispose);
+
+        // The observable drain-complete signal. Registered here rather than as a
+        // hosted service so its ApplicationStopped callback is not itself one of the
+        // services being waited on: it must be able to report the duration of a stop
+        // sequence it is not part of.
+        app.Services
+            .GetRequiredService<RepoContextDrainSignal>()
+            .Bind(app.Lifetime);
 
         if (isAzure)
         {
