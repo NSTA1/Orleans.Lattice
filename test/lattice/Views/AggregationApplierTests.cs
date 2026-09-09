@@ -166,4 +166,119 @@ public sealed class AggregationApplierTests
         Assert.That(await store.GetAsync("g"), Is.Not.Null,
             "the group re-materialises once a source key contributes again");
     }
+
+    // ───────────────── batched store round trips (issue: perf) ─────────────────
+
+    /// <summary>
+    /// Wraps the in-memory store and counts the read calls each kind of pass
+    /// issues, so the batched shard read and batched empty-slot cleanup are
+    /// asserted structurally rather than only by their end state.
+    /// </summary>
+    private sealed class CountingAggregationViewStore(InMemoryAggregationViewStore inner) : IAggregationViewStore
+    {
+        public int GetCalls { get; private set; }
+
+        public int GetManyCalls { get; private set; }
+
+        public Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
+        {
+            GetCalls++;
+            return inner.GetAsync(key, cancellationToken);
+        }
+
+        public Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default)
+        {
+            GetManyCalls++;
+            return inner.GetManyAsync(keys, cancellationToken);
+        }
+
+        public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
+            => inner.SetAsync(key, value, cancellationToken);
+
+        public Task DeleteAsync(string key, CancellationToken cancellationToken = default)
+            => inner.DeleteAsync(key, cancellationToken);
+
+        public Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId, CancellationToken cancellationToken = default)
+            => inner.SetManyAtomicAsync(entries, operationId, cancellationToken);
+    }
+
+    [Test]
+    public async Task Count_materialise_totals_every_slot_at_a_sharded_fanout()
+    {
+        // Distinct source keys spread across the 8 accumulator slots. The
+        // materialise pass must total all of them, so a batched read that dropped
+        // a slot would under-count.
+        var store = new InMemoryAggregationViewStore();
+        var applier = new AggregationApplier(store, AggregationKind.Count, fanout: 8, maxGroupEntries: 0, operationEpoch: "e1");
+
+        for (var i = 0; i < 32; i++)
+        {
+            await applier.ApplyAsync(AggregationContribution.OfNumeric("g", $"s{i}", 1.0, Hlc()));
+        }
+
+        var materialised = await store.GetAsync("g");
+        Assert.That(materialised, Is.Not.Null);
+        Assert.That(LatticeAggregationValue.DecodeInt64(materialised!), Is.EqualTo(32),
+            "every accumulator slot must be included in the materialised total");
+    }
+
+    [Test]
+    public async Task Sum_materialise_totals_every_slot_at_a_sharded_fanout()
+    {
+        var store = new InMemoryAggregationViewStore();
+        var applier = new AggregationApplier(store, AggregationKind.Sum, fanout: 8, maxGroupEntries: 0, operationEpoch: "e1");
+
+        for (var i = 0; i < 32; i++)
+        {
+            await applier.ApplyAsync(AggregationContribution.OfNumeric("g", $"s{i}", 2.5, Hlc()));
+        }
+
+        var materialised = await store.GetAsync("g");
+        Assert.That(materialised, Is.Not.Null);
+        Assert.That(LatticeAggregationValue.DecodeDouble(materialised!), Is.EqualTo(80.0).Within(1e-9),
+            "every accumulator slot must be included in the materialised total");
+    }
+
+    [Test]
+    public async Task Count_materialise_reads_every_slot_in_one_batched_call()
+    {
+        // The shard gather is one GetMany per materialise pass regardless of
+        // fanout, rather than one Get per slot: a fanout-32 contribution issues a
+        // single-digit number of point reads, not 30-odd of them.
+        var store = new CountingAggregationViewStore(new InMemoryAggregationViewStore());
+        var applier = new AggregationApplier(store, AggregationKind.Count, fanout: 32, maxGroupEntries: 0, operationEpoch: "e1");
+
+        await applier.ApplyAsync(AggregationContribution.OfNumeric("g", "s1", 1.0, Hlc()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.GetManyCalls, Is.EqualTo(2),
+                "one batched shard gather for the materialise pass, one for the empty-slot cleanup");
+            Assert.That(store.GetCalls, Is.LessThanOrEqualTo(4),
+                "point reads must not scale with the fanout");
+        });
+    }
+
+    [Test]
+    public async Task Retract_probes_its_cleanup_candidates_in_one_batched_call()
+    {
+        // A retract empties both the decremented slot and the membership row, and
+        // must probe them together rather than one round trip each.
+        var inner = new InMemoryAggregationViewStore();
+        var applier = new AggregationApplier(
+            new CountingAggregationViewStore(inner), AggregationKind.Count, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1");
+        await applier.ApplyAsync(AggregationContribution.OfNumeric("g", "s1", 1.0, Hlc()));
+
+        var counting = new CountingAggregationViewStore(inner);
+        var retracting = new AggregationApplier(counting, AggregationKind.Count, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1");
+        await retracting.ApplyAsync(AggregationContribution.Retract("s1", Hlc()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(counting.GetManyCalls, Is.EqualTo(2),
+                "one batched materialise gather, one batched cleanup probe");
+            Assert.That(inner.Count, Is.EqualTo(0),
+                "the emptied slot, membership row, and materialised group are all removed");
+        });
+    }
 }
