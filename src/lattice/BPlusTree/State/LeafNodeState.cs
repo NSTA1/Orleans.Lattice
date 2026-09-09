@@ -296,10 +296,15 @@ internal sealed class LeafNodeState
     /// <see langword="null"/> or empty in the steady state: entries are struck
     /// off the moment their work resolves (a terminal drains, a saga commits or
     /// aborts), so the list tracks outstanding sagas and undrained terminals,
-    /// never the replayed record count. Growth is bounded by
-    /// <c>LatticeOptions.MaxDurableUnresolvedReplayWork</c>; past that bound
-    /// the ceiling falls back to the pre-#2165 clamping behaviour rather than
-    /// letting the state row grow without limit.
+    /// never the replayed record count. <c>LatticeOptions.MaxDurableUnresolvedReplayWork</c>
+    /// bounds the <b>deferred terminals</b>: past that bound a terminal is not
+    /// recorded and the ceiling falls back to the pre-#2165 clamping behaviour
+    /// for it, which is safe because pass 2 re-reads and drains it. A resident
+    /// unresolved <b>prepare</b> is recorded unconditionally and is never
+    /// dropped at the bound (issue #2183), because nothing drains a prepare
+    /// whose saga never terminates and dropping one would pin the ceiling
+    /// permanently. The row is therefore allowed to grow past the bound, and
+    /// the crossing is metered and warned rather than capped.
     /// </para>
     /// </summary>
     [Id(21)] public List<UnresolvedReplayWorkEntry>? UnresolvedReplayWork { get; set; }

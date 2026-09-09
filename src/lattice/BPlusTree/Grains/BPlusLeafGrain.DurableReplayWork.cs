@@ -183,7 +183,6 @@ internal sealed partial class BPlusLeafGrain
     /// silent permanent write loss.
     /// </para>
     /// <para>
-    /// <summary>
     /// Idempotent: a prepare already recorded at (partition, offset) is left
     /// untouched, so a restore-then-re-read cannot double it.
     /// </para>

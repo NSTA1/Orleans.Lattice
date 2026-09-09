@@ -95,12 +95,13 @@ The background reconcile cadence (see [Background reconcile and change detection
 
 > **These three interval variables are a matched set.** `LATTICE_FULL_WALK_INTERVAL_SECONDS` and `LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS` are wall-clock values that are converted once into **pass counts** by dividing by the reconcile spacing (`LATTICE_RECONCILE_INTERVAL_SECONDS` plus `LATTICE_RECONCILE_JITTER_SECONDS`). Changing the reconcile interval therefore silently re-denominates both of the others. Raising it far enough that the full-walk interval floors to a single pass switches directory-modification-time pruning off entirely - no error, and the prune cache is written on every run but never read. If you raise the reconcile interval, restate the other two. The host logs the derived pass counts next to the configured seconds at startup (`full walk 120 s = 24 pass(es) ...; pruning can engage: True`), and warns when the arithmetic has disabled pruning, so the conversion never has to be worked out by hand.
 
-Three further variables tune the indexing role, per-file token counting, and the semantic-search vector cache:
+Two further variables tune the indexing role and per-file token counting, and two select the semantic-retrieval path and size the vector cache:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `LATTICE_REPOCONTEXT_INDEXING_ROLE` | `hub` | The cluster's indexing role: `hub` (the authoritative indexer that walks, reconciles, prunes, and re-embeds) or `spoke` (a read-only replica whose index pass is inert). An absent or unrecognised value falls back to `hub`. |
 | `LATTICE_REPOCONTEXT_TOKENIZER` | `o200k` | The BPE tokenizer profile the per-file token counter uses: `o200k` (OpenAI o200k_base) or `cl100k` (OpenAI cl100k_base). An absent or unrecognised value falls back to `o200k`. |
+| `LATTICE_REPOCONTEXT_SEMANTIC_RETRIEVAL` | `approximate` | Which semantic retrieval path is bound: `approximate` routes semantic search through the persisted approximate nearest-neighbour index (bounded recall, sub-linear query cost, survives a restart), and `exact` routes it through the complete-recall brute-force scan instead, whose cost is proportional to the corpus. An absent or unrecognised value falls back to `approximate`. A host set to `exact` maintains no approximate index at all, so the build coordinator below is inert for it. Documented in full under [Semantic search](semantic-search.md#the-two-paths). |
 | `LATTICE_VECTOR_CACHE_TTL_SECONDS` | `30` | How long (in seconds) a warm decoded-vector candidate set is trusted before it is re-gathered from the store; `0` disables the cache. |
 
 Two further variables are the kill switches for the approximate index's own housekeeping. Both default on, and both are documented in full under [Scheduling the approximate index build](semantic-search.md#scheduling-the-approximate-index-build):
