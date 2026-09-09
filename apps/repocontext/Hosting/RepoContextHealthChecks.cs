@@ -100,9 +100,19 @@ public sealed class RepoContextRetrievalReadinessHealthCheck(RepoContextRetrieva
         HealthCheckResult.Healthy(
             "Nothing registered: no repository is onboarded, so there is nothing the vector plane could be asked to serve."));
 
+    // Named for the readiness phase, not for a cause: what the phase records is
+    // that the plane has never served, and nothing here observes why. Asserting a
+    // build was in progress - which this message did until issue #2362 - turned an
+    // absence of evidence into a claim, and on a deployment whose sweep had
+    // scheduled no build at all it was simply false. The machine-readable form of
+    // the same fact is the search response's retrieval path,
+    // keyword.vector_plane_unavailable, which this text deliberately quotes so an
+    // operator reading either one is told the same thing.
     private static readonly Task<HealthCheckResult> Building = Task.FromResult(
         HealthCheckResult.Unhealthy(
-            "Not ready: the vector plane cannot serve semantic retrieval yet (still building, or unavailable)."));
+            "Not ready: the vector plane has not served semantic retrieval, so searches are answering as "
+            + "keyword.vector_plane_unavailable. Whether a build is in progress is not known here; check the "
+            + "index build's own status rather than inferring it from this line."));
 
     private readonly RepoContextRetrievalReadinessState _state = state
         ?? throw new ArgumentNullException(nameof(state));
