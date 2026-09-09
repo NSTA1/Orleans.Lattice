@@ -319,10 +319,55 @@ internal sealed class TxRegistryGrain(
         }
     }
 
+    /// <summary>
+    /// Enforces the disjointness premise the two cross-tree delegation maps rest
+    /// on: a txid may be delegated to an authoring coordinator or to a receiver
+    /// coordinator, never to both. Throws before any mutation, so a rejected
+    /// registration leaves the registry exactly as it found it and needs no
+    /// unwind.
+    /// <para>
+    /// The check is on the <b>consequence</b> - two rows coexisting - and
+    /// deliberately not on the cause, a terminal arriving with a foreign origin.
+    /// The cause is not expressible here: the core holds both maps but holds no
+    /// local cluster identity to compare an origin against.
+    /// <see cref="ILatticeOriginClusterIdResolver"/> looks like the missing
+    /// operand and is not, because its core default resolves to
+    /// <see cref="string.Empty"/>; a self-origin comparison built on it would
+    /// pass vacuously in precisely the deployment that has no replication
+    /// package and therefore most needs the seam guarded. A missing operand
+    /// stops an implementer; a present-but-vacuous one lets them ship.
+    /// </para>
+    /// <para>
+    /// Reaching this throw means an invariant several consumers read as given
+    /// has already been violated upstream - most plausibly by a caller of the
+    /// public replication-apply seam supplying a foreign origin, which
+    /// <c>EnsureInternalOrigin</c> does not constrain (it gates who may call,
+    /// never what origin is claimed, and is itself a no-op unless
+    /// <c>AddLatticeAuth</c> was registered). Failing the registration is the
+    /// conservative outcome: the alternative is a registry in which
+    /// <c>ResolveAnyDelegatedAsync</c> silently answers from whichever map it
+    /// probes first, which is undetectable at every call site.
+    /// </para>
+    /// </summary>
+    private static void ThrowIfWouldCoexist(
+        Guid txid,
+        Dictionary<Guid, string> otherMap,
+        string registering,
+        string occupied)
+    {
+        if (otherMap.ContainsKey(txid))
+        {
+            throw new InvalidOperationException(
+                $"Transaction {txid} is already delegated through {occupied}; "
+                + $"registering it in {registering} as well would leave the registry "
+                + "with two coordinators for one decision. The two cross-tree "
+                + "delegation maps are required to be disjoint per transaction id.");
+        }
+    }
+
     /// <inheritdoc />
     public async Task RegisterExternalDecisionAuthorityAsync(Guid txid, string coordinatorKey)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(coordinatorKey);
+    {        ArgumentException.ThrowIfNullOrEmpty(coordinatorKey);
 
         // A locally-recorded terminal decision already supersedes any
         // delegation - the sub-saga finalized before (or concurrently with)
@@ -338,6 +383,12 @@ internal sealed class TxRegistryGrain(
         {
             return;
         }
+
+        ThrowIfWouldCoexist(
+            txid,
+            state.State.ReceiverDecisionAuthorities,
+            registering: nameof(TxRegistryState.ExternalAuthorities),
+            occupied: nameof(TxRegistryState.ReceiverDecisionAuthorities));
 
         state.State.ExternalAuthorities[txid] = coordinatorKey;
         // First registration of this txid: advance the monotonic cross-tree
@@ -381,6 +432,12 @@ internal sealed class TxRegistryGrain(
         {
             return;
         }
+
+        ThrowIfWouldCoexist(
+            txid,
+            state.State.ExternalAuthorities,
+            registering: nameof(TxRegistryState.ReceiverDecisionAuthorities),
+            occupied: nameof(TxRegistryState.ExternalAuthorities));
 
         state.State.ReceiverDecisionAuthorities[txid] = receiverCoordinatorKey;
         // First registration of this txid: advance the monotonic cross-tree
@@ -455,8 +512,18 @@ internal sealed class TxRegistryGrain(
     /// Resolves a txid that has no local decision against whichever cross-tree
     /// delegation map (authoring-side <see cref="TxRegistryState.ExternalAuthorities"/>
     /// or receiver-side <see cref="TxRegistryState.ReceiverDecisionAuthorities"/>)
-    /// carries it, else returns <see cref="TxStatus.InFlight"/>. A txid is never
-    /// present in both maps.
+    /// carries it, else returns <see cref="TxStatus.InFlight"/>.
+    /// <para>
+    /// The probe order is authoring-side first, and it is only sound because a
+    /// txid is never present in both maps - a premise stated on both members of
+    /// <see cref="TxRegistryState"/> and enforced at the two registration sites
+    /// by <c>ThrowIfWouldCoexist</c>. It is not self-evident and is not
+    /// established by the coordinator-placement argument on the receiver map,
+    /// which is a different claim. Were it to fail, this method would answer
+    /// from the authoring coordinator and every other consumer would answer from
+    /// whichever map it probed first, with no call site able to observe the
+    /// divergence.
+    /// </para>
     /// </summary>
     private async Task<TxStatus> ResolveAnyDelegatedAsync(Guid txid)
     {

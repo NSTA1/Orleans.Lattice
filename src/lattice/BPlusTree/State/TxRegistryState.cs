@@ -225,6 +225,24 @@ internal sealed class TxRegistryState
     /// an empty dictionary, which is the correct semantic default (no cross-tree
     /// delegations - every saga resolves purely from <see cref="Decisions"/>).
     /// </para>
+    /// <para>
+    /// <b>Disjointness premise.</b> A txid present here must not also be present
+    /// in <see cref="ReceiverDecisionAuthorities"/>. The two maps name different
+    /// coordinator kinds for the same question, so a txid in both has two
+    /// answers and every consumer silently picks whichever map it happens to
+    /// probe first - a divergence no caller can detect. The premise is a
+    /// consequence of the seam that authors each row: a tree registers here only
+    /// for a saga it is <i>authoring</i>, and in
+    /// <see cref="ReceiverDecisionAuthorities"/> only for one whose terminal
+    /// arrived carrying a foreign origin, and origin is re-stamped verbatim
+    /// across every replication rehop so it cannot flip en route. That is a
+    /// property of the replication package, not of this one, so the core does
+    /// not merely assume it: <c>RegisterExternalDecisionAuthorityAsync</c> and
+    /// <c>RegisterReceiverDecisionAuthorityAsync</c> reject a registration that
+    /// would put a txid in both, which is the only formulation the core can
+    /// enforce (it holds both maps; it holds no local cluster identity to
+    /// compare an origin against).
+    /// </para>
     /// </summary>
     [Id(7)] public Dictionary<Guid, string> ExternalAuthorities { get; set; } = [];
 
@@ -255,6 +273,15 @@ internal sealed class TxRegistryState
     /// <para>
     /// Wire-compatibility: legacy persisted state with no Id-8 slot decodes to
     /// an empty dictionary (no receiver delegations).
+    /// </para>
+    /// <para>
+    /// <b>Disjointness premise.</b> A txid present here must not also be present
+    /// in <see cref="ExternalAuthorities"/>; see the premise stated on that
+    /// member for what depends on it and how the core enforces it. Note that the
+    /// paragraph above about <i>coordinator placement</i> - that the receiver
+    /// never hosts the authoring coordinator - is a claim about where a
+    /// coordinator lives, not a claim that the two maps cannot both hold the
+    /// same txid. It has been read as the latter; it does not establish it.
     /// </para>
     /// </summary>
     [Id(8)] public Dictionary<Guid, string> ReceiverDecisionAuthorities { get; set; } = [];

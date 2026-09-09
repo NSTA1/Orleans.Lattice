@@ -66,6 +66,13 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <paramref name="coordinatorKey"/> is a no-op; a repeat after the local
     /// decision was already recorded is ignored.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The txid is already delegated through
+    /// <see cref="RegisterReceiverDecisionAuthorityAsync"/>. The two delegation
+    /// maps must stay disjoint per transaction id, because a txid in both has
+    /// two coordinators for one decision and every consumer resolves it from
+    /// whichever map it probes first. Nothing is mutated when this throws.
+    /// </exception>
     Task RegisterExternalDecisionAuthorityAsync(Guid txid, string coordinatorKey);
 
     /// <summary>
@@ -87,6 +94,11 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// repeat with the same <paramref name="receiverCoordinatorKey"/> is a
     /// no-op; a repeat after the local decision was already recorded is ignored.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The txid is already delegated through
+    /// <see cref="RegisterExternalDecisionAuthorityAsync"/>; see that member for
+    /// why the two maps must stay disjoint. Nothing is mutated when this throws.
+    /// </exception>
     Task RegisterReceiverDecisionAuthorityAsync(Guid txid, string receiverCoordinatorKey);
 
     /// <summary>
