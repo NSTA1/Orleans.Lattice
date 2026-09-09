@@ -172,8 +172,162 @@ internal sealed partial class BPlusLeafGrain
     private long[]? _durableSnapshotOffsetsByPartition;
 
     /// <summary>
+    /// Per-partition RE-READ frontier of the cold rebuild in progress on this
+    /// activation: the highest offset this activation has actually re-read from
+    /// the WAL start and applied into the cache, or <c>-1</c> for a partition it
+    /// has not reached. <see langword="null"/> when no cold rebuild is running.
+    /// <para>
+    /// This is a DIFFERENT quantity from the projection checkpoint, and the
+    /// distinction is the whole of issue #2280. The checkpoint is the APPLIED
+    /// frontier - what the projection has durably absorbed - and it is strictly
+    /// monotonic because #1492 requires it to be. A cold rebuild re-reads from
+    /// offset 0 while that checkpoint still sits at its persisted value
+    /// <c>C_p</c>, so every offset it re-reads below <c>C_p</c> is real progress
+    /// that no monotonic scalar can express. Collapsing the two onto one number
+    /// is what makes a cancelled cold replay bank nothing: see the short-circuit
+    /// in <c>TryFlushRecoveredCeilingAsync</c>, which correctly refuses to lower
+    /// the checkpoint and thereby also refuses to record the re-read.
+    /// </para>
+    /// <para>
+    /// Recorded from the CLAMPED ceiling that
+    /// <c>TryFlushRecoveredCeilingAsync</c> already computes - <c>maxApplied</c>
+    /// bounded below the lowest unresolved deferred terminal and below any
+    /// unresolved saga prepare - and never from raw <c>maxApplied</c>. That
+    /// choice is load-bearing TWICE over, and a later reader must not
+    /// "simplify" it away:
+    /// </para>
+    /// <para>
+    /// (1) It makes over-claiming unrepresentable. The claim is the same
+    /// quantity already trusted to advance the durable checkpoint, so it
+    /// inherits a tested property instead of adding a new one.
+    /// </para>
+    /// <para>
+    /// (2) It keeps the un-restored pending-transaction set safe. Rehydrate
+    /// loads cache rows only and never repopulates <c>_pendingTx</c>, so a
+    /// banked frontier ABOVE an unresolved prepare would resume past a prepare
+    /// the next activation cannot reconstruct. Because the ceiling is clamped
+    /// below the earliest unresolved prepare, no unresolved prepare can ever lie
+    /// below a banked frontier and the re-read necessarily re-reads it.
+    /// </para>
+    /// </summary>
+    private long[]? _coldReplayFrontierByPartition;
+
+    /// <summary>
+    /// Records that the cold rebuild on this activation has re-read and applied
+    /// <paramref name="ceiling"/> for <paramref name="partition"/>. Monotonic
+    /// per partition within the activation; discarded when the activation ends.
+    /// </summary>
+    private void RecordColdReplayFrontier(int partition, long ceiling, int partitionCount)
+    {
+        if (partition < 0 || ceiling < 0)
+            return;
+
+        var slots = Math.Max(partitionCount, partition + 1);
+        var arr = _coldReplayFrontierByPartition;
+        if (arr is null || arr.Length < slots)
+        {
+            var grown = new long[slots];
+            for (var i = 0; i < grown.Length; i++)
+                grown[i] = arr is not null && i < arr.Length ? arr[i] : -1L;
+            _coldReplayFrontierByPartition = arr = grown;
+        }
+
+        if (ceiling > arr[partition])
+            arr[partition] = ceiling;
+    }
+
+    /// <summary>
+    /// Returns the cold-rebuild re-read frontier for <paramref name="partition"/>,
+    /// or <c>-1</c> when this activation has not re-read it.
+    /// </summary>
+    internal long ColdReplayFrontierForPartition(int partition)
+    {
+        var arr = _coldReplayFrontierByPartition;
+        if (arr is null || partition < 0 || partition >= arr.Length)
+            return -1L;
+        return arr[partition];
+    }
+
+    /// <summary>
+    /// Builds the ordinary per-partition coverage claim for a capture: each
+    /// partition's current checkpoint, with slot 0 mirroring the scalar.
+    /// </summary>
+    private long[] BuildCheckpointCoverage(int partitionCount, long checkpoint)
+    {
+        var offsets = new long[partitionCount];
+        offsets[0] = checkpoint;
+        for (var p = 1; p < partitionCount; p++)
+            offsets[p] = GetCurrentCheckpointForPartition(p);
+        return offsets;
+    }
+
+    /// <summary>
+    /// Banks the progress of an IN-FLIGHT cold rebuild as a durable snapshot
+    /// whose coverage claim is the re-read frontier rather than the checkpoint,
+    /// so that a cold activation torn down before it converges leaves an anchor
+    /// the next activation can resume from (issue #2280). Returns whether a blob
+    /// was written.
+    /// <para>
+    /// Banking is INLINE during replay and never on the way out. Orleans does
+    /// not run <c>OnDeactivateAsync</c> when <c>OnActivateAsync</c> throws, and
+    /// a cancelled cold replay leaves activation BY throwing, so a deactivation
+    /// hook is unreachable on exactly the path that needs it.
+    /// </para>
+    /// <para>
+    /// The claim is per-partition and is refused outright - fail closed - if ANY
+    /// partition would be claimed below coverage a durable snapshot already
+    /// holds. Declining a partial capture is always safe, because a partial
+    /// capture is a bonus and never a correctness requirement, whereas a
+    /// regressing claim would drive <c>LeafSnapshotStorageGrain.MergeMonotone</c>
+    /// off its fast path onto the element-wise merge whose row union retains a
+    /// key present in the stored blob and ABSENT from the incoming one with no
+    /// comparison at all - the resurrection shape flagged by issue #2436. This
+    /// keeps that hazard exactly as reachable as it is today and no more.
+    /// </para>
+    /// <para>
+    /// This is NOT the durable-offset design ruled unsound in the #2089
+    /// follow-up. That design extended a frontier ABOVE the clamped ceiling,
+    /// which would have authorised trimming past unapplied holes. This one
+    /// records a frontier strictly BELOW it - the opposite direction, and
+    /// strictly safer: the pin is <c>min(checkpoint, covered)</c>, so a claim
+    /// below the checkpoint can only ever LOWER the trim floor.
+    /// </para>
+    /// </summary>
+    private async Task<bool> TryBankColdReplayProgressAsync(CancellationToken cancellationToken)
+    {
+        if (!_cacheRebuiltFromWalStartThisActivation || state.State.TreeId is null)
+            return false;
+
+        var frontier = _coldReplayFrontierByPartition;
+        if (frontier is null)
+            return false;
+
+        var resolved = await GetOptionsAsync();
+        var partitionCount = Math.Max(1, resolved.WalPartitions);
+
+        var claim = new long[partitionCount];
+        var anyProgress = false;
+        for (var p = 0; p < partitionCount; p++)
+        {
+            var reRead = p < frontier.Length ? frontier[p] : -1L;
+            if (reRead < DurableSnapshotCoverageForPartition(p))
+                return false;
+
+            claim[p] = reRead;
+            if (reRead >= 0)
+                anyProgress = true;
+        }
+
+        if (!anyProgress)
+            return false;
+
+        await CaptureSnapshotCoreAsync(cancellationToken, claim);
+        return true;
+    }
+
+    /// <summary>
     /// Returns the highest WAL offset a durable snapshot is known to cover
-    /// for <paramref name="partition"/> this activation, or <c>-1</c> when no
+    /// for <paramref name="partition"/>, or <c>-1</c> when no
     /// durable snapshot covers it. Consumed by the coverage-gated durable-pin
     /// resolution.
     /// </summary>
@@ -228,8 +382,16 @@ internal sealed partial class BPlusLeafGrain
     /// path (issue #1965) supplies Orleans' deactivation token instead, so a
     /// leaf that overruns the deactivation deadline abandons its blob write
     /// rather than being cancelled inside the runtime's own frame.
+    /// <para>
+    /// <paramref name="coverageOverride"/> supplies the per-partition coverage
+    /// claim instead of the current checkpoints. It is supplied only by
+    /// <see cref="TryBankColdReplayProgressAsync"/>, where the honest claim is
+    /// the cold re-read frontier and NOT the checkpoint - see that method.
+    /// </para>
     /// </summary>
-    private async Task CaptureSnapshotCoreAsync(CancellationToken cancellationToken)
+    private async Task CaptureSnapshotCoreAsync(
+        CancellationToken cancellationToken,
+        long[]? coverageOverride = null)
     {
         // No-op for an uninitialised leaf. TreeId is assigned during
         // SetTreeIdAsync (called by the shard root on first attach);
@@ -341,14 +503,21 @@ internal sealed partial class BPlusLeafGrain
             // current checkpoint so the coverage-gated trim floor can
             // authorise trimming each partition's prefix independently. Slot
             // 0 mirrors the scalar SnapshotOffset for wire-compat.
-            var perPartitionOffsets = new long[partitionCount];
-            perPartitionOffsets[0] = checkpoint;
-            for (var p = 1; p < partitionCount; p++)
-                perPartitionOffsets[p] = GetCurrentCheckpointForPartition(p);
+            //
+            // The claim is about ROWS, not about the checkpoint scalar: it
+            // asserts "the rows in this blob cover [0, offset] for partition
+            // p". Stamping the checkpoint is an honest way to say that on a
+            // WARM capture, where the cache holds every checkpointed apply. It
+            // is NOT honest mid-COLD-rebuild, where the checkpoint still sits
+            // at its persisted value while the cache holds only what has been
+            // re-read so far - which is why the cold-progress banking path
+            // supplies the re-read frontier here instead (issue #2280).
+            var perPartitionOffsets = coverageOverride ?? BuildCheckpointCoverage(partitionCount, checkpoint);
+            var scalarOffset = perPartitionOffsets.Length > 0 ? perPartitionOffsets[0] : checkpoint;
 
             var blob = new LeafSnapshotBlob
             {
-                SnapshotOffset = LeafSnapshotBlob.NormalizeScalarOffset(checkpoint),
+                SnapshotOffset = LeafSnapshotBlob.NormalizeScalarOffset(scalarOffset),
                 Rows = legacyRows,
                 EncodedRows = encodedRows,
                 CapturedAtTicks = DateTime.UtcNow.Ticks,
