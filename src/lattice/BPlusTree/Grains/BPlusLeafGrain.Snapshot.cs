@@ -774,7 +774,50 @@ internal sealed partial class BPlusLeafGrain
             // Activation_ignores_snapshot_at_equal_offset intent for the
             // WAL-intact case). See the residual cold-restart prefix-loss
             // finding.
-            if (!await AnyPartitionWalPrefixTrimmedAsync(cancellationToken))
+            //
+            // The decline is gated on a NON-EMPTY cache (issue #2278). "The
+            // snapshot is redundant against an intact WAL" is a statement about
+            // DURABILITY, and it is true: the WAL still holds the prefix. It was
+            // being applied as though it were a statement about COST, and there
+            // it is exactly inverted. The only thing the decline saves is a cache
+            // replace, so it is a saving only when there is a live cache to
+            // preserve. On a fresh activation the cache is empty by construction,
+            // and declining then does not avoid work - it forces the most
+            // expensive path available: step 0.5 of OnActivateAsync sees
+            // (!rehydratedFromSnapshot && Cache.Count == 0), sets the -1
+            // replay-start override, and the leaf replays the WHOLE readable WAL
+            // window instead of bulk-loading a blob that already covers the
+            // checkpointed prefix.
+            //
+            // That is self-perpetuating rather than one-off. The converged
+            // steady state is precisely offset == checkpoint (a capture stamps
+            // the checkpoint it covers), so a leaf that reactivates, replays from
+            // zero and re-captures lands back on an at-or-behind snapshot and
+            // goes cold again on its NEXT activation, forever. The deployed
+            // signature is the cold total sitting far above the distinct-cold-leaf
+            // count - repo-context-vector-metadata measured 98 cold across 48
+            // distinct leaves (2.04 per leaf), against vector-membership's 13
+            // across 13 (1.00 per leaf, the benign one-time first activation) on
+            // three times the traffic.
+            //
+            // Accepting here is not a new trust assumption and not a new code
+            // path. RecordDurableSnapshotCoverage above already treats this same
+            // blob as durable coverage of [0, offset] - that is what authorises
+            // the coverage-gated WAL GC to TRIM that prefix. Refusing to let it
+            // fill an empty cache trusts the blob with the destructive decision
+            // and distrusts it for the cheap one. The accept path below is the
+            // one that already runs whenever a prefix HAS been trimmed; it
+            // handles an at-or-behind blob correctly by lowering each partition's
+            // checkpoint to exactly what the reloaded cache holds and letting the
+            // tail replay cover (offset, head]. Final state is identical to the
+            // from-zero rebuild; the window read is a subset of it.
+            //
+            // Short-circuit order matters: with an empty cache the probe is not
+            // consulted at all, which also removes a per-activation grain call
+            // INTO the tree being replayed - the call the #2082 note describes as
+            // most likely to fault on exactly the saturated tree where declining
+            // costs the most.
+            if (Cache.Count > 0 && !await AnyPartitionWalPrefixTrimmedAsync(cancellationToken))
             {
                 return false;
             }

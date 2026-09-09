@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -105,6 +106,86 @@ public partial class BPlusLeafGrainTests
         Assert.That(recorder.Temperatures, Has.Count.EqualTo(1),
             "the activation must emit exactly one measurement for this tree");
         Assert.That(recorder.Temperatures[0], Is.EqualTo("cold"));
+    }
+
+    [Test]
+    public async Task Activation_from_a_snapshot_at_the_persisted_checkpoint_counts_on_the_warm_arm()
+    {
+        var tree = UniqueTemperatureTree();
+
+        // Issue #2278, expressed in the units the issue is actually reported
+        // in. offset == checkpoint is the CONVERGED steady state, not an edge
+        // case: a capture stamps the checkpoint it covers, so this is where a
+        // healthy leaf sits on every reactivation after its first. This arm
+        // previously landed on "cold", and because a cold activation replays
+        // from zero and re-captures at the new checkpoint, it returned to this
+        // same state and went cold again on the next activation - which is the
+        // self-perpetuating loop behind repo-context-vector-metadata's 2.04
+        // cold-activations-per-distinct-leaf against vector-membership's 1.00.
+        var blob = NewSnapshotBlob(
+            offset: 40,
+            ("a", new byte[] { 1 }),
+            ("b", new byte[] { 2 }));
+        var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
+            preloadedSnapshot: blob,
+            persistedCheckpoint: 40,
+            walHead: 40);
+        state.State.TreeId = tree;
+
+        using var recorder = new ActivationTemperatureRecorder(tree);
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // Proves the rehydrate is what produced the warm tag, so a "warm"
+            // reading cannot come from an inert path that never loaded anything.
+            Assert.That(grain.EntriesForTest.Keys, Is.EquivalentTo(new[] { "a", "b" }),
+                "the at-checkpoint snapshot must fill the empty cache,");
+            Assert.That(recorder.Total("warm"), Is.EqualTo(1),
+                "so this activation is warm,");
+            Assert.That(recorder.Total("cold"), Is.Zero,
+                "and NOT cold - the whole-window WAL replay is exactly what issue #2278 removes.");
+        });
+    }
+
+    [Test]
+    public async Task Activation_with_a_populated_cache_and_a_redundant_snapshot_is_still_warm()
+    {
+        var tree = UniqueTemperatureTree();
+
+        // The control for the test above. It shares the same offset ==
+        // checkpoint input and the same expected arm, but reaches it down the
+        // OTHER branch - the snapshot is declined, and the activation is warm
+        // because the cache was already populated. Without this arm, a change
+        // that made every activation report "warm" regardless of what happened
+        // would pass the test above; with it, the two branches are shown to be
+        // distinguishable by their effect on the cache rather than only by their
+        // tag.
+        var blob = NewSnapshotBlob(offset: 40, ("fromSnapshot", new byte[] { 1 }));
+        var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
+            preloadedSnapshot: blob,
+            persistedCheckpoint: 40,
+            walHead: 40);
+        state.State.TreeId = tree;
+
+        grain.CacheForTest.StoreRow("fromCache", new LwwValue<byte[]>
+        {
+            Value = [9],
+            Timestamp = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+        });
+
+        using var recorder = new ActivationTemperatureRecorder(tree);
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.EntriesForTest.Keys, Is.EquivalentTo(new[] { "fromCache" }),
+                "the snapshot must still be declined against a populated cache,");
+            Assert.That(recorder.Total("warm"), Is.EqualTo(1),
+                "and the activation is warm anyway, because a populated cache is not cold,");
+            Assert.That(recorder.Total("cold"), Is.Zero,
+                "so the fix did not merely relabel the cold arm.");
+        });
     }
 
     /// <summary>
