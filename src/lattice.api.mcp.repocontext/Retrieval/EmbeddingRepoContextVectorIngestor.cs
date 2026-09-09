@@ -1847,6 +1847,243 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 : GapReadBackArm.PriorReadBackSkipped;
 
     /// <summary>
+    /// The most per-shard groups the shard-distribution line enumerates. The group
+    /// count is already bounded by <c>min(K, P)</c>, and <c>P</c> is itself bounded by
+    /// <see cref="LatticeOptions.MaxPhysicalShardsPerTree"/>, so this is a second,
+    /// unconditional ceiling rather than the only one: a pathological gap set over a
+    /// pathological shard space cannot flood the log however both move. The line
+    /// always reports <see cref="GapShardDistribution.DistinctShards"/> alongside, so
+    /// a truncated enumeration is visibly truncated and the totals stay complete.
+    /// </summary>
+    internal const int MaxReportedGapShardGroups = 64;
+
+    /// <summary>
+    /// The most individual sources the shard-distribution line names with their
+    /// resolved shard. This is the hand-checking arm - it exists so the derivation can
+    /// be reproduced offline from the log for a few members - not the measurement,
+    /// which is the whole-set histogram and the two statistics beside it.
+    /// </summary>
+    internal const int MaxReportedGapShardSources = 16;
+
+    /// <summary>
+    /// How a gap set distributes over the membership tree's <b>physical</b> shards,
+    /// with the two statistics issue #2287 pre-registers as the discriminator between
+    /// its surviving candidates.
+    /// <para>
+    /// <b>Why physical and not virtual.</b> Routing is two-stage: a key hashes into one
+    /// of <see cref="VirtualShardCount"/> virtual slots (4096 by default), and the
+    /// map sends that slot to a physical shard. With ~4096 slots over ~64 shards about
+    /// 64 virtual slots land on each physical shard, so keys sharing one <i>physical</i>
+    /// shard still occupy distinct <i>virtual</i> slots. A virtual-slot histogram
+    /// therefore reads as "scattered" under <b>both</b> candidates and discriminates
+    /// nothing; reporting its null as evidence against the hash-partitioned-subset
+    /// candidate would be a false refutation. Only <see cref="ShardMap.Resolve"/>,
+    /// which applies both stages, answers the question that was asked.
+    /// </para>
+    /// <para>
+    /// <b>What the two statistics are for.</b> <see cref="DistinctShards"/> (D) and
+    /// <see cref="LargestShardGroup"/> (M) are compared against a null simulated by
+    /// drawing <see cref="Sources"/> keys from the same population the gap set was
+    /// drawn from, and the candidate is judged on a quantile of that null. They are
+    /// deliberately <i>not</i> compared against an intuition about the gap-set size:
+    /// independent hashing of K=43 keys over P=63 shards occupies about 31 distinct
+    /// shards, not 43, so "far fewer than 43" fires when nothing is wrong. The
+    /// occupancy expectation is <c>E[D] = P * (1 - (1 - 1/P)^K)</c>, and this record
+    /// reports every term of it - K as <see cref="Sources"/> and P as
+    /// <see cref="PhysicalShardCount"/> - so the threshold is recomputed from the log
+    /// rather than assumed.
+    /// </para>
+    /// </summary>
+    /// <param name="Sources">K: gap sources whose membership key resolved to a shard. The whole gap set, not a prefix.</param>
+    /// <param name="DistinctShards">D: distinct physical shards the gap set occupies.</param>
+    /// <param name="LargestShardGroup">M: how many gap sources share the most-occupied single physical shard.</param>
+    /// <param name="PhysicalShardCount">P: distinct physical shards the tree's map references, so the null is parameterised from the tree rather than assumed.</param>
+    /// <param name="VirtualShardCount">The map's virtual slot count, which makes the virtual-to-physical fan-out readable from the log.</param>
+    /// <param name="MapVersion">The map version the assignments were computed against; a change between passes invalidates a cross-pass comparison.</param>
+    /// <param name="ReportedGroups">How many of the <paramref name="DistinctShards"/> groups the detail string enumerates.</param>
+    /// <param name="GroupDetail">Bounded <c>shard:count</c> enumeration, densest first then by ascending shard index.</param>
+    /// <param name="ReportedSources">How many of the <paramref name="Sources"/> the per-source detail names.</param>
+    /// <param name="SourceDetail">Bounded <c>path=shard</c> enumeration for offline hand-checking, in ordinal path order.</param>
+    internal readonly record struct GapShardDistribution(
+        int Sources,
+        int DistinctShards,
+        int LargestShardGroup,
+        int PhysicalShardCount,
+        int VirtualShardCount,
+        long MapVersion,
+        int ReportedGroups,
+        string GroupDetail,
+        int ReportedSources,
+        string SourceDetail);
+
+    /// <summary>
+    /// Resolves every gap source's membership key to its physical shard through
+    /// <paramref name="map"/> and summarises the distribution. Pure, deterministic,
+    /// and allocation-bounded, so the statistics are unit-testable without a silo.
+    /// <para>
+    /// The scan is over the <b>whole</b> <paramref name="gapSelectedFiles"/> set:
+    /// the counting arm never truncates, because D and M are the measurement and a
+    /// prefix would silently bias both downward. Only the two human-readable detail
+    /// strings are capped, and each reports the total it was drawn from, so
+    /// truncation can never be mistaken for a complete enumeration.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository whose gap set is being summarised.</param>
+    /// <param name="gapSelectedFiles">This pass's whole gap selection.</param>
+    /// <param name="map">The membership tree's effective shard map, as one snapshot for every assignment.</param>
+    /// <param name="maxReportedGroups">Ceiling on the enumerated per-shard groups.</param>
+    /// <param name="maxReportedSources">Ceiling on the enumerated per-source assignments.</param>
+    internal static GapShardDistribution SummariseGapShardDistribution(
+        string repoId,
+        IReadOnlyList<RepoFileEntry> gapSelectedFiles,
+        ShardMap map,
+        int maxReportedGroups = MaxReportedGapShardGroups,
+        int maxReportedSources = MaxReportedGapShardSources)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(gapSelectedFiles);
+        ArgumentNullException.ThrowIfNull(map);
+
+        // One snapshot for every assignment. The map is resolved once by the caller and
+        // never re-read inside this loop, so a remap landing mid-pass cannot split the
+        // set across two mappings: the assignments are atomic with respect to the map
+        // by construction, which is stronger than observing MapVersion either side and
+        // discarding the result when it moved. MapVersion is still reported, because a
+        // remap BETWEEN passes is what invalidates a cross-pass comparison.
+        var perShard = new Dictionary<int, int>();
+        var assignments = new List<(string Path, int Shard)>(
+            Math.Min(gapSelectedFiles.Count, Math.Max(0, maxReportedSources)));
+
+        var resolved = 0;
+        foreach (var file in gapSelectedFiles)
+        {
+            var membershipKey = RepoContextKeys.VectorMembership(
+                repoId, VectorCodec.SourceId(RepoContextKeys.File(repoId, file.RelativePath)));
+            var shard = map.Resolve(membershipKey);
+
+            resolved++;
+            perShard[shard] = perShard.TryGetValue(shard, out var seen) ? seen + 1 : 1;
+
+            if (assignments.Count < maxReportedSources)
+            {
+                assignments.Add((file.RelativePath, shard));
+            }
+        }
+
+        var largest = 0;
+        foreach (var count in perShard.Values)
+        {
+            if (count > largest) largest = count;
+        }
+
+        var groups = perShard
+            .OrderByDescending(static pair => pair.Value)
+            .ThenBy(static pair => pair.Key)
+            .Take(Math.Max(0, maxReportedGroups))
+            .Select(static pair => $"{pair.Key}:{pair.Value}")
+            .ToArray();
+
+        var sources = assignments
+            .OrderBy(static a => a.Path, StringComparer.Ordinal)
+            .Select(static a => $"{a.Path}={a.Shard}")
+            .ToArray();
+
+        return new GapShardDistribution(
+            Sources: resolved,
+            DistinctShards: perShard.Count,
+            LargestShardGroup: largest,
+            PhysicalShardCount: map.GetPhysicalShardIndices().Count,
+            VirtualShardCount: map.VirtualShardCount,
+            MapVersion: map.Version,
+            ReportedGroups: groups.Length,
+            GroupDetail: string.Join(", ", groups),
+            ReportedSources: sources.Length,
+            SourceDetail: string.Join(", ", sources));
+    }
+
+    /// <summary>
+    /// Emits the physical-shard distribution of this pass's gap set (issue #2287), so
+    /// the question "is the stranded set hash-partitioned onto particular shards, or
+    /// spread proportionally?" is answerable from a deployed container's log without
+    /// re-deriving anything offline.
+    /// <para>
+    /// <b>Why this cannot perturb the control arm it sits beside.</b> The only call it
+    /// makes is <see cref="ILattice.GetRoutingAsync(CancellationToken)"/>, which
+    /// resolves the tree alias and shard map from the registry tree and is served from
+    /// the activation's own cache after the first call. It reads no membership entry
+    /// and touches no membership leaf, so it cannot warm the coverage read path that
+    /// the alternating read-back probe measures. It therefore runs on <b>every</b>
+    /// pass, including the arm-B passes that deliberately skip the read-back, and the
+    /// A/B comparison stays valid.
+    /// </para>
+    /// <para>
+    /// Best-effort and self-contained: a routing failure is logged and swallowed here
+    /// rather than propagating, because the caller's remaining work includes the
+    /// read-back durability signal and losing that to an unrelated failure would cost
+    /// the control arm a data point on every affected pass.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository whose gap set is being measured.</param>
+    /// <param name="gapSelectedFiles">This pass's whole gap selection.</param>
+    /// <param name="cancellationToken">Cancels the routing resolve.</param>
+    private async Task LogGapShardDistributionAsync(
+        string repoId,
+        IReadOnlyList<RepoFileEntry> gapSelectedFiles,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var routing = await _grainFactory
+                .GetGrain<ILattice>(RepoContextTrees.VectorMembership)
+                .GetRoutingAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var distribution = SummariseGapShardDistribution(repoId, gapSelectedFiles, routing.Map);
+
+            _logger.LogInformation(
+                "Repo {RepoId}: back-fill gap set physical-shard distribution over tree {Tree} "
+                + "(physicalTreeId={PhysicalTreeId}, mapVersion={MapVersion}). K={Sources} gap source(s) over "
+                + "P={PhysicalShardCount} physical shard(s) (virtualSlots={VirtualShardCount}, so ~{FanOut} "
+                + "virtual slot(s) per physical shard - a VIRTUAL-slot histogram would read as scattered under "
+                + "either candidate and must not be substituted for this one). D={DistinctShards} distinct "
+                + "shard(s) occupied, M={LargestShardGroup} in the largest single-shard group. Compare D and M "
+                + "against a null simulated by drawing K keys from THIS pass's unchanged population and reject on "
+                + "a quantile of that null, not against a bare percentage: independent hashing gives "
+                + "E[D] = P * (1 - (1 - 1/P)^K), which is well below K, so a proportional set is not evidence of "
+                + "clustering. groups({ReportedGroups} of {DistinctShards} shown, shard:count, densest first): "
+                + "{GroupDetail}. sources({ReportedSources} of {Sources} shown, path=shard, for offline "
+                + "hand-checking only): {SourceDetail}",
+                repoId,
+                RepoContextTrees.VectorMembership,
+                routing.PhysicalTreeId,
+                distribution.MapVersion,
+                distribution.Sources,
+                distribution.PhysicalShardCount,
+                distribution.VirtualShardCount,
+                distribution.PhysicalShardCount > 0
+                    ? distribution.VirtualShardCount / distribution.PhysicalShardCount
+                    : 0,
+                distribution.DistinctShards,
+                distribution.LargestShardGroup,
+                distribution.ReportedGroups,
+                distribution.DistinctShards,
+                distribution.GroupDetail,
+                distribution.ReportedSources,
+                distribution.Sources,
+                distribution.SourceDetail);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Repo {RepoId}: could not resolve the membership tree's physical shard map, so this pass's "
+                + "gap-set shard distribution is unavailable (issue #2287). Diagnostic only: the pass, the gap "
+                + "set shape line, and the read-back control arm are all unaffected.",
+                repoId);
+        }
+    }
+
+    /// <summary>
     /// Records this pass's gap selection into the per-repository history and emits the
     /// shape of the never-converging back-fill (issue #2208) as two structured lines,
     /// so a live deployment answers what the per-pass count cannot. Diagnostic only -
@@ -2008,6 +2245,15 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 runReadBack,
                 arm,
                 string.Join(", ", sample));
+
+            // The physical-shard distribution of the WHOLE gap set (issue #2287),
+            // emitted immediately after the shape line and BEFORE the read-back branch
+            // below returns on arm-B passes, so it is collected on every pass rather
+            // than only on the passes that probe. It reads routing metadata only, never
+            // a membership entry, so running it on both arms cannot perturb the A/B
+            // control the read-back parity implements.
+            await LogGapShardDistributionAsync(repoId, gapSelectedFiles, cancellationToken)
+                .ConfigureAwait(false);
 
             if (stats.RegressionIsUnexplained)
             {
