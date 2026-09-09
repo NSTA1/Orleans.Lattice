@@ -134,4 +134,42 @@ public sealed class CompiledTenantUsageTests
 
         Assert.That(compiled.TryGetView(default, out _), Is.False);
     }
+
+    [Test]
+    public void Compile_is_identical_for_a_lazy_and_a_materialised_source()
+    {
+        // Compile presizes its accumulators from an ICollection<T> count probe,
+        // which the production caller always satisfies. A lazily-enumerated
+        // caller takes the un-hinted branch instead, and must compile to exactly
+        // the same snapshot.
+        var registry = new[]
+        {
+            Registry("acme", new TenantQuotas { MaxBytes = 10_000 }),
+            Registry("globex", new TenantQuotas { MaxBytes = 20_000 }),
+        };
+        var usage = new[] { UsageRecord("acme", (LocalCluster, Sample(100, 1, 10, 1))) };
+
+        var materialised = CompiledTenantUsage.Compile(registry, usage, LocalCluster);
+        var lazy = CompiledTenantUsage.Compile(Lazily(registry), Lazily(usage), LocalCluster);
+
+        Assert.That(lazy.TenantCount, Is.EqualTo(materialised.TenantCount));
+        foreach (var (id, expected) in materialised.Tenants)
+        {
+            Assert.That(lazy.Tenants.TryGetValue(id, out var actual), Is.True, $"tenant '{id}' is missing");
+            Assert.That(actual, Is.EqualTo(expected), $"tenant '{id}' compiled differently");
+        }
+    }
+
+    /// <summary>
+    /// Re-yields a sequence through an iterator, so the result is an
+    /// <see cref="IEnumerable{T}"/> that is deliberately <i>not</i> an
+    /// <see cref="ICollection{T}"/> and cannot be count-probed.
+    /// </summary>
+    private static IEnumerable<T> Lazily<T>(IEnumerable<T> source)
+    {
+        foreach (var item in source)
+        {
+            yield return item;
+        }
+    }
 }

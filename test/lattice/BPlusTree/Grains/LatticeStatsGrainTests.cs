@@ -186,5 +186,62 @@ public class LatticeStatsGrainTests
 
         Assert.That(report.Shards.Select(s => s.ShardIndex), Is.EqualTo(new[] { 0, 1, 2 }));
     }
+
+    [Test]
+    public async Task GetReportAsync_returns_shards_ordered_by_shard_index()
+    {
+        var (grain, _, _, _) = CreateGrain(physicalShardCount: 5);
+
+        var report = await grain.GetReportAsync(deep: false, CancellationToken.None);
+
+        Assert.That(report.Shards.Select(s => s.ShardIndex), Is.Ordered.Ascending);
+    }
+
+    [Test]
+    public void SortByShardIndexIfNeeded_leaves_an_already_ascending_array_untouched()
+    {
+        var reports = new[]
+        {
+            new ShardDiagnosticReport { ShardIndex = 0, LiveKeys = 10 },
+            new ShardDiagnosticReport { ShardIndex = 1, LiveKeys = 20 },
+            new ShardDiagnosticReport { ShardIndex = 2, LiveKeys = 30 },
+        };
+
+        LatticeStatsGrain.SortByShardIndexIfNeeded(reports);
+
+        Assert.That(reports.Select(r => r.ShardIndex), Is.EqualTo(new[] { 0, 1, 2 }));
+        Assert.That(reports.Select(r => r.LiveKeys), Is.EqualTo(new long[] { 10, 20, 30 }));
+    }
+
+    [Test]
+    public void SortByShardIndexIfNeeded_orders_an_out_of_order_array_ascending()
+    {
+        var reports = new[]
+        {
+            new ShardDiagnosticReport { ShardIndex = 3, LiveKeys = 30 },
+            new ShardDiagnosticReport { ShardIndex = 0, LiveKeys = 0 },
+            new ShardDiagnosticReport { ShardIndex = 2, LiveKeys = 20 },
+            new ShardDiagnosticReport { ShardIndex = 1, LiveKeys = 10 },
+        };
+
+        LatticeStatsGrain.SortByShardIndexIfNeeded(reports);
+
+        Assert.That(reports.Select(r => r.ShardIndex), Is.EqualTo(new[] { 0, 1, 2, 3 }));
+
+        // The payload must travel with its index: an ordering that sorted the
+        // keys but not the rows would still satisfy the assertion above.
+        Assert.That(reports.Select(r => r.LiveKeys), Is.EqualTo(new long[] { 0, 10, 20, 30 }));
+    }
+
+    [Test]
+    public void SortByShardIndexIfNeeded_accepts_empty_and_single_element_arrays()
+    {
+        var empty = Array.Empty<ShardDiagnosticReport>();
+        var single = new[] { new ShardDiagnosticReport { ShardIndex = 7 } };
+
+        Assert.That(() => LatticeStatsGrain.SortByShardIndexIfNeeded(empty), Throws.Nothing);
+        Assert.That(() => LatticeStatsGrain.SortByShardIndexIfNeeded(single), Throws.Nothing);
+        Assert.That(single[0].ShardIndex, Is.EqualTo(7));
+    }
 }
 
