@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Orleans.Lattice;
+using Orleans.Lattice.Testing;
 using Orleans.Streams;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -56,13 +57,11 @@ public sealed class PublishEventsOverrideIntegrationTests
         await tree.SetPublishEventsEnabledAsync(true);
         await tree.SetAsync(sentinel, new byte[] { 0xFF });
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
-        while (DateTime.UtcNow < deadline && !sink.Any(e => e.Key == sentinel))
-            await Task.Delay(25);
-
-        Assert.That(sink.Any(e => e.Key == sentinel), Is.True,
-            "the sentinel event never arrived, so the subscription is not delivering and the " +
-            "surrounding no-event assertions would pass vacuously");
+        await TestPoll.UntilAsync(
+            () => sink.Any(e => e.Key == sentinel),
+            "the sentinel event to arrive; without it the subscription is not delivering and the " +
+            "surrounding no-event assertions would pass vacuously",
+            TimeSpan.FromSeconds(30));
 
         return sentinel;
     }
@@ -78,13 +77,14 @@ public sealed class PublishEventsOverrideIntegrationTests
         {
             await tree.SetAsync("k1", new byte[] { 1 });
 
-            // Wait briefly for the event to propagate through memory streams.
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-            while (DateTime.UtcNow < deadline && !sink.Any(e => e.Kind == LatticeTreeEventKind.Set))
-                await Task.Delay(50);
-
-            Assert.That(sink.Any(e => e.Kind == LatticeTreeEventKind.Set && e.Key == "k1"), Is.True,
-                "Expected Set event when per-tree override forces publication on.");
+            // Wait for the event to propagate through memory streams. The barrier
+            // polls exactly what is being claimed, so it can neither open on a
+            // different tree's Set event nor fall through to a downstream
+            // assertion against a state it never reached.
+            await TestPoll.UntilAsync(
+                () => sink.Any(e => e.Kind == LatticeTreeEventKind.Set && e.Key == "k1"),
+                "a Set event for 'k1', which the per-tree override forces publication of",
+                TimeSpan.FromSeconds(5));
         }
         finally { await handle.UnsubscribeAsync(); }
     }
@@ -120,10 +120,10 @@ public sealed class PublishEventsOverrideIntegrationTests
             await tree.SetAsync("before", new byte[] { 1 });
 
             // Wait for the first event to confirm publication is initially on.
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-            while (DateTime.UtcNow < deadline && !sink.Any(e => e.Key == "before"))
-                await Task.Delay(50);
-            Assert.That(sink.Any(e => e.Key == "before"), Is.True, "Override=true should have produced the 'before' event.");
+            await TestPoll.UntilAsync(
+                () => sink.Any(e => e.Key == "before"),
+                "the 'before' event, which Override=true should have produced",
+                TimeSpan.FromSeconds(5));
 
             // Flip override off. Same activation handling the call must invalidate its gate cache immediately.
             await tree.SetPublishEventsEnabledAsync(false);
@@ -151,10 +151,10 @@ public sealed class PublishEventsOverrideIntegrationTests
         try
         {
             await tree.SetAsync("seed", new byte[] { 1 });
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-            while (DateTime.UtcNow < deadline && !sink.Any(e => e.Key == "seed"))
-                await Task.Delay(50);
-            Assert.That(sink.Any(e => e.Key == "seed"), Is.True);
+            await TestPoll.UntilAsync(
+                () => sink.Any(e => e.Key == "seed"),
+                "the 'seed' event, which Override=true should have produced",
+                TimeSpan.FromSeconds(5));
 
             // Clear override - falls back to silo default (false).
             await tree.SetPublishEventsEnabledAsync(null);

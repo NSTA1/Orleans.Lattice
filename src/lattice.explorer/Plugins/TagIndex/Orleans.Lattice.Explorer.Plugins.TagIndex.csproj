@@ -9,9 +9,6 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Version>9.4.0</Version>
     <Description>The tag-index browsing per-selection surface for the Orleans.Lattice Explorer, as a self-contained plugin: the trees an index covers, the tags it carries, and the live members of a chosen tag, each navigable back into the tree that holds them. It applies to tag-index selections alone, so a membership tree resolves to it through ordinary plugin applicability rather than a special case in the shell.</Description>
-    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 

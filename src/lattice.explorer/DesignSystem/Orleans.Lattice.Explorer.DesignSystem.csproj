@@ -8,9 +8,6 @@
     <PackageId>Orleans.Lattice.Explorer.DesignSystem</PackageId>
     <Version>9.4.0</Version>
     <Description>The Orleans.Lattice Explorer design system: the design-token layer (spacing, type scale, colour, elevation, motion, radius, density, touch targets), the single named breakpoint set (compact / medium / expanded), and the adaptive shell primitives (navigation, tab strip, table-or-card) every Explorer plugin is styled against. It has no project dependencies, so a plugin can consume it without taking on the Explorer core or any feature package. Served by a referencing app at _content/Orleans.Lattice.Explorer.DesignSystem.</Description>
-    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 

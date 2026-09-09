@@ -21,8 +21,11 @@ public class LatticeMergeOutcomeTests
     [Test]
     public void Accept_returns_cached_singleton_value()
     {
-        // Same struct value each call (allocation-free default path).
-        Assert.That(LatticeMergeOutcome.Accept().Kind, Is.EqualTo(LatticeMergeOutcome.Accept().Kind));
+        // Same struct value each call (allocation-free default path). Comparing
+        // the whole outcome rather than its Kind is what makes this falsifiable:
+        // Kind is fixed by the factory's own contract, so a Kind-to-Kind
+        // comparison holds for any implementation, cached or freshly built.
+        Assert.That(LatticeMergeOutcome.Accept(), Is.EqualTo(LatticeMergeOutcome.Accept()));
     }
 
     [Test]

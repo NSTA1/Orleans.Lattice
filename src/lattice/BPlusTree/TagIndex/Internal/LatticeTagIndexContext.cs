@@ -438,6 +438,87 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         }
     }
 
+    /// <summary>
+    /// Number of AND-query candidate keys whose sibling-tag membership rows are
+    /// probed in a single batched read.
+    /// </summary>
+    /// <remarks>
+    /// An AND query streams the rarest-first posting list and must confirm, for
+    /// each candidate key, that the remaining (T-1) tags also hold a live
+    /// membership row for it. Confirming one candidate at a time costs one index
+    /// round trip per candidate, so a posting list of C keys pays C of them
+    /// however few tags are involved. Buffering a window of candidates and
+    /// probing W x (T-1) row keys in one call reduces that to ceil(C / W): the
+    /// number of rows read is unchanged, only the number of calls carrying them
+    /// falls.
+    /// <para>
+    /// The window is a latency/throughput trade, not a correctness knob. It is
+    /// deliberately modest: a window is fully buffered before any of its keys is
+    /// emitted, so a consumer that breaks out after the first match waits for one
+    /// window rather than one candidate, and each in-flight call carries
+    /// W x (T-1) row keys. Widening it past the point where a single probe
+    /// outgrows a shard batch trades a real first-result delay for a shrinking
+    /// return, since the round trips already fell by a factor of W.
+    /// </para>
+    /// </remarks>
+    internal const int AndQueryCandidateWindow = 32;
+
+    /// <summary>
+    /// Probes one window of AND-query candidates in a single batched read and
+    /// returns, in posting-list order, those holding a live membership row for
+    /// every tag in <paramref name="tags"/> after the first.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="probe"/> and <paramref name="survivors"/> are caller-owned
+    /// scratch buffers reused across the windows of one query, so a long posting
+    /// list does not allocate a fresh row-key list per window. They are owned by
+    /// a single <see cref="QueryAsync"/> invocation rather than by the context,
+    /// because one context serves concurrent queries and a shared buffer would be
+    /// trampled between them.
+    /// </remarks>
+    private async Task<List<string>> ProbeAndWindowAsync(
+        string treeId,
+        string[] tags,
+        List<string> window,
+        List<string> probe,
+        List<string> survivors,
+        CancellationToken cancellationToken)
+    {
+        probe.Clear();
+        for (var c = 0; c < window.Count; c++)
+        {
+            for (var i = 1; i < tags.Length; i++)
+            {
+                probe.Add(RowKey(tags[i], treeId, window[c]));
+            }
+        }
+
+        var rows = await _indexTree.GetManyAsync(probe, cancellationToken).ConfigureAwait(false);
+
+        survivors.Clear();
+        var perCandidate = tags.Length - 1;
+        for (var c = 0; c < window.Count; c++)
+        {
+            var inAll = true;
+            var start = c * perCandidate;
+            for (var i = 0; i < perCandidate; i++)
+            {
+                if (!rows.TryGetValue(probe[start + i], out var bytes) || (FlagMode && !IsRowLive(bytes)))
+                {
+                    inAll = false;
+                    break;
+                }
+            }
+
+            if (inAll)
+            {
+                survivors.Add(window[c]);
+            }
+        }
+
+        return survivors;
+    }
+
     internal async IAsyncEnumerable<string> QueryAsync(string treeId, string[] tags, bool all, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (tags.Length == 0)
@@ -466,29 +547,39 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             // is additionally decoded so a disabled/tombstoned flag reads as
             // absent - matching the per-row RowLiveAsync semantics exactly, and
             // correct even when the same tag appears more than once.
-            var probe = new List<string>(tags.Length - 1);
+            //
+            // The candidates are additionally probed a WINDOW at a time rather
+            // than one at a time. Probing per candidate still costs one round
+            // trip per candidate, so a posting list of C keys pays C of them;
+            // batching W candidates into one call carries W x (T-1) row keys
+            // instead of (T-1) and reduces that to ceil(C / W). The window is
+            // buffered before any key is emitted, which delays the first result
+            // by at most one window but does not change the result set or its
+            // order: candidates are appended in posting-list order and emitted
+            // in that same order after the probe resolves.
+            var probe = new List<string>(AndQueryCandidateWindow * (tags.Length - 1));
+            var window = new List<string>(AndQueryCandidateWindow);
+            var survivors = new List<string>(AndQueryCandidateWindow);
             await foreach (var key in PostingListAsync(treeId, tags[0], cancellationToken).ConfigureAwait(false))
             {
-                probe.Clear();
-                for (var i = 1; i < tags.Length; i++)
+                window.Add(key);
+                if (window.Count < AndQueryCandidateWindow)
                 {
-                    probe.Add(RowKey(tags[i], treeId, key));
+                    continue;
                 }
 
-                var rows = await _indexTree.GetManyAsync(probe, cancellationToken).ConfigureAwait(false);
-                var inAll = true;
-                for (var i = 0; i < probe.Count; i++)
+                foreach (var survivor in await ProbeAndWindowAsync(treeId, tags, window, probe, survivors, cancellationToken).ConfigureAwait(false))
                 {
-                    if (!rows.TryGetValue(probe[i], out var bytes) || (FlagMode && !IsRowLive(bytes)))
-                    {
-                        inAll = false;
-                        break;
-                    }
+                    yield return survivor;
                 }
+                window.Clear();
+            }
 
-                if (inAll)
+            if (window.Count > 0)
+            {
+                foreach (var survivor in await ProbeAndWindowAsync(treeId, tags, window, probe, survivors, cancellationToken).ConfigureAwait(false))
                 {
-                    yield return key;
+                    yield return survivor;
                 }
             }
         }
@@ -582,22 +673,109 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         }
         CheckAllowlist(treeId);
         await EnsureExistsAsync(treeId, cancellationToken).ConfigureAwait(false);
-        foreach (var tag in tags)
+
+        if (FlagMode)
         {
-            ValidateTag(tag);
-            await WriteRowAsync(RowKey(tag, treeId, key), cancellationToken).ConfigureAwait(false);
-            await WriteRowAsync(KeyRowKey(treeId, key, tag), cancellationToken).ConfigureAwait(false);
+            // A flag membership row is authored as a typed enable delta minted
+            // against that row's own current state, so the rows cannot be
+            // collapsed into one value batch; keep the per-row loop.
+            foreach (var tag in tags)
+            {
+                ValidateTag(tag);
+                await WriteRowAsync(RowKey(tag, treeId, key), cancellationToken).ConfigureAwait(false);
+                await WriteRowAsync(KeyRowKey(treeId, key, tag), cancellationToken).ConfigureAwait(false);
+            }
         }
+        else
+        {
+            // LwwRegister membership: every row is the same constant presence
+            // value under a distinct key, so the whole add collapses into one
+            // batched fan-out write instead of 2N sequential round trips (a
+            // tag-major row and its key-major mirror per tag). SetManyAsync
+            // fans the rows out to their owning shards in parallel and is
+            // per-key equivalent to the SetAsync loop it replaces: the rows are
+            // distinct keys carrying an identical value, so their relative
+            // write order is immaterial, and SetManyAsync is non-atomic exactly
+            // as the loop was.
+            //
+            // Validation runs as its own pass first. Interleaved with the
+            // writes it could reject tag i after tags 0..i-1 had already been
+            // durably written; hoisting it means an invalid tag rejects the
+            // whole add before anything is written.
+            var rows = new List<KeyValuePair<string, byte[]>>(tags.Count * 2);
+            for (var i = 0; i < tags.Count; i++)
+            {
+                ValidateTag(tags[i]);
+            }
+            for (var i = 0; i < tags.Count; i++)
+            {
+                var tag = tags[i];
+                rows.Add(new KeyValuePair<string, byte[]>(RowKey(tag, treeId, key), Flag));
+                rows.Add(new KeyValuePair<string, byte[]>(KeyRowKey(treeId, key, tag), Flag));
+            }
+            await _indexTree.SetManyAsync(rows, cancellationToken).ConfigureAwait(false);
+        }
+
         await EnsureHintAsync(treeId, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Maximum number of membership-row removals issued concurrently by
+    /// <see cref="RemoveTagsForKeyAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// There is no batched delete on <see cref="ILattice"/>, so the removal of a
+    /// key's rows cannot collapse into a single call the way the add path does.
+    /// It can still stop being serial: the router grain is a
+    /// <c>[StatelessWorker(maxLocalWorkers: 32)]</c>, so independent deletes
+    /// issued together are serviced by separate local workers rather than
+    /// queued behind one another. The window is capped at that same worker count
+    /// so a pathologically wide tag set cannot issue an unbounded wave of
+    /// in-flight grain calls; beyond the cap the removal proceeds wave by wave.
+    /// </remarks>
+    internal const int RemoveRowConcurrencyLimit = 32;
+
     internal async Task RemoveTagsForKeyAsync(string treeId, string key, IReadOnlyList<string> tags, CancellationToken cancellationToken)
     {
-        foreach (var tag in tags)
+        if (tags.Count == 0)
         {
-            ValidateTag(tag);
-            await RemoveRowAsync(RowKey(tag, treeId, key), cancellationToken).ConfigureAwait(false);
-            await RemoveRowAsync(KeyRowKey(treeId, key, tag), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        // Validate up front for the same reason the add path does: a tag
+        // rejected mid-wave would leave the earlier rows already deleted.
+        for (var i = 0; i < tags.Count; i++)
+        {
+            ValidateTag(tags[i]);
+        }
+
+        // One row pair per tag. A single tag stays on the direct await so the
+        // common case pays no task-array allocation at all.
+        if (tags.Count == 1)
+        {
+            var only = tags[0];
+            await RemoveRowAsync(RowKey(only, treeId, key), cancellationToken).ConfigureAwait(false);
+            await RemoveRowAsync(KeyRowKey(treeId, key, only), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var wave = new List<Task>(Math.Min(tags.Count * 2, RemoveRowConcurrencyLimit));
+        for (var i = 0; i < tags.Count; i++)
+        {
+            var tag = tags[i];
+            wave.Add(RemoveRowAsync(RowKey(tag, treeId, key), cancellationToken));
+            wave.Add(RemoveRowAsync(KeyRowKey(treeId, key, tag), cancellationToken));
+
+            if (wave.Count >= RemoveRowConcurrencyLimit)
+            {
+                await Task.WhenAll(wave).ConfigureAwait(false);
+                wave.Clear();
+            }
+        }
+
+        if (wave.Count > 0)
+        {
+            await Task.WhenAll(wave).ConfigureAwait(false);
         }
     }
 

@@ -66,10 +66,13 @@ public sealed class LatticeSchemaEnvelopeCodecTests
         var envV2 = LatticeSchemaEnvelope.Encode(schemaId: 1, version: 2, body);
         var envV9 = LatticeSchemaEnvelope.Encode(schemaId: 1, version: 9, body);
 
-        // Same body, different stamped version -> identical strip output.
+        // Same body, different stamped version -> identical strip output. The
+        // cross-version comparison is the invariant itself: comparing a strip to
+        // itself would hold for any implementation, including one that upcast on
+        // the stamped version.
         Assert.That(Codec.StripForFold(envV2), Is.EqualTo(body));
         Assert.That(Codec.StripForFold(envV9), Is.EqualTo(body));
-        Assert.That(Codec.StripForFold(envV2), Is.EqualTo(Codec.StripForFold(envV2)));
+        Assert.That(Codec.StripForFold(envV2), Is.EqualTo(Codec.StripForFold(envV9)));
     }
 
     [Test]
