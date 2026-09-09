@@ -30,6 +30,14 @@ internal sealed class LatticeScalingSignal : ILatticeScalingSignal, IHostedServi
     /// </summary>
     internal const string WarmingUp = "warming up";
 
+    /// <summary>
+    /// Longest period <see cref="PeriodicTimer"/> accepts. A configured sample
+    /// cadence beyond this is clamped rather than allowed to throw out of the
+    /// fire-and-forget sampling loop: an out-of-range knob should degrade to the
+    /// slowest legal cadence, not fault the loop and leave the signal frozen.
+    /// </summary>
+    private static readonly TimeSpan MaxSampleInterval = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     private readonly IComputePressureCollector _computeCollector;
     private readonly IStoragePressureCollector _storageCollector;
     private readonly IReplicaCountProvider _replicaCountProvider;
@@ -177,9 +185,20 @@ internal sealed class LatticeScalingSignal : ILatticeScalingSignal, IHostedServi
         }
     }
 
-    private TimeSpan SampleInterval()
+    /// <summary>
+    /// The effective sample cadence: the configured interval, falling back to the
+    /// default when non-positive and clamped to <see cref="MaxSampleInterval"/> so
+    /// an out-of-range knob degrades the cadence instead of throwing out of the
+    /// sampling loop. Exposed to tests so the clamp can be asserted directly.
+    /// </summary>
+    internal TimeSpan SampleInterval()
     {
         var interval = _options.Value.SampleInterval;
-        return interval > TimeSpan.Zero ? interval : LatticeScalingSignalOptions.DefaultSampleInterval;
+        if (interval <= TimeSpan.Zero)
+        {
+            return LatticeScalingSignalOptions.DefaultSampleInterval;
+        }
+
+        return interval > MaxSampleInterval ? MaxSampleInterval : interval;
     }
 }

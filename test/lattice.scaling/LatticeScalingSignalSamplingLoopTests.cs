@@ -196,4 +196,57 @@ public sealed class LatticeScalingSignalSamplingLoopTests
 
         Assert.That(compute.Count, Is.GreaterThanOrEqualTo(1));
     }
+
+    /// <summary>
+    /// The longest period <see cref="PeriodicTimer"/> accepts. A cadence beyond
+    /// this must be clamped, not allowed to throw out of the sampling loop.
+    /// </summary>
+    private static readonly TimeSpan TimerCeiling = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    [Test]
+    public void SampleInterval_clamps_a_configured_interval_beyond_the_timer_ceiling()
+    {
+        // Regression: SampleInterval() fed the raw option straight into
+        // new PeriodicTimer(...), which throws ArgumentOutOfRangeException for a
+        // finite period above ~49.71 days. An out-of-range operator value must
+        // degrade to the slowest legal cadence, not fault the loop.
+        var facade = Build(new ControllableTimeProvider(T0), new CountingCompute(), o => o.SampleInterval = TimeSpan.FromDays(60));
+
+        Assert.That(facade.SampleInterval(), Is.EqualTo(TimerCeiling));
+    }
+
+    [Test]
+    public void SampleInterval_falls_back_to_the_default_when_non_positive()
+    {
+        var facade = Build(new ControllableTimeProvider(T0), new CountingCompute(), o => o.SampleInterval = TimeSpan.Zero);
+
+        Assert.That(facade.SampleInterval(), Is.EqualTo(LatticeScalingSignalOptions.DefaultSampleInterval));
+    }
+
+    [Test]
+    public void SampleInterval_returns_a_configured_in_range_interval_unchanged()
+    {
+        var facade = Build(new ControllableTimeProvider(T0), new CountingCompute(), o => o.SampleInterval = TimeSpan.FromSeconds(45));
+
+        Assert.That(facade.SampleInterval(), Is.EqualTo(TimeSpan.FromSeconds(45)));
+    }
+
+    [Test]
+    public async Task An_out_of_range_interval_still_creates_the_timer_without_faulting_the_loop()
+    {
+        // End-to-end guard: before the clamp, constructing the PeriodicTimer with
+        // the out-of-range period threw synchronously inside the loop, so the timer
+        // was never created and the fire-and-forget loop faulted. TimerCreated
+        // completing proves the timer was built from the clamped period.
+        var clock = new ControllableTimeProvider(T0);
+        var compute = new CountingCompute();
+        var facade = Build(clock, compute, o => o.SampleInterval = TimeSpan.FromDays(60));
+
+        await facade.StartAsync(CancellationToken.None);
+        await compute.WaitForSampleAsync(1);
+
+        Assert.That(async () => await clock.TimerCreated.WaitAsync(TimeSpan.FromSeconds(10)), Throws.Nothing);
+
+        await facade.StopAsync(CancellationToken.None);
+    }
 }
