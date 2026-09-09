@@ -260,4 +260,178 @@ public sealed class EmbeddingRepoContextVectorIngestorGapShardDistributionTests
             Assert.That(summary.LargestShardGroup, Is.LessThan(K));
         });
     }
+
+    /// <summary>
+    /// The physical shard count P is a <b>lower bound from observation</b>, and it has
+    /// moved twice: this workstream first assumed 16, then read shard 62 out of a
+    /// deployed log, then read shard 63 (observed 2026-09-09 in boot-2 logs of the
+    /// repo-context-vector-metadata tree), which puts the floor at P &gt;= 64. Any
+    /// threshold written against one day's best guess is wrong the next time a higher
+    /// shard id appears, so the diagnostic reports the map's own
+    /// <see cref="EmbeddingRepoContextVectorIngestor.GapShardDistribution.PhysicalShardCount"/>
+    /// and the criterion is computed from it rather than baked in.
+    /// <para>
+    /// E[D] = P * (1 - (1 - 1/P)^K) is monotonically increasing in P, so a larger P
+    /// raises expected occupancy and therefore RAISES the bar for concluding
+    /// "concentrated". The direction is not harmless, which is why this asserts the
+    /// monotonicity rather than assuming it.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void The_occupancy_criterion_is_computed_from_the_reported_P_and_does_not_flip_across_its_plausible_range()
+    {
+        const int K = 43;
+        int[] plausibleP = [16, 32, 63, 64, 128, 256];
+
+        var previousExpected = double.NegativeInfinity;
+
+        Assert.Multiple(() =>
+        {
+            foreach (var p in plausibleP)
+            {
+                var summary = EmbeddingRepoContextVectorIngestor.SummariseGapShardDistribution(
+                    RepoId, Entries(K), ShardMap.CreateDefault(4096, p));
+
+                var expected = p * (1 - Math.Pow(1 - (1.0 / p), K));
+
+                // The instrument reports P, so a reader can recompute the threshold for
+                // whatever P the deployment actually had. Nothing is assumed.
+                Assert.That(
+                    summary.PhysicalShardCount,
+                    Is.EqualTo(p),
+                    "the diagnostic must report the map's own P so the threshold is derived, not assumed");
+
+                // Monotone in P: a bigger P means more expected distinct shards.
+                Assert.That(
+                    expected,
+                    Is.GreaterThan(previousExpected),
+                    $"E[D] must increase with P; it did not at P={p}");
+                previousExpected = expected;
+
+                // The verdict under the null must be the SAME at every P in range:
+                // a hash-scattered set is never reported as occupying a single shard,
+                // and never as occupying all K. If either flipped anywhere in this
+                // range, an observed value could not be read without knowing P exactly.
+                Assert.That(
+                    summary.DistinctShards,
+                    Is.GreaterThan(1),
+                    $"a scattered set must not read as concentrated at P={p}");
+                Assert.That(
+                    summary.DistinctShards,
+                    Is.LessThanOrEqualTo(Math.Min(K, p)),
+                    $"D cannot exceed min(K, P) at P={p}");
+
+                // And the unsound bare-percentage criterion fires on the null at EVERY
+                // P in the range, not merely at the P this workstream happened to guess.
+                // That is the whole reason a bare percentage was rejected.
+                Assert.That(
+                    summary.DistinctShards,
+                    Is.LessThan(K),
+                    $"D < K under the null at P={p}, so 'far fewer than K' is unsound here too");
+            }
+        });
+    }
+
+    /// <summary>
+    /// The empirical result issue #2287 was opened to obtain, pinned as an executable
+    /// artifact so it cannot be lost with the log that produced it.
+    /// <para>
+    /// These are the real gap-set paths sampled from two deployed passes (2026-09-09,
+    /// passes 1 and 2 of the pre-window run). Every one of them hashes to a
+    /// <b>distinct</b> virtual slot, and every one of those slots is congruent to 32
+    /// modulo 64, so under any contiguous virtual-to-physical map they collapse onto a
+    /// single physical shard. That is the exact signature the virtual-slot proxy would
+    /// have hidden: the proxy sees 20 distinct slots and reports "scattered", which
+    /// would have been a false refutation of the hash-partitioned candidate.
+    /// </para>
+    /// <para>
+    /// The contrast is what carries the inference, so the control is asserted in the
+    /// same test: an equally path-ordered sample of ordinary repository paths spreads
+    /// across the whole residue space. Note the clustering claim is map-independent
+    /// (it is a property of the keys' slot residues); only naming the shard "32"
+    /// depends on the default contiguous map.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void The_deployed_gap_set_shares_one_physical_shard_while_occupying_distinct_virtual_slots()
+    {
+        string[] deployedGapSample =
+        [
+            "benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj",
+            "docs/lattice/bulk-loading.md",
+            "src/lattice.api.abstractions/TreeAdmin/Model/LatticeTreeAdminCapabilities.cs",
+            "src/lattice.api.mcp.repocontext/Source/IRepoContextSourceScanner.cs",
+            "src/lattice.api.mcp.telemetry/LatticeMcpTelemetryServiceCollectionExtensions.cs",
+            "src/lattice.api.tenantadmin/TenantAdminAccessAuthorizer.cs",
+            "src/lattice.explorer/DesignSystem/Layout/LatticeAdaptiveContext.cs",
+            "src/lattice.explorer/Plugins/Tenants/Views/TenantRegionView.razor",
+            "src/lattice.grainindex/GrainIndexOptionsValidator.cs",
+            "src/lattice.scaling/LatticeScalingEndpointRouteBuilderExtensions.cs",
+            "src/lattice.storage.azuretable/AzureTableWalEntity.cs",
+            "src/lattice.vector/Persistence/VectorIndexManifest.cs",
+            "src/lattice/BPlusTree/Grains/LatticeGrain.Idempotency.cs",
+            "src/lattice/BPlusTree/State/LeafSnapshotBlob.cs",
+            "src/lattice/Crdt/CrdtMemberValue.cs",
+            "src/lattice/Crdt/MvRegisterProvenanceDecoder.cs",
+            "src/lattice.api.treeadmin.grpc/Model/TreeAdminResizeRequest.cs",
+            "src/lattice/LatticeAuthorizationDeniedException.cs",
+            "src/lattice/LatticeIdempotencyContext.cs",
+            "src/lattice/Views/RuntimeViewProjectionProviderCatalog.cs",
+        ];
+
+        // The deployed repository indexes itself under this id, and the id is part of
+        // the hashed key, so the residue only reproduces under the real one.
+        const string DeployedRepoId = "lattice";
+        const int P = 64;
+
+        static string KeyFor(string repoId, string relativePath)
+            => RepoContextKeys.VectorMembership(
+                repoId, VectorCodec.SourceId(RepoContextKeys.File(repoId, relativePath)));
+
+        var gapKeys = deployedGapSample.Select(p => KeyFor(DeployedRepoId, p)).ToArray();
+        var gapSlots = gapKeys.Select(k => ShardMap.GetVirtualSlot(k, 4096)).ToArray();
+        var map = ShardMap.CreateDefault(4096, P);
+        var gapShards = gapKeys.Select(map.Resolve).Distinct().ToArray();
+
+        // The control: an equally path-ordered sample of ordinary paths from the same
+        // repository. Without this contrast a single-shard result could just as well be
+        // a property of every membership key, which would carry no information at all.
+        var controlPaths = Enumerable.Range(0, 400)
+            .Select(i => $"src/lattice/Generated/Control{i:D4}.cs")
+            .ToArray();
+        var controlResidues = controlPaths
+            .Select(p => ShardMap.GetVirtualSlot(KeyFor(DeployedRepoId, p), 4096) % 64)
+            .Distinct()
+            .Count();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                gapKeys.Distinct(StringComparer.Ordinal).Count(),
+                Is.EqualTo(deployedGapSample.Length),
+                "the sample must be distinct keys, or a single-shard result is a duplication artifact");
+
+            Assert.That(
+                gapSlots.Distinct().Count(),
+                Is.EqualTo(deployedGapSample.Length),
+                "every gap key occupies its OWN virtual slot, which is exactly why a "
+                + "virtual-slot histogram reads as scattered and cannot discriminate");
+
+            Assert.That(
+                gapSlots.Select(v => v % 64).Distinct().ToArray(),
+                Is.EqualTo(new[] { 32 }),
+                "every deployed gap key shares the virtual-slot residue class 32 mod 64");
+
+            Assert.That(
+                gapShards,
+                Is.EqualTo(new[] { 32 }),
+                "so they collapse onto a single physical shard under the default map");
+
+            Assert.That(
+                controlResidues,
+                Is.GreaterThan(32),
+                "the control must spread across the residue space, or the gap result is "
+                + "a property of all membership keys rather than of the gap set");
+        });
+    }
 }
