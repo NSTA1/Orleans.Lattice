@@ -28,6 +28,7 @@ internal sealed class RepoContextAnnIndexSweepService(
     RepoContextAnnIndexScheduler scheduler,
     RepoContextIndexingOptions options,
     RepoContextRetrievalReadinessState readiness,
+    IRepoIndexRunAuthority runAuthority,
     ILogger<RepoContextAnnIndexSweepService> logger) : BackgroundService
 {
     private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromMilliseconds(250);
@@ -158,6 +159,31 @@ internal sealed class RepoContextAnnIndexSweepService(
         var observed = 0;
         try
         {
+            // Stamp the run authority's fixed identity onto the whole sweep, so both
+            // the listing scan below and the arming calls it drives carry a subject
+            // the access gate can authorize.
+            //
+            // Without this the sweep is anonymous, because a BackgroundService loop
+            // is not a request and carries no ambient credential. On a host running a
+            // default-deny gate that does NOT surface as an error: a denied range
+            // read is enforced by ResolveRangeReadFilterAsync as a reject-all key
+            // filter (`static _ => false`), not an exception - so the scan returns an
+            // EMPTY list, cleanly, and the sweep reports "nothing to arm" on every
+            // pass forever while every credentialed caller in the same process sees
+            // the full set. The index is then never built and every semantic query
+            // falls back to an exact brute-force scan.
+            //
+            // This is the same remedy RepoIndexRunner, RepoContextSelfIndexGrain, and
+            // RepoContextGitSourceArmingService already apply for exactly this
+            // reason; the sweep was the one background arming component that omitted
+            // it. A host that registers no authority resolves null and the sweep's
+            // ambient credential is left untouched, so an in-process host with no
+            // access gate is unaffected. See issue #2406.
+            var credential = runAuthority.Resolve();
+            using var credentialScope = credential is null
+                ? null
+                : LatticeCredentialContext.With(credential);
+
             // Only the ids are needed to arm a coordinator, so this deliberately
             // avoids ListReposAsync: a full summary reads a root marker per repository
             // and can schedule an out-of-band membership walk, none of which a sweep
