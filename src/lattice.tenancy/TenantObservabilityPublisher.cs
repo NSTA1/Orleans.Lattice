@@ -31,6 +31,14 @@ internal sealed class TenantObservabilityPublisher : IHostedService
     private readonly CancellationTokenSource _stopping = new();
     private Task? _loop;
 
+    /// <summary>
+    /// Longest period <see cref="PeriodicTimer"/> accepts. A configured publish
+    /// cadence beyond this is clamped rather than allowed to throw out of the
+    /// fire-and-forget publish loop: an out-of-range knob should degrade to the
+    /// slowest legal cadence, not fault the loop and freeze the gauges.
+    /// </summary>
+    private static readonly TimeSpan MaxTimerPeriod = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     /// <summary>Initializes the publisher over its snapshot source and schedule inputs.</summary>
     /// <param name="source">The snapshot source composing usage and overage. Must not be <c>null</c>.</param>
     /// <param name="timeProvider">The timestamp source backing the publish timer. Must not be <c>null</c>.</param>
@@ -109,17 +117,28 @@ internal sealed class TenantObservabilityPublisher : IHostedService
     {
         await PublishCycleSafelyAsync(cancellationToken).ConfigureAwait(false);
 
+        using var timer = new PeriodicTimer(ResolvePublishInterval(), _timeProvider);
+        while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await PublishCycleSafelyAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The effective publish cadence: the configured interval, falling back to the
+    /// default when non-positive and clamped to <see cref="MaxTimerPeriod"/> so an
+    /// out-of-range knob degrades the cadence instead of throwing out of the loop.
+    /// Exposed to tests so the clamp can be asserted directly.
+    /// </summary>
+    internal TimeSpan ResolvePublishInterval()
+    {
         var interval = _options.CurrentValue.PublishInterval;
         if (interval <= TimeSpan.Zero)
         {
             interval = TenantObservabilityOptions.DefaultPublishInterval;
         }
 
-        using var timer = new PeriodicTimer(interval, _timeProvider);
-        while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
-        {
-            await PublishCycleSafelyAsync(cancellationToken).ConfigureAwait(false);
-        }
+        return interval > MaxTimerPeriod ? MaxTimerPeriod : interval;
     }
 
     private async Task PublishCycleSafelyAsync(CancellationToken cancellationToken)

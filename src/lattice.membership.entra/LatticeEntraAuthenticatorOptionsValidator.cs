@@ -4,10 +4,10 @@ namespace Orleans.Lattice.Membership.Entra;
 
 /// <summary>
 /// Validates <see cref="LatticeEntraAuthenticatorOptions"/>: an authority is
-/// required, at least one tenant id and one audience must be configured, the
-/// issuer template must carry the <c>{tenantid}</c> placeholder, the
-/// group-resolution mode must be a defined value, and the refresh intervals must
-/// be strictly positive.
+/// required, at least one tenant id, one audience and one signature algorithm
+/// must be configured, the issuer template must carry the <c>{tenantid}</c>
+/// placeholder, the group-resolution mode must be a defined value, and the
+/// refresh intervals must be strictly positive.
 /// </summary>
 internal sealed class LatticeEntraAuthenticatorOptionsValidator : IValidateOptions<LatticeEntraAuthenticatorOptions>
 {
@@ -41,6 +41,26 @@ internal sealed class LatticeEntraAuthenticatorOptionsValidator : IValidateOptio
         else if (options.Audiences.Any(string.IsNullOrWhiteSpace))
         {
             failures.Add($"{nameof(LatticeEntraAuthenticatorOptions.Audiences)} must not contain a null or empty audience.");
+        }
+
+        // Fail loud, at startup, rather than fail closed silently at every
+        // authentication. An empty pin is refused here because the alternative -
+        // reaching EntraCredentialAuthenticator's deny-all branch - denies every
+        // token at runtime with nothing naming the option responsible, which
+        // presents as a total authentication outage rather than as the
+        // configuration error it is. That runtime branch is deliberately kept as
+        // defence in depth for the direct-construction path this validator does
+        // not sit on; it is not made unreachable by this check.
+        if (options.Algorithms.Count == 0)
+        {
+            failures.Add(
+                $"{nameof(LatticeEntraAuthenticatorOptions.Algorithms)} must contain at least one signature algorithm. " +
+                "An empty allow-list is refused rather than treated as 'accept any algorithm' (CWE-347); " +
+                $"clear and repopulate it to accept a set other than the default '{LatticeEntraAuthenticatorOptions.DefaultAlgorithm}'.");
+        }
+        else if (options.Algorithms.Any(string.IsNullOrWhiteSpace))
+        {
+            failures.Add($"{nameof(LatticeEntraAuthenticatorOptions.Algorithms)} must not contain a null or empty algorithm.");
         }
 
         if (string.IsNullOrWhiteSpace(options.IssuerTemplate) ||

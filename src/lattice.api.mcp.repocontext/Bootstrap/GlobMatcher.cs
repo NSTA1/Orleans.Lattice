@@ -31,13 +31,38 @@ internal sealed class GlobMatcher
     private GlobMatcher(Regex regex) => _regex = regex;
 
     /// <summary>
+    /// The engine options every compiled glob is built with.
+    /// <para>
+    /// <see cref="RegexOptions.NonBacktracking"/> is load-bearing, not a
+    /// micro-optimisation. The pattern is caller-supplied over the wire (the
+    /// <c>includeGlobs</c> / <c>excludeGlobs</c> arguments of the indexing tools),
+    /// and <see cref="Translate"/> emits <c>(?:.*/)?</c> for every <c>**/</c>
+    /// segment, so a pattern such as <c>**/**/**/.../x</c> compiles to a nest of
+    /// ambiguous, mutually-overlapping quantifiers. Under the backtracking engine
+    /// that is exponential in the number of segments on a non-matching path, so a
+    /// short pattern paired with an ordinary repository path burns the indexer
+    /// thread indefinitely (CWE-1333). The non-backtracking engine evaluates the
+    /// same language in time linear in the input, which turns an unbounded burn
+    /// into a bounded one and needs no match timeout.
+    /// </para>
+    /// <para>
+    /// The emitted grammar is compatible by construction: it uses only literals,
+    /// character classes, <c>.</c>, <c>*</c>, <c>?</c>, anchors, and non-capturing
+    /// groups - never a backreference, lookaround, or atomic group, which are the
+    /// constructs the non-backtracking engine rejects.
+    /// </para>
+    /// </summary>
+    private const RegexOptions MatchOptions =
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.NonBacktracking;
+
+    /// <summary>
     /// Compiles <paramref name="pattern"/> into a matcher.
     /// </summary>
     /// <param name="pattern">The glob pattern. Must not be <see langword="null"/>.</param>
     internal static GlobMatcher Compile(string pattern)
     {
         ArgumentNullException.ThrowIfNull(pattern);
-        return new GlobMatcher(new Regex(Translate(pattern), RegexOptions.CultureInvariant | RegexOptions.IgnoreCase));
+        return new GlobMatcher(new Regex(Translate(pattern), MatchOptions));
     }
 
     /// <summary>Reports whether <paramref name="path"/> matches this glob.</summary>

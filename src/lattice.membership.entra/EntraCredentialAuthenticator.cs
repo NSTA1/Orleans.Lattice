@@ -26,6 +26,25 @@ public class EntraCredentialAuthenticator : JwtCredentialAuthenticator
     private readonly string _metadataAddress;
 
     /// <summary>
+    /// The explicit deny-all algorithm validator installed when the configured pin
+    /// is empty, so an empty allow-list denies rather than inheriting the token
+    /// validator's "empty means accept anything" behaviour (CWE-347). Mirrors the
+    /// <c>OidcCredentialAuthenticator</c> sibling. Cached in a static field so
+    /// installing it costs no allocation per authentication.
+    /// <para>
+    /// This is the second of two layers and is deliberately not the primary one.
+    /// <c>LatticeEntraAuthenticatorOptionsValidator</c> refuses an empty
+    /// <see cref="LatticeEntraAuthenticatorOptions.Algorithms"/> at startup, naming
+    /// the option, because denying here instead would present a configuration error
+    /// as a total authentication outage with nothing pointing at its cause. This
+    /// branch remains for the direct-construction path that bypasses options
+    /// validation, so the fail-closed default holds on every branch.
+    /// </para>
+    /// </summary>
+    private static readonly AlgorithmValidator DenyAllAlgorithms =
+        static (algorithm, key, token, parameters) => false;
+
+    /// <summary>
     /// Initializes a new <see cref="EntraCredentialAuthenticator"/> that discovers
     /// OIDC metadata from the live Entra authority.
     /// </summary>
@@ -155,6 +174,19 @@ public class EntraCredentialAuthenticator : JwtCredentialAuthenticator
             // whose header advertises an unexpected algorithm is rejected before
             // key validation, closing the algorithm-confusion gap (CWE-347).
             parameters.ValidAlgorithms = _entraOptions.Algorithms.ToArray();
+        }
+        else
+        {
+            // Fail closed, exactly as the OidcCredentialAuthenticator sibling does.
+            // Algorithms is a get-only IList pre-populated with RS256, so binding
+            // adds to it and cannot empty it - but a host that means to replace the
+            // default has to Clear() first, and any path that clears without
+            // repopulating (a misconfigured section, an ordering slip) previously
+            // left this branch silently unrestricted. An empty ValidAlgorithms is
+            // read by the token validator as "no restriction" rather than as "allow
+            // nothing", so the empty pin has to be expressed as an explicit
+            // deny-all validator instead of by leaving the property unset.
+            parameters.AlgorithmValidator = DenyAllAlgorithms;
         }
 
         return new ValueTask<TokenValidationParameters>(parameters);

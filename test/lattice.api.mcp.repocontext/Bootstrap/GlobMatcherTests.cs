@@ -102,4 +102,51 @@ public sealed class GlobMatcherTests
         var matcher = GlobMatcher.Compile("*.cs");
         Assert.Throws<ArgumentNullException>(() => matcher.IsMatch(null!));
     }
+
+    /// <summary>
+    /// Regression: the include / exclude globs are caller-supplied over the wire,
+    /// and the translation emits <c>(?:.*/)?</c> for every <c>**/</c> segment. Under
+    /// the backtracking engine those ambiguous, mutually-overlapping quantifiers
+    /// compose into exponential work on a path that does <em>not</em> match, so a
+    /// short pattern paired with an ordinary repository path pinned the indexer
+    /// thread indefinitely (CWE-1333). Measured against the unmodified source this
+    /// case did not return within 30 seconds; the non-backtracking engine settles it
+    /// in single-digit milliseconds.
+    /// <para>
+    /// The budget is deliberately generous - three orders of magnitude above the
+    /// fixed behaviour - so the test asserts "bounded, not exponential" rather than
+    /// a wall-clock figure that could flake on a loaded CI agent.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void A_pattern_dense_in_recursive_wildcards_matches_in_bounded_time()
+    {
+        var pattern = string.Concat(Enumerable.Repeat("**/", 12)) + "x";
+        var nonMatchingPath = string.Concat(Enumerable.Repeat("a/", 22));
+        var matcher = GlobMatcher.Compile(pattern);
+
+        bool? matched = null;
+        var probe = Task.Run(() => matched = matcher.IsMatch(nonMatchingPath));
+
+        Assert.That(
+            probe.Wait(TimeSpan.FromSeconds(10)),
+            Is.True,
+            "A recursive-wildcard-dense glob must not backtrack exponentially on a non-matching path.");
+        Assert.That(matched, Is.False);
+    }
+
+    [Test]
+    public void A_pattern_dense_in_recursive_wildcards_still_matches_what_it_should()
+    {
+        // The bound above must not have been bought by changing the language the
+        // grammar accepts: the same pattern still matches at any depth.
+        var matcher = GlobMatcher.Compile(string.Concat(Enumerable.Repeat("**/", 12)) + "x");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matcher.IsMatch("x"), Is.True);
+            Assert.That(matcher.IsMatch("a/b/c/x"), Is.True);
+            Assert.That(matcher.IsMatch("a/b/c/y"), Is.False);
+        });
+    }
 }
