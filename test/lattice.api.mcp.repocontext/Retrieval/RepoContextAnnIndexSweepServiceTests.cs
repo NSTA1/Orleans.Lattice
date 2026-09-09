@@ -60,12 +60,14 @@ public sealed partial class RepoContextAnnIndexSweepServiceTests
         RepoContextAnnIndexScheduler scheduler,
         RepoContextIndexingOptions? options = null,
         RepoContextRetrievalReadinessState? readiness = null,
-        ILogger<RepoContextAnnIndexSweepService>? logger = null)
+        ILogger<RepoContextAnnIndexSweepService>? logger = null,
+        IRepoIndexRunAuthority? runAuthority = null)
         => new(
             store,
             scheduler,
             options ?? new RepoContextIndexingOptions(),
             readiness ?? new RepoContextRetrievalReadinessState(TimeProvider.System),
+            runAuthority ?? Substitute.For<IRepoIndexRunAuthority>(),
             logger ?? NullLogger<RepoContextAnnIndexSweepService>.Instance);
 
     /// <summary>Spins until <paramref name="condition"/> holds or the budget runs out.</summary>
