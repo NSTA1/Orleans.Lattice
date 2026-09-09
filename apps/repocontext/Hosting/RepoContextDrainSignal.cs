@@ -53,9 +53,12 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// </item>
 /// <item>
 /// <description>
-/// an overrun line - the <b>host</b> abandoned the drain, so
-/// <see cref="RepoContextHostBuilder.ShutdownBudget"/> itself is too small and no
-/// grace period can rescue it (the defect of issue #2397).
+/// an overrun line - the <b>host</b> abandoned the drain, so the budget itself is
+/// too small (the defect of issue #2397). Since issue #2402 the budget is derived
+/// from the declared container grant, so both cases are answered by the same pair
+/// of values - the service's <c>stop_grace_period</c> and the
+/// <see cref="RepoContextShutdownBudget.StopGracePeriodKey"/> that declares it -
+/// raised together and kept equal.
 /// </description>
 /// </item>
 /// </list>
@@ -312,9 +315,12 @@ public sealed class RepoContextDrainSignal : IDisposable
             + "before the silo finished deactivating, so the host has stopped waiting and the remaining leaf "
             + "activations are being torn down without banking their projection checkpoints. The process will "
             + "exit {ExitCode} rather than 0, so this is visible to an orchestrator and not only in this log. "
-            + "Raising the container's stop_grace_period does NOT fix this - "
-            + "RepoContextHostBuilder.ShutdownBudget is the binding "
-            + "ceiling and must rise, and stop_grace_period must then be raised to stay strictly greater.",
+            + "The budget is derived from the container grace period the deployment declares, so the remedy is "
+            + "to raise the service's stop_grace_period AND the " + RepoContextShutdownBudget.StopGracePeriodKey
+            + " that declares it, together and to the same value. Raising only the declaration buys no drain "
+            + "time and silences this line, because the container still kills the process at the real grace "
+            + "period. Understand either as buying time: drain duration tracks the resident activation set, "
+            + "which nothing here bounds.",
             _shutdownBudget.TotalSeconds,
             RepoContextExitCode.DrainAbandoned);
     }
@@ -412,8 +418,9 @@ public sealed class RepoContextDrainSignal : IDisposable
                 "RepoContext drain ran to {DrainSeconds:F1}s against a {ShutdownBudgetSeconds:F0}s host shutdown "
                 + "budget, so it did NOT complete: the host abandoned deactivation at the budget and this line "
                 + "reports when the stop sequence unwound, not a successful drain. The process exits "
-                + "{ExitCode} rather than 0. "
-                + "RepoContextHostBuilder.ShutdownBudget must rise, and the container's stop_grace_period with it.",
+                + "{ExitCode} rather than 0. Raise the service's stop_grace_period and the "
+                + RepoContextShutdownBudget.StopGracePeriodKey + " that declares it together, to the same "
+                + "value; the budget is derived from the second and bounded by the first.",
                 measured.TotalSeconds,
                 _shutdownBudget.TotalSeconds,
                 RepoContextExitCode.DrainAbandoned);

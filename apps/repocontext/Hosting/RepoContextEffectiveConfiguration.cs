@@ -98,6 +98,7 @@ public static class RepoContextEffectiveConfiguration
             RepoContextPinBucketing.PinBucketsKey,
             RepoContextReplayConcurrency.MaxConcurrentReplaysKey,
             RepoContextClaimLeases.MaxLockLeaseSecondsKey,
+            RepoContextShutdownBudget.StopGracePeriodKey,
 
             // Not a LATTICE_ key, and deliberately reported anyway: it is the value that
             // sized the oversubscribed WAL replay gate in issue #2279, and a report scoped

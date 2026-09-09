@@ -131,6 +131,7 @@ public sealed class RepoContextEffectiveConfigurationReporter(
         RepoContextPinBucketing.PinBucketsKey,
         RepoContextReplayConcurrency.MaxConcurrentReplaysKey,
         RepoContextClaimLeases.MaxLockLeaseSecondsKey,
+        RepoContextShutdownBudget.StopGracePeriodKey,
     ];
 
     /// <summary>
@@ -179,6 +180,14 @@ public sealed class RepoContextEffectiveConfigurationReporter(
                 RepoContextClaimLeases.ResolveMaxLeaseSeconds,
                 RepoContextClaimLeases.DefaultMaxLockLeaseSeconds),
 
+            // Reported as the declared GRANT rather than as the budget derived from it.
+            // The grant is the value an operator sets, and it is the half of the pair
+            // this process can actually read - the real stop_grace_period is invisible
+            // from inside the container - so a report naming only the derived budget
+            // would not answer the question this report exists for: which value did the
+            // running process believe.
+            DescribeGrant(),
+
             // A runtime fact rather than a setting, and reported for that reason: nothing
             // in this list would have exposed it. There is no default to compare against,
             // because the value the runtime would have chosen unaided is not observable
@@ -214,5 +223,29 @@ public sealed class RepoContextEffectiveConfigurationReporter(
         }
 
         static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
+
+        string DescribeGrant()
+        {
+            // Same discipline as Knob: the host's own call site validates and throws, so
+            // this reporter reports a malformed value as malformed rather than taking the
+            // process down from inside the diagnostic that was supposed to explain it.
+            string current;
+            try
+            {
+                current = Seconds(RepoContextShutdownBudget.Resolve(configuration).StopGracePeriod);
+            }
+            catch (InvalidOperationException ex)
+            {
+                current = string.Create(CultureInfo.InvariantCulture, $"<invalid: {ex.Message}>");
+            }
+
+            return RepoContextEffectiveConfiguration.DescribeSetting(
+                RepoContextShutdownBudget.StopGracePeriodKey,
+                current,
+                Seconds(RepoContextShutdownBudget.DefaultStopGracePeriod));
+        }
+
+        static string Seconds(TimeSpan value)
+            => string.Create(CultureInfo.InvariantCulture, $"{value.TotalSeconds:0.###}s");
     }
 }

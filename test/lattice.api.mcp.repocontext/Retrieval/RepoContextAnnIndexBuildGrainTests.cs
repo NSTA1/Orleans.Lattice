@@ -109,6 +109,7 @@ public sealed class RepoContextAnnIndexBuildGrainTests
                 registry,
                 Backing,
                 Indexing,
+                new NullRepoIndexRunAuthority(),
                 NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
                 State);
 
