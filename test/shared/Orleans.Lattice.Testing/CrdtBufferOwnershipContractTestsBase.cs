@@ -70,7 +70,21 @@ public abstract class CrdtBufferOwnershipContractTestsBase
     public void Every_crdt_type_in_the_package_has_an_ownership_specimen()
     {
         var covered = Specimens.Select(static s => Normalise(s.CrdtType)).ToHashSet();
-        var missing = DeclaredCrdtTypes()
+        var declared = DeclaredCrdtTypes().ToArray();
+
+        // Denominator guard for the whole fixture, not just this leg. Every leg
+        // below is driven off this same assembly scan, so if it ever stopped
+        // matching (ICrdt<> relocated or renamed, the package assembly wired to
+        // the wrong reference) `missing` would be empty and this structural gate
+        // would report success having covered nothing. Unlike the per-leg
+        // silences this base class deliberately tolerates - a package with no
+        // MergeDelta, or no byte[] projection, is correctly quiet - a package
+        // with no declared CRDT at all is never legitimate, because the deriving
+        // fixture exists precisely because its package declares one.
+        Assert.That(declared, Is.Not.Empty,
+            "the package CRDT scan found no declared types, so the coverage assertion below would pass vacuously");
+
+        var missing = declared
             .Where(t => !covered.Contains(Normalise(t)))
             .Select(static t => t.Name)
             .OrderBy(static n => n, StringComparer.Ordinal)
