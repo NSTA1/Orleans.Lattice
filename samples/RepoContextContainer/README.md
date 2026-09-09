@@ -320,13 +320,34 @@ curl -fsS http://localhost:8080/metrics | head -n 20
   budget there - Kubernetes has the identical trap under a different name, since
   `terminationGracePeriodSeconds` defaults to 30s.
 - The drain reports its own duration, so the budget can be derived rather than
-  bisected. `docker logs` carries `RepoContext drain complete in <n>s` once every
-  hosted service has stopped. The **absence** of that line is the useful signal:
-  it means the container was killed mid-drain. The exit code will not tell you,
-  because a killed container reports `137` and the next `docker start` overwrites
-  it. Drain time scales with resident state: the same 400-file rig drained in
-  33.9s before its vector trees had landed and 67.2s once they had, which is
-  already three quarters of the 90s budget. If a drain ever exceeds 90s the
-  *host* abandons it and no `stop_grace_period` can rescue that, so a
-  drain-complete line reporting a duration near 90s means `ShutdownBudget` needs
-  raising, not just this compose value.
+  bisected. `docker logs` carries `RepoContext drain complete in <n>s, consuming
+  <p>% of the 90s host shutdown budget`. Read it together with its severity,
+  because there are three distinct outcomes and the level is what separates them:
+  - **No completion line at all.** The container was killed mid-drain, so
+    `stop_grace_period` is smaller than the drain (issue #2389). The exit code
+    will not tell you, because a killed container reports `137` and the next
+    `docker start` overwrites it.
+  - **`drain complete` at `Warning`.** The drain finished but consumed more than
+    70% of the budget. Nothing has failed; treat it as a lead indicator, because
+    drain time grows with resident state.
+  - **`drain ABANDONED after 90s` at `Error`.** The *host* stopped waiting and
+    deactivation was abandoned part-way. No `stop_grace_period` can rescue this:
+    `RepoContextHostBuilder.ShutdownBudget` is the binding ceiling and must rise,
+    with `stop_grace_period` raised to stay strictly greater.
+- That last line exists because of issue #2397, and the reason it is needed is
+  not obvious. The host raises `ApplicationStopped` **even when the shutdown
+  budget expired and it gave up waiting** - so a signal bound only to that event
+  reported `drain complete in 90.0s` for a drain that did not complete. The
+  failure looked like success. The overrun is now raised by an alarm armed when
+  the drain begins, so it is reported at the moment the budget expires rather
+  than depending on a callback that may never arrive.
+- Drain time scales with resident state: the same 400-file rig drained in 33.9s
+  before its vector trees had landed and 67.2s once they had, which is already
+  three quarters of the 90s budget. The budget was nevertheless **not** raised,
+  because measurements on a live box show the resident set that a drain must
+  flush has no observed ceiling (idle-deactivation sweeps ranging from 1 to 4,418
+  activations, still climbing between readings). A fixed ceiling on an unbounded
+  quantity moves the threshold without changing the failure mode, so #2397
+  shipped the diagnostic instead of a new number. Raising `ShutdownBudget` past
+  your own observed drain is a legitimate local remedy, but it buys time rather
+  than fixing the shape.
