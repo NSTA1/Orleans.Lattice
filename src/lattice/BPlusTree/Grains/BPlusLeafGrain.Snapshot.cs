@@ -839,11 +839,27 @@ internal sealed partial class BPlusLeafGrain
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Resolve the leaf's own identity BEFORE the observed try block, and
+        // without throwing. A leaf that is not Guid-keyed has no snapshot grain
+        // to address at all, so declining here is the SAME arm as "this leaf has
+        // no snapshot" - it is a precondition, not a failed load.
+        //
+        // Keeping this inside the try below would be a new conflation of exactly
+        // the kind issue #2364 exists to remove: GetGuidKey throws
+        // ArgumentException on a non-Guid key, which would be caught by the
+        // observing catch and counted and logged as a snapshot LOAD failure. The
+        // counter would then answer "did the snapshot store fail?" with evidence
+        // about grain naming, which is a worse lie than the silence it replaced,
+        // because it is a confident one.
+        if (!context.GrainId.TryGetGuidKey(out var leafKey, out _))
+        {
+            return false;
+        }
+
         LeafSnapshotBlob? blob;
         try
         {
-            var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
-                context.GrainId.GetGuidKey());
+            var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(leafKey);
             blob = await snapshotGrain.LoadAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
@@ -268,5 +269,75 @@ public partial class BPlusLeafGrainTests
             Throws.Nothing,
             "A cyclic chain must terminate at the depth bound rather than recursing forever.");
         Assert.That(BPlusLeafGrain.IsResourceExhaustion(outer), Is.False);
+    }
+    /// <summary>
+    /// A leaf whose identity is not Guid-keyed has no snapshot storage grain to
+    /// address, so it must take the SAME arm as a leaf with no snapshot: decline
+    /// silently, count nothing, and never reach the storage grain.
+    /// <para>
+    /// This is a regression guard on the observation seam itself rather than on
+    /// the leaf. Resolving the Guid key throws for a non-Guid identity, so had
+    /// that resolution stayed inside the observed try block the new counter
+    /// would have recorded a snapshot LOAD failure for what is really a naming
+    /// precondition. That would answer "did the snapshot store fail?" with
+    /// evidence about grain identity - a worse outcome than the silence this
+    /// change replaces, because it is a confident answer rather than an absent
+    /// one, and issue #2364 exists precisely to stop one subsystem's fault
+    /// being reported as another's.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_leaf_that_is_not_guid_keyed_records_no_failure_and_never_asks_storage()
+    {
+        var treeId = UniqueSnapshotLoadFailureTree();
+
+        var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
+        snapshotStub.LoadAsync(Arg.Any<CancellationToken>()).Returns<Task<LeafSnapshotBlob?>>(
+            _ => throw new InvalidOperationException(
+                "The storage grain must never be asked for a leaf that cannot address one."));
+
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStub);
+
+        var sc = new ServiceCollection();
+        sc.AddSingleton(Substitute.For<ICommitLogReader>());
+        sc.AddSingleton(Substitute.For<ILeafCursorReporter>());
+        var services = sc.BuildServiceProvider();
+
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("leaf", "not-a-guid-key"));
+        context.ActivationServices.Returns(services);
+
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = treeId;
+
+        var grain = new BPlusLeafGrain(
+            context,
+            state,
+            grainFactory,
+            TestOptionsResolver.Create(
+                baseOptions: new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero },
+                maxLeafKeys: 128,
+                shardCount: 1,
+                factory: grainFactory),
+            TestMutationObservers.NoObservers(),
+            TestOriginClusterIdResolver.Default());
+
+        var records = CaptureSnapshotLoadFailures(treeId, out var listener);
+        bool rehydrated;
+        using (listener)
+        {
+            rehydrated = await grain.TryRehydrateFromSnapshotAsync(CancellationToken.None);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rehydrated, Is.False,
+                "A leaf that cannot address a snapshot grain declines, exactly as one with no snapshot does.");
+            Assert.That(records, Is.Empty,
+                "A naming precondition is not a snapshot load failure and must not be counted as one.");
+        });
+
+        await snapshotStub.DidNotReceive().LoadAsync(Arg.Any<CancellationToken>());
     }
 }
