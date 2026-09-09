@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -905,6 +906,207 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Issue #2190. Self-terminalises every saga prepare still resident in
+    /// <c>_pendingTx</c> after activation-time replay whose saga the per-tree
+    /// <see cref="ITxRegistryGrain"/> reports as terminally decided, by applying
+    /// that decision locally through the ordinary <see cref="ApplyTxCommit"/> /
+    /// <see cref="ApplyTxAbort"/> path.
+    /// <para>
+    /// The defect it closes: a saga can finish - or be abandoned - without a
+    /// terminal ever reaching a bucket-holding leaf (an empty-txid write, a
+    /// shutdown-refused shard, the late-refetch wall-clock guard tripping, or a
+    /// decision expiring under a slow sweep). The prepare then stays resident
+    /// indefinitely. Its offset clamps the incremental flush ceiling
+    /// (<see cref="MinUnresolvedPrepareOffsetForPartition"/>) one below itself
+    /// once the durable ledger (issue #2165) is at capacity, so the projection
+    /// checkpoint cannot advance, the checkpoint pins the coverage-gated WAL GC,
+    /// and the next activation re-reads the identical prepare and banks nothing.
+    /// The pin is self-perpetuating: nothing time-, count- or registry-driven
+    /// removes a resident prepare, and the only removers are the two terminal
+    /// paths, which by hypothesis never fire because the terminal never arrives.
+    /// </para>
+    /// <para>
+    /// Why the decision is APPLIED and not merely consulted. Resolving the
+    /// registry proves the saga's DECISION was made; it does not prove the
+    /// EFFECT landed on this leaf - the prepare is resident precisely because
+    /// its write has not yet been drained into <c>Entries</c>. Freeing the clamp
+    /// on resolvability alone would advance the checkpoint past a prepare whose
+    /// committed write was never applied, and a later cold replay resuming past
+    /// that checkpoint would silently lose it. Instead this LANDS the effect:
+    /// <see cref="ApplyTxCommit"/> drains the prepared bucket into <c>Entries</c>
+    /// (or <see cref="ApplyTxAbort"/> discards it), and
+    /// <see cref="RemovePendingTxOffsetsForTransaction"/> then releases BOTH the
+    /// in-memory offset clamp and the durable ledger record. The clamp lifts as a
+    /// CONSEQUENCE of the effect landing, never instead of it, so the end state
+    /// matches the terminal having arrived and no acknowledged write is dropped.
+    /// </para>
+    /// <para>
+    /// Trigger. This runs during activation replay - after pass 2 has drained
+    /// every deferred terminal and before the final checkpoint reconciliation -
+    /// NOT on the read path. Piggybacking resolution on a read would make the
+    /// self-heal load-dependent, so a cold leaf serving no reads would never run
+    /// it; running it once per activation heals on the very activations the pin
+    /// is forcing.
+    /// </para>
+    /// <para>
+    /// Idempotency. <see cref="ApplyTxCommit"/> / <see cref="ApplyTxAbort"/> are
+    /// idempotent and record the txid in <c>_recentlyTerminal</c>; a real
+    /// terminal that later arrives for the same saga observes no resident bucket
+    /// and is a no-op redelivery (or re-asserts the already-durable committed
+    /// value through the per-key backstop). A grain's turn-based scheduling means
+    /// no terminal RPC interleaves with this loop.
+    /// </para>
+    /// <para>
+    /// Retention boundary (issue #2190 design question 3). A decision the
+    /// registry has already forgotten - its <c>TxDecisionRetention</c> tombstone
+    /// TTL elapsed - reads back as <see cref="TxStatus.InFlight"/>, so a prepare
+    /// whose decision has aged out is left resident and the clamp is preserved
+    /// exactly as before this change: a safe no-op, never an advance on an
+    /// unresolvable prepare. Because the pin forces frequent re-activation, a
+    /// freshly orphaned prepare is normally resolved on its first post-decision
+    /// activation, well inside the retention window.
+    /// </para>
+    /// <para>
+    /// Registry-failure containment. The per-txid resolution is an RPC to the
+    /// <see cref="ITxRegistryGrain"/>, which can time out or fault under the same
+    /// load that produces the pin. A resolution failure is contained per txid and
+    /// degrades to the pre-heal behaviour - the prepare stays resident, its clamp
+    /// stands, and the heal is retried on a later activation - rather than
+    /// failing activation, which the host would retry straight back into the same
+    /// timeout and so keep the self-heal from ever running under the load it
+    /// exists to clear. The containment covers only the resolution: a fault from
+    /// the <see cref="ApplyTxCommit"/> / <see cref="ApplyTxAbort"/> effect is a
+    /// genuine projection-correctness failure and still propagates, and
+    /// cooperative cancellation is never swallowed.
+    /// </para>
+    /// </summary>
+    private async Task SelfTerminaliseResolvedPreparesAsync(CancellationToken cancellationToken)
+    {
+        if (_pendingTx is null || _pendingTx.Count == 0)
+            return;
+
+        // Snapshot the resident txids first: ApplyTxCommit / ApplyTxAbort mutate
+        // _pendingTx, so iterating its live key collection would throw.
+        var residentTxids = new List<Guid>(_pendingTx.Keys);
+
+        foreach (var txid in residentTxids)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Resolve the saga's decision against the per-tree registry. Only a
+            // terminal decision authorises self-terminalising; InFlight -
+            // including the aged-out / forgotten-decision case, which reads back
+            // as InFlight - leaves the prepare resident and the clamp intact.
+            //
+            // ResolvePendingStatusAsync issues an RPC to the ITxRegistryGrain,
+            // which can time out or fault when the registry is under load - the
+            // same pressure that produces this pin. Containing that fault PER
+            // TXID degrades a resolution failure to the pre-heal behaviour: the
+            // prepare stays resident, its flush-ceiling clamp stands, and the
+            // heal is retried on a later activation. Letting it escape would
+            // instead fail the whole activation, which the host retries straight
+            // back into the same timeout - making the self-heal unable to run
+            // under exactly the load it exists to clear, and taking a leaf that
+            // previously activated-but-pinned offline. Only the RESOLUTION is
+            // contained: a fault from the ApplyTxCommit / ApplyTxAbort effect
+            // below is a genuine projection-correctness failure and still
+            // propagates, and cooperative cancellation is never swallowed.
+            TxStatus decision;
+            try
+            {
+                decision = await ResolvePendingStatusAsync(txid);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                var logger = ResolveLogger();
+                if (logger is not null && logger.IsEnabled(LogLevel.Debug))
+                {
+                    logger.LogDebug(
+                        ex,
+                        "Self-terminalise could not resolve saga '{TxId}' against the registry during activation "
+                        + "replay for tree '{TreeId}'; leaving the prepare resident with its flush-ceiling clamp in "
+                        + "place and retrying the heal on a later activation.",
+                        txid,
+                        state.State.TreeId);
+                }
+
+                continue;
+            }
+
+            switch (decision)
+            {
+                case TxStatus.Committed:
+                    ApplyTxCommit(txid);
+                    break;
+                case TxStatus.Aborted:
+                    ApplyTxAbort(txid);
+                    break;
+                case TxStatus.Indeterminate:
+                    // The registry holds a decision it will no longer report on
+                    // the read path - typically the tombstone outlived
+                    // TxDecisionRetention while this leaf was down. The read
+                    // path is right to hide the key, but this sweep is not a
+                    // read: the prepare is work this leaf already owns and is
+                    // still holding open, and leaving it resident forever
+                    // pins the flush ceiling and leaks the bucket. Ask for the
+                    // recorded row explicitly.
+                    //
+                    // A failure here (older registry, unreachable grain) leaves
+                    // the prepare exactly as it was, which is the same outcome
+                    // as the resolve failure handled above, so the sweep simply
+                    // retries on a later activation.
+                    await SelfTerminaliseFromRecordedStatusAsync(txid);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Retention-mask bypass for the self-terminalisation sweep: asks the
+    /// registry for the physically recorded verdict behind an
+    /// <see cref="TxStatus.Indeterminate"/> answer and applies it locally.
+    /// Silently gives up when the registry cannot answer, leaving the prepare
+    /// resident for a later sweep.
+    /// </summary>
+    private async ValueTask SelfTerminaliseFromRecordedStatusAsync(Guid txid)
+    {
+        var treeId = state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId)) return;
+
+        TxStatus recorded;
+        try
+        {
+            registry ??= grainFactory.GetGrain<ITxRegistryGrain>(treeId);
+            recorded = await registry.GetRecordedStatusAsync(txid);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var logger = ResolveLogger();
+            if (logger is not null && logger.IsEnabled(LogLevel.Debug))
+            {
+                logger.LogDebug(
+                    ex,
+                    "Self-terminalise could not read the recorded outcome for saga '{TxId}' on tree '{TreeId}'; "
+                    + "leaving the prepare resident and retrying the heal on a later activation.",
+                    txid,
+                    treeId);
+            }
+
+            return;
+        }
+
+        switch (recorded)
+        {
+            case TxStatus.Committed:
+                ApplyTxCommit(txid);
+                break;
+            case TxStatus.Aborted:
+                ApplyTxAbort(txid);
+                break;
+        }
+    }
+
+    /// <summary>
     /// Captures a snapshot of the leaf's current pending-tx state for
     /// a scan-path read: the per-key pending entries plus a single
     /// batched call to the per-tree <see cref="ITxRegistryGrain"/>
@@ -922,10 +1124,15 @@ internal sealed partial class BPlusLeafGrain
     /// registry call collapses N per-key dial-backs into one round
     /// trip. Callers iterate the runtime entry cache as usual and,
     /// for each key found in <c>pendingKeys</c>, branch on
-    /// the resolved outcome: <see cref="TxStatus.Committed"/> surfaces
-    /// the prepared value, <see cref="TxStatus.InFlight"/> hides the
-    /// key, and <see cref="TxStatus.Aborted"/> falls through to the
-    /// pre-saga cache value.
+    /// the resolved outcome through
+    /// <see cref="AtomicVisibilityGate.ResolveKey"/>:
+    /// <see cref="TxStatus.Committed"/> surfaces the prepared value,
+    /// <see cref="TxStatus.Indeterminate"/> hides the key, and
+    /// <see cref="TxStatus.InFlight"/> / <see cref="TxStatus.Aborted"/>
+    /// fall through to the pre-saga cache value. (An in-flight saga
+    /// falling through rather than hiding is the strict-isolation
+    /// contract: the prepared value is invisible until the registry
+    /// records a commit, so the reader sees the last committed one.)
     /// </para>
     /// </summary>
     private async ValueTask<(
@@ -973,12 +1180,15 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
         {
-            // Defensive: no tree id means we cannot consult the
-            // registry. Treat every pending entry as InFlight - the
-            // strict-isolation default keeps the prepared keys hidden
-            // until activation completes its tree-id stamp.
+            // Defensive: no tree id means we cannot consult the registry, so we
+            // do not know these sagas' outcomes and must not claim to. Report
+            // Indeterminate, which the visibility gate hides. InFlight would
+            // have been wrong for the stated intent: it falls through to the
+            // pre-saga value rather than hiding, so the comment's promise to
+            // keep the prepared keys hidden until activation completes its
+            // tree-id stamp was not what the code did.
             var hidden = new Dictionary<Guid, TxStatus>(txids.Count);
-            foreach (var t in txids) hidden[t] = TxStatus.InFlight;
+            foreach (var t in txids) hidden[t] = TxStatus.Indeterminate;
             return (hidden, pendingKeys);
         }
 
@@ -1059,6 +1269,17 @@ internal sealed partial class BPlusLeafGrain
         {
             if (p != partition)
                 continue;
+
+            // Issue #2165. A prepare whose mutation is durably recorded no
+            // longer requires a re-read to rebuild _pendingTx, so it must not
+            // clamp the checkpoint. Skipping it here covers BOTH clamp sites -
+            // the pass-1 ceiling in TryFlushRecoveredCeilingAsync and the
+            // independent clamp inside SetCheckpointOffsetAsync - so the two
+            // cannot disagree about which prepares are covered and the fix
+            // cannot be silently undone by the second one.
+            if (IsUnresolvedReplayWorkRecorded(p, offset))
+                continue;
+
             seen = true;
             if (offset < min)
                 min = offset;
@@ -1077,6 +1298,14 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private void RemovePendingTxOffsetsForTransaction(Guid transactionId)
     {
+        // Issue #2165. The saga's durable replay records are released at the
+        // same moment its in-memory clamp is, and unconditionally: the records
+        // outlive the activation that wrote them, so a terminal replaying in a
+        // LATER activation finds no _pendingTxOffsets entry to remove yet must
+        // still clear the ledger. Returning early on an empty offset map would
+        // strand the record forever and leak the leaf's state row.
+        ResolveUnresolvedReplayWorkForTransaction(transactionId);
+
         if (_pendingTxOffsets is null || _pendingTxOffsets.Count == 0)
             return;
         List<(Guid, int)>? toRemove = null;
@@ -1704,6 +1933,14 @@ internal sealed partial class BPlusLeafGrain
     ///     against any sibling leaf whose backstop has already landed.
     ///     Returns <c>false</c> so the caller raises
     ///     <see cref="StaleShardRoutingException"/>.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="TxStatus.Indeterminate"/>: resolved exactly as
+    ///     <see cref="TxStatus.Committed"/> is. Passing through would
+    ///     assert the saga did not commit, which is precisely what an
+    ///     indeterminate reading does not know; with the backstop
+    ///     already applied the projected value is correct either way,
+    ///     and without it the read gates.
     ///   </description></item>
     /// </list>
     /// </summary>

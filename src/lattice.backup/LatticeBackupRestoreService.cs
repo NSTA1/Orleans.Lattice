@@ -415,7 +415,7 @@ internal sealed class LatticeBackupRestoreService(
         // commit the atomic alias swap. There is no fence here because a
         // single-cluster restore has no peer that could re-advance the tree.
         var (shadowPhysical, previousPhysical, applied) = await BuildShadowCoreAsync(
-            targetTreeId, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken).ConfigureAwait(false);
+            targetTreeId, chain, rangeStart, rangeEnd, operationId, applyBatchSize, admission, cancellationToken).ConfigureAwait(false);
 
         await CommitShadowCoreAsync(
             targetTreeId, shadowPhysical, previousPhysical, operationId, cancellationToken)
@@ -436,6 +436,7 @@ internal sealed class LatticeBackupRestoreService(
         string? rangeStart,
         string? rangeEnd,
         string operationId,
+        int applyBatchSize,
         IBackupRestoreAdmission? admission,
         CancellationToken cancellationToken)
     {
@@ -460,10 +461,23 @@ internal sealed class LatticeBackupRestoreService(
                 .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        // The shadow tree is always fresh, so it takes the bulk-load fast path. A
-        // whole-tree scope loads everything; a narrower scope loads its subset.
-        var applied = await BulkLoadRawAsync(shadowRouting, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken)
-            .ConfigureAwait(false);
+        // The shadow tree is always fresh, but freshness alone does not license the
+        // bottom-up bulk-load: BulkLoadRawAsync requires globally ascending,
+        // duplicate-free input per shard (it chunks the list into leaves and takes
+        // each leaf separator from sortedEntries[i].Key). A multi-manifest chain
+        // violates that precondition - StreamChainEntriesAsync yields base-first
+        // then each increment, so the concatenation is non-monotonic at the
+        // manifest boundary and repeats any key an increment rewrote, which would
+        // produce non-increasing separators and a corrupt tree (mis-routed or lost
+        // reads). Only a single full backup satisfies the precondition; any chain
+        // with an increment takes the LWW merge path, which reconciles duplicate
+        // keys by HLC and converges correctly into the empty shadow. This mirrors
+        // the fast-path gate in RestoreInPlaceAsync.
+        var applied = chain.Count == 1 && chain[0].Kind == BackupKind.Full
+            ? await BulkLoadRawAsync(shadowRouting, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken)
+                .ConfigureAwait(false)
+            : await MergeApplyAsync(shadowRouting, chain, rangeStart, rangeEnd, applyBatchSize, admission, cancellationToken)
+                .ConfigureAwait(false);
 
         return (shadowRouting.PhysicalTreeId, previousPhysical, applied);
     }
@@ -607,7 +621,7 @@ internal sealed class LatticeBackupRestoreService(
             : null;
 
         var (shadowPhysical, previousPhysical, applied) = await BuildShadowCoreAsync(
-            targetTreeId, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken).ConfigureAwait(false);
+            targetTreeId, chain, rangeStart, rangeEnd, operationId, request.ApplyBatchSize, admission, cancellationToken).ConfigureAwait(false);
 
         logger.LogInformation(
             "Built restore shadow for backup {BackupId} into tree {TreeId} ({EntryCount} entries) at shadow "
@@ -1057,7 +1071,12 @@ internal sealed class LatticeBackupRestoreService(
                 hasher.AppendData(chunk.Span);
             }
 
-            if (!seenAny)
+            // A descriptor with ChunkCount == 0 is a legitimately empty artifact
+            // (an empty increment or empty full backup) that streamed no chunks;
+            // its bytes hash to SHA-256("") and are validated by the digest check
+            // below. Only a descriptor that claims chunks yet streams none is a
+            // genuine integrity failure.
+            if (!seenAny && descriptor.ChunkCount > 0)
             {
                 throw new LatticeRestoreValidationException(
                     $"Backup '{manifest.Id}' references artifact '{descriptor.ArtifactId}', which is absent from the sink.");

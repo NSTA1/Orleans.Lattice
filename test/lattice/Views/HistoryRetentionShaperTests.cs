@@ -62,6 +62,24 @@ public sealed class HistoryRetentionShaperTests
     }
 
     [Test]
+    public void Shape_saturates_an_overflowing_window_instead_of_wrapping_negative()
+    {
+        // The durable-history retention window is validated only as strictly
+        // positive (no upper bound), so an extreme value can drive drainNowTicks
+        // + Window.Ticks past long.MaxValue. It must saturate at
+        // DateTime.MaxValue.Ticks, never wrap to a negative expiry that the next
+        // TTL sweep would treat as already-expired and silently drop - the exact
+        // opposite of the operator's retain-nearly-forever intent.
+        var row = SetRow(Now, new byte[] { 1 });
+        var policy = new HistoryRetentionPolicy(HistoryRetentionMode.FullValue, TimeSpan.MaxValue, TimeSpan.Zero);
+
+        var (_, expiresAtTicks) = HistoryRetentionShaper.Shape(row, policy, Now);
+
+        Assert.That(expiresAtTicks, Is.EqualTo(DateTime.MaxValue.Ticks));
+        Assert.That(expiresAtTicks, Is.GreaterThan(Now), "a huge window must not expire the row immediately");
+    }
+
+    [Test]
     public void Shape_hybrid_keeps_recent_value()
     {
         var row = SetRow(Now - TimeSpan.FromMinutes(1).Ticks, new byte[] { 5 });

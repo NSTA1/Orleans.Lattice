@@ -295,9 +295,12 @@ internal sealed partial class ReplicationApplier(
                 {
                     await DeadLetterTenantIsolationAsync(entry, decision, cancellationToken)
                         .ConfigureAwait(false);
-                    outcome = decision == ReplicationTenantIsolationDecision.RejectOutOfRegion
-                        ? LatticeReplicationMetrics.OutcomeRejectedTenantOffline
-                        : LatticeReplicationMetrics.OutcomeRejectedForeignTenant;
+                    outcome = decision switch
+                    {
+                        ReplicationTenantIsolationDecision.RejectOutOfRegion => LatticeReplicationMetrics.OutcomeRejectedTenantOffline,
+                        ReplicationTenantIsolationDecision.RejectSuspendedTenant => LatticeReplicationMetrics.OutcomeRejectedSuspendedTenant,
+                        _ => LatticeReplicationMetrics.OutcomeRejectedForeignTenant,
+                    };
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
                 }
             }
@@ -344,12 +347,24 @@ internal sealed partial class ReplicationApplier(
             var resolved = options.Get(entry.TreeId);
             if (string.Equals(entry.OriginClusterId, resolved.ClusterId, StringComparison.Ordinal))
             {
-                // Defence-in-depth: a local-origin entry must never be applied
-                // back onto its authoring cluster. The outbound ship loop's
-                // origin filter already prevents this in the steady state, but
-                // hand-built apply pipelines and tests can still hand us such
-                // an entry - surface it as an explicit no-op rather than
-                // silently merging into the same cluster's state.
+                // This is the receiving cluster's ONLY enforcement that a
+                // local-origin entry is never applied back onto its authoring
+                // cluster. Do not read the outbound `ShouldShip` origin filter
+                // as the primary with this as backup: `ShouldShip` is a private
+                // filter on the *sending* side. On cluster A it decides what A
+                // ships; it cannot decide what A receives. Treating it as the
+                // primary makes the guarantee a trust assumption about another
+                // process's build, and the fourth clause of that reading
+                // concedes the case in terms - hand-built apply pipelines and
+                // tests can hand us such an entry directly.
+                //
+                // What this guard actually carries: it is the reason a txid can
+                // never land in both of the registry's cross-tree delegation
+                // maps, since the receiver row is written only for an entry
+                // whose origin is foreign. That premise is stated on both maps
+                // in TxRegistryState and enforced independently at the registry
+                // itself, because this file is one transport binding and the
+                // core seam is public.
                 outcome = LatticeReplicationMetrics.OutcomeDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
             }
@@ -1227,15 +1242,24 @@ internal sealed partial class ReplicationApplier(
         ReplicationTenantIsolationDecision decision,
         CancellationToken cancellationToken)
     {
-        var (reasonTag, failureReason) = decision == ReplicationTenantIsolationDecision.RejectOutOfRegion
-            ? (LatticeReplicationMetrics.ReasonTenantOffline,
-                $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that is not "
-                + "resident in the region serving this receiver; the write was refused so it cannot "
-                + "land in a region outside the tenant's residency set.")
-            : (LatticeReplicationMetrics.ReasonForeignTenant,
-                $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that does not "
-                + "exist on this receiver; the write was refused so a peer cannot create or smuggle "
-                + "into a foreign or non-existent tenant.");
+        var (reasonTag, failureReason) = decision switch
+        {
+            ReplicationTenantIsolationDecision.RejectOutOfRegion =>
+                (LatticeReplicationMetrics.ReasonTenantOffline,
+                    $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that is not "
+                    + "resident in the region serving this receiver; the write was refused so it cannot "
+                    + "land in a region outside the tenant's residency set."),
+            ReplicationTenantIsolationDecision.RejectSuspendedTenant =>
+                (LatticeReplicationMetrics.ReasonSuspendedTenant,
+                    $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that exists but "
+                    + "is not active on this receiver; the write was refused so an administrative suspension "
+                    + "binds the replication apply path as well as the authoring path."),
+            _ =>
+                (LatticeReplicationMetrics.ReasonForeignTenant,
+                    $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that does not "
+                    + "exist on this receiver; the write was refused so a peer cannot create or smuggle "
+                    + "into a foreign or non-existent tenant."),
+        };
 
         var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
         return dlq.EnqueueAsync(

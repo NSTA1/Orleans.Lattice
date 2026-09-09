@@ -126,6 +126,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`LeafHydrationResidentBytes`](#leafhydrationresidentbytes) | `long` | 1 MiB | Yes (on next activation) |
 | [`LeafPartialHydrationEnabled`](#leafpartialhydrationenabled) | `bool` | `true` | Yes (on next activation) |
 | [`LeafProjectionRetention`](#leafprojectionretention) | `TimeSpan` | 7 days | Yes |
+| [`LeafRetirementRetryDeadline`](#leafretirementretrydeadline) | `TimeSpan` | 2 seconds | Yes |
 | [`LeafSnapshotBinaryEncodingEnabled`](#leafsnapshotbinaryencodingenabled) | `bool` | `true` | Yes (write side only; reads are always dual) |
 | [`LeafSnapshotMargin`](projection-rebuild.md) | `double` | 0.30 | Yes |
 | [`LeafSnapshotReClassifyEveryNCheckpoints`](projection-rebuild.md) | `int` | 64 | Yes |
@@ -567,6 +568,28 @@ Maximum age beyond which a cold leaf's persisted projection is treated as stale,
 
 This option can be changed freely at any time.
 
+### `LeafRetirementRetryDeadline`
+
+How long a write blocked by a leaf-retirement latch keeps retrying before it fails (default: **2 seconds**).
+
+Empty-leaf reclaim latches a leaf closed for the handful of grain calls between deciding to fold it and clearing its state. A write routed to that leaf inside the window is **refused, never applied**: applying it would put a record into state that is about to be destroyed. Refusing is what makes the fold safe, but on its own it would turn every write unlucky enough to arrive during an ordinary fold into a caller-visible error. This deadline is what closes that gap - the write retries with exponential backoff and jitter until the latch clears and the range is served by the leaf that now owns it.
+
+The default is derived from two regimes rather than picked:
+
+- **Transient regime.** The latch is held across the compare-and-swap and the routing retirement, and the latter retries its parent call up to three times, so the window's ceiling is four grain calls: sub-millisecond co-located, single-digit milliseconds cross-silo, plus scheduling jitter. Tens of milliseconds is a generous reading, and 2 seconds clears that by about two orders of magnitude, so jitter alone can never exhaust it.
+- **Stuck regime.** If those calls are instead hitting the Orleans response timeout (30 seconds by default), the same arithmetic gives about two minutes. The default deliberately does **not** cover that. A fold blocked for minutes is an outage, not a transient overlap, and a write that inherited its wait would exceed any caller's own timeout while reporting nothing.
+
+Exhausting the deadline throws. That is the intended behaviour, and it is the entire point of the interlock: it converts a **silent** loss of an acknowledged write into a **loud** failure the caller can retry or surface.
+
+One caveat worth stating plainly, because the safety argument rests on it: waiting is only safe because a retirement latch clears, and the call that reopens an abandoned fold can itself fail. When it does, the latch is held until the leaf deactivates - far beyond any sane value here - and the write fails loudly. That is the correct outcome, but "the latch is guaranteed to clear" is a conditional guarantee, not an unconditional one.
+
+```csharp verify
+// Fail fast instead of waiting out a fold: useful in a test suite, where a
+// blocked write should surface immediately rather than retry for seconds.
+siloBuilder.ConfigureLattice("latency-sensitive-tree", o => o.LeafRetirementRetryDeadline = TimeSpan.FromMilliseconds(500));
+```
+
+Lower this only to make a test suite fail fast; raising it trades caller latency under a slow fold for fewer surfaced faults. This option can be changed freely at any time.
 ### `LeafSnapshotBinaryEncodingEnabled`
 
 Whether a leaf snapshot capture persists its rows as a compact binary frame rather than as the legacy object graph (default: `true`).
@@ -1053,7 +1076,7 @@ Healing is deliberately **not** gated on [`AutoSplitEnabled`](#autosplitenabled)
 
 **When off:** no reminder, no timer, and no shard polling. An in-flight fold is left to its own resumable coordinator and is never cancelled, so the tree stays consistent.
 
-The switch is deliberately **asymmetric**, and it is worth knowing which direction is fast. Turning it **off** takes effect on the next sweep, because every sweep re-reads the option. Turning it back **on** takes effect at the tree's next healing bootstrap: the orchestrator does not latch itself while disabled, so it will start on the next bootstrap call, but the tree's `LatticeGrain` only issues that call once per activation - so in practice re-enabling is picked up on the first write after the tree next activates. No redeploy is needed either way. Off-fast, on-slower is the correct direction for a kill switch, and it is not a defect to be filed away as a symmetric latch.
+The switch is deliberately **asymmetric**, and it is worth knowing which direction is fast. Turning it **off** takes effect on the next sweep, because every sweep re-reads the option. Turning it back **on** takes effect at the tree's next healing bootstrap: the orchestrator does not latch itself while disabled, so it will start on the next bootstrap call, and the tree's `LatticeGrain` issues that call when it activates - so in practice re-enabling is picked up the next time the tree activates, whether or not anything writes to it. No redeploy is needed either way. Off-fast, on-slower is the correct direction for a kill switch, and it is not a defect to be filed away as a symmetric latch.
 
 **When an operator would turn it off:** to isolate healing while diagnosing shard-routing or consolidation faults, or on a tree that is deliberately over-provisioned above its registry pin and should stay that way. To pause healing while still measuring the backlog, prefer `MaxConcurrentShardConsolidations = 0` instead.
 
@@ -1224,7 +1247,9 @@ Retention window for a completed saga's commit/abort decision in the per-tree `I
 
 The primary race the window guards is the retroactive shadow-forward sweep at the start of an adaptive shard split: the split coordinator replays every in-flight prepared mutation from the source leaves into the destination shard's `_pendingTx` buckets, and its post-sweep cleanup pass resolves any orphan bucket whose terminal has already broadcast by reading the retained verdict. Without retention, a saga that completed microseconds before the sweep installed its pending bucket would leave a destination-shard orphan with no recoverable outcome.
 
-Tombstones are physically purged on the next `ForgetAsync` / `MarkCommittedAsync` / `MarkAbortedAsync` call against the registry (inline `PruneExpired` pass). Set `TimeSpan.Zero` to restore the pre-tombstone immediate-evict semantic (legacy behaviour; reintroduces the orphan risk - reserved for tests or trees with `AutoSplitEnabled = false`). Increase beyond 60 s only if your operational profile produces sweep durations longer than that (very large shards under sustained write load, cascading split storms).
+Once the window elapses the decision is *masked* rather than deleted: `GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync` report the saga as `Indeterminate` ("a decision exists, and this tree is no longer entitled to report it") rather than as `InFlight`. A txid the tree never recorded at all still reports `InFlight`. Read paths hide a prepared key whose saga is `Indeterminate` instead of falling through to its pre-saga value, because absence asserts nothing while `InFlight` would be an affirmative and possibly wrong claim that the saga did not commit.
+
+Expired tombstones are physically purged by the next `ForgetAsync` call against the registry (an inline prune pass); a `MarkCommittedAsync` / `MarkAbortedAsync` carrying the *same* outcome is recognised as idempotent and deliberately leaves the tombstone in place, so it can never resurrect a decision the tree already retired. A tombstone held by a live point-in-time cursor pin is skipped by both the purge and the read-side mask, so a pinned snapshot keeps reading its decisions for as long as the pin lives. Set `TimeSpan.Zero` to restore the pre-tombstone immediate-evict semantic (legacy behaviour; reintroduces the orphan risk - reserved for tests or trees with `AutoSplitEnabled = false`). Increase beyond 60 s only if your operational profile produces sweep durations longer than that (very large shards under sustained write load, cascading split storms).
 
 This option can be changed freely at any time.
 

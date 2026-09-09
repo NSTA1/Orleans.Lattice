@@ -323,12 +323,55 @@ resolves any saga whose terminal already completed via the retained
 verdict. Without the retention window, a saga that completed
 microseconds before the sweep installed its pending bucket on the
 destination would leave an orphan bucket whose verdict the registry
-had already forgotten. Tombstones expire and are physically purged on
-the next `ForgetAsync` / `MarkCommittedAsync` / `MarkAbortedAsync`
-call. Setting `TxDecisionRetention = TimeSpan.Zero` restores the
+had already forgotten. Tombstones expire and are physically purged by
+the next `ForgetAsync` call, or by a `MarkCommittedAsync` /
+`MarkAbortedAsync` carrying a *conflicting* outcome (a repeat of the
+same outcome is recognised as idempotent and leaves the tombstone in
+place, so it can never resurrect a decision the tree already retired).
+A tombstone held by a live point-in-time cursor pin is skipped by both
+the purge and the read-side mask. Setting
+`TxDecisionRetention = TimeSpan.Zero` restores the
 pre-tombstone immediate-evict behaviour and reintroduces the orphan
 risk - reserved for unit tests or environments that disable adaptive
 splitting.
+
+### After the retention window: `Indeterminate`, not `InFlight`
+
+Once a tombstone outlives `TxDecisionRetention`, the registry stops
+*reporting* the verdict but the decision row itself is still stored
+until a purge removes it. `GetStatusAsync` / `GetStatusManyAsync` /
+`SnapshotAsync` report that masked row as `TxStatus.Indeterminate` -
+"a decision exists and I am no longer entitled to report it" - and
+**not** as `InFlight`. The distinction is exact: a txid the registry
+has genuinely never recorded still reports `InFlight`.
+
+The two are kept apart because readers act on them differently.
+`InFlight` is an affirmative claim that the saga did not commit, so
+the read gate falls through to the pre-saga value. Making that claim
+for a saga that may well have committed would serve superseded data
+as current, with no error and no metric. `Indeterminate` instead
+*hides* the prepared key: absence asserts nothing, is never wrong
+about a value, and resolves correctly the moment the outcome becomes
+determinable again. The same reading is produced when a cross-tree
+saga's coordinator cannot be dialled at all (see
+[Cross-tree atomic writes](#cross-tree-multi-tree-atomic-writes)), and
+when a leaf has no tree id bound yet and so has no registry to consult.
+
+Snapshots carry the masked row explicitly rather than dropping it, so
+absence from a snapshot means only "no decision recorded". That
+matters most for the cross-cluster bootstrap export built from that
+snapshot - see
+[Snapshot Bootstrap](../lattice.replication/snapshot-bootstrap.md).
+
+The masked row remains readable to the one caller that legitimately
+needs it: the leaf's activation-time self-terminalisation sweep, which
+is finishing a prepare it already owns rather than disclosing an
+outcome to a caller, reads past the mask through a deliberately narrow
+registry bypass. Read paths never do.
+
+`TxStatus.Indeterminate` is additive by value, so a mixed-version
+cluster stays wire-compatible: a node that predates the case takes the
+same conservative branch it already took for `InFlight`.
 
 ## Crash-Recovery Timeline
 
@@ -869,6 +912,14 @@ delegated read returns `InFlight`, so the prepared keys are invisible
 the **same** global verdict. The global visibility flip is therefore the
 coordinator's single decision write, applied uniformly across all trees.
 
+If the dial to the coordinator itself fails, the per-tree registry
+answers `Indeterminate` rather than `InFlight`: it has no evidence
+about the verdict, so it declines to answer instead of asserting
+"not committed". The prepared keys are then *hidden* rather than
+resolved to their pre-saga values, and resolve normally as soon as the
+coordinator is reachable again. See
+[After the retention window](#after-the-retention-window-indeterminate-not-inflight).
+
 ### Cross-cluster cross-tree visibility (receiver barrier)
 
 The authoring-cluster flip above is a *single* write, but each
@@ -898,7 +949,9 @@ hear from and decides only once a terminal has arrived for every tree in
 the set; the global verdict is `Committed` iff every arrived terminal
 voted commit. Before the coordinator decides, a delegated read on any
 participating tree's registry dials the receiver coordinator and resolves
-`InFlight` - so every tree stays invisible. After it decides, every tree
+`InFlight` - so every tree stays invisible (an unreachable receiver
+coordinator resolves `Indeterminate`, which also keeps the keys hidden).
+After it decides, every tree
 resolves the same verdict and the receiver flips them **together**,
 mirroring the authoring cluster's single-write flip. The coordinator only
 ever *returns* the decision (it never calls back into a tree grain), so
@@ -927,6 +980,25 @@ batch that is.
 - **Crash recovery.** The coordinator grain drives the saga to a
   terminal state via a keepalive reminder if its silo crashes mid-flight,
   exactly as the single-tree saga does.
+- **Participating trees must agree on cluster identity.** The protocol
+  repeatedly carries a guard verdict reached on one participating tree
+  across the tree boundary to another, and that step is sound only when
+  the two trees resolve the same origin cluster id. Because
+  `LatticeReplicationOptions.ClusterId` is a *per-tree* named option, no
+  options validator can check the relation - it is handed one tree's
+  options at a time. The check therefore runs where a participant set
+  first exists: at the coordinator's admission of a cross-tree write, and
+  at the replicated cross-tree barrier's wait-set freeze on the receiver.
+  A disagreement throws `InvalidOperationException` naming both trees and
+  their resolved ids, before anything is staged, persisted, or dispatched,
+  so a rejected saga leaves no state behind. The check is on *agreement*,
+  not on any particular value, so a host that never configured replication
+  (uniform empty cluster id) always passes; a tree whose slice of the batch
+  is empty is dropped from the participant set before the check. It is not
+  re-run on a resumed saga, whose participants already have writes staged
+  and must still be driven to a terminal decision. Configure `ClusterId`
+  cluster-wide (`AddLatticeReplication` does) and avoid per-tree overrides
+  on trees you span in one cross-tree write.
 - **Idempotent retry.** Re-submitting the same `operationId` with the
   same tree-set and key-set re-attaches to the in-flight (or completed)
   saga and returns its memoized outcome. Re-submitting the same
@@ -935,7 +1007,8 @@ batch that is.
 - **Atomicity, not cross-tree read isolation.** The guarantee is
   all-or-nothing *commit* of the write, anchored to the coordinator's single
   decision write as one global linearization point: at any single instant the
-  saga is either undecided (every tree returns `InFlight`) or decided (every
+  saga is either undecided (no tree reports a verdict - `InFlight`, or
+  `Indeterminate` if a tree cannot reach the coordinator) or decided (every
   tree returns the same verdict), never durably half-applied. It is **not** a
   cross-tree read snapshot: Lattice has no read operation spanning trees, so a
   reader issuing *separate* per-tree reads at *different* instants that

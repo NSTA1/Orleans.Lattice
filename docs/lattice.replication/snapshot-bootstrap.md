@@ -501,7 +501,12 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
     correctness-preserving.
   - The per-tree transaction registry's "repeat-same-outcome no-op"
     drops a commit/abort mark that matches a transaction id already
-    in the requested terminal state.
+    in the requested terminal state. Note the bound: that guarantee
+    holds only while the decision is still recorded. Once the tree has
+    forgotten the saga and its tombstone has been physically pruned,
+    the registry has nothing left to recognise the repeat against and a
+    late redelivery records the verdict afresh. The safe redelivery
+    window is `LatticeOptions.TxDecisionRetention`, not "forever".
 
   The post-drain
   snapshot pin atomically
@@ -644,7 +649,8 @@ producer's per-tree transaction-registry decisions:
    chain and emits a `SnapshotEntry` with `IsPrepared = true` for
    every `(transactionId, key)` pair in any leaf's per-tx pending
    bucket whose registry status in the captured snapshot is
-   `InFlight` (or absent). The emitted row carries the source-stamped
+   `InFlight`, `Indeterminate`, or absent. The emitted row carries the
+   source-stamped
    prepare-time HLC verbatim, plus `IsTombstone`, `TransactionId`,
    `AtomicBatchSize`, `AtomicBatchIndex`, and `ExpiresAtTicks` so the
    receiver can route it identically to a steady-state prepared WAL
@@ -655,7 +661,8 @@ producer's per-tree transaction-registry decisions:
    `ILattice.EntriesAsync`, under the same frozen registry scope.
    Sagas the snapshot recorded as
    `Committed` surface their prepared value as the live one; sagas
-   recorded as `Aborted` are dropped; sagas still `InFlight` against
+   recorded as `Aborted` are dropped; sagas still `InFlight` (or
+   `Indeterminate`) against
    the snapshot are hidden from the committed scan because the
    prepared rows pass above has already shipped them. The wrapper
    matters here because the export is long-running and latency-prone:
@@ -689,6 +696,23 @@ at `asOfHlc`). Capturing prepared rows first guarantees every
 `InFlight` saga's per-key state is shipped to the receiver's pending
 bucket, and the incremental stream delivers the terminal record to
 flip visibility.
+
+**An aged-out decision is shipped, not dropped.** A decision whose
+tombstone has outlived `LatticeOptions.TxDecisionRetention` is carried
+in the frozen snapshot as `Indeterminate` rather than omitted from it.
+Omission used to fold two different facts onto one reading - "no
+decision was ever recorded" and "a decision was recorded and the source
+is no longer entitled to report it". Locally that collapse was
+invisible, but in this export it was load-bearing in the wrong
+direction: an aged-out `Committed` saga reached the receiver as
+absence, was read as still preparing, and could never be corrected,
+because the terminal that would have flipped it was already behind the
+incremental stream the receiver drains after the snapshot. The source
+held "committed", the receiver held "preparing", permanently, with no
+repair path on either side. Carrying the row explicitly means absence
+in this payload once again means only what it says, and an
+`Indeterminate` saga's prepared rows ship (pass 1 above) so the
+receiver holds exactly what the source holds.
 
 A saga the producer's registry recorded as `Committed` before the
 snapshot is naturally folded into the committed projection by the

@@ -631,114 +631,57 @@ internal sealed class LatticeOptionsResolver(
             }
         }
 
-        return new ResolvedLatticeOptions
+        var resolved = new ResolvedLatticeOptions
         {
+            // Structural pins are sourced from the registry entry, not from
+            // LatticeOptions, and are declared on ResolvedLatticeOptions as
+            // required init-only members - so they are set here and are never
+            // touched by the reflective base-options copy below.
             MaxLeafKeys = mlk,
             MaxInternalChildren = mic,
             ShardCount = sc,
-            KeysPageSize = baseOptions.KeysPageSize,
-            TombstoneGracePeriod = baseOptions.TombstoneGracePeriod,
-            SoftDeleteDuration = baseOptions.SoftDeleteDuration,
-            CacheTtl = baseOptions.CacheTtl,
-            PrefetchKeysScan = baseOptions.PrefetchKeysScan,
-            AutoSplitEnabled = baseOptions.AutoSplitEnabled,
-            HotShardOpsPerSecondThreshold = baseOptions.HotShardOpsPerSecondThreshold,
-            HotShardSampleInterval = baseOptions.HotShardSampleInterval,
-            HotShardSplitCooldown = baseOptions.HotShardSplitCooldown,
-            HotShardMinSkewRatio = baseOptions.HotShardMinSkewRatio,
-            HotShardConsolidationSkewRatio = baseOptions.HotShardConsolidationSkewRatio,
-            HotShardMinShardEntries = baseOptions.HotShardMinShardEntries,
-            MaxPhysicalShardsPerTree = baseOptions.MaxPhysicalShardsPerTree,
-            MaxConcurrentAutoSplits = baseOptions.MaxConcurrentAutoSplits,
-            MaxConcurrentMigrations = baseOptions.MaxConcurrentMigrations,
-            MaxConcurrentDrains = baseOptions.MaxConcurrentDrains,
-            MaxConcurrentSnapshotCaptures = baseOptions.MaxConcurrentSnapshotCaptures,
-            MaxConcurrentStorageUsageSurfaces = baseOptions.MaxConcurrentStorageUsageSurfaces,
-            ShedSnapshotOpensWhenSaturated = baseOptions.ShedSnapshotOpensWhenSaturated,
-            SplitDrainBatchSize = baseOptions.SplitDrainBatchSize,
-            ConsolidationDrainBatchSize = baseOptions.ConsolidationDrainBatchSize,
-            ConsolidationDrainLeavesPerPass = baseOptions.ConsolidationDrainLeavesPerPass,
-            MaxConcurrentShardConsolidations = baseOptions.MaxConcurrentShardConsolidations,
-            ShardHealingEnabled = baseOptions.ShardHealingEnabled,
-            ShardHealingInterval = baseOptions.ShardHealingInterval,
-            ShardHealingCooldown = baseOptions.ShardHealingCooldown,
-            ShardHealingBackpressureOpsPerSecond = baseOptions.ShardHealingBackpressureOpsPerSecond,
-            AutoSplitMinTreeAge = baseOptions.AutoSplitMinTreeAge,
-            MaxScanRetries = baseOptions.MaxScanRetries,
-            MaxLeavesPerScanPage = baseOptions.MaxLeavesPerScanPage,
-            MaxScanPageDuration = baseOptions.MaxScanPageDuration,
-            // Folded to its effective value, not passed through raw, so a
-            // caller reading the resolved options sees the same ceiling the
-            // page-fill path enforces rather than the "derive it" null.
-            MaxScanPageStallDuration = ResolveStallDuration(baseOptions),
-            BackgroundDrainLeavesPerPass = baseOptions.BackgroundDrainLeavesPerPass,
-            BackgroundDrainMaxDuration = baseOptions.BackgroundDrainMaxDuration,
-            CursorIdleTtl = baseOptions.CursorIdleTtl,
-            AtomicWriteRetention = baseOptions.AtomicWriteRetention,
-            VersionVectorRetention = baseOptions.VersionVectorRetention,
-            DiagnosticsCacheTtl = baseOptions.DiagnosticsCacheTtl,
-            StorageUsageCacheTtl = baseOptions.StorageUsageCacheTtl,
-            StorageUsagePollInterval = baseOptions.StorageUsagePollInterval,
-            StorageUsageDeepPollInterval = baseOptions.StorageUsageDeepPollInterval,
-            WalGcInterval = baseOptions.WalGcInterval,
-            WalGcStartupDelay = baseOptions.WalGcStartupDelay,
-            WalGcMinInterval = baseOptions.WalGcMinInterval,
-            ShardForwardTimeout = baseOptions.ShardForwardTimeout,
-            EmptyTreeProbeBudget = baseOptions.EmptyTreeProbeBudget,
-            ActivationReadyTimeout = baseOptions.ActivationReadyTimeout,
-            DigestPublishTimeout = baseOptions.DigestPublishTimeout,
-            WalAppendDispatchTimeout = baseOptions.WalAppendDispatchTimeout,
-            WalFlushPreflightTimeout = baseOptions.WalFlushPreflightTimeout,
-            WalDrainBudget = baseOptions.WalDrainBudget,
-            WalAdmissionSaturationWaitBudget = baseOptions.WalAdmissionSaturationWaitBudget,
-            WalThrottledAdmissionPace = baseOptions.WalThrottledAdmissionPace,
-            WalMaxRetainedBytes = baseOptions.WalMaxRetainedBytes,
-            WalBytePressureReclaimTarget = baseOptions.WalBytePressureReclaimTarget,
-            MaterialiserCheckpointInterval = baseOptions.MaterialiserCheckpointInterval,
-            MaterialiserCheckpointEntries = baseOptions.MaterialiserCheckpointEntries,
-            LeafProjectionRetention = baseOptions.LeafProjectionRetention,
-            ProjectionRebuildPolicy = baseOptions.ProjectionRebuildPolicy,
-            MaxLeafReplayEntries = baseOptions.MaxLeafReplayEntries,
-            LeafSnapshotMargin = baseOptions.LeafSnapshotMargin,
-            LeafSnapshotReClassifyEveryNCheckpoints = baseOptions.LeafSnapshotReClassifyEveryNCheckpoints,
-            LeafSnapshotBinaryEncodingEnabled = baseOptions.LeafSnapshotBinaryEncodingEnabled,
-            LeafPartialHydrationEnabled = baseOptions.LeafPartialHydrationEnabled,
-            LeafHydrationResidentBytes = baseOptions.LeafHydrationResidentBytes,
-            MinTombstoneRatioForCompaction = baseOptions.MinTombstoneRatioForCompaction,
-            MaxLeafEntriesBeforeForcedCompaction = baseOptions.MaxLeafEntriesBeforeForcedCompaction,
-            CompactionTriggerCooldown = baseOptions.CompactionTriggerCooldown,
-            CompactionShardTickInterval = effectiveTickInterval,
-            CompactionLeafBatchSize = effectiveLeafBatchSize,
-            DirtyLeafFlushIntervalMs = baseOptions.DirtyLeafFlushIntervalMs,
-            MaintainProjectionDigest = maintainDigest,
-            // c2-xxix bugfix: the resolver previously dropped this
-            // field, so every leaf grain observed the
-            // ResolvedLatticeOptions default (0 = synchronous publish)
-            // regardless of what the operator or bench configured. The
-            // c2-xxviii coalescing path therefore never fired on Azure
-            // - the apparent win in the c2-xxviii memo (digest p50
-            // 13ms -> 0.00ms) was misattribution. The leaf clamps
-            // this to 0 anyway when MaintainProjectionDigest resolves
-            // to false. See LatticeOptionsResolverPropagationGuardTests
-            // for the regression gate.
-            DigestCoalescingWindowMs = baseOptions.DigestCoalescingWindowMs,
-            // WalPartitions sourced from the per-tree pin (registry
-            // entry) for user trees and from LatticeConstants for
-            // system trees. The pin is established at first
-            // RegisterAsync from the silo's then-current
-            // LatticeOptions.WalPartitions; once stamped it is
-            // tree-immutable so the foreground commit-log writer and
-            // the activation-time materialiser always agree on the
-            // partition fan-out shape regardless of what the silo's
-            // live IOptionsMonitor<LatticeOptions> value is.
-            WalPartitions = walPartitions,
-            // MaxCacheValueBytes sourced from the per-tree runtime override
-            // (registry entry) when present, else the silo-wide static option.
-            // This surfaces the resolved per-tree read-through-cache payload cap
-            // as the seam a tenant-memory-budget consumer drives; when no
-            // override is pinned it equals the static option exactly.
-            MaxCacheValueBytes = maxCacheValueBytes,
         };
+
+        // Copy the entire configurable LatticeOptions surface through by
+        // reflection instead of a hand-maintained per-property assignment list.
+        // The old list silently dropped any property missing from it - four
+        // admission gauges (MaxLiveKeys, MaxEstimatedBytes,
+        // AdmissionAdvisoryLiveKeys, AdmissionAdvisoryBytes) and two WAL replay
+        // bounds (WalMaterialiserMaxConcurrentReplays, WalReplayMaxRecordsPerTurn)
+        // were inert this way (issues #2182, #2203), and the list would drop the
+        // next option added exactly the same way. The reflective copy cannot,
+        // because it enumerates the source type. The derived and registry-pinned
+        // fields that must NOT carry the raw configured value are overridden
+        // immediately below, so those transformed values win.
+        resolved.CopyConfigurableBaseOptionsFrom(baseOptions);
+
+        // MaxScanPageStallDuration is folded to its effective value, not passed
+        // through raw, so a caller reading the resolved options sees the same
+        // ceiling the page-fill path enforces rather than the "derive it" null.
+        resolved.MaxScanPageStallDuration = ResolveStallDuration(baseOptions);
+
+        // Compaction floors clamp configured values below the documented floor
+        // up to the floor (see the clamp computation above).
+        resolved.CompactionShardTickInterval = effectiveTickInterval;
+        resolved.CompactionLeafBatchSize = effectiveLeafBatchSize;
+
+        // Effective MaintainProjectionDigest folds in the per-tree override and
+        // the one-way "permanently disabled" latch computed above.
+        resolved.MaintainProjectionDigest = maintainDigest;
+
+        // WalPartitions is sourced from the per-tree pin (registry entry) for
+        // user trees and from LatticeConstants for system trees, never from the
+        // live silo-wide LatticeOptions.WalPartitions. The pin is established at
+        // first RegisterAsync and is thereafter tree-immutable, so the foreground
+        // commit-log writer and the activation-time materialiser always agree on
+        // the partition fan-out shape for the lifetime of the tree.
+        resolved.WalPartitions = walPartitions;
+
+        // MaxCacheValueBytes is sourced from the per-tree runtime override
+        // (registry entry) when present, else the silo-wide static option.
+        resolved.MaxCacheValueBytes = maxCacheValueBytes;
+
+        return resolved;
     }
 
     /// <summary>

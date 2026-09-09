@@ -59,6 +59,60 @@ public class CachingReplicationSecretProviderTests
     }
 
     [Test]
+    public void SaturatingExpiresAtTicks_saturates_instead_of_overflowing()
+    {
+        var now = DateTimeOffset.UtcNow.UtcTicks;
+
+        var expiry = CachingReplicationSecretProvider.SaturatingExpiresAtTicks(now, TimeSpan.MaxValue);
+
+        // The unguarded sum this replaces wraps to a past instant.
+        Assert.That(
+            unchecked(now + TimeSpan.MaxValue.Ticks),
+            Is.LessThan(now),
+            "precondition: the raw tick sum overflows negative for an extreme interval");
+        Assert.Multiple(() =>
+        {
+            Assert.That(expiry, Is.EqualTo(DateTimeOffset.MaxValue.UtcTicks));
+            Assert.That(
+                expiry,
+                Is.GreaterThan(now),
+                "an extreme refresh interval must keep the entry cached, never expire it immediately");
+        });
+    }
+
+    [Test]
+    public async Task GetAcceptedSecretsAsync_caches_when_refresh_interval_is_extreme()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var source = new CountingSource
+        {
+            Snapshot = new LatticeReplicationAcceptedSecrets(new[] { "alpha" }, "v1"),
+        };
+        var p = new CachingReplicationSecretProvider(source, OptionsFor(TimeSpan.MaxValue), time);
+
+        _ = await p.GetAcceptedSecretsAsync(CancellationToken.None);
+        _ = await p.GetAcceptedSecretsAsync(CancellationToken.None);
+
+        // Before the saturating fix, now + TimeSpan.MaxValue.Ticks overflowed to a
+        // past instant, so every entry read as already expired and the source was
+        // hit on every call (AcceptedCalls == 2), defeating the cache entirely.
+        Assert.That(source.AcceptedCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task GetOutboundSecretAsync_caches_when_refresh_interval_is_extreme()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var source = new CountingSource { Secret = "alpha" };
+        var p = new CachingReplicationSecretProvider(source, OptionsFor(TimeSpan.MaxValue), time);
+
+        _ = await p.GetOutboundSecretAsync("peer", CancellationToken.None);
+        _ = await p.GetOutboundSecretAsync("peer", CancellationToken.None);
+
+        Assert.That(source.OutboundCalls, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task GetOutboundSecretAsync_caches_within_refresh_interval()
     {
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);

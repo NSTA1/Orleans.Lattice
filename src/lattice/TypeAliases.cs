@@ -245,6 +245,10 @@ internal static class TypeAliases
     // Leaf owned-key-range bounds (used to terminate paged range-scan sibling walks)
     internal const string LeafKeyRange = "ol.lkr";
 
+    // Single-round-trip reclaim decision inputs for one leaf (empty-leaf chain reclaim)
+    internal const string LeafReclaimProbe = "ol.lrb";
+    internal const string LeafRetired = "ol.lrt";
+
     // Conditional bulk write (guard predicate against existing value)
     internal const string ConditionalSetManyResult = "ol.csm";
 
@@ -627,4 +631,11 @@ internal static class TypeAliases
 
     /// <summary>Alias for the durable runtime-view registry's persisted state.</summary>
     internal const string ViewRegistryState = "ol.vrs";
+
+    /// <summary>
+    /// Alias for one durably recorded piece of unresolved leaf replay work
+    /// (an unresolved saga prepare or an undrained deferred terminal) that the
+    /// incremental flush ceiling has advanced past. See issue #2165.
+    /// </summary>
+    internal const string UnresolvedReplayWorkEntry = "ol.urw";
 }

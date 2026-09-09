@@ -46,6 +46,26 @@ internal static class TenantQuotaEvaluator
         Check(tenant, treeId, TreeCountDimension, usage.TreeCount, quotas.MaxTreeCount, quotas.BurstPercent);
     }
 
+    /// <summary>
+    /// Admits a tree <em>creation</em> against the tenant's owned-tree ceiling,
+    /// using an authoritative count rather than a metered sample.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="currentTreeCount"/> is the tenant's count <em>before</em>
+    /// the create, so the resulting count is passed to the shared ceiling check:
+    /// a tenant sitting exactly on its cap is refused the next tree rather than
+    /// admitted to one over. Shares <see cref="Check"/> with
+    /// <see cref="Admit"/> so the burst-headroom arithmetic and the exception
+    /// shape are identical on both paths.
+    /// </remarks>
+    /// <param name="tenant">The tenant the create runs under.</param>
+    /// <param name="treeId">The tree being created, surfaced on the exception.</param>
+    /// <param name="currentTreeCount">The tenant's authoritative owned-tree count before this create.</param>
+    /// <param name="quotas">The tenant's declared quotas.</param>
+    /// <exception cref="LatticeQuotaExceededException">The create would exceed the burst-adjusted ceiling.</exception>
+    internal static void AdmitTreeCreate(TenantId tenant, string treeId, long currentTreeCount, TenantQuotas quotas)
+        => Check(tenant, treeId, TreeCountDimension, currentTreeCount + 1, quotas.MaxTreeCount, quotas.BurstPercent);
+
     private static void Check(TenantId tenant, string treeId, string dimension, long current, long? limit, int burstPercent)
     {
         if (limit is not { } ceiling)

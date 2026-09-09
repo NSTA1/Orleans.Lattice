@@ -65,9 +65,27 @@ internal struct LeafWalkBudget
         _maxLeaves = maxLeaves > 0 ? maxLeaves : int.MaxValue;
         var start = startTimestamp != 0L ? startTimestamp : Stopwatch.GetTimestamp();
         _deadlineTimestamp = maxDuration is { } duration && duration > TimeSpan.Zero
-            ? start + (long)(duration.TotalSeconds * Stopwatch.Frequency)
+            ? SaturatingDeadlineTimestamp(start, duration)
             : 0L;
         _leavesVisited = 0;
+    }
+
+    /// <summary>
+    /// Computes the Stopwatch-tick deadline <paramref name="duration"/> after
+    /// <paramref name="start"/>, saturating at <see cref="long.MaxValue"/> so an
+    /// extreme <see cref="LatticeOptions.MaxScanPageDuration"/> or
+    /// <see cref="LatticeOptions.BackgroundDrainMaxDuration"/> (neither carries an
+    /// upper bound) cannot overflow the cast to a negative (past) deadline -
+    /// which would make <see cref="ShouldYield"/> fire on the very first leaf,
+    /// truncating every page to a single leaf, the exact opposite of the
+    /// effectively-unbounded budget the extreme value expresses.
+    /// </summary>
+    private static long SaturatingDeadlineTimestamp(long start, TimeSpan duration)
+    {
+        var deltaTicks = duration.TotalSeconds * Stopwatch.Frequency;
+        return deltaTicks >= long.MaxValue - start
+            ? long.MaxValue
+            : start + (long)deltaTicks;
     }
 
     /// <summary>

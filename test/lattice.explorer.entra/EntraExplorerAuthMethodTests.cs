@@ -131,6 +131,118 @@ public class EntraExplorerAuthMethodTests
     }
 
     [Test]
+    public async Task ChallengeAsync_configuredAuthorityAndClientId_areNotDisplacedByAdvertisement()
+    {
+        // Credential-theft regression: the endpoint's advertisement is fetched
+        // over an unauthenticated RPC, so a hostile endpoint must not be able to
+        // choose the identity provider or the OAuth client an operator has
+        // already pinned locally. Configuration wins, as it already does for
+        // Scopes and as it does in the hosted-web provider.
+        var time = new MutableTimeProvider(Start);
+        var acquirer = new FakeEntraAcquirer(time);
+        var options = new ExplorerEntraOptions
+        {
+            Authority = "https://login.microsoftonline.com/fabrikam",
+            ClientId = "static-client",
+        };
+        var method = CreateMethod(acquirer, options);
+
+        await method.ChallengeAsync(ContextWithAdvertisedParameters(time));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(acquirer.LastRequest!.Authority, Is.EqualTo("https://login.microsoftonline.com/fabrikam"));
+            Assert.That(acquirer.LastRequest!.ClientId, Is.EqualTo("static-client"));
+        });
+    }
+
+    [Test]
+    public async Task ChallengeAsync_configuredTenantId_isNotDisplacedByAdvertisedAuthority()
+    {
+        var time = new MutableTimeProvider(Start);
+        var acquirer = new FakeEntraAcquirer(time);
+        var options = new ExplorerEntraOptions { TenantId = "fabrikam" };
+        var method = CreateMethod(acquirer, options);
+
+        await method.ChallengeAsync(ContextWithAdvertisedParameters(time));
+
+        Assert.That(acquirer.LastRequest!.Authority, Is.EqualTo("https://login.microsoftonline.com/fabrikam"));
+    }
+
+    [Test]
+    public void ChallengeAsync_advertisedAuthorityOnAnUnrecognisedHost_isRefused()
+    {
+        var time = new MutableTimeProvider(Start);
+        var acquirer = new FakeEntraAcquirer(time);
+        var method = CreateMethod(acquirer);
+        var context = new ExplorerAuthChallengeContext
+        {
+            SchemeId = ExplorerAuthSchemes.Entra,
+            TimeProvider = time,
+            Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [ExplorerAuthSchemes.AuthorityParameter] = "https://login.evil.example/contoso",
+                [ExplorerAuthSchemes.ClientIdParameter] = "client-123",
+                [ExplorerAuthSchemes.AudienceParameter] = "api://state-api",
+            },
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await method.ChallengeAsync(context),
+                Throws.InvalidOperationException.With.Message.Contains("login.evil.example"));
+            Assert.That(acquirer.InteractiveCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void ChallengeAsync_advertisedAuthorityOverPlaintext_isRefused()
+    {
+        var time = new MutableTimeProvider(Start);
+        var acquirer = new FakeEntraAcquirer(time);
+        var method = CreateMethod(acquirer);
+        var context = new ExplorerAuthChallengeContext
+        {
+            SchemeId = ExplorerAuthSchemes.Entra,
+            TimeProvider = time,
+            Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [ExplorerAuthSchemes.AuthorityParameter] = "http://login.microsoftonline.com/contoso",
+                [ExplorerAuthSchemes.ClientIdParameter] = "client-123",
+                [ExplorerAuthSchemes.AudienceParameter] = "api://state-api",
+            },
+        };
+
+        Assert.That(async () => await method.ChallengeAsync(context), Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public async Task ChallengeAsync_advertisedAuthorityOnAnOperatorAllowedHost_isAccepted()
+    {
+        var time = new MutableTimeProvider(Start);
+        var acquirer = new FakeEntraAcquirer(time);
+        var options = new ExplorerEntraOptions();
+        options.AllowedAuthorityHosts.Add("login.contoso.example");
+        var method = CreateMethod(acquirer, options);
+        var context = new ExplorerAuthChallengeContext
+        {
+            SchemeId = ExplorerAuthSchemes.Entra,
+            TimeProvider = time,
+            Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [ExplorerAuthSchemes.AuthorityParameter] = "https://login.contoso.example/contoso",
+                [ExplorerAuthSchemes.ClientIdParameter] = "client-123",
+                [ExplorerAuthSchemes.AudienceParameter] = "api://state-api",
+            },
+        };
+
+        await method.ChallengeAsync(context);
+
+        Assert.That(acquirer.LastRequest!.Authority, Is.EqualTo("https://login.contoso.example/contoso"));
+    }
+
+    [Test]
     public void ChallengeAsync_missingAuthority_throwsInvalidOperationException()
     {
         var method = CreateMethod(new FakeEntraAcquirer(TimeProvider.System));

@@ -110,6 +110,37 @@ internal sealed partial class BPlusLeafGrain
     private bool _cacheRebuiltFromWalStartThisActivation;
 
     /// <summary>
+    /// Set once this activation's snapshot rehydrate <b>lowered</b> a
+    /// per-partition projection checkpoint below the durable value it held on
+    /// entry - i.e. the leaf activated with a durable checkpoint the loaded
+    /// snapshot does not cover (<c>durable[p] &gt; snapshotOffsets[p]</c>). This
+    /// is the frozen-leaf signature (#2220): a leaf whose replay gap exceeded
+    /// <c>MaxLeafReplayEntries</c> was torn down before it could capture a fresh
+    /// snapshot, so its durable snapshot froze two days behind the advancing
+    /// checkpoint. Every reactivation then reloads that stale snapshot, the
+    /// per-partition rehydrate loop rolls the advanced partition back to the
+    /// snapshot offset (lowering is REQUIRED for cache coherence after the
+    /// whole-cache <c>Cache.Clear()</c>, so the tail replay rebuilds the
+    /// dropped rows), and the leaf re-replays the same window forever while its
+    /// WAL pin stays frozen at the stale covered offset and its WAL grows
+    /// unbounded. The livelock only breaks if the leaf banks a fresh snapshot
+    /// covering the re-advanced checkpoint DURING an activation, off the
+    /// deactivation deadline; the periodic recheck cannot do it because its
+    /// per-activation persist counter resets every activation and a short
+    /// over-budget activation never reaches
+    /// <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>.
+    /// This latch drives the off-cadence coverage-deficit capture in
+    /// <see cref="MaybeRunPeriodicSnapshotRecheckAsync"/> exactly once, after
+    /// the tail replay re-advances the partition over cache-resident applies
+    /// (the same <see cref="_checkpointAdvancedThisActivation"/> /
+    /// <see cref="_cacheRebuiltFromWalStartThisActivation"/> no-loss precondition
+    /// the graceful-deactivation capture already trusts). Reset to <c>false</c>
+    /// on every fresh activation because it is a plain instance field, never
+    /// persisted.
+    /// </summary>
+    private bool _snapshotCoverageDeficitAtActivation;
+
+    /// <summary>
     /// Byte-accurate footprint of the most recently persisted snapshot
     /// for this leaf, or <c>0</c> when no snapshot has been captured this
     /// activation. Mirrors the value written into
@@ -396,6 +427,11 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="Orleans.Lattice.BPlusTree.Grains.FallOffLogDecision.SnapshotPending"/>) drives a
     /// capture. Returns synchronously when the option is <c>0</c>
     /// (disabled) or the threshold has not yet been reached.
+    /// <para>
+    /// The coverage-deficit escape (#2220) runs BEFORE that option is read,
+    /// because it is activation-scoped rather than periodic and the option is
+    /// documented to govern periodic capture only.
+    /// </para>
     /// </summary>
     private async Task MaybeRunPeriodicSnapshotRecheckAsync()
     {
@@ -405,11 +441,83 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var resolved = await GetOptionsAsync();
+
+        // Coverage-deficit fast path (frozen-leaf livelock escape, #2220).
+        // A leaf that rehydrated a snapshot sitting BEHIND its durable
+        // checkpoint (the rehydrate lowered a partition - see
+        // _snapshotCoverageDeficitAtActivation) must bank a fresh snapshot
+        // covering the re-advanced checkpoint DURING this activation. The
+        // cadence gate below cannot do it: it fires only after `threshold`
+        // persists WITHIN ONE ACTIVATION, but _checkpointPersistCountSinceRecheck
+        // resets every activation, and a leaf whose replay gap exceeds
+        // MaxLeafReplayEntries is torn down after only a handful of persists -
+        // so it never reaches the cadence, never captures, reloads the same
+        // stale snapshot next activation and rolls the same partition back
+        // forever while its WAL pin stays frozen and its WAL grows unbounded.
+        // Capture once per activation, off the cadence, as soon as the tail
+        // replay has re-advanced a partition past the coverage the stale
+        // snapshot recorded - gated by the SAME no-loss precondition the
+        // graceful-deactivation capture trusts (a checkpoint advanced over
+        // cache-resident applies, or a full cold rebuild), so we never stamp
+        // coverage the cache does not hold. Coverage advances strictly (current
+        // > the inherited snapshot offset), so even if teardown interrupts a
+        // full replay each activation banks a STRICTLY higher snapshot: a
+        // monotone escape that needs no single activation to finish the
+        // 30k-entry replay (#2220 point 3).
+        //
+        // This escape deliberately sits ABOVE the cadence gate below.
+        // LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints is documented
+        // to govern the PERIODIC re-classification only: "Set to 0 to disable
+        // the periodic re-classification entirely; only the once-per-activation
+        // capture ... will fire. The activation-time capture itself is not
+        // affected by this option." That is a contract, and this escape is
+        // activation-scoped by construction - latched during rehydrate, gated on
+        // THIS activation's no-loss precondition, one-shot per activation, and
+        // explicitly off the cadence - so placing it behind the cadence gate
+        // would make that documented sentence untrue. The consequence would also
+        // be out of all proportion to a tuning knob: with the cadence set to 0 a
+        // frozen leaf could NEVER escape, so its WAL pin would never lift and its
+        // WAL would grow without bound - a disk-exhaustion failure mode reachable
+        // by setting a cadence value.
+        if (_snapshotCoverageDeficitAtActivation
+            && !_snapshotCaptureInFlight
+            && (_checkpointAdvancedThisActivation || _cacheRebuiltFromWalStartThisActivation))
+        {
+            var deficitPartitionCount = Math.Max(1, resolved.WalPartitions);
+            var stillDeficit = false;
+            for (var p = 0; p < deficitPartitionCount; p++)
+            {
+                if (GetCurrentCheckpointForPartition(p) > DurableSnapshotCoverageForPartition(p))
+                {
+                    stillDeficit = true;
+                    break;
+                }
+            }
+
+            if (stillDeficit)
+            {
+                // One-shot per activation. Clear BEFORE the capture so a
+                // capture that itself fails cannot re-fire on every subsequent
+                // persist this activation; the ordinary cadence path below, the
+                // graceful-deactivation hook and the next reactivation remain
+                // backstops, and monotone progress guarantees convergence.
+                _snapshotCoverageDeficitAtActivation = false;
+                await TryCaptureSnapshotForAdvisoryAsync();
+                return;
+            }
+
+            // Precondition met but coverage already caught up (the ordinary
+            // cadence or another capture beat us): retire the latch and fall
+            // through to normal cadence handling.
+            _snapshotCoverageDeficitAtActivation = false;
+        }
+
         var threshold = resolved.LeafSnapshotReClassifyEveryNCheckpoints;
         if (threshold <= 0)
         {
-            // Periodic recheck disabled. The activation-time advisory
-            // path is the only proactive-capture driver.
+            // Periodic recheck disabled. The activation-scoped drivers - the
+            // activation-time advisory and the coverage-deficit escape above -
+            // remain the only proactive-capture drivers.
             return;
         }
 
@@ -745,7 +853,35 @@ internal sealed partial class BPlusLeafGrain
         if (perPartition is not null && perPartition.Length > 0)
         {
             for (var p = 0; p < perPartition.Length; p++)
+            {
+                // Frozen-leaf livelock detector (#2220). When this partition's
+                // durable checkpoint sits AHEAD of the snapshot offset we are
+                // about to write, the leaf is activating with a durable
+                // checkpoint the snapshot does not cover - the snapshot froze
+                // behind the checkpoint (an over-budget leaf that never captured
+                // a fresh one). The rollback below is still REQUIRED for cache
+                // coherence (the Cache.Clear above dropped the (snapshot,
+                // checkpoint] rows, so the tail replay MUST resume from the
+                // snapshot offset to rebuild them; keeping the higher checkpoint
+                // over the cleared cache would silently skip them). But without
+                // banking fresh coverage this activation, the leaf reloads the
+                // same stale snapshot next activation and rolls this partition
+                // back forever - a livelock whose WAL pin never lifts. Latch the
+                // deficit so the first post-replay checkpoint flush captures a
+                // snapshot covering the re-advanced checkpoint off the periodic
+                // cadence (which a short over-budget activation never reaches)
+                // and off the deactivation deadline. Only a genuine lowering of
+                // a real (>= 0) prior checkpoint counts: resetting an uncovered
+                // partition to -1 is the loss-free reset the coverage gate
+                // already guarantees, not a deficit, and the ordinary cadence
+                // handles a busy partition that merely advanced past its
+                // coverage.
+                if (perPartition[p] >= 0 && perPartition[p] < GetPersistedCheckpointForPartition(p))
+                {
+                    _snapshotCoverageDeficitAtActivation = true;
+                }
                 SetPersistedCheckpointForPartition(p, perPartition[p]);
+            }
         }
         else
         {

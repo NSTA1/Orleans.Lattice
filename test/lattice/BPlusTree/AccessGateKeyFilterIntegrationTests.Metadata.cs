@@ -408,4 +408,86 @@ public partial class AccessGateKeyFilterIntegrationTests
         Assert.That(await owned.TreeExistsAsync(), Is.True);
         Assert.That((await owned.DiagnoseAsync()).TotalLiveKeys, Is.EqualTo(1));
     }
+
+    // ---- WarmUpAsync ----------------------------------------------------
+
+    /// <summary>
+    /// <see cref="ILattice.WarmUpAsync"/> was the last facade verb performing no
+    /// gate call at all: it validated only that the tree is not a system tree and
+    /// then pre-activated every physical shard root - and each shard's root-node
+    /// grain - up to 32-way parallel, retrying through
+    /// <c>ShardActivationRetry</c>. That makes it strictly more dangerous than the
+    /// metadata verbs above, because the work is not a read that can be filtered
+    /// but real, unbounded activation of another tenant's grains.
+    /// <para>
+    /// It is gated at whole-tree <see cref="LatticeOperation.Read"/> - the same
+    /// authority as its true siblings <see cref="ILattice.DiagnoseAsync"/> and
+    /// <see cref="ILattice.GetStorageUsageAsync"/>, which are likewise operational
+    /// verbs that return no key data. Read is the minimum authority that closes
+    /// the hole, and deliberately not <see cref="LatticeOperation.Admin"/>: warm-up
+    /// exists to be called by ordinary data-plane producers before their first
+    /// write, so requiring admin rights would break its documented purpose on any
+    /// auth-enabled cluster.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task WarmUpAsync_consults_the_gate_with_a_whole_tree_read()
+    {
+        const string treeId = "agf-warmup-observed";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        await SeedAsync(tree, "user/alice");
+
+        var seen = RecordRequestsFor(treeId);
+        await tree.WarmUpAsync();
+
+        AssertWholeTreeReadObserved(seen, treeId, nameof(ILattice.WarmUpAsync));
+    }
+
+    [Test]
+    public async Task WarmUpAsync_denied_caller_is_refused()
+    {
+        const string treeId = "agf-warmup-denied";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        await SeedAsync(tree, "user/alice");
+
+        DenyTree(treeId);
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(() => tree.WarmUpAsync());
+    }
+
+    [Test]
+    public async Task WarmUpAsync_authorized_caller_is_still_served()
+    {
+        const string treeId = "agf-warmup-allowed";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        await SeedAsync(tree, "user/alice");
+
+        ConfigurableAccessGate.Decide = _ => LatticeAccessDecision.Allow();
+
+        Assert.DoesNotThrowAsync(() => tree.WarmUpAsync());
+    }
+
+    [Test]
+    public async Task WarmUpAsync_cannot_activate_another_trees_shards()
+    {
+        const string ownedId = "agf-warmup-iso-owned";
+        const string victimId = "agf-warmup-iso-victim";
+        var owned = _cluster.GrainFactory.GetGrain<ILattice>(ownedId);
+        var victim = _cluster.GrainFactory.GetGrain<ILattice>(victimId);
+        await SeedAsync(owned, "mine/one");
+        await SeedAsync(victim, "secret/one");
+
+        // The denial-of-service shape: the caller merely *names* a tree it does not
+        // hold a grant on. Because tenant isolation is composed inside the gate, an
+        // ungated warm-up is also a cross-tenant activation storm - the caller pays
+        // one cheap call and the victim pays a fan-out across every one of its
+        // shards.
+        ConfigurableAccessGate.Decide = req =>
+            req.TreeId == ownedId
+                ? LatticeAccessDecision.Allow()
+                : LatticeAccessDecision.Deny("not your tree");
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(() => victim.WarmUpAsync());
+        Assert.DoesNotThrowAsync(() => owned.WarmUpAsync(), "the caller's own tree is unaffected");
+    }
 }

@@ -77,6 +77,70 @@ internal sealed class LatticeTelemetryApiGrpcAuthInterceptor : Interceptor
         return await continuation(request, context).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public override async Task ServerStreamingServerHandler<TRequest, TResponse>(
+        TRequest request,
+        IServerStreamWriter<TResponse> responseStream,
+        ServerCallContext context,
+        ServerStreamingServerMethod<TRequest, TResponse> continuation)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(responseStream);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(continuation);
+
+        if (!IsLatticeTelemetryApiMethod(context.Method))
+        {
+            await continuation(request, responseStream, context).ConfigureAwait(false);
+            return;
+        }
+
+        await EnforceAuthAsync(request, context).ConfigureAwait(false);
+        await continuation(request, responseStream, context).ConfigureAwait(false);
+    }
+    /// <inheritdoc />
+    public override async Task<TResponse> ClientStreamingServerHandler<TRequest, TResponse>(
+        IAsyncStreamReader<TRequest> requestStream,
+        ServerCallContext context,
+        ClientStreamingServerMethod<TRequest, TResponse> continuation)
+    {
+        ArgumentNullException.ThrowIfNull(requestStream);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(continuation);
+
+        if (!IsLatticeTelemetryApiMethod(context.Method))
+        {
+            return await continuation(requestStream, context).ConfigureAwait(false);
+        }
+
+        // A streaming call has no single request message to describe, so the call
+        // is identified by its method name alone. The authorization decision is
+        // made before the first client message is read.
+        await EnforceAuthAsync<TRequest>(default!, context).ConfigureAwait(false);
+        return await continuation(requestStream, context).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task DuplexStreamingServerHandler<TRequest, TResponse>(
+        IAsyncStreamReader<TRequest> requestStream,
+        IServerStreamWriter<TResponse> responseStream,
+        ServerCallContext context,
+        DuplexStreamingServerMethod<TRequest, TResponse> continuation)
+    {
+        ArgumentNullException.ThrowIfNull(requestStream);
+        ArgumentNullException.ThrowIfNull(responseStream);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(continuation);
+
+        if (!IsLatticeTelemetryApiMethod(context.Method))
+        {
+            await continuation(requestStream, responseStream, context).ConfigureAwait(false);
+            return;
+        }
+
+        await EnforceAuthAsync<TRequest>(default!, context).ConfigureAwait(false);
+        await continuation(requestStream, responseStream, context).ConfigureAwait(false);
+    }
     private async Task EnforceAuthAsync<TRequest>(TRequest request, ServerCallContext context)
     {
         if (!_options.CurrentValue.RequireAuthorization)

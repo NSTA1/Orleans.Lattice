@@ -26,6 +26,24 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Warm-up pre-activates every physical shard root and each shard's
+        // root-node grain, up to MaxWarmUpParallelism at a time and with retry, so
+        // one cheap call costs the target tree a cluster-wide fan-out. It
+        // previously performed no gate call at all, which made it both an
+        // existence/topology oracle for an arbitrary tree id and - far worse than
+        // the metadata verbs beside it - a cross-tenant activation storm: tenant
+        // isolation is composed inside the gate, so a verb that never calls the
+        // gate never reaches the tenant enforcer, and any in-cluster caller could
+        // force that fan-out against another tenant's tree.
+        //
+        // Gated at whole-tree Read, matching its true siblings DiagnoseAsync and
+        // GetStorageUsageAsync: operational verbs that return no key data. Read is
+        // the minimum authority that closes the hole, and deliberately not Admin,
+        // because warm-up exists to be called by ordinary data-plane producers
+        // ahead of their first write - requiring admin rights would break its
+        // documented purpose on any auth-enabled cluster.
+        await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
+
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var (physicalTreeId, shardMap) = await GetRoutingAsync(cancellationToken);
         var physicalIndices = shardMap.GetPhysicalShardIndices();

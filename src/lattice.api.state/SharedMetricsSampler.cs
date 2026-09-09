@@ -490,7 +490,24 @@ internal sealed class SharedMetricsSampler(
             // without the extra LINQ sort-buffer allocation.
             var distinct = treeIds.Distinct(StringComparer.Ordinal).ToArray();
             Array.Sort(distinct, StringComparer.Ordinal);
-            ids = string.Join(',', distinct);
+
+            // Length-prefix each id so the tree-id component is injective. A bare
+            // ',' join would alias one tree literally named "a,b" with two trees
+            // "a" and "b" (both render "a,b"), coalescing two genuinely different
+            // request scopes onto one sampling loop - RunLoopAsync then samples
+            // only the first attacher's loop.Request, so the second subscriber
+            // silently receives the first request's tree set instead of its own.
+            // This is the same aliasing class BuildIdentityComponent already
+            // length-prefixes for group ids and claims (#971); nothing forbids a
+            // comma in a tree id (only NUL is globally reserved), so the tree-id
+            // component needs the identical framing.
+            var builder = new StringBuilder();
+            foreach (var id in distinct)
+            {
+                AppendLengthPrefixed(builder, id);
+            }
+
+            ids = builder.ToString();
         }
         else
         {

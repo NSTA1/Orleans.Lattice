@@ -41,7 +41,9 @@ namespace Orleans.Lattice.Replication;
 /// projection by the per-leaf scan (Committed surfaces the prepared
 /// value as the live one; Aborted drops the prepared mutation
 /// entirely). Sagas the snapshot recorded as
-/// <see cref="TxStatus.InFlight"/> have their per-key prepared
+/// <see cref="TxStatus.InFlight"/> or
+/// <see cref="TxStatus.Indeterminate"/>, and sagas it has no row for
+/// at all, have their per-key prepared
 /// mutations emitted explicitly with
 /// <see cref="SnapshotEntry.IsPrepared"/> set, routed on the receiver
 /// through
@@ -173,8 +175,8 @@ internal sealed class LatticeSnapshotProvider(
             // linearizable against snap0. Sagas snap0 had as
             // Committed surface their prepared (post-saga) value on
             // the matching key; sagas snap0 had as Aborted are
-            // dropped; sagas snap0 had as InFlight are hidden
-            // (already covered by the prepared-row pass above).
+            // dropped; sagas snap0 had as InFlight or Indeterminate are
+            // hidden (already covered by the prepared-row pass above).
             //
             // Resilience: this is a long-running export - cross-cluster
             // bootstrap drains it over a (potentially proxied, WAN)
@@ -227,11 +229,27 @@ internal sealed class LatticeSnapshotProvider(
     /// <see cref="SnapshotEntry"/> with <see cref="SnapshotEntry.IsPrepared"/>
     /// set for every <c>(transactionId, key)</c> pair in any leaf's
     /// pending-tx bucket whose <paramref name="snap0"/> status is
-    /// <see cref="TxStatus.InFlight"/> or absent. Sagas snap0 had as
+    /// <see cref="TxStatus.InFlight"/>, <see cref="TxStatus.Indeterminate"/>,
+    /// or absent. Sagas snap0 had as
     /// <see cref="TxStatus.Committed"/> / <see cref="TxStatus.Aborted"/>
     /// are intentionally skipped here because the committed-projection
     /// pass under the same registry snapshot has already folded their
     /// per-key visibility into its emitted rows.
+    /// <para>
+    /// <b>What absence means to the receiver, and why it changed.</b> A txid
+    /// absent from <paramref name="snap0"/> means the source has no decision
+    /// for it, so the receiver is right to treat it as still preparing. That
+    /// reading used to be unsound for one case: a saga that <i>committed</i> and
+    /// whose decision then aged out of the retention window was dropped from the
+    /// snapshot, so it arrived at the receiver as absence and was read as still
+    /// preparing. The terminal that would have corrected it was already outside
+    /// the incremental stream the receiver drains after the snapshot, so nothing
+    /// on either side could repair the divergence: the source held "committed",
+    /// the receiver held "preparing", permanently. The registry now carries such
+    /// a row explicitly as <see cref="TxStatus.Indeterminate"/> instead of
+    /// dropping it, so absence in this payload once again means only what it
+    /// says, and the aged-out case is visible as the distinct thing it is.
+    /// </para>
     /// </summary>
     private async IAsyncEnumerable<SnapshotEntry> EnumeratePreparedAsync(
         string treeName,
@@ -297,12 +315,24 @@ internal sealed class LatticeSnapshotProvider(
                     // already folded them in (Committed -> prepared
                     // value surfaced as committed; Aborted -> dropped).
                     // We emit prepared rows only for sagas that snap0
-                    // had as InFlight or absent, so the receiver routes
-                    // them into its per-tx pending bucket where the
-                    // post-snapshot incremental WAL's terminal record
-                    // will flip them atomically.
+                    // had as InFlight, Indeterminate, or absent, so the
+                    // receiver routes them into its per-tx pending bucket
+                    // where the post-snapshot incremental WAL's terminal
+                    // record will flip them atomically.
+                    //
+                    // Indeterminate must be on the SHIPPING side of this test,
+                    // not the skipping side. The committed pass runs under the
+                    // same snap0 and does not surface an indeterminate saga's
+                    // keys, so skipping here too would drop the prepared rows
+                    // from the export entirely and lose the write. Shipping
+                    // them leaves the receiver holding exactly what the source
+                    // holds - a resident prepare whose outcome is not currently
+                    // determinable - which is honest, is repaired by the same
+                    // mechanisms that repair the source, and is strictly better
+                    // than the receiver silently concluding the saga never
+                    // committed.
                     if (snap0.TryGetValue(m.TransactionId, out var status)
-                        && status != TxStatus.InFlight)
+                        && status is TxStatus.Committed or TxStatus.Aborted)
                     {
                         continue;
                     }

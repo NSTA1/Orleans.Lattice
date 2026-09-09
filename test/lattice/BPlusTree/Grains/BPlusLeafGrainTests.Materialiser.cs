@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
@@ -32,7 +33,10 @@ public partial class BPlusLeafGrainTests
         Action<LeafNodeState>? seedState = null,
         Action<SortedDictionary<string, LwwValue<byte[]>>>? seedEntries = null,
         ILatticeFallOffLogDetector? detector = null,
-        ILeafCursorReporter? reporter = null)
+        ILeafCursorReporter? reporter = null,
+        int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
+        int? maxLeafReplayEntries = null,
+        ILoggerProvider? loggerProvider = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
 
@@ -41,6 +45,13 @@ public partial class BPlusLeafGrainTests
         if (detector is not null)
             sc.AddSingleton(detector);
         sc.AddSingleton(reporter);
+        if (loggerProvider is not null)
+        {
+            sc.AddLogging(builder => builder
+                .SetMinimumLevel(LogLevel.Trace)
+                .AddProvider(loggerProvider));
+        }
+
         var services = sc.BuildServiceProvider();
 
         var context = Substitute.For<IGrainContext>();
@@ -73,7 +84,15 @@ public partial class BPlusLeafGrainTests
             // this explicit pin; the multi-partition fan-out is
             // covered by BPlusLeafGrainTests.MultiPartitionMaterialiser.
             WalPartitions = 1,
+            MaxDurableUnresolvedReplayWork = maxDurableUnresolvedReplayWork,
         };
+
+        // Optional so the default (10,000) stays in force for every test that does
+        // not care. Since #2149 the over-budget warning is gated on the leaf's own
+        // applied-entry count, so a fixture that wants to drive that line has to be
+        // able to lower the budget rather than inflate the WAL.
+        if (maxLeafReplayEntries is { } leafReplayBudget)
+            baseOptions.MaxLeafReplayEntries = leafReplayBudget;
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
             maxLeafKeys: 128,
@@ -301,7 +320,11 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var entry = new CommitLogSliceEntry(1, BuildPreparedSet(txId, "k1", Encoding.UTF8.GetBytes("v1")));
         var coord = BuildCoordinator(head: 1, entry);
-        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
+        // Guards the NO-RECORD path (issue #2165): with the durable
+        // replay-work ledger disabled the clamp is the only thing keeping the
+        // prepare alive across a teardown, so it must still pin the
+        // checkpoint. The ledgered path is guarded separately below.
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, maxDurableUnresolvedReplayWork: 0);
 
         await ActivateAsync(grain);
 
@@ -323,7 +346,8 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var entry = new CommitLogSliceEntry(1, BuildPreparedSet(txId, "k1", Array.Empty<byte>(), isTombstone: true));
         var coord = BuildCoordinator(head: 1, entry);
-        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
+        // No-record path (issue #2165); see the sibling prepared-set guard.
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, maxDurableUnresolvedReplayWork: 0);
 
         await ActivateAsync(grain);
 
@@ -331,6 +355,35 @@ public partial class BPlusLeafGrainTests
         // Checkpoint clamped behind the unresolved prepare at offset 1
         // -> persisted offset stays at 0.
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task Ledgered_prepared_tombstone_advances_the_checkpoint_and_stays_unresolved()
+    {
+        // Enabled-path counterpart to
+        // Materialiser_replays_prepared_tombstone_into_pending_tx (issue
+        // #2165). A prepared tombstone is the shape most at risk from
+        // advancing a checkpoint carelessly, because losing it would silently
+        // resurrect a deleted key. The ledger must therefore carry the
+        // tombstone itself, not merely the fact that an offset was skipped.
+        var txId = Guid.NewGuid();
+        var entry = new CommitLogSliceEntry(1, BuildPreparedSet(txId, "k1", Array.Empty<byte>(), isTombstone: true));
+        var coord = BuildCoordinator(head: 1, entry);
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, maxDurableUnresolvedReplayWork: 1024);
+
+        await ActivateAsync(grain);
+
+        Assert.That(grain.PendingTransactionCount, Is.EqualTo(1),
+            "The prepare remains unresolved - recording it is not resolving it.");
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1),
+            "The checkpoint advances past the recorded prepare rather than freezing at 0.");
+
+        var ledger = state.State.UnresolvedReplayWork;
+        Assert.That(ledger, Is.Not.Null);
+        Assert.That(ledger!.Count, Is.EqualTo(1));
+        Assert.That(ledger[0].Offset, Is.EqualTo(1L));
+        Assert.That(await grain.GetAsync("k1"), Is.Null,
+            "An uncommitted prepared tombstone stays invisible to readers.");
     }
 
     [Test]
@@ -378,7 +431,8 @@ public partial class BPlusLeafGrainTests
         var commit1 = new CommitLogSliceEntry(2, BuildTerminal(tx1, committed: true));
         var prepared2 = new CommitLogSliceEntry(3, BuildPreparedSet(tx2, "k2", Encoding.UTF8.GetBytes("v2")));
         var coord = BuildCoordinator(head: 3, prepared1, commit1, prepared2);
-        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
+        // No-record path (issue #2165); see the sibling prepared-set guard.
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, maxDurableUnresolvedReplayWork: 0);
 
         await ActivateAsync(grain);
 
@@ -406,12 +460,61 @@ public partial class BPlusLeafGrainTests
         var entry6 = new CommitLogSliceEntry(6, BuildCommittedSet("k6", Encoding.UTF8.GetBytes("v6")));
         var prepared3 = new CommitLogSliceEntry(7, BuildPreparedSet(tx3, "k7", Encoding.UTF8.GetBytes("v7")));
         var coord = BuildCoordinator(head: 7, entry1, prepared1, entry3, entry4, prepared2, entry6, prepared3);
-        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
+        // No-record path (issue #2165). This guard is specifically valuable
+        // here: it tests MIN-versus-MAX aggregate selection, and with the
+        // ledger enabled every prepare is skipped so the aggregate is bypassed
+        // entirely. Pinning it to the no-record path keeps that selection
+        // covered rather than silently losing it.
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, maxDurableUnresolvedReplayWork: 0);
 
         await ActivateAsync(grain);
 
         Assert.That(grain.PendingTransactionCount, Is.EqualTo(3));
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Ledgered_multiple_prepares_advance_the_checkpoint_and_are_all_recorded()
+    {
+        // Enabled-path counterpart to
+        // Materialiser_clamps_to_min_unresolved_when_multiple_prepares
+        // (issue #2165). The REQUIREMENT is that unresolved prepares survive a
+        // teardown, not that the checkpoint is frozen: the clamp was only ever
+        // the mechanism by which they survived. With a durable record of the
+        // work, the checkpoint may advance to the head while all three
+        // prepares remain unresolved - which is exactly the progress the
+        // livelocked leaf could not make.
+        var tx1 = Guid.NewGuid();
+        var tx2 = Guid.NewGuid();
+        var tx3 = Guid.NewGuid();
+        var entry1 = new CommitLogSliceEntry(1, BuildCommittedSet("k0", Encoding.UTF8.GetBytes("v0")));
+        var prepared1 = new CommitLogSliceEntry(2, BuildPreparedSet(tx1, "k1", Encoding.UTF8.GetBytes("v1")));
+        var entry3 = new CommitLogSliceEntry(3, BuildCommittedSet("k3", Encoding.UTF8.GetBytes("v3")));
+        var entry4 = new CommitLogSliceEntry(4, BuildCommittedSet("k4", Encoding.UTF8.GetBytes("v4")));
+        var prepared2 = new CommitLogSliceEntry(5, BuildPreparedSet(tx2, "k5", Encoding.UTF8.GetBytes("v5")));
+        var entry6 = new CommitLogSliceEntry(6, BuildCommittedSet("k6", Encoding.UTF8.GetBytes("v6")));
+        var prepared3 = new CommitLogSliceEntry(7, BuildPreparedSet(tx3, "k7", Encoding.UTF8.GetBytes("v7")));
+        var coord = BuildCoordinator(head: 7, entry1, prepared1, entry3, entry4, prepared2, entry6, prepared3);
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, maxDurableUnresolvedReplayWork: 1024);
+
+        await ActivateAsync(grain);
+
+        Assert.That(grain.PendingTransactionCount, Is.EqualTo(3),
+            "All three prepares are still unresolved - the ledger does not resolve them, it records them.");
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(7),
+            "With every unresolved prepare durably recorded, the checkpoint advances to the head "
+            + "instead of freezing at 1 for the life of the leaf.");
+
+        var ledger = state.State.UnresolvedReplayWork;
+        Assert.That(ledger, Is.Not.Null, "The unresolved work must be durably recorded, not merely skipped.");
+        Assert.That(ledger!.Select(e => e.Offset), Is.EquivalentTo(new[] { 2L, 5L, 7L }),
+            "Every prepare the clamp would have held must appear in the ledger, or advancing loses it.");
+
+        // Reader isolation is unaffected: a prepared value is not visible
+        // until its terminal commits, whatever the checkpoint says.
+        Assert.That(await grain.GetAsync("k1"), Is.Null);
+        Assert.That(await grain.GetAsync("k5"), Is.Null);
+        Assert.That(await grain.GetAsync("k7"), Is.Null);
     }
 
     [Test]
@@ -649,7 +752,10 @@ public partial class BPlusLeafGrainTests
         entries.Add(new CommitLogSliceEntry(42, BuildPreparedSet(txId, "p", Encoding.UTF8.GetBytes("pv"), hlcPhysical: 200)));
 
         var coord = BuildCoordinator(head: 42, entries.ToArray());
-        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
+        // No-record path (issue #2165). The clamp is this test's INSTRUMENT
+        // for offset stamping, not its subject, so it must keep observing the
+        // clamp to keep testing the stamp.
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, maxDurableUnresolvedReplayWork: 0);
 
         await ActivateAsync(grain);
 

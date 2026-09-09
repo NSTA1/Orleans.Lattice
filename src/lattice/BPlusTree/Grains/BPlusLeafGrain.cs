@@ -7,7 +7,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Leaf node grain implementation. Stores key → <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> entries
+/// Leaf node grain implementation. Stores key -> <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> entries
 /// in a sorted dictionary. Splits when the entry count exceeds the leaf-sizing
 /// pin in the tree registry.
 /// </summary>
@@ -107,15 +107,20 @@ internal sealed partial class BPlusLeafGrain(
         {
             DisposeProjectionHasher();
 
-            // Remove this activation's same-silo revision cookie so a
-            // future re-activation starts fresh and any same-silo
-            // LeafCacheGrain that may still hold _lastSeenPrimaryRevision
-            // from this activation falls through to the cross-grain
-            // refresh path on its next read. Cookies are best-effort,
-            // not correctness-critical, but pruning keeps the registry
-            // bounded by the live-leaf set rather than the lifetime-leaf
-            // set.
-            LeafRevisionRegistry.TryRemove(context.GrainId, out _);
+            // Remove this activation's same-silo revision cookie so the
+            // registry stays bounded by the live-leaf set rather than
+            // the lifetime-leaf set, and carry its final counter value
+            // into the ticket source so the next activation seeds
+            // strictly above it. While the entry is absent, a same-silo
+            // LeafCacheGrain still holding _lastSeenPrimaryRevision from
+            // this activation falls back to its TTL gate - NOT, as an
+            // earlier version of this comment claimed, to the
+            // cross-grain refresh path, which the cache reaches only
+            // when an entry is present. The next activation republishes
+            // a cookie from a strictly higher range during
+            // OnActivateAsync (issue #2151), so the cache is forced onto
+            // the refresh path as soon as the leaf is back.
+            RemoveLeafRevision(context.GrainId);
         }
     }
 
@@ -301,7 +306,8 @@ internal sealed partial class BPlusLeafGrain(
     /// would surface a migrated entry but carries a destination-side
     /// shadow marker. Resolves every shadowing saga through the
     /// registry and either passes the migrated value through
-    /// (InFlight / Aborted / Committed-with-backstop) or raises
+    /// (InFlight / Aborted, or a decided-or-indeterminate saga whose
+    /// backstop terminal has already landed here) or raises
     /// <see cref="StaleShardRoutingException"/> with a sentinel
     /// <c>(-1, -1, -1)</c> tuple so the caller's deadline-bounded
     /// retry loop re-fans under a fresh snapshot.
@@ -569,9 +575,10 @@ internal sealed partial class BPlusLeafGrain(
                 // full rationale: when the surfacing entry is a
                 // destination-side migration (IsMigrated=true) and
                 // the split coordinator installed a shadow marker
-                // naming a committed-no-backstop saga as the owner
-                // of this key, raise StaleShardRoutingException so
-                // the LatticeGrain retry loop re-fans under a fresh
+                // naming a saga that is not known to be undecided,
+                // and whose backstop terminal has not landed here,
+                // as the owner of this key, raise
+                // StaleShardRoutingException so the LatticeGrain retry loop re-fans under a fresh
                 // snapshot. Cheap on the steady-state path: a single
                 // null check plus a dictionary miss when no marker
                 // is installed.
@@ -636,6 +643,7 @@ internal sealed partial class BPlusLeafGrain(
     private async Task<SplitResult?> SetCoreAsync(string key, byte[] value, long expiresAtTicks)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {
@@ -849,6 +857,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(entries);
         if (entries.Count == 0)
         {
@@ -923,6 +932,7 @@ internal sealed partial class BPlusLeafGrain(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(entries);
         if (entries.Count == 0)
         {
@@ -1372,6 +1382,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<bool> DeleteAsync(string key)
     {
         EnsureInternalOrigin(LatticeOperation.Delete);
+        using var _mutationScope = EnterMutationScope();
         var isPrepared = LatticePreparedContext.Current;
 
         // For non-prepared deletes, the absent / tombstoned short-circuit
@@ -1489,6 +1500,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
+        using var _mutationScope = EnterMutationScope();
         // Collect matching keys. Entries is a SortedDictionary so we can
         // break early once we pass endExclusive - but we must still report
         // whether we observed a key >= endExclusive so the shard
@@ -2435,6 +2447,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
 #if LATTICE_DIAG
         // DIAG leaf-cross-leaf-merge: fires when a sibling leaf or
         // a split-source leaf hands a batch of LWW values into this
@@ -2847,6 +2860,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
+        using var _mutationScope = EnterMutationScope();
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {

@@ -272,8 +272,9 @@ semantics and apply on the shard axis regardless.
 
 ## Autonomic detection
 
-The per-tree `HotShardMonitorGrain` is started lazily on the first write and
-re-anchored by a keepalive reminder. On each tick (default every 30 s) it:
+The per-tree `HotShardMonitorGrain` is started when the tree's `LatticeGrain`
+activates, re-attempted on every write (so an arming that lost the race with
+reminder-service startup recovers), and re-anchored by a keepalive reminder. On each tick (default every 30 s) it:
 
 1. Polls every physical shard's `GetHotnessAsync()` in parallel.
 2. Computes ops/sec = `(reads + writes) / window.TotalSeconds`.
@@ -372,6 +373,23 @@ Per-tree options resolve through named `IOptionsMonitor<LatticeOptions>.Get(tree
   installs a pending bucket after the saga's terminal fan-out has
   already broadcast can still resolve the verdict via the registry
   tombstone window. See [Atomic Writes - Phase 4 Complete](atomic-writes.md#phase-4---complete).
+* **No mixed-round batch across the swap** - the coordinator's drain
+  copies a shadowing saga's *pre-saga* value into *T* with a migration
+  marker, so between the shard-map swap and the arrival of the saga's
+  backstop terminal on *T* a reader could otherwise see that key's old
+  value while every sibling key already showed the new one. The
+  coordinator therefore installs a per-key marker naming the shadowing
+  saga, and *T*'s read gate resolves it against the registry: a saga the
+  registry reports as in-flight or aborted is safe (the pre-saga value is
+  the correct answer), and so is any saga whose backstop terminal has
+  already landed on *T*. Otherwise the read raises
+  `StaleShardRoutingException` and the deadline-bounded retry loop
+  re-fans once the backstop lands. A saga whose decision has aged out of
+  `TxDecisionRetention` reads as `Indeterminate` and takes the same
+  conservative arm as a committed one - serving the migrated pre-saga
+  value there would be an affirmative claim that the saga did not commit,
+  which is exactly what the registry has stopped vouching for. See
+  [Atomic Writes - After the retention window](atomic-writes.md#after-the-retention-window-indeterminate-not-inflight).
 * **No duplicate authority** - after the swap, only *T* is reachable for
   moved slots via the public API; orphan entries on *S* are unreachable
   and reclaimed on tree purge.

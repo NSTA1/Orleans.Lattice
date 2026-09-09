@@ -144,6 +144,57 @@ public class LatticeOptions
     public TimeSpan TombstoneGracePeriod { get; set; } = DefaultTombstoneGracePeriod;
 
     /// <summary>
+    /// How long a write refused by a leaf that empty-leaf reclaim has latched
+    /// closed keeps retrying before it gives up and surfaces the fault.
+    /// <para>
+    /// A reclaim fold latches the leaf it is about to remove so that a write
+    /// cannot be applied to state that is about to be cleared, and the leaf
+    /// refuses mutations for as long as the latch is held. The refusal is
+    /// transient by construction - the latch clears when the fold completes
+    /// and routing moves on, or when an abandoned fold reopens the leaf - so
+    /// the shard root waits it out and retries rather than failing the write.
+    /// This bounds that wait.
+    /// </para>
+    /// <para>
+    /// <b>Healthy regime.</b> The latch is held across
+    /// <c>TryUnlinkSuccessorAsync</c> and the routing retirement, and the
+    /// latter retries its parent call up to three times, so the window's
+    /// ceiling is four grain calls: sub-millisecond co-located, single-digit
+    /// milliseconds cross-silo, plus whatever scheduling jitter a
+    /// garbage-collection pause or a starved thread pool adds. Tens of
+    /// milliseconds is a generous reading. The default clears that by about
+    /// two orders of magnitude, so jitter alone can never exhaust it.
+    /// </para>
+    /// <para>
+    /// <b>Stuck regime.</b> If those calls are instead hitting the Orleans
+    /// response timeout (30s by default), the same arithmetic gives about two
+    /// minutes. The default deliberately does <em>not</em> cover that: a fold
+    /// blocked for minutes is an outage rather than a transient overlap, and a
+    /// write that inherited its wait would exceed any caller's own timeout
+    /// while reporting nothing. Failing visibly is the useful behaviour, and
+    /// it is what the reclaim interlock exists to produce - it converts a
+    /// silent loss of an acknowledged write into a loud one.
+    /// </para>
+    /// <para>
+    /// <b>The guarantee this rests on is conditional.</b> Waiting is only safe
+    /// because a retirement latch clears, but the call that reopens an
+    /// abandoned fold can itself fail. When it does, the latch is held until
+    /// the leaf deactivates - far beyond any sane value here - and the write
+    /// fails loudly. That is the correct outcome, but do not read "the latch
+    /// is guaranteed to clear" as unconditional.
+    /// </para>
+    /// <para>
+    /// Lower this only to make a test suite fail fast; raising it trades
+    /// caller latency under a slow fold for fewer surfaced faults. Per-tree
+    /// overrides follow the same named-options pattern as other properties.
+    /// </para>
+    /// </summary>
+    public TimeSpan LeafRetirementRetryDeadline { get; set; } = DefaultLeafRetirementRetryDeadline;
+
+    /// <summary>Default value for <see cref="LeafRetirementRetryDeadline"/> (2 seconds).</summary>
+    public static readonly TimeSpan DefaultLeafRetirementRetryDeadline = TimeSpan.FromSeconds(2);
+
+    /// <summary>
     /// Minimum tombstone-to-total ratio (in <c>[0.0, 1.0]</c>) on a single leaf
     /// that triggers an out-of-cycle compaction pass for the leaf's shard,
     /// in addition to the regular reminder-driven cadence governed by
@@ -226,6 +277,18 @@ public class LatticeOptions
     /// with a one-shot warning per tree per process. Snapshotted at pass
     /// start, so mid-pass option changes do not retroactively reshape an
     /// in-flight pass.
+    /// </para>
+    /// <para>
+    /// <b>This also sizes the empty-leaf reclaim walk, which is not obvious
+    /// from the name.</b> The compactor passes this value to
+    /// <c>ReclaimEmptyLeavesAsync</c> as its fold budget, and that pass probes
+    /// up to sixteen leaves for every leaf it may fold - so a pass walks up to
+    /// <c>CompactionLeafBatchSize * 16</c> leaves sequentially, 1024 at this
+    /// default, while holding the shard root's non-reentrant turn. Raising
+    /// this to 625 or beyond saturates the reclaim walk's own 10,000-leaf
+    /// clamp, and 10,000 sequential leaf activations in one turn will exceed
+    /// the caller's Orleans response timeout against cold storage. Treat a
+    /// large value here as a change to two subsystems, not one.
     /// </para>
     /// </summary>
     public int CompactionLeafBatchSize { get; set; } = DefaultCompactionLeafBatchSize;
@@ -1338,6 +1401,19 @@ public class LatticeOptions
     /// and by <see cref="WalMaterialiserMaxConcurrentReplays"/>.
     /// </para>
     /// <para>
+    /// <b>This budget is per leaf and counted after the per-leaf range
+    /// filter</b> (<c>ShouldApplyDuringReplay</c>), which is what makes it
+    /// comparable to the seam it is named after. The classifier's cheap
+    /// pre-check compares the <i>partition-wide</i> WAL gap against it, and
+    /// that gap is shared by every leaf pinned to the partition; it is a sound
+    /// upper bound (a leaf can never apply more than the gap) but it can
+    /// overstate a single leaf's work by the partition's leaf fan-out, so it
+    /// only nominates a candidate. The warning and the counter are emitted on
+    /// the exact per-leaf count taken during the replay, not on that candidate
+    /// (issue #2149). Raising this value to quieten warnings that the
+    /// pre-check alone produced is therefore the wrong remedy.
+    /// </para>
+    /// <para>
     /// Before issue #1738 an overrun was fatal: it surfaced
     /// <see cref="LeafProjectionStaleException"/> and left the tree
     /// permanently un-activatable even though its data was fully intact. A
@@ -1352,6 +1428,41 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="MaxLeafReplayEntries"/> (10 000).</summary>
     public const int DefaultMaxLeafReplayEntries = 10_000;
+
+    /// <summary>
+    /// Maximum number of unresolved replay-work records
+    /// (<c>UnresolvedReplayWorkEntry</c>) a leaf will carry in its durable
+    /// state so its incremental flush ceiling may advance past them
+    /// (issue #2165).
+    /// <para>
+    /// A leaf's flush ceiling is clamped below every unresolved saga prepare
+    /// and every undrained deferred terminal, because neither survives an
+    /// activation teardown in memory. Recording that work durably removes the
+    /// need to re-read it, which is what lets a partition that never wins the
+    /// single pass-1 drain slot bank forward progress instead of replaying the
+    /// identical range on every activation. The records are struck off as the
+    /// work resolves, so in the steady state the list is empty and this bound
+    /// is never approached.
+    /// </para>
+    /// <para>
+    /// The bound exists for the pathological case only: a stream of sagas
+    /// whose terminals never arrive would otherwise grow the persisted leaf
+    /// row without limit. Past the bound the leaf simply stops recording and
+    /// the ceiling falls back to the pre-#2165 clamping behaviour, which is
+    /// slow but never unsafe - it is the behaviour that shipped for every
+    /// release before this one.
+    /// </para>
+    /// <para>
+    /// Setting this to zero disables the mechanism, restoring the pre-#2165
+    /// behaviour in which the clamp is the only thing keeping unresolved work
+    /// alive across a teardown. That path still ships - it is what runs once
+    /// the bound is reached - so it is guarded independently.
+    /// </para>
+    /// </summary>
+    public int MaxDurableUnresolvedReplayWork { get; set; } = DefaultMaxDurableUnresolvedReplayWork;
+
+    /// <summary>Default value for <see cref="MaxDurableUnresolvedReplayWork"/> (1 024).</summary>
+    public const int DefaultMaxDurableUnresolvedReplayWork = 1_024;
 
     /// <summary>
     /// Maximum interval between durable persistences of a leaf grain's
@@ -1470,9 +1581,11 @@ public class LatticeOptions
     /// within <see cref="LeafSnapshotMargin"/> of the WAL tail.
     /// <para>
     /// Set to <c>0</c> to disable the periodic re-classification
-    /// entirely; only the once-per-activation capture (driven by the
-    /// activation-time advisory) will fire. The activation-time
-    /// capture itself is not affected by this option.
+    /// entirely; only the activation-scoped captures (the
+    /// once-per-activation capture driven by the activation-time
+    /// advisory, and the one-shot snapshot-coverage-deficit escape that
+    /// breaks the frozen-leaf rehydrate livelock) will fire. Those
+    /// activation-scoped captures are not affected by this option.
     /// </para>
     /// </summary>
     public int LeafSnapshotReClassifyEveryNCheckpoints { get; set; } = DefaultLeafSnapshotReClassifyEveryNCheckpoints;

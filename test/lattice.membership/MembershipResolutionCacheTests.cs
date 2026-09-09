@@ -5,8 +5,10 @@ namespace Orleans.Lattice.Membership.Tests;
 
 /// <summary>
 /// Unit tests for <see cref="MembershipResolutionCache"/>: warm-hit reuse,
-/// token-expiry bounding, the two disabling conditions (zero TTL), and
-/// change-feed invalidation via the <see cref="IMutationObserver"/> seam.
+/// token-expiry bounding, the two disabling conditions (zero TTL), the
+/// positive-only admission and capped size that keep an unauthenticated or
+/// token-rotating caller from growing the map, and change-feed invalidation via
+/// the <see cref="IMutationObserver"/> seam.
 /// </summary>
 public class MembershipResolutionCacheTests
 {
@@ -146,5 +148,101 @@ public class MembershipResolutionCacheTests
         cache.Clear();
 
         Assert.That(cache.Count, Is.Zero);
+    }
+
+    [Test]
+    public async Task ResolveAsync_an_anonymous_verdict_is_never_cached()
+    {
+        var (cache, _) = CreateCache();
+        var calls = 0;
+
+        var first = await cache.ResolveAsync(
+            "bogus", Resolver(LatticeSubject.Anonymous, null, () => calls++), default);
+        var second = await cache.ResolveAsync(
+            "bogus", Resolver(LatticeSubject.Anonymous, null, () => calls++), default);
+
+        Assert.That(first.IsAnonymous, Is.True);
+        Assert.That(second.IsAnonymous, Is.True);
+        Assert.That(cache.Count, Is.Zero, "an unresolvable credential must not occupy a cache entry");
+        Assert.That(calls, Is.EqualTo(2), "an anonymous verdict must be re-resolved, never served warm");
+    }
+
+    [Test]
+    public async Task ResolveAsync_distinct_unresolvable_tokens_do_not_grow_the_cache()
+    {
+        var (cache, _) = CreateCache();
+
+        // Every distinct token an unauthenticated caller presents used to mint a
+        // permanent entry. The cache must stay empty no matter how many are tried.
+        for (var i = 0; i < 10_000; i++)
+        {
+            _ = await cache.ResolveAsync(
+                $"forged-{i}", Resolver(LatticeSubject.Anonymous, null, () => { }), default);
+        }
+
+        Assert.That(cache.Count, Is.Zero);
+    }
+
+    [Test]
+    public async Task ResolveAsync_bounds_the_number_of_cached_subjects()
+    {
+        var (cache, _) = CreateCache();
+
+        // A resolved population that rotates its tokens mints a new key per
+        // token; the map must stay capped rather than growing with the churn.
+        for (var i = 0; i < MembershipResolutionCache.MaxCachedSubjects + 500; i++)
+        {
+            _ = await cache.ResolveAsync(
+                $"tok-{i}", Resolver(new LatticeSubject($"user-{i}"), null, () => { }), default);
+        }
+
+        Assert.That(cache.Count, Is.LessThanOrEqualTo(MembershipResolutionCache.MaxCachedSubjects));
+    }
+
+    [Test]
+    public async Task ResolveAsync_still_resolves_correctly_once_the_cache_is_full()
+    {
+        var (cache, _) = CreateCache();
+
+        for (var i = 0; i < MembershipResolutionCache.MaxCachedSubjects + 500; i++)
+        {
+            _ = await cache.ResolveAsync(
+                $"tok-{i}", Resolver(new LatticeSubject($"user-{i}"), null, () => { }), default);
+        }
+
+        var expected = new LatticeSubject("late-arrival");
+        var actual = await cache.ResolveAsync("late-tok", Resolver(expected, null, () => { }), default);
+
+        Assert.That(
+            actual,
+            Is.EqualTo(expected),
+            "a full cache must still return the authoritative subject; the bound may cost a lookup, never correctness");
+    }
+
+    [Test]
+    public async Task ResolveAsync_reclaims_expired_entries_when_the_cache_is_full()
+    {
+        var (cache, time) = CreateCache(ttl: TimeSpan.FromMinutes(5));
+
+        for (var i = 0; i < MembershipResolutionCache.MaxCachedSubjects; i++)
+        {
+            _ = await cache.ResolveAsync(
+                $"tok-{i}", Resolver(new LatticeSubject($"user-{i}"), null, () => { }), default);
+        }
+
+        Assert.That(cache.Count, Is.EqualTo(MembershipResolutionCache.MaxCachedSubjects));
+
+        // Every entry is now stale. Admitting a new key must drop them rather
+        // than refuse the insert, so a full-but-dead cache does not stay cold.
+        time.Advance(TimeSpan.FromMinutes(6));
+        var subject = new LatticeSubject("fresh");
+        var calls = 0;
+
+        _ = await cache.ResolveAsync("fresh-tok", Resolver(subject, null, () => calls++), default);
+        var warm = await cache.ResolveAsync("fresh-tok", Resolver(subject, null, () => calls++), default);
+
+        Assert.That(cache.Count, Is.EqualTo(1), "the expired entries must have been reclaimed");
+        Assert.That(warm, Is.EqualTo(subject));
+        Assert.That(calls, Is.EqualTo(1), "the newly admitted entry must be served warm");
     }
 }

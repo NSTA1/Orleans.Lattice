@@ -1,3 +1,5 @@
+using Orleans.Concurrency;
+
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
@@ -40,6 +42,27 @@ internal interface IShardHealingOrchestratorGrain : IGrainWithStringKey
     /// calls are no-ops once it is running, and the call is a no-op when
     /// <see cref="LatticeOptions.ShardHealingEnabled"/> is <c>false</c>.
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the
+    /// same reason as <c>IHotShardMonitorGrain.EnsureRunningAsync</c> (#2218): a
+    /// healing sweep (<see cref="RunHealingPassAsync"/>) calls the tree's status
+    /// verbs (<c>ILattice.Is*CompleteAsync</c>) once a tree is over-split, and on
+    /// a quiet tree that call births a <c>LatticeGrain</c> activation whose
+    /// <c>OnActivateAsync</c> arms this orchestrator by awaiting this method -
+    /// the identical activation-vs-sweep cycle, healing head. This head is latent
+    /// in the field because a structurally-settled tree short-circuits its sweep
+    /// before the status verbs, but it becomes reachable once the monitor head is
+    /// fixed, so both must be broken together.
+    /// <para>
+    /// Interleaving is safe by the same invariant: there is no await between the
+    /// <c>if (_running) return;</c> guard and <c>_running = true;</c>. The
+    /// intervening <see cref="LatticeOptions.ShardHealingEnabled"/> check reads a
+    /// synchronous property and so introduces no turn boundary, so the body runs
+    /// at most once and a call admitted while a sweep holds the turn returns
+    /// synchronously at the guard.
+    /// </para>
+    /// </remarks>
+    [AlwaysInterleave]
     Task EnsureRunningAsync();
 
     /// <summary>

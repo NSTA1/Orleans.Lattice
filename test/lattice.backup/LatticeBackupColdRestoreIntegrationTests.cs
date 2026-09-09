@@ -116,6 +116,42 @@ public sealed class LatticeBackupColdRestoreIntegrationTests
         });
     }
 
+    // ---- Empty increment tip --------------------------------------------
+
+    [Test]
+    public async Task ColdRestoreAsync_chain_with_an_empty_increment_tip_restores_from_the_sink()
+    {
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("k1", Bytes("v1"));
+        await source.SetAsync("k2", Bytes("v2"));
+
+        var baseBackup = await _fixture.Capture.CaptureAsync(
+            new LatticeBackupCaptureRequest("base", BackupScopeSelector.WholeTree(Source)));
+
+        // No intervening writes: the increment is a real chained manifest whose
+        // sole artifact streams zero chunks (ChunkCount == 0). Restoring from it
+        // must not be rejected as a missing artifact - the empty artifact hashes
+        // to SHA-256("") and validates.
+        var increment = await _fixture.Incremental.CaptureIncrementalAsync(
+            new LatticeBackupIncrementalCaptureRequest(
+                "inc-empty", BackupScopeSelector.WholeTree(Source), baseBackup.BackupId));
+
+        await ClearCatalogAsync();
+
+        const string target = "orders-cold-empty-inc";
+        var result = await _fixture.ColdRestore.ColdRestoreAsync(
+            new LatticeRestoreRequest(increment.BackupId, target));
+
+        var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(result.ManifestChain, Has.Count.EqualTo(2), "base + empty increment walked from the sink");
+            Assert.That(Str((await restored.GetAsync("k1"))!), Is.EqualTo("v1"));
+            Assert.That(Str((await restored.GetAsync("k2"))!), Is.EqualTo("v2"));
+        });
+    }
+
     // ---- Idempotency ----------------------------------------------------
 
     [Test]

@@ -187,6 +187,17 @@ public static class LatticeReplicationMetrics
     public const string OutcomeRejectedTenantOffline = "rejected-tenant-offline";
 
     /// <summary>
+    /// <see cref="TagOutcome"/> value: the inbound entry was rejected by the
+    /// receiver-side tenant-isolation gate because its tenant, while it exists, has
+    /// been suspended or disabled by an operator. The entry is not applied; because
+    /// the tree is enrolled (and therefore bounded) it is dead-lettered with
+    /// <see cref="ReasonSuspendedTenant"/> for operator visibility. The
+    /// high-water-mark is left unchanged so the sender re-ships the entry, which
+    /// converges if and when the tenant is reinstated.
+    /// </summary>
+    public const string OutcomeRejectedSuspendedTenant = "rejected-tenant-suspended";
+
+    /// <summary>
     /// Tag key for the dead-letter enqueue / removal reason. Values are
     /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
     /// <see cref="ReasonEvicted"/>, <see cref="ReasonSchema"/>,
@@ -286,6 +297,15 @@ public static class LatticeReplicationMetrics
     public const string ReasonTenantOffline = "tenant_offline";
 
     /// <summary>
+    /// Reason tag value: enqueue cause was an inbound replicated write for a tenant
+    /// that exists but has been suspended or disabled by an operator. Raised by the
+    /// receiver-side tenant-isolation gate so an administrative suspension binds the
+    /// replication apply path as well as the authoring path, rather than stopping
+    /// local writes while a peer region goes on changing the same tenant's data.
+    /// </summary>
+    public const string ReasonSuspendedTenant = "tenant_suspended";
+
+    /// <summary>
     /// Reason tag value: catch-all bucket for enqueue causes the inbound
     /// apply pipeline could not classify more specifically. Future
     /// observability work will partition this further.
@@ -297,6 +317,17 @@ public static class LatticeReplicationMetrics
     /// integration tests and custom OpenTelemetry exporters can subscribe by
     /// reference rather than by name.
     /// </summary>
+    /// <remarks>
+    /// Must stay above every instrument declared below it, and every instrument must be
+    /// constructed from it. Static field initialisers execute in declaration order, so a
+    /// listener matching
+    /// <c>ReferenceEquals(instrument.Meter, LatticeReplicationMetrics.Meter)</c> that is
+    /// the first code in the process to touch this class would compare against
+    /// <see langword="null"/> while an instrument declared higher up is published, never
+    /// enable it, and silently record nothing. Enforced by
+    /// <c>MeterFieldDeclarationOrderTests</c>; demonstrated by <c>MeterListeningTests</c>.
+    /// See the Metrics section of <c>.github/copilot-instructions.md</c>.
+    /// </remarks>
     public static readonly Meter Meter = new(MeterName);
 
     // --- Per-operation histograms ------------------------------------------------
@@ -1940,6 +1971,16 @@ public static class LatticeReplicationMetrics
     /// shadow and voted abort.
     /// </summary>
     public const string SagaReasonBuildFailed = "build-failed";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on the participant vote / commit / abort
+    /// counters: the saga named a target tree this cluster does not replicate, so
+    /// the participant refused it without building, swapping, or reverting
+    /// anything. The target tree arrives on the inbound saga control channel,
+    /// which authorizes the origin cluster and not the tree, so this counter
+    /// rising is the signal that a peer asked for a tree outside its enrollment.
+    /// </summary>
+    public const string SagaReasonNotReplicated = "not-replicated";
 
     /// <summary>
     /// <see cref="TagReason"/> value on the participant commit / abort counters:

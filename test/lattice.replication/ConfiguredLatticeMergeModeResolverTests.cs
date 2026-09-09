@@ -24,6 +24,62 @@ public class ReplicationModeResolverTests
     }
 
     [Test]
+    public void Resolve_distinct_tree_ids_do_not_grow_the_cache_without_bound()
+    {
+        using var resolver = new ConfiguredLatticeMergeModeResolver(
+            Monitor(_ => new LatticeReplicationOptions { ClusterId = "x", ReplicatedTrees = null }));
+
+        // The key is a caller-supplied tree id and an unreplicated id still caches
+        // a null sentinel, so an unbounded cache grew silo memory without limit as
+        // distinct tree ids accumulated (CWE-770).
+        for (var i = 0; i < ConfiguredLatticeMergeModeResolver.MaxCachedTrees + 500; i++)
+        {
+            Assert.That(resolver.Resolve("tree-" + i), Is.Null);
+        }
+
+        Assert.That(
+            resolver.CachedTreeCount,
+            Is.LessThanOrEqualTo(ConfiguredLatticeMergeModeResolver.MaxCachedTrees));
+    }
+
+    [Test]
+    public void Resolve_still_returns_the_configured_mode_once_the_cache_is_full()
+    {
+        using var resolver = new ConfiguredLatticeMergeModeResolver(Monitor(_ => new LatticeReplicationOptions
+        {
+            ClusterId = "x",
+            ReplicatedTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
+            {
+                ["orders"] = LatticeMergeMode.OrSet,
+            },
+        }));
+
+        for (var i = 0; i < ConfiguredLatticeMergeModeResolver.MaxCachedTrees + 10; i++)
+        {
+            _ = resolver.Resolve("filler-" + i);
+        }
+
+        // A refused insert must only cost an options read, never change the answer.
+        Assert.That(resolver.Resolve("orders"), Is.EqualTo(LatticeMergeMode.OrSet));
+    }
+
+    [Test]
+    public void Origin_resolver_distinct_tree_ids_do_not_grow_the_cache_without_bound()
+    {
+        using var resolver = new ConfiguredLatticeOriginClusterIdResolver(
+            Monitor(_ => new LatticeReplicationOptions { ClusterId = "cluster-a" }));
+
+        for (var i = 0; i < ConfiguredLatticeOriginClusterIdResolver.MaxCachedTrees + 500; i++)
+        {
+            Assert.That(resolver.Resolve("tree-" + i), Is.EqualTo("cluster-a"));
+        }
+
+        Assert.That(
+            resolver.CachedTreeCount,
+            Is.LessThanOrEqualTo(ConfiguredLatticeOriginClusterIdResolver.MaxCachedTrees));
+    }
+
+    [Test]
     public void Constructor_throws_on_null_options()
     {
         Assert.That(() => new ConfiguredLatticeMergeModeResolver(null!), Throws.ArgumentNullException);
@@ -56,7 +112,7 @@ public class ReplicationModeResolverTests
             ClusterId = "x",
             ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
             {
-                ["declared"] = LatticeMergeMode.LwwRegister,
+                ["declared"] = LatticeMergeMode.OrSet,
             },
         }));
 
@@ -71,11 +127,11 @@ public class ReplicationModeResolverTests
             ClusterId = "x",
             ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
             {
-                ["t"] = LatticeMergeMode.LwwRegister,
+                ["t"] = LatticeMergeMode.OrSet,
             },
         }));
 
-        Assert.That(resolver.Resolve("t"), Is.EqualTo(LatticeMergeMode.LwwRegister));
+        Assert.That(resolver.Resolve("t"), Is.EqualTo(LatticeMergeMode.OrSet));
     }
 
     [Test]
@@ -87,7 +143,7 @@ public class ReplicationModeResolverTests
             ClusterId = "x",
             ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
             {
-                ["t"] = LatticeMergeMode.LwwRegister,
+                ["t"] = LatticeMergeMode.OrSet,
             },
         };
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
@@ -112,7 +168,7 @@ public class ReplicationModeResolverTests
             ClusterId = "x",
             ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
             {
-                ["t1"] = LatticeMergeMode.LwwRegister,
+                ["t1"] = LatticeMergeMode.OrSet,
             },
         });
         monitor.OnChange(Arg.Any<Action<LatticeReplicationOptions, string?>>()).Returns(Substitute.For<IDisposable>());
@@ -121,7 +177,7 @@ public class ReplicationModeResolverTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(resolver.Resolve("t1"), Is.EqualTo(LatticeMergeMode.LwwRegister));
+            Assert.That(resolver.Resolve("t1"), Is.EqualTo(LatticeMergeMode.OrSet));
             Assert.That(resolver.Resolve("t2"), Is.Null);
         });
     }
@@ -136,7 +192,7 @@ public class ReplicationModeResolverTests
             ClusterId = "x",
             ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
             {
-                ["t"] = LatticeMergeMode.LwwRegister,
+                ["t"] = LatticeMergeMode.OrSet,
             },
         };
         var current = deny;
@@ -156,7 +212,7 @@ public class ReplicationModeResolverTests
         Assert.That(changeCallback, Is.Not.Null);
         changeCallback!.Invoke(allow, null);
 
-        Assert.That(resolver.Resolve("t"), Is.EqualTo(LatticeMergeMode.LwwRegister));
+        Assert.That(resolver.Resolve("t"), Is.EqualTo(LatticeMergeMode.OrSet));
     }
 
     [Test]

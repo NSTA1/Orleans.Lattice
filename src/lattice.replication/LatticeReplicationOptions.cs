@@ -21,6 +21,26 @@ public class LatticeReplicationOptions
     /// participates in replication, and must be set to a non-empty value -
     /// the registered <c>IValidateOptions&lt;LatticeReplicationOptions&gt;</c>
     /// rejects an empty or whitespace cluster id at first-resolve time.
+    /// <para>
+    /// <b>Cross-tree uniformity.</b> This is a <em>per-tree</em> option, but
+    /// the cross-tree saga protocol requires every tree in one cross-tree
+    /// transaction to resolve the <b>same</b> value: several of its arguments
+    /// carry a guard verdict reached on one participating tree across the tree
+    /// boundary to another, and that step is licensed only by the two trees
+    /// agreeing on cluster identity. The validator asserts this in prose and is
+    /// structurally unable to check it - a relation between two trees'
+    /// configurations is not observable from the one options instance it is
+    /// handed. What actually holds uniformity up is a <em>default</em>:
+    /// <see cref="DefaultClusterId"/> is empty, so a per-tree instance that
+    /// never received a cluster id fails the validator's non-empty check, and
+    /// <c>AddLatticeReplication</c> registers cluster-wide via
+    /// <c>ConfigureAll</c>. Divergence therefore requires a deliberate per-tree
+    /// override, which is exactly what this documented mechanism permits. The
+    /// relation is enforced where it first becomes expressible - at cross-tree
+    /// saga admission, and at the replicated cross-tree barrier's wait-set
+    /// freeze - both of which fail loudly rather than proceeding on a premise
+    /// that no longer holds.
+    /// </para>
     /// </summary>
     public string ClusterId { get; set; } = DefaultClusterId;
 

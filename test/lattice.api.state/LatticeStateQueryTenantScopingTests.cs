@@ -427,10 +427,35 @@ public sealed class LatticeStateQueryTenantScopingTests
     }
 
     [Test]
-    public async Task A_system_data_tree_name_is_not_composed_under_a_tenant()
+    public void A_confined_tenant_may_not_address_the_reserved_system_data_namespace()
     {
-        // The core composition helper leaves the reserved system namespaces alone,
-        // so a 'sys-' tree keeps addressing the one cluster-global tree it names.
+        // 'sys-' holds first-party add-on state and sits outside every tenant, so it
+        // is never composed into the caller's namespace. Left readable, it would be a
+        // shared, accounting-invisible, cross-tenant namespace, so resolution refuses
+        // it outright for a confined tenant rather than serving the escape.
+        const string systemDataTree = "sys-auth-rules";
+        var factory = Substitute.For<IGrainFactory>();
+        var tree = WireTree(factory, systemDataTree);
+        WireEntry(tree, Key, [1]);
+        var query = CreateQuery(factory, new AmbientTenantContextResolver());
+
+        using (LatticeActiveTenantContext.With(Acme))
+        {
+            Assert.That(
+                async () => await query.GetEntryAsync(systemDataTree, Key),
+                Throws.TypeOf<LatticeTenantAccessDeniedException>());
+        }
+
+        factory.DidNotReceive().GetGrain<ILattice>(systemDataTree);
+    }
+
+    [Test]
+    public async Task A_system_data_tree_name_is_not_composed_under_a_system_origin_scope()
+    {
+        // First-party add-ons administering their own stores run system-origin and are
+        // exempt from the refusal above. For them the core composition helper still
+        // leaves the reserved system namespace alone, so a 'sys-' tree keeps addressing
+        // the one cluster-global tree it names rather than a per-tenant copy of it.
         const string systemDataTree = "sys-auth-rules";
         var factory = Substitute.For<IGrainFactory>();
         var tree = WireTree(factory, systemDataTree);
@@ -438,6 +463,7 @@ public sealed class LatticeStateQueryTenantScopingTests
         var query = CreateQuery(factory, new AmbientTenantContextResolver());
 
         EntryDetailResult result;
+        using (LatticeSystemOrigin.Enter())
         using (LatticeActiveTenantContext.With(Acme))
         {
             result = await query.GetEntryAsync(systemDataTree, Key);

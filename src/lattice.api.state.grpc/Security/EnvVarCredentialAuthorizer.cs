@@ -48,8 +48,20 @@ public sealed class EnvVarCredentialAuthorizer : ILatticeStateApiAuthorizer
     private readonly IOptionsMonitor<EnvVarCredentialAuthorizerOptions> _options;
     private readonly ILogger<EnvVarCredentialAuthorizer> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly ConcurrentDictionary<string, AttemptRecord> _attempts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, AttemptRecord> _attempts;
     private int _verificationCount;
+
+    /// <summary>
+    /// The comparer the failed-attempt map is keyed by. It must share the identity
+    /// semantics of the credential lookup it guards: process environment variables
+    /// are case-insensitive on Windows, so <c>alice</c> and <c>ALICE</c> resolve to
+    /// the same credential there and must therefore share one lockout record.
+    /// Keying ordinally on that platform gave every case variant its own budget,
+    /// which both multiplied the lockout allowance and let a caller grow the
+    /// attempt map without bound from a single known username.
+    /// </summary>
+    private static StringComparer PlatformUsernameComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     /// <summary>
     /// The number of distinct usernames currently tracked in the failed-attempt
@@ -81,15 +93,37 @@ public sealed class EnvVarCredentialAuthorizer : ILatticeStateApiAuthorizer
         IOptionsMonitor<EnvVarCredentialAuthorizerOptions> options,
         ILogger<EnvVarCredentialAuthorizer> logger,
         TimeProvider? timeProvider = null)
+        : this(environment, options, logger, timeProvider, PlatformUsernameComparer)
+    {
+    }
+
+    /// <summary>
+    /// Initialises the authorizer with an explicit username comparer. Exposed so a
+    /// test can exercise the case-insensitive (Windows) credential-lookup shape on
+    /// any host platform, rather than leaving that branch untested off Windows.
+    /// </summary>
+    /// <param name="environment">The environment-variable source.</param>
+    /// <param name="options">The lockout and prefix options.</param>
+    /// <param name="logger">The logger.</param>
+    /// <param name="timeProvider">The time source driving the lockout window.</param>
+    /// <param name="usernameComparer">The comparer keying the failed-attempt map.</param>
+    internal EnvVarCredentialAuthorizer(
+        IEnvironmentVariableReader environment,
+        IOptionsMonitor<EnvVarCredentialAuthorizerOptions> options,
+        ILogger<EnvVarCredentialAuthorizer> logger,
+        TimeProvider? timeProvider,
+        StringComparer usernameComparer)
     {
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(usernameComparer);
 
         _environment = environment;
         _options = options;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _attempts = new ConcurrentDictionary<string, AttemptRecord>(usernameComparer);
     }
 
     /// <inheritdoc />
@@ -134,7 +168,9 @@ public sealed class EnvVarCredentialAuthorizer : ILatticeStateApiAuthorizer
             return false;
         }
 
-        // Only real credentials populate the map, so its working set is bounded
+        // Only real credentials populate the map, and the comparer matches the
+        // credential lookup's own identity semantics, so case variants of one
+        // credential share a single record. The working set is therefore bounded
         // by the number of configured users.
         var record = _attempts.GetOrAdd(username, static _ => new AttemptRecord());
 

@@ -186,6 +186,7 @@ internal sealed partial class BPlusLeafGrain
         string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks, List<WalRecord>? batch)
     {
         EnsureInternalOrigin(LatticeOperation.CrdtApply);
+        using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(deltaBytes);
         if (mode == LatticeMergeMode.LwwRegister)
@@ -562,6 +563,7 @@ internal sealed partial class BPlusLeafGrain
         List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode)
     {
         EnsureInternalOrigin(LatticeOperation.CrdtApply);
+        using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(deltas);
         if (deltas.Count == 0)
         {

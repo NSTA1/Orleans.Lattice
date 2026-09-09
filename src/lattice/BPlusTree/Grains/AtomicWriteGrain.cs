@@ -1170,10 +1170,18 @@ internal sealed class AtomicWriteGrain(
             // minted transaction id. If it does (legacy persisted
             // state, or a code path that bypassed StampTransactionId),
             // there is no per-shard linearization point to mark, so
-            // skip the broadcast. The saga still completes - the
-            // worst case is that prepared writes (if any) remain
-            // bucketed in the leaves' pending-tx maps until they
-            // age out of replay or the operator manually drops them.
+            // skip the broadcast. The saga still completes - but the
+            // residue is NOT self-limiting. Prepared writes (if any)
+            // stay bucketed in the leaves' pending-tx maps until an
+            // operator drops them. They do NOT age out of replay:
+            // a prepare leaves those maps only via ApplyTxCommit /
+            // ApplyTxAbort on the terminal-replay path, and skipping
+            // the broadcast is exactly what guarantees no terminal
+            // ever arrives. The resident prepare then clamps the
+            // leaf's incremental flush ceiling strictly below its own
+            // offset, which pins the WAL prefix holding it, so every
+            // later activation re-reads it and re-derives the same
+            // clamp (issue #2183).
             Logger.LogWarning(
                 "Atomic-write saga {OperationKey}: skipping terminal broadcast - no transaction id is set on persisted state.",
                 OperationKey);
@@ -1268,10 +1276,15 @@ internal sealed class AtomicWriteGrain(
             // physical shard than the one captured in TouchedShards.
             // The terminal broadcast must reach EVERY shard that
             // could hold a pending-tx bucket for this saga, otherwise
-            // those buckets are orphaned forever (or until the replay
-            // coordinator ages them out) and a reader routed to that
-            // shard surfaces the destination's pre-saga value
-            // indefinitely. Fix: re-resolve every entry against a
+            // those buckets are orphaned permanently: there is no
+            // replay coordinator that ages them out, and no other
+            // reaper of any kind. A prepare leaves the pending-tx
+            // maps only via ApplyTxCommit / ApplyTxAbort on the
+            // terminal-replay path (issue #2183). A reader routed to
+            // that shard then surfaces the destination's pre-saga
+            // value indefinitely, and the orphan additionally pins
+            // the owning leaf's incremental flush ceiling.
+            // Fix: re-resolve every entry against a
             // fresh routing snapshot and union the result into
             // TouchedShards. This is purely additive - old captures
             // are preserved (for sagas whose prepare landed on the
@@ -2243,11 +2256,35 @@ internal sealed class AtomicWriteGrain(
     /// dials back through the registry to resolve the read against the
     /// already-recorded outcome, so the post-fan-out window in which
     /// some leaves have flipped and others have not is invisible to
-    /// readers. Idempotent - reminder-driven re-entry after a crash
-    /// between the registry write and the saga's Completed flip is
-    /// safe because both <c>MarkCommittedAsync</c> and
-    /// <c>MarkAbortedAsync</c> treat repeated same-outcome calls as
-    /// no-ops.
+    /// readers. Idempotent for reminder-driven re-entry after a crash
+    /// between the registry write and the saga's Completed flip: a
+    /// same-outcome repeat is classified <c>Idempotent</c> by the
+    /// registry's write-once guard and mutates nothing, including the
+    /// tombstone map.
+    /// <para>
+    /// That guard is necessary but not by itself sufficient, because it
+    /// only holds while the decision is still recorded. Once the saga's
+    /// cleanup has forgotten it and the tombstone has been physically
+    /// pruned, a repeat would be classified <c>Record</c> and would
+    /// resurrect a decision the tree had retired. What rules that out is
+    /// ordering, not idempotence: <c>ForgetAsync</c> is only reached
+    /// from the cleanup that runs after the <c>Phase = Completed</c>
+    /// flip, and re-entry past that flip short-circuits at the top of
+    /// the saga entry points before it can reach this method. Do not
+    /// weaken either half - the write-once guard alone does not survive
+    /// retention expiry, and the ordering alone does not survive a
+    /// duplicate delivery inside the live window.
+    /// </para>
+    /// <para>
+    /// Neither argument extends to a <em>replicated</em> terminal. Two of
+    /// the three producers of <c>MarkCommittedAsync</c> /
+    /// <c>MarkAbortedAsync</c> live on the replication-apply path of a
+    /// different grain and are not sequenced behind this saga's
+    /// <c>Phase</c> at all, so a peer-originated terminal arriving after
+    /// local cleanup is subject to the resurrection case above. That is
+    /// the cross-cluster hazard, and it is a property of the apply path,
+    /// not of this method.
+    /// </para>
     /// </summary>
     private Task RecordTerminalDecisionAsync(bool committed)
     {
