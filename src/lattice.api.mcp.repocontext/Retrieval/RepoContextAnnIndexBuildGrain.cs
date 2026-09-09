@@ -40,6 +40,7 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     RepoContextAnnIndexRegistry registry,
     IRepoContextAnnBackingFactory backing,
     RepoContextIndexingOptions options,
+    IRepoIndexRunAuthority runAuthority,
     ILogger<RepoContextAnnIndexBuildGrain> logger,
     [PersistentState("repoContextAnnIndexBuild", global::Orleans.Lattice.LatticeOptions.StorageProviderName)]
     IPersistentState<RepoContextAnnIndexBuildState> state)
@@ -156,6 +157,38 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     /// <inheritdoc />
     protected internal override async Task ProcessNextPhaseAsync()
     {
+        // Stamp the run authority's fixed identity onto the whole tick, so the
+        // corpus stream the build step drives - and the store writes and prefix
+        // reclamation that follow it - carry a subject the access gate can
+        // authorize.
+        //
+        // Without this the build is anonymous, and it cannot inherit a credential
+        // from whichever call armed it: the phase timer is deliberately re-armed
+        // from the activation hook (see OnActivateCoreAsync) precisely so that
+        // steady-state processing is decoupled from that call, so every step runs
+        // on a timer turn rather than inside the arming call's scope. On a host
+        // running a default-deny gate that does NOT surface as an error: a denied
+        // range read is enforced by ResolveRangeReadFilterAsync as a reject-all key
+        // filter (`static _ => false`), not an exception - so RepoContextVectorSource
+        // streams an EMPTY corpus, cleanly. An empty corpus is refused nowhere
+        // below: the count probe reports zero, the ingest completes on its first
+        // step, training drops the partitioning and returns false rather than
+        // throwing, and the build reaches Ready holding zero vectors. This grain
+        // then records Converged, logs a successful build, and stands the
+        // coordinator down - so the denied read is durably indistinguishable from a
+        // repository that genuinely had nothing to index, and every semantic query
+        // falls back to an exact brute-force scan for good.
+        //
+        // This is the same remedy RepoIndexRunner, RepoContextSelfIndexGrain,
+        // RepoContextGitSourceArmingService, and RepoContextAnnIndexSweepService
+        // already apply. A host that registers no authority resolves null and the
+        // ambient credential is left untouched, so an in-process host with no
+        // access gate is unaffected. See issue #2426.
+        var credential = runAuthority.Resolve();
+        using var credentialScope = credential is null
+            ? null
+            : LatticeCredentialContext.With(credential);
+
         if (!InProgress)
         {
             await CompleteCoordinatorAsync().ConfigureAwait(true);

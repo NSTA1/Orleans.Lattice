@@ -94,6 +94,7 @@ public sealed class RepoContextAnnSupersededSpaceReclamationTests
                 registry,
                 Backing,
                 Indexing,
+                new NullRepoIndexRunAuthority(),
                 NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
                 state);
 
@@ -188,6 +189,7 @@ public sealed class RepoContextAnnSupersededSpaceReclamationTests
             registry,
             rig.Backing,
             rig.Indexing,
+            new NullRepoIndexRunAuthority(),
             NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
             state);
 
