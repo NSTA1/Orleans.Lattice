@@ -30,6 +30,20 @@ Two containers, one private network:
 ## Prerequisites
 
 - Docker with Compose v2.
+- Memory: budget at least 12 GiB for the host container, and give the Docker VM
+  headroom above that. This is much more than a default allocation. Measured on
+  a ~8000-file index, steady-state working set settled at about 10.2 GiB; a
+  single-variable run differing only in the memory limit produced 756
+  OutOfMemoryException and 528 failed grain activations at 4 GiB, and zero of
+  each at 12 GiB (issue #2364). Under-provisioning does not present as memory
+  pressure: a cgroup limit becomes the .NET GC heap hard limit, so the process is
+  never OOM-killed and there is no restart, exit code or resource event. The
+  visible symptom is a STORAGE error while reading grain state, because the
+  allocation that fails is a leaf-snapshot deserialisation; the leaf then
+  activates cold and replays its whole WAL window, raising pressure further. The
+  `orleans.lattice.leaf.snapshot.load_failures` counter names the real cause
+  directly (`reason=resource_exhausted`). No limit is set in the sample compose
+  file on purpose - measure your own corpus rather than copying 12.
 - Build context differs per image: the host image's is the REPOSITORY ROOT (it
   ProjectReferences the just-built `src/` bits), so its service sets
   `context: ../..`; the embedder builds from its own `apps/embedding-onnx`

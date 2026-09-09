@@ -1462,6 +1462,71 @@ public static class LatticeMetrics
             description: "Leaf activations that threw out of OnActivateAsync, tagged by tree, activation temperature and reason (canceled/canceled_awaiting_permit/faulted). LOWER BOUND: faults raised before the guarded replay region, and outright process kills, are not counted.");
 
     /// <summary>
+    /// Counter of activation-time leaf-snapshot loads that FAILED, emitted by
+    /// <c>BPlusLeafGrain.TryRehydrateFromSnapshotAsync</c> (issue #2364).
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagReason"/>:
+    /// <see cref="SnapshotLoadFailureResourceExhausted"/> when an
+    /// <see cref="OutOfMemoryException"/> appears anywhere in the thrown
+    /// exception's chain, and <see cref="SnapshotLoadFailureFaulted"/>
+    /// otherwise.
+    /// <para>
+    /// The rehydrate path treats a failed load as best-effort and returns
+    /// "no snapshot", which is correct for availability but made the failure
+    /// <b>indistinguishable from a leaf that genuinely has no snapshot</b>: both
+    /// render as the same declined rehydrate, and the activation then takes the
+    /// <c>-1</c> replay-start override and replays its whole readable WAL
+    /// window. Without this counter the failure population reads as zero at
+    /// every rate of occurrence, so the two arms of "no snapshot" cannot be
+    /// separated at all.
+    /// </para>
+    /// <para>
+    /// The <c>resource_exhausted</c> arm exists because that failure arrives
+    /// <b>wearing a storage fault's clothes</b>. Under a container memory limit
+    /// the .NET GC heap hard limit is sized from the cgroup limit, so the
+    /// runtime is not OOM-killed - it throws
+    /// <see cref="OutOfMemoryException"/> inside the provider's deserialise of
+    /// the snapshot blob, and the only line an operator sees is the provider's
+    /// own "Error reading grain state". Nothing in that presentation names
+    /// memory, which is why a deployment can run in this state for a long time
+    /// undiagnosed. It also COMPOUNDS: the failed load forces the cold
+    /// whole-window replay, which costs more memory again, so the same few
+    /// leaves go cold repeatedly. A sustained non-zero <c>resource_exhausted</c>
+    /// rate means the host's memory limit is below the deployment's true
+    /// working set, and is not a storage-provider fault.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotLoadFailures =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.load_failures", unit: "{load}",
+            description: "Activation-time leaf-snapshot loads that failed and were swallowed as \"no snapshot\", tagged by tree and reason (resource_exhausted/faulted). A resource_exhausted reading is memory exhaustion presenting as a storage fault, not a provider defect.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotLoadFailures"/>.</summary>
+    public const string LeafSnapshotLoadFailuresName = "orleans.lattice.leaf.snapshot.load_failures";
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>resource_exhausted</c> on
+    /// <see cref="LeafSnapshotLoadFailures"/>. An
+    /// <see cref="OutOfMemoryException"/> was present in the failure's
+    /// exception chain, so the load did not fail because the store was
+    /// unreachable or the row unreadable - it failed because the blob could not
+    /// be materialised within the available heap.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotLoadFailureResourceExhausted =
+        new(TagReason, "resource_exhausted");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>faulted</c> on
+    /// <see cref="LeafSnapshotLoadFailures"/>: any load failure with no
+    /// <see cref="OutOfMemoryException"/> in its chain (an unreachable store, a
+    /// rejected activation, a deserialisation defect). Kept apart from
+    /// <see cref="SnapshotLoadFailureResourceExhausted"/> because the two call
+    /// for opposite operator responses - raise the memory limit, versus
+    /// investigate the storage provider - and folding them together is exactly
+    /// the conflation this counter exists to undo.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotLoadFailureFaulted =
+        new(TagReason, "faulted");
+
+    /// <summary>
     /// Counter of resident unresolved saga prepares recorded into
     /// <c>LeafNodeState.UnresolvedReplayWork</c> <b>beyond</b> the
     /// <see cref="LatticeOptions.MaxDurableUnresolvedReplayWork"/> cap, emitted

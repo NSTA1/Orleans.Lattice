@@ -680,6 +680,134 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// True when <paramref name="error"/> is, or was caused by, an
+    /// <see cref="OutOfMemoryException"/> - walking <see cref="Exception.InnerException"/>
+    /// and every branch of an <see cref="AggregateException"/>.
+    /// <para>
+    /// The walk is necessary rather than defensive. The allocation that fails
+    /// is inside the storage provider's deserialiser, several frames below the
+    /// grain call this leaf issues, and it reaches the caller wrapped: Orleans
+    /// surfaces a failure to read a grain's persistent state as an activation
+    /// failure carrying the original as an inner exception. Testing the
+    /// outermost type alone would classify every real occurrence of this fault
+    /// as an ordinary storage fault - that is, it would report the exact wrong
+    /// answer for the one case the classifier exists to catch, rather than
+    /// reporting nothing.
+    /// </para>
+    /// <para>
+    /// Cycle-safe by bounded depth: a hand-constructed exception graph can be
+    /// cyclic, and this runs on the activation path, where a hang is a worse
+    /// outcome than a missed classification.
+    /// </para>
+    /// </summary>
+    internal static bool IsResourceExhaustion(Exception? error)
+    {
+        return Walk(error, 0);
+
+        static bool Walk(Exception? candidate, int depth)
+        {
+            const int MaxDepth = 16;
+
+            if (candidate is null || depth >= MaxDepth)
+            {
+                return false;
+            }
+
+            if (candidate is OutOfMemoryException)
+            {
+                return true;
+            }
+
+            if (candidate is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions)
+                {
+                    if (Walk(inner, depth + 1))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            return Walk(candidate.InnerException, depth + 1);
+        }
+    }
+
+    /// <summary>
+    /// Records a swallowed activation-time snapshot-load failure on
+    /// <see cref="LatticeMetrics.LeafSnapshotLoadFailures"/> and logs it
+    /// (issue #2364). Observation only: the caller's decline is unchanged, so
+    /// availability behaviour is exactly as it was.
+    /// <para>
+    /// Memory exhaustion is logged at <see cref="LogLevel.Error"/> and names
+    /// the real cause in the message, because the operator-visible evidence
+    /// otherwise names only the storage provider. The GC's own view of the heap
+    /// hard limit is included: under a container limit that ceiling is derived
+    /// from the cgroup, so it is the number that turns "a leaf failed to load"
+    /// into "this host is provisioned below its working set", and it is not
+    /// otherwise recoverable from the logs.
+    /// </para>
+    /// </summary>
+    private void ObserveSnapshotLoadFailure(Exception error)
+    {
+        var resourceExhaustion = IsResourceExhaustion(error);
+        var treeId = state.State.TreeId;
+
+        if (treeId is { Length: > 0 })
+        {
+            LatticeMetrics.LeafSnapshotLoadFailures.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                resourceExhaustion
+                    ? LatticeMetrics.SnapshotLoadFailureResourceExhausted
+                    : LatticeMetrics.SnapshotLoadFailureFaulted,
+                LatticeTenantLabel.ForTree(treeId));
+        }
+
+        var logger = context.ActivationServices?
+            .GetService<ILoggerFactory>()?
+            .CreateLogger<BPlusLeafGrain>();
+
+        if (logger is null)
+        {
+            return;
+        }
+
+        if (resourceExhaustion)
+        {
+            var memoryInfo = GC.GetGCMemoryInfo();
+            logger.LogError(
+                error,
+                "Leaf {GrainId} (tree '{TreeId}') could not load its snapshot because memory was exhausted, so "
+                + "it will now activate COLD and replay its whole readable WAL window - which allocates more than "
+                + "the load that just failed. This is a MEMORY fault, not a storage-provider fault: the underlying "
+                + "exception is raised inside the provider's deserialise of the snapshot blob and is reported by "
+                + "the provider as a failure to read grain state, which names no memory anywhere. The managed heap "
+                + "is using {HeapBytes} bytes against a hard limit of {HeapHardLimitBytes} bytes (0 means "
+                + "unlimited); under a container memory limit that ceiling is sized from the cgroup, so a recurring "
+                + "reading here means the host is provisioned below this deployment's working set. Raise the "
+                + "container memory limit rather than investigating the storage provider.",
+                context.GrainId,
+                treeId,
+                GC.GetTotalMemory(forceFullCollection: false),
+                memoryInfo.TotalAvailableMemoryBytes);
+        }
+        else
+        {
+            logger.LogWarning(
+                error,
+                "Leaf {GrainId} (tree '{TreeId}') could not load its snapshot; it will activate without "
+                + "rehydrating, which means a cold replay of its whole readable WAL window when the entry cache is "
+                + "empty. The activation itself is unaffected - the WAL can still recover the projection provided "
+                + "it has not trimmed past the checkpoint.",
+                context.GrainId,
+                treeId);
+        }
+    }
+
+    /// <summary>
     /// Activation-time rehydration seam. Consults the dedicated
     /// snapshot storage grain for a persisted blob and, when the blob
     /// is newer than the leaf's persisted
@@ -711,20 +839,68 @@ internal sealed partial class BPlusLeafGrain
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Resolve the leaf's own identity BEFORE the observed try block, and
+        // without throwing. A leaf that is not Guid-keyed has no snapshot grain
+        // to address at all, so declining here is the SAME arm as "this leaf has
+        // no snapshot" - it is a precondition, not a failed load.
+        //
+        // Keeping this inside the try below would be a new conflation of exactly
+        // the kind issue #2364 exists to remove: GetGuidKey throws
+        // ArgumentException on a non-Guid key, which would be caught by the
+        // observing catch and counted and logged as a snapshot LOAD failure. The
+        // counter would then answer "did the snapshot store fail?" with evidence
+        // about grain naming, which is a worse lie than the silence it replaced,
+        // because it is a confident one.
+        if (!context.GrainId.TryGetGuidKey(out var leafKey, out _))
+        {
+            return false;
+        }
+
         LeafSnapshotBlob? blob;
         try
         {
-            var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
-                context.GrainId.GetGuidKey());
+            var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(leafKey);
             blob = await snapshotGrain.LoadAsync(cancellationToken);
         }
-        catch
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Deliberate abandonment on the caller's deadline, not a failure of
+            // the load. Swallowed without observation for the same reason the
+            // capture path swallows it: thousands of leaves standing down
+            // together would turn one signal into a flood.
+            return false;
+        }
+        catch (Exception ex)
         {
             // Snapshot load is best-effort: a transient storage failure
             // must not block the leaf coming online. The activation
             // path falls through to the existing WAL-tail replay,
             // which can still recover the projection as long as the
             // WAL has not trimmed past the checkpoint.
+            //
+            // The DECISION is unchanged; what changes is that it is no longer
+            // silent (issue #2364). Returning false here is indistinguishable
+            // at every call site from "this leaf has no snapshot": both decline
+            // the rehydrate, and OnActivateAsync then sees
+            // (!rehydratedFromSnapshot && Cache.Count == 0), takes the -1
+            // replay-start override, and replays the WHOLE readable WAL window.
+            // So a leaf whose snapshot exists and failed to load reported
+            // exactly what a leaf with no snapshot reports, and the cold-replay
+            // log line said "no snapshot rehydrate" - true, and read by every
+            // operator as "there was no snapshot". An absence rendering as a
+            // measured negative.
+            //
+            // That cost the deployment in issue #2364 an undiagnosed multi-hour
+            // window, because the failure was memory exhaustion wearing a
+            // storage fault's clothes: under a container memory limit the GC
+            // heap hard limit is sized from the cgroup limit, so the process is
+            // never OOM-killed (no restart, no exit code, no resource event) -
+            // it throws OutOfMemoryException inside the provider's deserialise
+            // of the blob, and the provider logs "Error reading grain state".
+            // Nothing in that names memory. Worse, it compounds: the forced
+            // cold replay allocates more than the load that just failed, so the
+            // same few leaves go cold repeatedly and pressure rises.
+            ObserveSnapshotLoadFailure(ex);
             return false;
         }
 
