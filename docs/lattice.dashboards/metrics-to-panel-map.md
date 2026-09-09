@@ -395,6 +395,29 @@ Every instrument is an **observable gauge** published on a fixed cadence (`Tenan
 | `orleans.lattice.tenancy.overage.memory_bytes` | observable gauge (`By`) | `tenant` | Per-Tenant Observability | Metered overage by tenant (memory) |
 | `orleans.lattice.tenancy.overage.trees` | observable gauge (`{tree}`) | `tenant` | Per-Tenant Observability | Metered overage by tenant (trees) |
 
+## `Orleans.Lattice.Api.Mcp.RepoContext` meter
+
+The repository-context MCP surface's telemetry, published by the opt-in `lattice.api.mcp.repocontext` add-on. This meter is named unlike every other meter on this page: it carries the assembly-style name `Orleans.Lattice.Api.Mcp.RepoContext` rather than a dotted-lowercase `orleans.lattice.*` name, and its instruments carry a bare `repocontext.` prefix. The two halves of that mismatch behave differently, and the difference is load-bearing. The container's Prometheus exposition subscribes by **meter** name and compares case-insensitively, so `Orleans.Lattice.Api.Mcp.RepoContext` does match an `orleans.lattice` prefix and these series are collected; the collector pins that exact meter name in a test. A selector or a doc guard written against the **instrument** names does not match, because those begin `repocontext.` rather than `orleans.lattice.`. That is why this section exists as its own table rather than as rows under an existing meter, and why a doc-coverage fixture for this package needs its own instrument-name prefix.
+
+**No bundled dashboard charts these instruments, so the Panel(s) column reads "not charted" throughout.** That is a real gap recorded here rather than an omission in this table. The container serves a Prometheus text exposition on `/metrics`, on the same listener as MCP and the health probes, so these series are scrapeable today. That inverts the earlier position: while the endpoint returned 404 nothing could scrape them, so an unmapped instrument had no observable consequence; now it is a live gap. One caveat when scoping a scraper: the exposition subscribes by meter-name prefix, so it covers this meter and the core `orleans.lattice` meter alike, but a selector narrowed to `Orleans.Lattice.Api.Mcp.RepoContext` alone measures a false absence for core series such as `orleans.lattice.leaf.deactivation.checkpoint_delta` and `orleans.lattice.leaf.activation.failures`, which are published on `LatticeMetrics` rather than here.
+
+A second cause is structural and is not removed by that fix. A `Histogram<T>` renders on this endpoint as a Prometheus `summary` carrying `_sum` and `_count` and **no `_bucket` series**, so a `histogram_quantile` panel over it returns nothing, and the common dashboard idiom of appending `or vector(0)` then substitutes a literal zero that is indistinguishable from a genuine sustained-zero fault. That applies to `repocontext.retrieval.ready_seconds`, the one histogram in the table below: chart it as `_sum` and `_count`, and treat any quantile panel against this endpoint as unavailable rather than as measured. The full account is in [the container guide](../lattice.api.mcp.repocontext/container.md). Author the panels and update this column when they land.
+
+Every instrument here carries the derived `tenant` label with the reserved `_platform_` value described in [The derived `tenant` label](#the-derived-tenant-label): the repository-context surface is platform-owned and has no owning tree.
+
+| Instrument | Type | Tags | Dashboard | Panel(s) |
+|------------|------|------|-----------|----------|
+| `repocontext.calls` | counter (`{call}`, **per-operation**) | `command` | (none) | **not charted** |
+| `repocontext.response_tokens` | counter (`{token}`) | `command` | (none) | **not charted** |
+| `repocontext.reads_replaced_tokens` | counter (`{token}`) | `command` | (none) | **not charted** |
+| `repocontext.ann.sweep` | counter (`{sweep}`) | `outcome` = `armed`, `empty`, `faulted` | (none) | **not charted** |
+| `repocontext.retrieval.ann.search` | counter (`{query}`) | `state` = `bootstrapping`, `exhaustive`, `approximate` | (none) | **not charted** |
+| `repocontext.retrieval.ready_seconds` | histogram (`s`) | `phase` = `serving`, `keyword_only`, `nothing_registered` | (none) | **not charted** |
+| `repocontext.retrieval.unavailable` | counter (`{event}`) | `cause` | (none) | **not charted** |
+| `repocontext.vectorplane.rederive` | counter (`{event}`) | `tree`, `outcome` | (none) | **not charted** |
+
+Three of these are partitions of a total rather than free-standing counts, and reading them as free-standing counts inverts their meaning. `repocontext.ann.sweep` counts **every** sweep including the faulting one, and a faulting sweep is re-run on a retry backoff rather than at the sweep interval, so `outcome="faulted"` must not be denominated by the sweep interval. `repocontext.retrieval.ann.search` counts every query including the ones the approximate plane could not answer. In both cases a zero on one tag value beside a non-zero total is a **measured** absence; all series reading zero instead means the loop is not running at all, which is a different fact and is distinguished by the service's startup line rather than by these counters.
+
 ### The derived `tenant` label
 
 **Every instrument on every meter carries a `tenant` tag.** It is derived from the tree id rather than measured, and it is emitted on tenancy-on and tenancy-off clusters alike, so a panel or a named query is byte-identical in both deployment modes - there are no tenancy-on and tenancy-off variants of a query.
