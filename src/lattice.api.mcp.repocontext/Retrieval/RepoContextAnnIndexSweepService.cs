@@ -27,6 +27,7 @@ internal sealed class RepoContextAnnIndexSweepService(
     RepoContextStore store,
     RepoContextAnnIndexScheduler scheduler,
     RepoContextIndexingOptions options,
+    RepoContextRetrievalReadinessState readiness,
     ILogger<RepoContextAnnIndexSweepService> logger) : BackgroundService
 {
     private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromMilliseconds(250);
@@ -41,6 +42,18 @@ internal sealed class RepoContextAnnIndexSweepService(
     private static readonly TimeSpan MinimumSweepInterval = TimeSpan.FromMinutes(1);
 
     private readonly RepoContextAnnIndexSweepReporter _reporter = new();
+
+    /// <summary>
+    /// Whether the readiness contradiction has already been announced for the
+    /// episode in progress. Re-armed the moment the contradiction clears, so a
+    /// recurrence is reported rather than silently absorbed.
+    /// <para>
+    /// Not synchronised, and does not need to be: every write goes through
+    /// <see cref="Announce"/>, which is only ever reached from the single
+    /// <see cref="ExecuteAsync"/> loop.
+    /// </para>
+    /// </summary>
+    private bool _announcedContradiction;
 
     /// <summary>
     /// The sweep's outcome counters, cumulative since process start. Exposed so a
@@ -142,6 +155,7 @@ internal sealed class RepoContextAnnIndexSweepService(
     private async Task<RepoContextAnnSweepOutcome?> TrySweepAsync(CancellationToken stoppingToken)
     {
         var armed = 0;
+        var observed = 0;
         try
         {
             // Only the ids are needed to arm a coordinator, so this deliberately
@@ -149,6 +163,7 @@ internal sealed class RepoContextAnnIndexSweepService(
             // and can schedule an out-of-band membership walk, none of which a sweep
             // uses.
             var repoIds = await store.ListRepoIdsAsync(stoppingToken).ConfigureAwait(false);
+            observed = repoIds.Count;
             foreach (var repoId in repoIds)
             {
                 stoppingToken.ThrowIfCancellationRequested();
@@ -164,17 +179,17 @@ internal sealed class RepoContextAnnIndexSweepService(
         }
         catch (Exception ex)
         {
-            Announce(RepoContextAnnSweepOutcome.Faulted, armed, ex);
+            Announce(RepoContextAnnSweepOutcome.Faulted, armed, observed, ex);
             return RepoContextAnnSweepOutcome.Faulted;
         }
 
         var outcome = armed > 0 ? RepoContextAnnSweepOutcome.Armed : RepoContextAnnSweepOutcome.Empty;
-        Announce(outcome, armed, exception: null);
+        Announce(outcome, armed, observed, exception: null);
         return outcome;
     }
 
     /// <summary>Records one outcome and writes the log line its transition warrants.</summary>
-    private void Announce(RepoContextAnnSweepOutcome outcome, int armed, Exception? exception)
+    private void Announce(RepoContextAnnSweepOutcome outcome, int armed, int observed, Exception? exception)
     {
         var report = _reporter.Record(outcome);
         switch (report.Announcement)
@@ -207,12 +222,15 @@ internal sealed class RepoContextAnnIndexSweepService(
                     RepoContextAnnIndexSweepReporter.SweepInstrumentName);
                 break;
 
-            case RepoContextAnnSweepAnnouncement.NoRepositories:
+            case RepoContextAnnSweepAnnouncement.ArmedNothing:
                 logger.LogInformation(
-                    "Repository-context approximate-index sweep completed with no repository to arm, so no build "
-                    + "is scheduled. This is a successful sweep with nothing to do rather than a failure, and it "
-                    + "reads identically to a working one in every signal except this line and the '{Outcome}' "
-                    + "arm of '{Instrument}'.",
+                    "Repository-context approximate-index sweep completed without arming anything, so no build is "
+                    + "scheduled. It observed {ObservedRepositoryCount} repository id(s) in the store listing. This "
+                    + "line reports what the sweep observed rather than what the store contains, because those two "
+                    + "differ exactly when the listing is itself wrong - and a listing that returns nothing while "
+                    + "repositories are registered is the defect issue #2406 records. Repetitions are counted onto "
+                    + "the '{Outcome}' arm of '{Instrument}' rather than logged.",
+                    observed,
                     RepoContextAnnIndexSweepReporter.OutcomeEmptyTag,
                     RepoContextAnnIndexSweepReporter.SweepInstrumentName);
                 break;
@@ -220,5 +238,69 @@ internal sealed class RepoContextAnnIndexSweepService(
             default:
                 break;
         }
+
+        // Deliberately outside the switch, and deliberately not gated on the
+        // once-per-process announcement above: the retrieval plane usually reaches
+        // 'serving' well AFTER the first sweep that armed nothing, so a contradiction
+        // folded into that first-of-kind line would be unreachable in precisely the
+        // case it exists to catch.
+        if (outcome != RepoContextAnnSweepOutcome.Faulted)
+        {
+            AnnounceReadinessContradiction(observed);
+        }
+    }
+
+    /// <summary>
+    /// Compares the sweep's own observation against the retrieval plane's readiness,
+    /// and warns when the two contradict each other.
+    /// <para>
+    /// A sweep that listed no repository while readiness reports
+    /// <see cref="RepoContextRetrievalReadinessPhase.Serving"/> is not an ambiguity,
+    /// it is a flat contradiction: that phase is reached only where a semantic
+    /// retrieval demonstrably succeeded, which requires indexed content the listing
+    /// says is not there. The host has held both halves of this comparison all along
+    /// and has never made it, which is why a sweep counted onto the <c>empty</c> arm
+    /// could be read as a successful no-op for 189 iterations while the store held
+    /// two repositories.
+    /// </para>
+    /// <para>
+    /// <see cref="RepoContextRetrievalReadinessState.Phase"/> applies the fault
+    /// hold-down, so a plane proven serving with a fault episode open still reads
+    /// <see cref="RepoContextRetrievalReadinessPhase.Serving"/> inside the window.
+    /// That is the reading this check wants: the plane demonstrably served, and a
+    /// transient fault does not make the listing's emptiness any less contradictory.
+    /// </para>
+    /// <para>
+    /// Announced once per episode and re-armed when the contradiction clears, in the
+    /// same shape as the fault-episode pacing above, so a condition that persists for
+    /// hours does not write a line per sweep.
+    /// </para>
+    /// </summary>
+    /// <param name="observed">How many repository ids this sweep's listing yielded.</param>
+    private void AnnounceReadinessContradiction(int observed)
+    {
+        var phase = readiness.Phase;
+        if (observed != 0 || phase != RepoContextRetrievalReadinessPhase.Serving)
+        {
+            _announcedContradiction = false;
+            return;
+        }
+
+        if (_announcedContradiction)
+        {
+            return;
+        }
+
+        _announcedContradiction = true;
+        logger.LogWarning(
+            "Repository-context approximate-index sweep listed no repository while retrieval readiness reports "
+            + "'{ReadinessPhase}'. Those two observations contradict each other: readiness reaches that phase only "
+            + "where a semantic retrieval demonstrably succeeded, which requires indexed content the listing says "
+            + "is not there. One of the two is wrong, so a sweep counted onto the '{Outcome}' arm of "
+            + "'{Instrument}' must not be read as a successful sweep with nothing to do until it is resolved. See "
+            + "issue #2406.",
+            phase,
+            RepoContextAnnIndexSweepReporter.OutcomeEmptyTag,
+            RepoContextAnnIndexSweepReporter.SweepInstrumentName);
     }
 }
