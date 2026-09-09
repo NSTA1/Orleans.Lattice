@@ -20,9 +20,6 @@
     <PackageId>Orleans.Lattice.Explorer.Schema</PackageId>
     <Version>9.4.0</Version>
     <Description>The Schema (enforcement policy, envelope versioning and remediation, compliance, and dead letters) Explorer plugin: a self-contained plugin package carrying its own schema control-API gRPC client, its domain model, its Razor views, and its plugin-scoped stylesheet. Registered with AddExplorerPlugin, gated by its own four-state access gate plus per-tree scoped decisions, and styled against Orleans.Lattice.Explorer.DesignSystem. A head surfaces the area by registering this plugin and withholds it by not registering it; there is no per-area option flag. Served by a referencing app at _content/Orleans.Lattice.Explorer.Schema.</Description>
-    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 

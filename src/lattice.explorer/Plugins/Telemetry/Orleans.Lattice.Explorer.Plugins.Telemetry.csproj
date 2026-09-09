@@ -19,9 +19,6 @@
     <PackageId>Orleans.Lattice.Explorer.Plugins.Telemetry</PackageId>
     <Version>9.4.0</Version>
     <Description>The Telemetry plugin for the Orleans.Lattice Explorer: the client seam over the telemetry gRPC binding plus the time-series panels built on it. Panels are composed entirely from the server-authored catalogue - the titles, units, semantics and parameter bounds the cluster publishes - so no query id, label, or limit is hard-coded in the client and no control anywhere accepts free-text query input. Every result renders the tenant scope the facade actually pinned, and says so when a requested visibility was degraded. The same panels also fill the My Tenant area's metrics section, pinned to the caller's own tenant. Registered with AddExplorerTelemetry(), AddExplorerTelemetryPlugin() and AddExplorerTelemetryMyTenantSection(); served by a referencing app at _content/Orleans.Lattice.Explorer.Plugins.Telemetry.</Description>
-    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 
