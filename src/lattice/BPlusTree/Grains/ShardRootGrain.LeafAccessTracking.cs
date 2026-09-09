@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
+using Orleans.Storage;
 using Orleans.Timers;
 using System.Runtime.CompilerServices;
 
@@ -35,10 +36,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 // creates during warm-up land on its own silo - the same silo that will serve
 // the subsequent reads. No silo-lifecycle infrastructure is needed.
 //
-// Hot path. Disabled (the default) costs two predictable, never-taken branches
-// and zero allocations. Enabled costs one null check plus an O(1),
-// allocation-free record into a bounded dictionary. The read path never awaits
-// a storage write: a coalescing grain timer
+// Hot path. Disabled (`LeafCachePreWarmCount = 0`) costs two predictable,
+// never-taken branches and zero allocations. Enabled - which is the DEFAULT,
+// since `DefaultLeafCachePreWarmCount` is 8 - costs one null check plus an
+// O(1), allocation-free record into a bounded dictionary. The read path never
+// awaits a storage write: a coalescing grain timer
 // (`LatticeOptions.LeafAccessModelFlushIntervalMs`, default 30 s) persists a
 // compact snapshot, and clean deactivation flushes once more. This mirrors the
 // dirty-leaf coalescing design in ShardRootGrain.DirtyLeaves.cs exactly.
@@ -81,6 +83,19 @@ internal sealed partial class ShardRootGrain
     private bool _leafAccessFlushInFlight;
 
     /// <summary>
+    /// Consecutive failed model flushes on this activation. Reset by any flush that
+    /// lands, so only an unbroken run of failures counts toward suspension.
+    /// </summary>
+    private int _leafAccessFlushConsecutiveFailures;
+
+    /// <summary>
+    /// Latched once the model flush loop has given up for this activation. Checked by
+    /// <see cref="EnsureLeafAccessFlushTimerArmed"/> so warm-up cannot silently re-arm
+    /// a loop that has already been suspended.
+    /// </summary>
+    private bool _leafAccessFlushSuspended;
+
+    /// <summary>
     /// Builds the metric tag set for this feature's instruments:
     /// <c>(tree, shard, tenant)</c>, matching every other shard-root
     /// instrument so a telemetry query joins across them cleanly.
@@ -104,8 +119,10 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// Records that a routed read resolved to <paramref name="leafId"/>.
     /// <para>
-    /// This is the hot path. When the feature is disabled - the default - the
-    /// whole method is two predictable branches that allocate nothing. When
+    /// This is the hot path. When the feature is disabled - which is NOT the
+    /// default, since <see cref="LatticeOptions.LeafCachePreWarmCount"/> defaults
+    /// to 8 - the whole method is two predictable branches that allocate nothing.
+    /// When
     /// enabled, the steady state is one null check plus an O(1) record.
     /// Aggressively inlined so a disabled shard pays no call overhead either.
     /// </para>
@@ -180,6 +197,7 @@ internal sealed partial class ShardRootGrain
     private void EnsureLeafAccessFlushTimerArmed()
     {
         if (_leafAccessFlushTimer is not null) return;
+        if (_leafAccessFlushSuspended) return;
 
         var intervalMs = _leafAccessSettings.FlushIntervalMs;
         if (intervalMs <= 0) return;
@@ -205,12 +223,29 @@ internal sealed partial class ShardRootGrain
         try
         {
             await FlushLeafAccessModelAsync();
+            _leafAccessFlushConsecutiveFailures = 0;
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex,
-                "Coalesced leaf-access model flush failed for shard {ShardKey}; will retry on next tick.",
-                context.GrainId.Key.ToString());
+            _leafAccessFlushConsecutiveFailures++;
+            if (_leafAccessFlushConsecutiveFailures < MaxConsecutiveFlushFailures)
+            {
+                logger.LogDebug(ex,
+                    "Coalesced leaf-access model flush failed for shard {ShardKey} ({FailureCount} of {FailureCeiling} consecutive); will retry on next tick.",
+                    context.GrainId.Key.ToString(),
+                    _leafAccessFlushConsecutiveFailures,
+                    MaxConsecutiveFlushFailures);
+                return;
+            }
+
+            // Give up for this activation. Debug was the only report this loop
+            // ever made, so a permanently-failing shard root was invisible above
+            // the storage provider (issue 2419); the suspension warning is the
+            // operator-visible signal, and it fires once rather than per tick.
+            _leafAccessFlushSuspended = true;
+            _leafAccessFlushTimer?.Dispose();
+            _leafAccessFlushTimer = null;
+            ReportFlushRetriesSuspended("leaf-access", ex);
         }
     }
 
@@ -219,6 +254,32 @@ internal sealed partial class ShardRootGrain
     /// persists it in one write. No-op when the model is absent, unchanged, or a
     /// flush is already in flight.
     /// </summary>
+    /// <remarks>
+    /// Retry classification (issue 2419). A failed write falls into two classes
+    /// that call for opposite handling, and the distinction is observable in the
+    /// exception type:
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     A transient storage fault (contention, a locked database file) may
+    ///     well succeed next tick, so the window is <b>kept</b> dirty and
+    ///     retried.
+    ///   </description></item>
+    ///   <item><description>
+    ///     An <see cref="Orleans.Storage.InconsistentStateException"/> means this
+    ///     activation's ETag no longer matches the stored row. Nothing this
+    ///     activation can write will ever match it again, so retrying the same
+    ///     window is futile - it is <b>dropped</b> instead. That is exactly what
+    ///     the deactivation flush below already does with the same failure, for
+    ///     the reason stated there: the model is an optimization whose loss
+    ///     costs a colder next start and never a wrong answer.
+    ///   </description></item>
+    /// </list>
+    /// Both classes still propagate to the caller, so both count toward the
+    /// consecutive-failure ceiling. Dropping the window must not silently
+    /// disarm the bound - a permanently poisoned activation stops writing
+    /// because it hit the ceiling, not because each individual window was
+    /// quietly discarded.
+    /// </remarks>
     private async Task FlushLeafAccessModelAsync()
     {
         var model = _leafAccessModel;
@@ -228,7 +289,20 @@ internal sealed partial class ShardRootGrain
         try
         {
             state.State.LeafAccessModel = model.CaptureSnapshot();
-            await WriteShardStateAsync();
+            try
+            {
+                await WriteShardStateAsync();
+            }
+            catch (InconsistentStateException)
+            {
+                // Drop this window: see the classification note above. Marking
+                // it persisted is a statement about retry policy, not about
+                // durability - the observations are gone, and the model rebuilds
+                // itself from live traffic.
+                model.MarkPersisted();
+                throw;
+            }
+
             // Only clear the dirty flag once the write actually landed, so a
             // failed flush is retried rather than silently dropped.
             model.MarkPersisted();

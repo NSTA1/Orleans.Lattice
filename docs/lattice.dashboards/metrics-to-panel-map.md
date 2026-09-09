@@ -89,9 +89,10 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.atomic_action.duration` | histogram (ms) | `outcome` | Overview | Atomic action - saga duration |
 | `orleans.lattice.leaf.replay.duration` | histogram (ms) | `tree`, `outcome` | CommitPath | Activation replay duration by outcome |
 | `orleans.lattice.leaf.replay.entries` | counter | `tree`, `outcome` | CommitPath | Replay entries (applied vs skipped) |
-| `orleans.lattice.shard_root.forward.timeouts` | counter | `tree` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, and scan resumptions) |
-| `orleans.lattice.shard_root.scan_page.stalls` | counter | `tree`, `shard`, `phase` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, and scan resumptions) |
-| `orleans.lattice.scan.stall_resumptions` | counter | `tree`, `phase`, `outcome` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, and scan resumptions) |
+| `orleans.lattice.shard_root.forward.timeouts` | counter | `tree` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
+| `orleans.lattice.shard_root.scan_page.stalls` | counter | `tree`, `shard`, `phase` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
+| `orleans.lattice.scan.stall_resumptions` | counter | `tree`, `phase`, `outcome` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
+| `orleans.lattice.shard_root.flush.retries_suspended` | counter | `tree`, `shard`, `kind` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.wal.writer.append.admission_saturation_refusals` | counter | `tree` | CommitPath | WAL writer admission & dispatch (rate) |
 | `orleans.lattice.wal.writer.append.admission_timeouts` | counter | `tree` | CommitPath | WAL writer admission & dispatch (rate) |
 | `orleans.lattice.wal.writer.append.dispatched` | counter | `tree` | CommitPath | WAL writer admission & dispatch (rate) |
@@ -167,9 +168,9 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.shard_root.set_many.shadow_forward.duration` | histogram (ms) | `tree` | CommitPath | ShardRoot.SetMany sub-attribution p95 (ms) |
 | `orleans.lattice.warmup.invocations` | counter (`{call}`) | `tree` | CommitPath | WarmUpAsync - invocations and duration |
 | `orleans.lattice.warmup.duration` | histogram (ms) | `tree` | CommitPath | WarmUpAsync - invocations and duration |
-| `orleans.lattice.warmup.leaf_cache.prewarmed` | counter (`{leaf}`) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (opt-in) - leaves primed, fan-out cost, model size |
-| `orleans.lattice.warmup.leaf_cache.duration` | histogram (ms) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (opt-in) - leaves primed, fan-out cost, model size |
-| `orleans.lattice.leaf_access.model.leaves` | histogram (`{leaf}`) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (opt-in) - leaves primed, fan-out cost, model size |
+| `orleans.lattice.warmup.leaf_cache.prewarmed` | counter (`{leaf}`) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (on by default) - leaves primed, fan-out cost, model size |
+| `orleans.lattice.warmup.leaf_cache.duration` | histogram (ms) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (on by default) - leaves primed, fan-out cost, model size |
+| `orleans.lattice.leaf_access.model.leaves` | histogram (`{leaf}`) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (on by default) - leaves primed, fan-out cost, model size |
 | `orleans.lattice.leaf.commit.in_flight` | histogram (`{commit}`) | `tree` | CommitPath | Leaf commit concurrency (in-flight) p95 |
 | `orleans.lattice.leaf.digest.publishes` | counter (`{publish}`) | `tree`, `path` | CommitPath | Digest publish path attribution (ops/s) - coalescing efficacy |
 | `orleans.lattice.provider.commit.duration` | histogram (ms) | `tree`, `shard`, `phase`, `pipeline_phase2` | CommitPath | Storage-provider phase-2 commit p95 (ms) + batch size |
