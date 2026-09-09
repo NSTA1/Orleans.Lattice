@@ -237,7 +237,7 @@ internal static class RepoContextToolHandlers
     /// <param name="fencingToken">The fencing token from repocontext_claim, when writing under a claim.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>The write outcome.</returns>
-    /// <exception cref="McpException">A required argument is missing, the kind is unknown, the TTL is not positive, or a link target is malformed.</exception>
+    /// <exception cref="McpException">A required argument is missing, the kind is unknown, the TTL is not positive, the body carries leaked tool-call framing, or a link target is malformed.</exception>
     /// <exception cref="RepoContextClaimConflictException">The entry is claimed and the presented token does not entitle this write.</exception>
     public static Task<RepoContextRememberResult> RememberAsync(
         RequestContext<CallToolRequestParams> context,
@@ -289,6 +289,8 @@ internal static class RepoContextToolHandlers
                 $"The 'kind' value '{kind}' is not recognised. Use one of: Decision, Note, Memory.");
         }
 
+        GuardBody(RepoContextBodyFraming.RememberBodyLocation, body);
+
         return ResolveStore(context).RememberAsync(
             repoId, topic, id, memoryKind, title, body, author, provenance, tags,
             addLinks, removeLinks, ttlSeconds, fencingToken, cancellationToken);
@@ -308,7 +310,7 @@ internal static class RepoContextToolHandlers
     /// <param name="fencingToken">The fencing token from repocontext_claim, when patching under a claim.</param>
     /// <param name="cancellationToken">Cancels the read-merge-write.</param>
     /// <returns>The patch outcome.</returns>
-    /// <exception cref="McpException">The key is missing or malformed, no record exists, a field is invalid, or a link target is malformed.</exception>
+    /// <exception cref="McpException">The key is missing or malformed, no record exists, a field is invalid, the patched body carries leaked tool-call framing, or a link target is malformed.</exception>
     /// <exception cref="RepoContextClaimConflictException">The record is claimed and the presented token does not entitle this write.</exception>
     public static Task<RepoContextUpdateResult> UpdateAsync(
         RequestContext<CallToolRequestParams> context,
@@ -333,8 +335,37 @@ internal static class RepoContextToolHandlers
             throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
+        if (fields is not null)
+        {
+            foreach (var field in fields)
+            {
+                if (string.Equals(field.Key, "body", StringComparison.OrdinalIgnoreCase))
+                {
+                    GuardBody(RepoContextBodyFraming.UpdateBodyLocation, field.Value);
+                }
+            }
+        }
+
         return ResolveStore(context).UpdateAsync(
             key, fields, addTags, removeTags, addLinks, removeLinks, fencingToken, cancellationToken);
+    }
+
+    /// <summary>
+    /// Refuses a body that ends in leaked MCP tool-call framing, completing the
+    /// rule the seam already applies to an unknown field name and a malformed link
+    /// target by extending it, for this one field, to the value.
+    /// </summary>
+    /// <param name="location">Names how the offending body was supplied.</param>
+    /// <param name="body">The candidate body.</param>
+    /// <exception cref="McpException">The body ends in tool-call framing.</exception>
+    private static void GuardBody(string location, string? body)
+    {
+        var framing = RepoContextBodyFraming.Inspect(body);
+        if (framing.IsContaminated)
+        {
+            throw new McpException(
+                RepoContextBodyFraming.DescribeRejection(location, framing.DisplacedArguments));
+        }
     }
 
     /// <summary>
