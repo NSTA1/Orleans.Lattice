@@ -465,6 +465,16 @@ internal sealed partial class BPlusLeafGrain
             }
 
             advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
+
+            // The reset half of the cold-replay-loop streak (issue #2280). This
+            // site is the exact complement of the catch below: the guarded
+            // replay region completed, so this leaf is out of the loop and its
+            // run of consecutive cancellations ends here.
+            //
+            // Unconditional, including on the warm arm and on a leaf with no
+            // tree id. Any successful activation is an intervening success, and
+            // a leaf that never recorded a streak removes nothing.
+            ForgetColdReplayCancellations(this.GetGrainId());
         }
         catch (Exception ex)
         {
@@ -511,6 +521,45 @@ internal sealed partial class BPlusLeafGrain
                     replayCheckpointOverride == -1L ? LatticeMetrics.ActivationTemperatureCold : LatticeMetrics.ActivationTemperatureWarm,
                     reason,
                     LatticeTenantLabel.ForTree(failedTreeId));
+
+                // Loop detection and escalation (issue #2280, direction 4).
+                //
+                // The counter above is an AGGREGATE. It cannot distinguish one
+                // leaf cancelled five times from five leaves cancelled once,
+                // and those are a defect and a cost respectively - the first is
+                // a leaf whose cancellation reproduces exactly the condition
+                // that caused it, which is the self-reinforcing loop this issue
+                // is about. Only a per-leaf run of CONSECUTIVE cancellations
+                // separates them, so that is what is tracked here.
+                //
+                // Restricted to the COLD arm on purpose: a warm activation
+                // resumed above a snapshot or cache anchor, so its cancellation
+                // does not reproduce coldness and is not this pathology.
+                if (replayCheckpointOverride == -1L && ex is OperationCanceledException)
+                {
+                    // The whole escalation is observation, and an observation
+                    // must NEVER replace the fault it observes. Without this
+                    // guard a throwing logging sink - transient, environmental,
+                    // and the exact fault the #2256 permit leak was caused by -
+                    // would escape this catch in place of the
+                    // OperationCanceledException, rewriting a cancelled
+                    // activation as a faulted one upstream and destroying the
+                    // very signal this change exists to create.
+                    try
+                    {
+                        EscalateColdReplayCancellation(
+                            failedTreeId,
+                            this.GetGrainId(),
+                            awaitingPermit: replayPermit is null,
+                            Stopwatch.GetTimestamp());
+                    }
+                    catch
+                    {
+                        // Intentionally swallowed. See above: losing the
+                        // diagnostic is a bounded loss, losing the exception is
+                        // not.
+                    }
+                }
             }
 
             throw;
@@ -2174,6 +2223,318 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// How many cold activations of one leaf must be cancelled IN A ROW, with no
+    /// successful activation in between, before the self-reinforcing cold replay
+    /// loop of issue #2280 is escalated.
+    /// <para>
+    /// <b>Calibrated from the measured distribution, not chosen.</b> The field
+    /// measurement on issue #2278 recorded 79 runtime cancellations over roughly
+    /// 40 minutes, all on <c>bplusleaf</c>, across 67 distinct leaves: 55 leaves
+    /// cancelled ONCE, 12 cancelled TWICE, and NONE more than twice. That is
+    /// leaves occasionally repeating, not leaves trapped. A threshold of 2 would
+    /// therefore fire on 12 of 67 leaves - roughly a fifth of the population -
+    /// in a NORMAL 40-minute window, and a warning that fires always is a
+    /// warning that gets muted, taking the real signal with it. 3 sits one above
+    /// the highest value the field has produced, so this diagnostic is not
+    /// expected to fire at all in healthy operation, which is what lets a single
+    /// occurrence be treated as a finding.
+    /// </para>
+    /// <para>
+    /// It is also robust to a real ambiguity in that evidence: the log never
+    /// recorded whether the 12 twice-cancelled leaves activated successfully in
+    /// between, so each reads as either two streaks of 1 or one streak of 2 -
+    /// and NEITHER reading reaches 3. A threshold of 2 would have had to guess.
+    /// </para>
+    /// <para>
+    /// (If you are re-deriving this: the figures originally published on #2278 -
+    /// "27 cancelled more than once, one four times" - were impossible on their
+    /// own arithmetic, since 79 cancellations spread over 67 distinct leaves
+    /// leaves a surplus of only 12. Use the corrected distribution above.)
+    /// </para>
+    /// </summary>
+    internal const int ColdReplayLoopThreshold = 3;
+
+    /// <summary>
+    /// The most leaves whose cold-cancellation streaks are tracked at once,
+    /// sized like <see cref="DistinctColdLeafCapacity"/> to bound silo-static
+    /// memory.
+    /// <para>
+    /// The saturation behaviour is deliberately ASYMMETRIC: at capacity the map
+    /// stops admitting NEW leaves, while leaves already tracked keep counting.
+    /// So saturation can only ever cause a false negative - the diagnostic is a
+    /// floor, never an overstatement. That is the right way round for a signal
+    /// whose entire value is that it can be believed when it fires.
+    /// </para>
+    /// </summary>
+    private const int ColdReplayLoopStreakCapacity = 4096;
+
+    /// <summary>
+    /// Minimum interval between cold-replay-loop warnings for the same leaf.
+    /// The counter is not throttled: a log line has a flood to prevent and a
+    /// counter does not.
+    /// </summary>
+    private static readonly TimeSpan ColdReplayLoopLogInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Per-leaf runs of consecutive cold cancellations, silo-scoped.
+    /// <para>
+    /// <b>Why consecutive, and why the reset exists.</b> A CUMULATIVE count with
+    /// a fixed threshold is not merely noisier - it is guaranteed to fire
+    /// falsely given enough uptime. At the measured rate of 79 cancellations per
+    /// 40 minutes a perfectly healthy leaf that is occasionally cancelled
+    /// accumulates without bound, so it reaches ANY fixed threshold eventually.
+    /// That makes the threshold a function of PROCESS AGE rather than of leaf
+    /// health, which is precisely the property a diagnostic must not have.
+    /// Resetting on a successful activation is what makes the count mean "this
+    /// leaf cannot escape under its own power" instead of "this process has been
+    /// up a while".
+    /// </para>
+    /// <para>
+    /// The reset is therefore load-bearing, and it is also the part a later
+    /// simplifier is most likely to remove as redundant bookkeeping. It is not.
+    /// </para>
+    /// <para>
+    /// Static for the same reason the stamp maps are: the entire point is to
+    /// remember across activations, and a failed activation destroys its grain
+    /// instance, so per-activation state would reset every time and observe
+    /// nothing.
+    /// </para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<GrainId, ColdReplayCancellationStreak> ColdReplayCancellationStreaks = new();
+
+    /// <summary>
+    /// Last-emitted timestamps for the cold-replay-loop warning, keyed by leaf.
+    /// </summary>
+    private static readonly ConcurrentDictionary<GrainId, long> ColdReplayLoopLogStamps = new();
+
+    /// <summary>
+    /// One leaf's run of consecutive cold cancellations, split by whether the
+    /// activation had begun replaying or was still queued for the replay permit.
+    /// </summary>
+    /// <param name="ConsecutiveCancellations">
+    /// Cold cancellations since this leaf last activated successfully.
+    /// </param>
+    /// <param name="DuringReplay">
+    /// How many of them cancelled a replay already in progress, losing work.
+    /// </param>
+    /// <param name="AwaitingPermit">
+    /// How many of them were cancelled while still queued for the replay permit,
+    /// having done no work to lose. Carried separately because the two call for
+    /// different remedies - a leaf starved at the gate is a concurrency problem,
+    /// a leaf cut off mid-replay is a bounding problem - and a single total would
+    /// let one masquerade as the other.
+    /// </param>
+    internal readonly record struct ColdReplayLoopSample(
+        int ConsecutiveCancellations,
+        int DuringReplay,
+        int AwaitingPermit);
+
+    /// <summary>
+    /// One leaf's mutable streak. Updated under its own lock: the three fields
+    /// must advance together or a reader could observe a total that disagrees
+    /// with its own split.
+    /// </summary>
+    private sealed class ColdReplayCancellationStreak
+    {
+        private int _consecutive;
+        private int _duringReplay;
+        private int _awaitingPermit;
+
+        public ColdReplayLoopSample Record(bool awaitingPermit)
+        {
+            lock (this)
+            {
+                _consecutive++;
+                if (awaitingPermit)
+                {
+                    _awaitingPermit++;
+                }
+                else
+                {
+                    _duringReplay++;
+                }
+
+                return new ColdReplayLoopSample(_consecutive, _duringReplay, _awaitingPermit);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records one cold cancellation against <paramref name="leafId"/>'s streak
+    /// and returns the streak as observed immediately afterwards, or
+    /// <see langword="null"/> when the streak map is saturated and this leaf was
+    /// not already being tracked (see
+    /// <see cref="ColdReplayLoopStreakCapacity"/>).
+    /// </summary>
+    /// <param name="leafId">The leaf whose activation was cancelled.</param>
+    /// <param name="awaitingPermit">
+    /// Whether the cancellation arrived while the activation was still queued
+    /// for the replay permit rather than replaying.
+    /// </param>
+    /// <returns>The streak after recording, or <see langword="null"/>.</returns>
+    internal static ColdReplayLoopSample? ObserveColdReplayCancellation(GrainId leafId, bool awaitingPermit)
+    {
+        if (!ColdReplayCancellationStreaks.TryGetValue(leafId, out var streak))
+        {
+            if (ColdReplayCancellationStreaks.Count >= ColdReplayLoopStreakCapacity)
+            {
+                return null;
+            }
+
+            streak = ColdReplayCancellationStreaks.GetOrAdd(
+                leafId, static _ => new ColdReplayCancellationStreak());
+        }
+
+        return streak.Record(awaitingPermit);
+    }
+
+    /// <summary>
+    /// Clears <paramref name="leafId"/>'s cold-cancellation streak because the
+    /// leaf activated successfully. This is the half of the mechanism that makes
+    /// the count consecutive rather than cumulative - see
+    /// <see cref="ColdReplayCancellationStreaks"/> for why that distinction
+    /// decides whether the threshold measures leaf health or process age.
+    /// <para>
+    /// The warning's throttle stamp is dropped with it, so a leaf that recovers
+    /// and later falls back into the loop warns immediately instead of being
+    /// silenced by the interval left over from its previous run.
+    /// </para>
+    /// </summary>
+    /// <param name="leafId">The leaf that activated successfully.</param>
+    internal static void ForgetColdReplayCancellations(GrainId leafId)
+    {
+        ColdReplayCancellationStreaks.TryRemove(leafId, out _);
+        ColdReplayLoopLogStamps.TryRemove(leafId, out _);
+    }
+
+    /// <summary>
+    /// True when the cold-replay-loop warning is due again for
+    /// <paramref name="leafId"/>. Same shape as the activation-temperature
+    /// throttle: a sibling stamp map, its own interval, and the same aged-out
+    /// sweep at capacity.
+    /// </summary>
+    /// <param name="leafId">The leaf the warning would name.</param>
+    /// <param name="now">The timestamp to evaluate the interval against.</param>
+    /// <returns><see langword="true"/> when the line should be emitted.</returns>
+    private static bool ShouldLogColdReplayLoop(GrainId leafId, long now)
+    {
+        if (!ColdReplayLoopLogStamps.TryGetValue(leafId, out var last))
+        {
+            if (ColdReplayLoopLogStamps.Count >= ColdReplayLoopStreakCapacity)
+            {
+                PruneColdReplayLoopLogStamps(now);
+            }
+
+            return ColdReplayLoopLogStamps.TryAdd(leafId, now);
+        }
+
+        if (Stopwatch.GetElapsedTime(last, now) < ColdReplayLoopLogInterval)
+        {
+            return false;
+        }
+
+        return ColdReplayLoopLogStamps.TryUpdate(leafId, now, last);
+    }
+
+    /// <summary>
+    /// Drops every <see cref="ColdReplayLoopLogStamps"/> entry that has already
+    /// aged past <see cref="ColdReplayLoopLogInterval"/>. Such an entry would
+    /// permit the next line anyway, so removing it is semantically free. The
+    /// streaks themselves are a separate map and are never swept - dropping one
+    /// would silently forgive a leaf that has not recovered.
+    /// </summary>
+    /// <param name="now">The timestamp the calling check is evaluated at.</param>
+    private static void PruneColdReplayLoopLogStamps(long now)
+    {
+        foreach (var stamp in ColdReplayLoopLogStamps)
+        {
+            if (Stopwatch.GetElapsedTime(stamp.Value, now) >= ColdReplayLoopLogInterval)
+            {
+                ColdReplayLoopLogStamps.TryRemove(stamp);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records one cold cancellation against this leaf's streak and, once the
+    /// streak reaches <see cref="ColdReplayLoopThreshold"/>, emits the counter
+    /// and the throttled warning that name the self-reinforcing cold replay loop
+    /// of issue #2280.
+    /// <para>
+    /// The counter fires on EVERY cancellation at or above the threshold, so a
+    /// leaf that stays stuck carries a rate rather than a single edge; the
+    /// warning is throttled per leaf because a log line does have a flood to
+    /// prevent and a counter does not.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree the cancelled leaf belongs to.</param>
+    /// <param name="leafId">The cancelled leaf.</param>
+    /// <param name="awaitingPermit">
+    /// Whether the cancellation arrived while still queued for the replay
+    /// permit rather than mid-replay.
+    /// </param>
+    /// <param name="now">
+    /// The <see cref="Stopwatch.GetTimestamp"/> reading to evaluate the warning
+    /// throttle at. Supplied by the caller so a test can advance time
+    /// deterministically instead of waiting out the interval.
+    /// </param>
+    private void EscalateColdReplayCancellation(
+        string treeId, GrainId leafId, bool awaitingPermit, long now)
+    {
+        var streak = ObserveColdReplayCancellation(leafId, awaitingPermit);
+        if (streak is not { } sample || sample.ConsecutiveCancellations < ColdReplayLoopThreshold)
+        {
+            return;
+        }
+
+        LatticeMetrics.LeafColdReplayLoop.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            LatticeTenantLabel.ForTree(treeId));
+
+        if (!ShouldLogColdReplayLoop(leafId, now))
+        {
+            return;
+        }
+
+        var logger = ResolveLogger();
+        if (logger is null || !logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        // The line names the pathology in full, because the deployed host
+        // exposes no metrics endpoint (issue #2148) and because this loop
+        // previously ran for the entire life of a container without emitting a
+        // single line that named it - it was found by correlating two unrelated
+        // counters, which is not a thing an operator can be expected to do.
+        logger.LogWarning(
+            "SELF-REINFORCING COLD REPLAY LOOP: leaf '{LeafId}' of tree '{TreeId}' has now had "
+            + "{ConsecutiveCancellations} cold activations cancelled in a row with no successful "
+            + "activation in between ({DuringReplay} cancelled mid-replay, {AwaitingPermit} cancelled "
+            + "while still queued for a replay permit), which is at or past the escalation threshold of "
+            + "{Threshold}. A cold activation replays the whole readable WAL window; when it is "
+            + "cancelled it latches neither signal the snapshot capture gate requires, so no snapshot is "
+            + "banked, the next activation finds no anchor and replays the whole window again. The "
+            + "condition that causes the cancellation is therefore REPRODUCED BY the cancellation, and "
+            + "this leaf is not expected to escape on its own. The count is CONSECUTIVE and resets on "
+            + "any successful activation, so it measures this leaf's health and not how long this "
+            + "process has been up. The threshold is set one above the highest value seen in the field "
+            + "measurement behind issue #2280, so this line is not expected to appear in normal "
+            + "operation. Remedies are tracked as issues #2411 (bounding a cold replay), #2279 (replay "
+            + "concurrency oversubscription) and #2256 (replay permit leak); a high "
+            + "queued-for-permit share points at the latter two, a high mid-replay share at the first. "
+            + "This is a DIAGNOSTIC: nothing here changes the leaf's behaviour, and the activation "
+            + "still fails as it did before.",
+            leafId,
+            treeId,
+            sample.ConsecutiveCancellations,
+            sample.DuringReplay,
+            sample.AwaitingPermit,
+            ColdReplayLoopThreshold);
+    }
+
+    /// <summary>
     /// Silo-scoped record of the persisted checkpoint each leaf partition was
     /// last seen replaying from, used to tell a slow replay from a STALLED one
     /// (issue #2149, fault shape of issue #2165).
@@ -2362,6 +2723,8 @@ internal sealed partial class BPlusLeafGrain
         OverBudgetLogStamps.Clear();
         StalledReplayLogStamps.Clear();
         ReplayCheckpointObservations.Clear();
+        ColdReplayCancellationStreaks.Clear();
+        ColdReplayLoopLogStamps.Clear();
     }
 
     /// <summary>
