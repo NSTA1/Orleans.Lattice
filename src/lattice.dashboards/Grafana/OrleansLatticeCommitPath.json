@@ -762,6 +762,18 @@
         { "refId": "C", "expr": "sum by (activation_temperature) (rate(orleans_lattice_leaf_deactivation_checkpoint_delta_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "graceful deactivations {{activation_temperature}}/s" },
         { "refId": "D", "expr": "sum by (activation_temperature, reason) (rate(orleans_lattice_leaf_activation_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "activation failures {{activation_temperature}} {{reason}}/s" }
       ]
+    },
+    {
+      "id": 131,
+      "title": "Leaf snapshot load failures (rate) by reason - issue #2364",
+      "description": "Leaf activations that could not load their snapshot (orleans.lattice.leaf.snapshot.load_failures), split by reason. READ THIS PANEL WITH THE ACTIVATION-FAILURE PANEL ABOVE, NOT INSTEAD OF IT: this counter does not count activations that failed, it counts activations that SUCCEEDED while silently giving up their warm start. A failed snapshot load is not fatal - the leaf declines the snapshot, activates cold, and replays its whole readable WAL window - so the fault is invisible in availability terms and shows up only as slower activations and higher WAL read volume. Before this instrument existed the decline was indistinguishable from a leaf that genuinely had no snapshot, so the failure population read as zero at every rate of occurrence, which is not a weak measurement but no measurement. reason=resource_exhausted means the load ran out of memory, which under a container memory limit is the self-reinforcing shape: the cgroup limit sizes the .NET GC heap hard limit, so the process is never OOM-killed and there is no restart, no exit code and no resource event - the allocation simply fails inside the storage provider deserialising the snapshot blob, and surfaces to an operator as the provider's own \"Error reading grain state\". A memory shortage wearing a storage fault's clothes. The cold replay that follows raises memory pressure further, so a non-zero resource_exhausted rate tends to climb rather than settle. reason=faulted is every other cause, and is what a snapshot-grain activation failure arrives as, because that failure is raised in-process inside the snapshot grain and never crosses a grain-call boundary carrying the original exception. Zero is the healthy steady state. Any sustained non-zero rate means leaves are paying for full-window replays they should not be paying for; correlate with container memory headroom first.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 172 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_snapshot_load_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{reason}}/s" }
+      ]
     }
   ]
 }
