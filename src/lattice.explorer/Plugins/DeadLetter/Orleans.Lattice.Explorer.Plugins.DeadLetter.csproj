@@ -9,9 +9,6 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Version>9.4.0</Version>
     <Description>The strict-mode dead-letter per-selection surface for the Orleans.Lattice Explorer, as a self-contained plugin: a read-only, cursor-paged inspection view of the entries a tree rejected, with a per-entry detail pane. It reaches the cluster only through the IDeadLetterSurface domain contract it declares, and ships its own scoped stylesheet.</Description>
-    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 

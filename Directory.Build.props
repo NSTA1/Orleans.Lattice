@@ -27,4 +27,27 @@
     <WarningsAsErrors>$(WarningsAsErrors);CA2017;CA2241</WarningsAsErrors>
   </PropertyGroup>
 
+  <!--
+    Shared NuGet repository metadata. Every packable project used to repeat
+    these three properties verbatim, so a change cost 64 identical edits and
+    any project that drifted did so silently. They live here instead.
+
+    PackageProjectUrl and RepositoryUrl are deliberately *different* values.
+    NuGet renders them as two separate links on a package page, "Project
+    website" and "Source repository"; pointing both at the repository wasted
+    the first slot. PackageProjectUrl is the published GitHub Pages
+    documentation site (also the repository's `homepage` field), RepositoryUrl
+    stays the git remote that SourceLink and the "Source repository" link
+    resolve against.
+
+    MSBuild imports this file before the body of each project, so a project
+    that ever needs a different value can still override any of these by
+    declaring it in its own PropertyGroup.
+  -->
+  <PropertyGroup>
+    <PackageProjectUrl>https://nsta1.github.io/Orleans.Lattice/</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
 </Project>

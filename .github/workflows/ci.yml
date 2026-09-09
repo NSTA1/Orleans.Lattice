@@ -35,23 +35,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
+  # ---------------------------------------------------------------------------
+  # PLAN. The guards, the change detection, the package selection, and the
+  # bin-packing that turns that selection into parallel legs. Cheap (about a
+  # minute) because it compiles nothing: the legs build what they need.
+  #
+  # The guards run FIRST and unconditionally, exactly as they did when this was
+  # a single job, so a bad branch name or a commit trailer still fails fast on
+  # every pull request including a docs-only one.
+  # ---------------------------------------------------------------------------
+  plan:
+    name: Plan
     runs-on: ubuntu-latest
 
-    # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
-    # AzureStorageEmulator-category integration tests (in storage.azuretable,
-    # caching.azureblob, and backup.azureblob) drive via `UseDevelopmentStorage=true`.
-    # Without it those tests self-skip (Assert.Inconclusive) and never validate their
-    # coverage in CI. The image's default command binds blob/queue/table on 0.0.0.0;
-    # publishing 10000-10002 to the runner host makes the SDK dev endpoints
-    # (127.0.0.1:10000-10002) resolve. Pinned to the version validated locally.
-    services:
-      azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:3.36.0
-        ports:
-          - 10000:10000
-          - 10001:10001
-          - 10002:10002
+    outputs:
+      # Consumed by `extras` and by the `build-and-test` gate. A job cannot read
+      # another job's step outputs directly, so everything downstream needs is
+      # re-exported here.
+      code: ${{ steps.filter.outputs.code }}
+      nonSample: ${{ steps.filter.outputs.nonSample }}
+      refArch: ${{ steps.filter.outputs.refArch }}
+      apps: ${{ steps.filter.outputs.apps }}
+      benchmark_changed: ${{ steps.benchmark.outputs.changed }}
+      version_only: ${{ steps.verbump.outputs.version_only }}
+      to_test: ${{ steps.discover.outputs.to_test }}
+      # Defaulted so a skipped plan yields a well-formed empty matrix rather
+      # than an empty string, which `fromJson` would reject and turn a
+      # deliberate no-op into a workflow-level error.
+      legs: ${{ steps.matrix.outputs.legs || '[]' }}
+      leg_count: ${{ steps.matrix.outputs.leg_count || '0' }}
 
     steps:
       - uses: actions/checkout@v5
@@ -285,6 +297,11 @@ jobs:
       #   refArch    - at least one non-markdown file under
       #                reference-architecture/** changed (drives the isolated
       #                reference-architecture build/test lane below).
+      #   workflows  - at least one file under .github/workflows/** changed.
+      #                Deliberately NOT an exclusion-style filter: it is a
+      #                positive signal, consumed by the "Decide whether to run
+      #                tests" step to force a full fan-out on a workflow edit
+      #                that `code`/`nonSample` would otherwise skip. See #2351.
       #
       # *.txt is treated as documentation (the only tracked .txt files are the
       # root llms.txt index and a MAUI Raw resource that the ubuntu lane never
@@ -393,6 +410,8 @@ jobs:
             apps:
               - 'apps/**'
               - '!apps/**/*.md'
+            workflows:
+              - '.github/workflows/**'
 
       # Detect a change to the benchmark harness (its source under benchmark/**
       # or its own NUnit project under test/azure-throughput-silo/**), ignoring
@@ -529,6 +548,61 @@ jobs:
       - name: Self-test the package selector
         run: .github/workflows/select-test-packages-selftest.sh
 
+      # Decide whether to run the test matrix at all, and close #2351 while
+      # doing it.
+      #
+      # `nonSample` alone is not the right predicate any more. Both `code` and
+      # `nonSample` carry '!.github/workflows/**' (see the filter above), so a
+      # diff confined to workflow files skips discovery outright and
+      # `build-and-test` reports a green that is indistinguishable from a run
+      # over every package. That is the unsafe direction: a workflow-only
+      # change is the shape MOST able to break the test infrastructure for
+      # every subsequent pull request, and it was the one shape guaranteed not
+      # to be tested before it merged.
+      #
+      # #2351 declined to prescribe a fix because the obvious one - let the
+      # selector's no-match fallback select everything - "would put a
+      # 46-package run on every workflow edit", and it asked for that cost to
+      # be measured rather than asserted. It has now been measured on identical
+      # commits: 43.9 min serially against 8.9 min across this matrix. A full
+      # run on every workflow edit is affordable once it is not serialised onto
+      # a single runner, so the answer #2351 was waiting for is yes.
+      #
+      # The predicate is "touches workflows AT ALL", not "touches only
+      # workflows". The hazard is a workflow change reaching main untested, and
+      # that hazard is present whether or not the same pull request also edits
+      # a README.
+      #
+      # `version_only` still suppresses the matrix: a release version bump
+      # changes no compiled behaviour, and that reasoning is unaffected by
+      # which files carry the bump.
+      - name: Decide whether to run tests
+        id: gate
+        env:
+          NON_SAMPLE: ${{ steps.filter.outputs.nonSample }}
+          WORKFLOWS: ${{ steps.filter.outputs.workflows }}
+          VERSION_ONLY: ${{ steps.verbump.outputs.version_only }}
+        run: |
+          set -euo pipefail
+
+          if [ "$VERSION_ONLY" = "true" ]; then
+            run_tests=false
+            reason="release version bump only"
+          elif [ "$NON_SAMPLE" = "true" ]; then
+            run_tests=true
+            reason="non-sample code changed"
+          elif [ "$WORKFLOWS" = "true" ]; then
+            run_tests=true
+            reason="workflow files changed (#2351): the selector's no-match fallback selects every package"
+          else
+            run_tests=false
+            reason="no test-relevant files changed"
+          fi
+
+          echo "run_tests=$run_tests" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "Decision: run_tests=$run_tests ($reason)"
+
       # Auto-discover packages by convention: each subdirectory of `src/` is a
       # package; tests live at `test/{name}/`; docs at `docs/{name}/`.
       #
@@ -558,7 +632,7 @@ jobs:
       # references - automatically.
       - name: Discover changed packages
         id: discover
-        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
+        if: steps.gate.outputs.run_tests == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -602,10 +676,19 @@ jobs:
           # package and a run over every package are identical in the check name
           # - so the run page states which packages were tested and which were
           # not.
+          #
+          # Written to a file first, then appended, because the matrix planner
+          # below also parses it: the report is the only place that records
+          # WHICH packages were seeded by the diff as opposed to pulled in by
+          # the dependency closure, and that distinction is what lets the
+          # aggregate result attribute a failure to this pull request rather
+          # than to something already red on the base.
           .github/workflows/select-test-packages.sh \
             --changed-file /tmp/changed-files.txt \
-            --report-file "$GITHUB_STEP_SUMMARY" \
+            --report-file /tmp/selection.md \
             > /tmp/selected-packages.txt
+
+          cat /tmp/selection.md >> "$GITHUB_STEP_SUMMARY"
 
           matched=()
           while IFS= read -r name; do
@@ -639,30 +722,110 @@ jobs:
           echo "Packages to test: ${matched[*]}"
 
       # The most dangerous denominator is zero. When the matrix is skipped
-      # entirely - a docs-only, samples-only, workflow-only, or version-bump-only
-      # change - the check still reports green, and nothing on the run page says
-      # that no package was built or tested. Say it.
+      # entirely - a docs-only, samples-only, or version-bump-only change - the
+      # check still reports green, and nothing on the run page says that no
+      # package was built or tested. Say it.
+      #
+      # A workflow-only change is deliberately NOT in that list any more; see
+      # the gate step above and #2351.
       - name: Report a skipped test matrix
-        if: steps.filter.outputs.nonSample != 'true' || steps.verbump.outputs.version_only == 'true'
+        if: steps.gate.outputs.run_tests != 'true'
         run: |
           {
             echo "### Test selection: 0 packages"
             echo
             echo "The per-package build/test matrix did not run for this change"
-            echo "(docs-only, samples-only, workflow-only, or a release version bump)."
+            echo "(${{ steps.gate.outputs.reason }})."
             echo "A green \`build-and-test\` here means the gates that did run passed,"
             echo "not that any package's tests were executed."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Turn the selected packages into parallel legs. `test/lattice` is about
+      # half of all test time, so a package-level fan-out alone would leave it
+      # as a single long pole; it is sharded by namespace via test-shards.json.
+      # The shard set is an ordered first-match-wins partition with a trailing
+      # complement, so every test is claimed exactly once and none is dropped.
+      - name: Plan the test matrix
+        id: matrix
+        if: steps.gate.outputs.run_tests == 'true'
+        run: |
+          set -euo pipefail
+
+          # The packages the diff touched DIRECTLY, as distinct from the ones
+          # pulled in by the dependency closure. A failure in the first is this
+          # pull request's doing; a failure in the second may be, or may have
+          # been red on the base already. The aggregate report marks the two
+          # differently, which is most of the attribution story on a fan-out.
+          sed -n 's/^Seeded by changed paths:.*(`\([^`]*\)`).*/\1/p' /tmp/selection.md \
+            | tr ' ' '\n' | sed '/^$/d' > /tmp/seeded-packages.txt || true
+
+          python3 .github/workflows/plan-test-matrix.py \
+            --packages /tmp/selected-packages.txt \
+            --seeded /tmp/seeded-packages.txt \
+            --shards .github/workflows/test-shards.json \
+            --durations .github/workflows/test-durations.tsv \
+            --max-legs 10 \
+            --output-matrix /tmp/matrix.json \
+            --report-file "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "legs<<MATRIX_EOF"
+            cat /tmp/matrix.json
+            echo ""
+            echo "MATRIX_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "leg_count=$(python3 -c 'import json;print(len(json.load(open("/tmp/matrix.json"))))')" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # EXTRAS. The samples, reference-architecture, apps, and benchmark-harness
+  # lanes. These were serial steps in the old single job, so they delayed the
+  # tests even though nothing about them is related. They now run alongside the
+  # test matrix and only when their own paths changed.
+  # ---------------------------------------------------------------------------
+  extras:
+    name: Samples, reference architecture, apps, benchmark
+    needs: plan
+    runs-on: ubuntu-latest
+    if: >-
+      needs.plan.outputs.refArch == 'true'
+      || needs.plan.outputs.apps == 'true'
+      || needs.plan.outputs.benchmark_changed == 'true'
+      || (needs.plan.outputs.code == 'true'
+          && needs.plan.outputs.nonSample != 'true'
+          && needs.plan.outputs.version_only != 'true')
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Need full history so the change-detection steps below can diff
+          # against the PR base SHA. A shallow clone (the default) would not
+          # have the base commit available.
+          #
+          # `fetch-depth: 0` is LOAD-BEARING and not merely a convenience: every
+          # change-detection step in this job uses the THREE-dot form
+          # (`git diff "$BASE_SHA...$HEAD_SHA"`), which resolves the MERGE BASE
+          # of the two commits and needs the common ancestry of both to be
+          # present locally. Shallow it and those diffs fail outright rather
+          # than quietly narrowing, which is the failure mode we want - but it
+          # is still a broken CI run, so do not reduce this depth.
+          # `CiChangeDetectionDiffFormTests` guards both halves.
+          #
+          # WARNING - do not spell the two-dot form out anywhere in this file,
+          # not even in a comment like this one explaining why it is wrong. That
+          # guard scans every match of its diff pattern, comments included, so
+          # writing the bad form down turns the suite red, and its message
+          # reports the offender as a "step" - which is confusing when the
+          # offender is prose. Describe it in words instead, as here.
+          fetch-depth: 0
+
       - name: Setup .NET
-        if: steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || steps.benchmark.outputs.changed == 'true' || (steps.filter.outputs.code == 'true' && steps.verbump.outputs.version_only != 'true')
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       # Cache ~/.nuget/packages between runs.
       - name: Cache NuGet packages
-        if: steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || steps.benchmark.outputs.changed == 'true' || (steps.filter.outputs.code == 'true' && steps.verbump.outputs.version_only != 'true')
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
@@ -706,7 +869,7 @@ jobs:
       # the previous `samples/**/*.csproj` glob silently missed nested csprojs.
       # The slnx-first / `find`-fallback dispatch below avoids that footgun.
       - name: Build and test samples (samples-only change)
-        if: steps.filter.outputs.code == 'true' && steps.filter.outputs.nonSample != 'true' && steps.verbump.outputs.version_only != 'true'
+        if: needs.plan.outputs.code == 'true' && needs.plan.outputs.nonSample != 'true' && needs.plan.outputs.version_only != 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -801,7 +964,7 @@ jobs:
       # only (chaos and Azure-emulator categories excluded, mirroring the samples
       # lane). bin/obj are pruned so stale build outputs are never picked up.
       - name: Build and test reference architecture (reference-architecture change)
-        if: steps.filter.outputs.refArch == 'true'
+        if: needs.plan.outputs.refArch == 'true'
         run: |
           set -euo pipefail
 
@@ -849,7 +1012,7 @@ jobs:
       # apps/embedding, a pure Dockerfile build) and an app with no covering test
       # are both clean no-ops in their respective phases.
       - name: Build and test apps (apps change)
-        if: steps.filter.outputs.apps == 'true'
+        if: needs.plan.outputs.apps == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -950,7 +1113,7 @@ jobs:
       # them back to the current WAL API is separate follow-up work; drop a path
       # from BENCH_EXCLUDE once its project compiles again.
       - name: Build and test benchmark harness (benchmark change)
-        if: steps.benchmark.outputs.changed == 'true'
+        if: needs.plan.outputs.benchmark_changed == 'true'
         run: |
           set -euo pipefail
 
@@ -1014,45 +1177,116 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Upload test results even if the Test step fails. Gated on `code`,
+      # `refArch`, or `apps` rather than `nonSample` so trx files produced by the
+      # samples-only path, the reference-architecture lane, and the apps lane are
+      # also captured.
+      - name: Upload test results
+        if: always() && (needs.plan.outputs.code == 'true' || needs.plan.outputs.refArch == 'true' || needs.plan.outputs.apps == 'true' || needs.plan.outputs.benchmark_changed == 'true')
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-results-extras
+          # Include blame-hang crash dumps (*.dmp) and the sequence file
+          # alongside the trx logs so a hung test can be diagnosed from the
+          # captured process state, not just inferred from a missing result.
+          if-no-files-found: ignore
+          path: |
+            **/*.trx
+            **/*.dmp
+            **/Sequence_*.xml
+
+  # ---------------------------------------------------------------------------
+  # TEST. One runner per leg. Job names carry the package, shard, and tier, so
+  # a red X in the checks list already says what broke before you open it.
+  # ---------------------------------------------------------------------------
+  test:
+    name: ${{ matrix.leg.name }}
+    needs: plan
+    # An empty matrix is a valid plan, not a failure: it is what a docs-only or
+    # version-bump-only change produces. The `build-and-test` gate below still
+    # runs and still reports, so the required check never goes missing.
+    if: needs.plan.outputs.leg_count != '0'
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Never fail-fast. A cancelled sibling leg is an unreported leg, and an
+      # unreported leg is indistinguishable from a passing one in the summary.
+      # On a fan-out the whole point is to learn everything that broke in one
+      # cycle rather than one failure at a time.
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        leg: ${{ fromJson(needs.plan.outputs.legs) }}
+
+    # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
+    # AzureStorageEmulator-category integration tests (in storage.azuretable,
+    # caching.azureblob, and backup.azureblob) drive via `UseDevelopmentStorage=true`.
+    # Without it those tests self-skip (Assert.Inconclusive) and never validate their
+    # coverage in CI. The image's default command binds blob/queue/table on 0.0.0.0;
+    # publishing 10000-10002 to the runner host makes the SDK dev endpoints
+    # (127.0.0.1:10000-10002) resolve. Pinned to the version validated locally.
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.36.0
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+    # Carried over from the serial job, and load-bearing. Legs are bin-packed
+    # dynamically, so any leg can contain storage.azuretable, caching.azureblob,
+    # or backup.azureblob. Without the service those fixtures self-skip via
+    # Assert.Inconclusive, which NUnit counts as neither passed, failed, nor
+    # skipped - the run still prints `Passed!` with `Skipped: 0` and only the
+    # total drops. That is a silent coverage hole, so every leg gets Azurite.
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Need full history so the change-detection steps below can diff
+          # against the PR base SHA. A shallow clone (the default) would not
+          # have the base commit available.
+          #
+          # `fetch-depth: 0` is LOAD-BEARING and not merely a convenience: every
+          # change-detection step in this job uses the THREE-dot form
+          # (`git diff "$BASE_SHA...$HEAD_SHA"`), which resolves the MERGE BASE
+          # of the two commits and needs the common ancestry of both to be
+          # present locally. Shallow it and those diffs fail outright rather
+          # than quietly narrowing, which is the failure mode we want - but it
+          # is still a broken CI run, so do not reduce this depth.
+          # `CiChangeDetectionDiffFormTests` guards both halves.
+          #
+          # WARNING - do not spell the two-dot form out anywhere in this file,
+          # not even in a comment like this one explaining why it is wrong. That
+          # guard scans every match of its diff pattern, comments included, so
+          # writing the bad form down turns the suite red, and its message
+          # reports the offender as a "step" - which is confusing when the
+          # offender is prose. Describe it in words instead, as here.
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
       - name: Restore
-        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
         run: dotnet restore
 
-      # Whole-solution build, used only when a shared/root change fanned the
-      # test matrix out to every package (build_all=true). One solution build
-      # is faster than looping every project separately.
-      - name: Build (all packages - shared/root change)
-        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true' && steps.discover.outputs.build_all == 'true'
+      # One whole-solution build per leg. Measured at about 1.2 minutes on a
+      # warm NuGet cache, which is simpler than building each leg's own project
+      # set and much cheaper than uploading and downloading a multi-hundred-
+      # megabyte Release output as an artifact. This fixed per-leg overhead is
+      # now larger than the tests on most legs and is paid once per runner, so
+      # it is the first thing to revisit if the makespan needs to come down
+      # further.
+      - name: Build
         run: dotnet build --no-restore --configuration Release
-
-      # Selective build: compile only the in-scope packages. Building each
-      # package's test project transitively compiles its src project (and its
-      # dependency graph) in Release, which is exactly what the downstream
-      # `dotnet test --no-build` steps consume. Packages with no test project
-      # fall back to building the src csproj directly so a src-only change is
-      # still compile-checked. This mirrors the per-package test scoping - a PR
-      # that touches one package no longer pays to rebuild the whole solution.
-      - name: Build changed packages
-        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true' && steps.discover.outputs.build_all != 'true'
-        run: |
-          set -euo pipefail
-          for name in ${{ steps.discover.outputs.to_test }}; do
-            testProj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
-            if [ -n "$testProj" ]; then
-              echo "::group::Build ${name} (test project -> transitively builds src)"
-              dotnet build "$testProj" --no-restore --configuration Release
-              echo "::endgroup::"
-              continue
-            fi
-            srcProj=$(ls "src/${name}"/*.csproj 2>/dev/null | head -n 1 || true)
-            if [ -n "$srcProj" ]; then
-              echo "::group::Build ${name} (src project - no test project)"
-              dotnet build "$srcProj" --no-restore --configuration Release
-              echo "::endgroup::"
-            else
-              echo "::notice::No csproj found for ${name} - nothing to build."
-            fi
-          done
 
       # Per-package test execution. Two separate top-level steps preserve the
       # chaos-first / deterministic split from the previous static layout: all
@@ -1070,7 +1304,6 @@ jobs:
       # starts at job start and restore/build precede this, so it is normally
       # already satisfied; this is a cheap guard against a cold-start race.
       - name: Wait for Azurite
-        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
         run: |
           for port in 10000 10001 10002; do
             for i in $(seq 1 30); do
@@ -1082,103 +1315,141 @@ jobs:
             done
           done
 
-      - name: Test changed packages (deterministic)
-        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
-        # The leaf-side projection-digest publish is coalesced behind a
-        # short one-shot grain timer, so the digest-settle integration
-        # oracles poll the chained-fold aggregate until it converges to
-        # the authoritative live count. Under full-suite parallel load a
-        # post-split aggregate can transiently overshoot (a new leaf's
-        # count folds in before the donor's corrective reduction is
-        # scheduled off the backlogged grain-call queue) and take longer
-        # than the 20s default to settle. The settle helper exposes
-        # LATTICE_DIGEST_SETTLE_TIMEOUT_MS precisely so a saturated runner
-        # can grant a longer convergence budget; wire it here. This does
-        # not mask a real convergence bug - a digest that settles on a
-        # wrong value still fails, it only grants more wall-clock time for
-        # a correct-but-slow convergence on a loaded runner.
+      - name: Run leg
         env:
+          LEG: ${{ toJson(matrix.leg) }}
+          # The leaf-side projection-digest publish is coalesced behind a short
+          # one-shot grain timer, so the digest-settle oracles poll until the
+          # chained-fold aggregate converges. Under parallel load a post-split
+          # aggregate can transiently overshoot and take longer than the 20s
+          # default to settle. Carried over from the serial job unchanged so a
+          # difference in results cannot be attributed to a difference in
+          # timeouts. This does not mask a convergence bug - a digest that
+          # settles on a wrong value still fails.
           LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
         run: |
           set -euo pipefail
-          for name in ${{ steps.discover.outputs.to_test }}; do
-            proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
-            if [ -z "$proj" ]; then
-              echo "::notice::No test project under test/${name}/ - skipping."
-              continue
-            fi
-            echo "::group::Test ${name} (deterministic)"
-            dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory!=Chaos&TestCategory!=Coyote" \
-              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
-              --logger "trx;LogFileName=${name}-results.trx"
-            echo "::endgroup::"
-          done
+          printf '%s' "$LEG" > /tmp/leg.json
+          python3 .github/workflows/run-test-leg.py \
+            --leg /tmp/leg.json \
+            --results-dir leg-results \
+            --summary-file "$GITHUB_STEP_SUMMARY"
 
-      - name: Test changed packages (Coyote systematic concurrency)
-        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
-        # Runs after the deterministic unit tests and before the chaos suite:
-        # normal -> coyote -> chaos. Opt-in tier. Coyote models drive the
-        # shared, dependency-free correctness cores (e.g. AtomicVisibilityGate)
-        # through systematic schedule exploration. They use no Orleans cluster,
-        # so they are fast and deterministic, but they are held out of the
-        # deterministic step (via TestCategory!=Coyote above) and run here on
-        # their own so a model regression is attributed to this tier rather than
-        # buried in the per-package suite.
-        run: |
-          set -euo pipefail
-          for name in ${{ steps.discover.outputs.to_test }}; do
-            proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
-            if [ -z "$proj" ]; then
-              continue
-            fi
-            echo "::group::Test ${name} (Coyote)"
-            dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory=Coyote" \
-              --logger "trx;LogFileName=${name}-coyote.trx"
-            echo "::endgroup::"
-          done
-
-      - name: Test changed packages (chaos last - isolate flaky-prone surface)
-        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
-        # See the deterministic step above for why the digest-settle
-        # convergence budget is widened on a loaded CI runner via
-        # LATTICE_DIGEST_SETTLE_TIMEOUT_MS. The chaos digest suite leans on
-        # the same settle helper under even heavier fault-injection load.
-        # Runs last (normal -> coyote -> chaos) so the fast deterministic and
-        # Coyote tiers report first and the flaky-prone fault-injection surface
-        # is isolated at the end.
-        env:
-          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
-        run: |
-          set -euo pipefail
-          for name in ${{ steps.discover.outputs.to_test }}; do
-            proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
-            if [ -z "$proj" ]; then
-              echo "::notice::No test project under test/${name}/ - skipping."
-              continue
-            fi
-            echo "::group::Test ${name} (chaos)"
-            dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory=Chaos&TestCategory!=AzureStorageEmulator" \
-              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
-              --logger "trx;LogFileName=${name}-chaos.trx"
-            echo "::endgroup::"
-          done
-
-      # Upload test results even if the Test step fails. Gated on `code`,
-      # `refArch`, or `apps` rather than `nonSample` so trx files produced by the
-      # samples-only path, the reference-architecture lane, and the apps lane are
-      # also captured.
-      - name: Upload test results
-        if: always() && (steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || steps.benchmark.outputs.changed == 'true')
+      - name: Upload leg results
+        if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: test-results
-          # Include blame-hang crash dumps (*.dmp) and the sequence file
-          # alongside the trx logs so a hung test can be diagnosed from the
-          # captured process state, not just inferred from a missing result.
+          name: leg-results-${{ matrix.leg.id }}
+          path: leg-results/
+          retention-days: 7
+
+      # Include blame-hang crash dumps (*.dmp) and the sequence file alongside
+      # the trx logs so a hung test can be diagnosed from the captured process
+      # state, not just inferred from a missing result.
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-output-${{ matrix.leg.id }}
           path: |
             **/*.trx
             **/*.dmp
             **/Sequence_*.xml
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # THE REQUIRED CHECK.
+  #
+  # `build-and-test` is the required status check on `main`, with `strict`
+  # enabled. Its NAME is the contract, not its contents, so this job keeps that
+  # name while the work it used to do runs in the jobs above.
+  #
+  # `if: always()` is load-bearing. A required check that never reports leaves
+  # every pull request pending forever, so this job must run and report even
+  # when every upstream job was skipped - which is exactly what a docs-only
+  # change produces.
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    name: build-and-test
+    needs: [plan, extras, test]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Every checkout in a workflow that diffs against the merge base must
+          # be full-depth, even the ones that do not diff. The guard checks the
+          # file, not the job.
+          fetch-depth: 0
+
+      - name: Download leg results
+        if: needs.plan.outputs.leg_count != '0'
+        uses: actions/download-artifact@v6
+        with:
+          pattern: leg-results-*
+          path: leg-results
+          merge-multiple: true
+
+      # Aggregates every leg into one table: which package, which shard, which
+      # tier, and whether that package was seeded by this diff or pulled in by
+      # the dependency closure. Also enforces the two guards that stop a fan-out
+      # reporting a green that verified nothing - a shard that executed no tests
+      # in any tier, and a leg that died before writing its record.
+      - name: Aggregate test legs
+        if: needs.plan.outputs.leg_count != '0'
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/summarise-test-legs.py \
+            --results-dir leg-results \
+            --expect-legs "${{ needs.plan.outputs.leg_count }}" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      # The verdict. Every upstream job must have either succeeded or been
+      # deliberately skipped; anything else fails the required check.
+      #
+      # A skipped job is legitimate (no legs to run, no extras to build), but a
+      # FAILED or CANCELLED one never is. Reading the results explicitly rather
+      # than relying on job ordering means a new upstream job cannot be added
+      # later and silently escape the gate.
+      - name: Verdict
+        env:
+          PLAN: ${{ needs.plan.result }}
+          EXTRAS: ${{ needs.extras.result }}
+          TEST: ${{ needs.test.result }}
+          LEG_COUNT: ${{ needs.plan.outputs.leg_count }}
+        run: |
+          set -euo pipefail
+
+          echo "plan=$PLAN extras=$EXTRAS test=$TEST legs=$LEG_COUNT"
+
+          ok=true
+          for pair in "plan:$PLAN" "extras:$EXTRAS" "test:$TEST"; do
+            name="${pair%%:*}"
+            result="${pair#*:}"
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::Upstream job '${name}' reported '${result}'."; ok=false ;;
+            esac
+          done
+
+          if [ "$ok" != "true" ]; then
+            exit 1
+          fi
+
+          # Say plainly when nothing was tested. A green check here means the
+          # gates that ran passed, not that any package's tests executed, and
+          # the two must not look the same on the run page.
+          if [ "$LEG_COUNT" = "0" ]; then
+            {
+              echo "### Test selection: 0 packages"
+              echo ""
+              echo "No test legs ran for this change (docs-only, samples-only,"
+              echo "or a release version bump). A green \`build-and-test\` here"
+              echo "means the gates that did run passed, not that any package's"
+              echo "tests were executed."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "All upstream jobs succeeded or were deliberately skipped."

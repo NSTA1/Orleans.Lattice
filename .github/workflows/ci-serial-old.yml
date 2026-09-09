@@ -1,0 +1,1184 @@
+name: CI (serial, legacy)
+
+# The single-job serial workflow that `ci.yml` used to be, preserved verbatim
+# and reachable ONLY by hand.
+#
+# It is kept for one reason: it is the control. Any future claim about the
+# matrix in `ci.yml` being faster, or about it having changed what is tested,
+# is checkable by dispatching this on the same commit and comparing. That
+# comparison is exactly how the promotion was justified (43.9 min here against
+# 8.9 min there on an identical commit), and it stops being possible the moment
+# this file is deleted.
+#
+# Two things keep it from interfering with the real gate:
+#
+#   1. It has no `pull_request` trigger, so it never runs on its own.
+#   2. Its job id is `build-and-test-serial`, NOT `build-and-test`. The latter
+#      is the required status check on `main`, and a check run is identified by
+#      name - two workflows both publishing `build-and-test` would race to
+#      satisfy one contract, and the faster one would decide the verdict. Do
+#      not rename this job back.
+#
+# It is otherwise unmodified, deliberately: a control that has been "tidied" is
+# no longer a control.
+
+on:
+  workflow_dispatch:
+# Least-privilege: this workflow only reads source code.
+permissions:
+  contents: read
+
+# Cancel in-progress runs for the same branch/PR to save runner minutes.
+concurrency:
+  group: ci-serial-old-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test-serial:
+    name: build-and-test (serial, legacy)
+    runs-on: ubuntu-latest
+
+    # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
+    # AzureStorageEmulator-category integration tests (in storage.azuretable,
+    # caching.azureblob, and backup.azureblob) drive via `UseDevelopmentStorage=true`.
+    # Without it those tests self-skip (Assert.Inconclusive) and never validate their
+    # coverage in CI. The image's default command binds blob/queue/table on 0.0.0.0;
+    # publishing 10000-10002 to the runner host makes the SDK dev endpoints
+    # (127.0.0.1:10000-10002) resolve. Pinned to the version validated locally.
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.36.0
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Need full history so the change-detection steps below can diff
+          # against the PR base SHA. A shallow clone (the default) would not
+          # have the base commit available.
+          #
+          # `fetch-depth: 0` is LOAD-BEARING and not merely a convenience: every
+          # change-detection step in this job uses the THREE-dot form
+          # (`git diff "$BASE_SHA...$HEAD_SHA"`), which resolves the MERGE BASE
+          # of the two commits and needs the common ancestry of both to be
+          # present locally. Shallow it and those diffs fail outright rather
+          # than quietly narrowing, which is the failure mode we want - but it
+          # is still a broken CI run, so do not reduce this depth.
+          # `CiChangeDetectionDiffFormTests` guards both halves.
+          #
+          # WARNING - do not spell the two-dot form out anywhere in this file,
+          # not even in a comment like this one explaining why it is wrong. That
+          # guard scans every match of its diff pattern, comments included, so
+          # writing the bad form down turns the suite red, and its message
+          # reports the offender as a "step" - which is confusing when the
+          # offender is prose. Describe it in words instead, as here.
+          fetch-depth: 0
+
+      # Fail fast on the two repository conventions that are cheap to check and
+      # expensive to undo once merged: the branch naming scheme, and commit
+      # trailers. Both are unfixable after a squash merge without a history
+      # rewrite, so they are gated here rather than reviewed by eye. This runs
+      # before restore/build so a violation costs seconds, not a full CI cycle.
+      #
+      # .github/copilot-instructions.md is the single source of truth for both
+      # rules, including the enumerated branch prefixes. The two lists below
+      # mirror it; change them together.
+      - name: Guard - branch name and commit trailers
+        env:
+          BRANCH: ${{ github.head_ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          failed=0
+
+          # -- Branch name -------------------------------------------------
+          # A type prefix, then a description. The set below is the one the
+          # repository actually uses; extend it here rather than working around
+          # it with an off-convention branch.
+          #
+          # The trailing `(/...)*` group permitting further path segments is
+          # load-bearing, not incidental: it is what lets an epic integration
+          # branch (`<type>/epic/<slug>`) pass with no `epic` prefix added
+          # here. Its member branches separate the item slug with a HYPHEN
+          # (`<type>/epic/<slug>-<item>`) and not a further path segment:
+          # git stores a branch as a file at `refs/heads/<name>`, so
+          # `refs/heads/<type>/epic/<slug>` and a nested
+          # `refs/heads/<type>/epic/<slug>/<item>` cannot coexist, whichever
+          # is created first. Do not tighten the group to a single segment,
+          # and do not add `epic` to the alternation - a bare `epic/<slug>`
+          # is not the convention.
+          prefixes='feat|fix|docs|test|tests|perf|chore|ci|refactor|build|deps|revert|release'
+
+          if ! printf '%s' "${BRANCH}" | grep -Eq "^(${prefixes})/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*$"; then
+            echo "::error::Branch '${BRANCH}' does not follow the naming convention (see .github/copilot-instructions.md). Use '<type>/<kebab-case-description>' where <type> is one of: ${prefixes//|/, }. Push to a conforming name with an explicit refspec - 'git push <remote> HEAD:refs/heads/<type>/<description>' - which works regardless of what your local or harness-generated branch is called, then update this PR. Agents: prefer this over a rename tool, which may be single-shot and may re-apply a harness username prefix to the name you choose."
+            failed=1
+          fi
+
+          # Never a username. Checked against the PR author's actual login
+          # rather than a heuristic, so this cannot misfire on ordinary words.
+          if [ -n "${AUTHOR}" ] && [ "${#AUTHOR}" -ge 4 ]; then
+            if printf '%s' "${BRANCH}" | grep -qiF "${AUTHOR}"; then
+              echo "::error::Branch '${BRANCH}' contains the author's username ('${AUTHOR}'). Branch names describe the change, never who made it."
+              failed=1
+            fi
+          fi
+
+          # -- Commit trailers ---------------------------------------------
+          # Attribution trailers are not used in this repository. Add a new
+          # banned trailer to this alternation, one per line, when needed.
+          trailers='Co-authored-by|Copilot-Session'
+
+          # The PR's own commits. Use the event SHAs rather than HEAD, because
+          # on a pull_request event HEAD is the synthetic merge commit. Checkout
+          # above uses fetch-depth: 0, so both ends are normally present; fall
+          # back to a targeted fetch rather than silently scanning nothing.
+          if ! commits="$(git rev-list "${BASE_SHA}..${HEAD_SHA}" 2>/dev/null)"; then
+            git fetch --no-tags --quiet origin "${BASE_SHA}" "${HEAD_SHA}" 2>/dev/null || true
+            commits="$(git rev-list "${BASE_SHA}..${HEAD_SHA}")"
+          fi
+
+          offenders=""
+          for sha in ${commits}; do
+            if git log -1 --format='%B' "${sha}" | grep -Eqi "^[[:space:]]*(${trailers})[[:space:]]*:"; then
+              offenders="${offenders}  ${sha}  $(git log -1 --format='%s' "${sha}")"$'\n'
+            fi
+          done
+
+          if [ -n "${offenders}" ]; then
+            echo "::error::Commits carry a banned trailer (${trailers//|/, }). This repository does not use attribution trailers (see .github/copilot-instructions.md), even when a tool adds one by default. Strip them with an interactive rebase or 'git commit --amend', then force-push."
+            printf 'Offending commits:\n%s' "${offenders}"
+            failed=1
+          fi
+
+          if [ "${failed}" -ne 0 ]; then
+            exit 1
+          fi
+          echo "OK: branch name and commit trailers are compliant."
+
+      # Guard - inert closing keywords on a non-default base.
+      #
+      # GitHub honours a closing keyword ONLY when the pull request targets the
+      # repository's default branch. In a pull request based on an epic or
+      # bucket integration branch, a `Closes #N` is silently inert: it merges,
+      # it reads correctly, and the issue stays open. Nothing reports this. The
+      # cost of the mistake is a completed item left open with no signal
+      # anywhere that it was meant to close, which is why it is gated here
+      # rather than left to review.
+      #
+      # WHAT THIS GATE DOES AND DOES NOT COVER. It catches the MEMBER half of
+      # the convention - a keyword that will not fire because of where the
+      # pull request is aimed. It does NOT and cannot check the other half,
+      # that the integration pull request into the default branch carries every
+      # `Closes #N` its members gave up. Nothing here observes that, and it
+      # stays advice (see .github/copilot-instructions.md). This is stated
+      # explicitly because a gate that half-covers a convention while appearing
+      # to cover it is worse than no gate: it converts "unchecked" into
+      # "checked and clean" without changing what is actually known.
+      #
+      # PREDICATE. The test is "a closing reference GitHub would ACT ON", not
+      # "the string appears in the body". Those differ, and the difference is
+      # not hypothetical: a pull request that DISCUSSES this very trap contains
+      # the literal text and is entirely correct. GitHub does not linkify - and
+      # so cannot honour - a reference inside a fenced code block, a blockquote,
+      # or an inline code span, so those regions are removed before matching. A
+      # gate whose predicate is broader than the one it stands in for reports a
+      # state the system does not have.
+      - name: Guard - inert closing keywords
+        if: github.event.pull_request.base.ref != github.event.repository.default_branch
+        env:
+          # Passed through the environment, never interpolated into the script
+          # body: a pull request description is attacker-controlled text.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os, re, sys
+
+          keywords = r"close[sd]?|fix(?:e[sd])?|resolve[sd]?"
+          target = r"(?:#\d+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#\d+|https?://\S+?/issues/\d+)"
+
+          def honoured(body):
+              """References GitHub would ACT ON. Fenced blocks, blockquotes and
+              inline code spans are removed first, because GitHub does not
+              linkify a reference inside them and so cannot honour one."""
+              out, fence = [], None
+              for line in body.splitlines():
+                  stripped = line.lstrip()
+                  if fence is None:
+                      m = re.match(r"(`{3,}|~{3,})", stripped)
+                      if m:
+                          fence = m.group(1)[:3]
+                          continue
+                      if stripped.startswith(">"):
+                          continue
+                      out.append(line)
+                  elif stripped.startswith(fence):
+                      fence = None
+              text = re.sub(r"`[^`\n]*`", "", "\n".join(out))
+              return [m.group(0).strip()
+                      for m in re.finditer(rf"(?i)\b(?:{keywords})\b[ \t]*:?[ \t]+{target}", text)]
+
+          # Anti-vacuity self-test (issue #2275). A silent pass is this gate's
+          # desired outcome, so a matcher that has stopped matching ANYTHING
+          # looks exactly like a repository full of correct pull requests.
+          # These planted controls make that state observable: the gate must
+          # demonstrate on every run that it still detects a keyword it should
+          # act on, and still ignores the three forms it should not.
+          #
+          # There is one control per REGION the predicate claims to strip, not
+          # one per region that is convenient to write inline. The fenced-block
+          # control is load-bearing for that reason: with the fence arm of
+          # honoured() disabled, the other three probes still pass unanimously,
+          # so without it a third of this predicate could break and the
+          # self-test would report itself healthy - the precise failure the
+          # self-test exists to make impossible.
+          probes = [("Closes #1", True), ("`Closes #1`", False),
+                    ("> Closes #1", False), ("Refs #1", False),
+                    ("```\nCloses #1\n```", False)]
+          broken = [p for p, want in probes if bool(honoured(p)) is not want]
+          if broken:
+              print("::error::This gate's own matcher is broken - it failed its "
+                    f"planted self-test on: {broken!r}. Until that is fixed the gate "
+                    "cannot detect anything, and a pass from it means nothing.")
+              sys.exit(1)
+
+          base = os.environ.get("BASE_REF", "")
+          default = os.environ.get("DEFAULT_BRANCH", "")
+          hits = honoured(os.environ.get("PR_BODY") or "")
+
+          if not hits:
+              print(f"OK: matcher self-test passed, and no closing keyword GitHub would "
+                    f"honour appears in a PR targeting '{base}' rather than '{default}'.")
+              sys.exit(0)
+
+          print(f"::error::This pull request targets '{base}', not the default branch "
+                f"'{default}', so GitHub will NOT honour its closing keyword(s): "
+                + "; ".join(sorted(set(hits)))
+                + ". The reference is inert - this PR will merge, read as correct, and "
+                  "leave the issue open. Reword it to 'Refs #N' here, and put the "
+                  "'Closes #N' on the integration pull request that targets "
+                  f"'{default}'. Verify that one with: gh pr view <n> --json "
+                  "closingIssuesReferences (read the command's output, not the body). "
+                  "If a keyword above is only being discussed rather than used, put it "
+                  "in a code span or fenced block, which is also what stops GitHub "
+                  "acting on it.")
+          sys.exit(1)
+          PY
+
+      # Classify what changed so we can skip expensive steps when the PR only
+      # touches docs, or run a lightweight samples-only build when nothing
+      # outside samples/ (plus docs) changed.
+      #
+      # Outputs:
+      #   code       - at least one non-doc, non-benchmark file changed
+      #                (any *.md / *.txt / docs/** / benchmark/** / apps/** /
+      #                 reference-architecture/** / .github/workflows/** only
+      #                 => false).
+      #   nonSample  - at least one non-doc, non-benchmark, non-sample file changed.
+      #   refArch    - at least one non-markdown file under
+      #                reference-architecture/** changed (drives the isolated
+      #                reference-architecture build/test lane below).
+      #
+      # *.txt is treated as documentation (the only tracked .txt files are the
+      # root llms.txt index and a MAUI Raw resource that the ubuntu lane never
+      # compiles), and .github/workflows/** is excluded because a CI/publish
+      # workflow edit has no compileable surface for the library test matrix -
+      # gating a full build/test on either would just burn runner minutes.
+      #
+      # Derived: samples-only == (code == 'true' && nonSample == 'false').
+      #
+      # benchmark/** is excluded because its projects (Silo/, Producer/,
+      # infra/, scripts/) are not referenced from Orleans.Lattice.slnx and
+      # are deployed/run by hand against a long-lived Azure VM
+      # (see benchmark/azure-throughput/README.md). A benchmark-only PR has
+      # no compileable surface for the library test matrix to cover, so
+      # gating on it would just burn CI minutes running every package's
+      # deterministic suite via the conservative no-match-found fallback.
+      # The benchmark harness IS compiled and tested by its own dedicated lane
+      # below (gated on the `benchmark` detection step), so a benchmark change
+      # is not left unbuilt - it just does not fan out to the library matrix.
+      # test/azure-throughput-silo/** (the harness's own NUnit project) is
+      # excluded here for the same reason: it lives under test/ but covers only
+      # the benchmark Silo, maps to no src/<name>/ package, and so would
+      # otherwise fall through the per-package discovery to the conservative
+      # "test every package" fallback. The dedicated benchmark lane runs it.
+      #
+      # reference-architecture/** is excluded from `code`/`nonSample` (and
+      # handled by its own `refArch` lane) because it is a standalone deployment
+      # kit: its host projects and single test project are NOT in
+      # Orleans.Lattice.slnx and reference the core library by published
+      # PackageReference, not by ProjectReference into src/. Without the
+      # exclusion, a reference-architecture-only change matches no src/<name>/
+      # package and falls through to the conservative "test every package"
+      # fallback - fanning a docs-and-IaC kit change out to the entire core
+      # library matrix while never actually building the kit's own projects.
+      # The dedicated lane below builds only the kit and runs only its tests.
+      #
+      # apps/** is excluded from `code`/`nonSample` (and handled by its own
+      # `apps` lane) for the same reason as reference-architecture/**: the
+      # container host apps (apps/repocontext, apps/embedding) map to no
+      # src/<name>/ package, so an apps-only change matches nothing in the
+      # per-package discovery step and would fall through to the conservative
+      # "test every package" fallback - fanning a Docker-host edit out to the
+      # entire core library matrix. Unlike the reference-architecture kit, the
+      # repocontext host IS in Orleans.Lattice.slnx and references src/ by
+      # ProjectReference, and it is covered by test/lattice.api.mcp.repocontext
+      # (which references the host via InternalsVisibleTo + ProjectReference), so
+      # it must still be compile-checked and its covering tests run. The
+      # dedicated lane below builds each changed app's csproj and runs every test
+      # project that covers it - both a *.Tests.csproj under the app and a
+      # test/<pkg>/ project that ProjectReferences the changed app - instead of
+      # rebuilding and testing every package. An app with no csproj (e.g.
+      # apps/embedding, a pure Dockerfile build) is a clean no-op there.
+      #
+      # docs-site/** is excluded from `code`/`nonSample` for the same reason as
+      # .github/workflows/**: it is the documentation-site build (a DocFX config,
+      # PowerShell staging scripts, and a CSS template override), contains no
+      # csproj, is not in Orleans.Lattice.slnx, and so has no compileable surface
+      # for the library test matrix. It also maps to no src/<name>/ package, so
+      # without the exclusion a docs-site-only change falls through the
+      # per-package discovery to the conservative "test every package" fallback -
+      # fanning a documentation-tooling edit out to the entire core library
+      # matrix. The dedicated Docs workflow builds it on every documentation pull
+      # request, failing closed on any broken link or anchor, so it is not left
+      # unverified. .gitignore is excluded on the same grounds: it governs which
+      # files git tracks and cannot affect compilation.
+      #
+      # NOTE: patterns must use '**/*.md' for recursive markdown matching.
+      # picomatch (the matcher dorny/paths-filter uses) only treats '**' as a
+      # globstar when it stands alone as a path segment - '**.md' degrades to
+      # '*.md' and silently fails to match nested files like
+      # 'docs/lattice/observability.md', defeating the docs-only skip.
+      - name: Check for non-markdown changes
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '!**/*.md'
+              - '!**/*.txt'
+              - '!docs/**'
+              - '!docs-site/**'
+              - '!benchmark/**'
+              - '!test/azure-throughput-silo/**'
+              - '!test/lattice.explorer.uitests/**'
+              - '!apps/**'
+              - '!reference-architecture/**'
+              - '!.github/workflows/**'
+              - '!.gitignore'
+            nonSample:
+              - '!**/*.md'
+              - '!**/*.txt'
+              - '!docs/**'
+              - '!docs-site/**'
+              - '!benchmark/**'
+              - '!test/azure-throughput-silo/**'
+              - '!test/lattice.explorer.uitests/**'
+              - '!apps/**'
+              - '!reference-architecture/**'
+              - '!.github/workflows/**'
+              - '!.gitignore'
+              - '!samples/**'
+            refArch:
+              - 'reference-architecture/**'
+              - '!reference-architecture/**/*.md'
+            apps:
+              - 'apps/**'
+              - '!apps/**/*.md'
+
+      # Detect a change to the benchmark harness (its source under benchmark/**
+      # or its own NUnit project under test/azure-throughput-silo/**), ignoring
+      # markdown. The harness is excluded from the `code`/`nonSample` library
+      # matrix above; this flag instead drives the dedicated benchmark lane that
+      # compiles the harness and runs its covering tests, so a benchmark-only
+      # change is built and tested WITHOUT fanning out to every package.
+      - name: Detect benchmark harness changes
+        id: benchmark
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # THREE-dot. `git diff A B` reports what turns A into B, which on a
+          # PR whose head is BEHIND its base also reports the REVERSE of every
+          # commit merged into the base since the branch was cut - attributing
+          # other people's files to this PR. `git diff A...B` diffs against the
+          # MERGE BASE, which is the question every step in this job is asking:
+          # what did THIS branch change. See the checkout step for the
+          # fetch-depth precondition, and the comment on `Discover changed
+          # packages` for why the two-dot form can also UNDER-select.
+          changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          if echo "$changed" \
+               | grep -E '^(benchmark/|test/azure-throughput-silo/)' \
+               | grep -vE '\.md$' > /dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Benchmark harness change detected; the benchmark lane will build and test it."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Content-aware release-version-bump carve-out. A coordinated release
+      # rewrites the `<Version>` slot of every publishable csproj in one commit
+      # (see docs/RELEASING.md). That edit changes no compileable behaviour, so
+      # fanning it out to the full per-package build/test matrix - which the
+      # path-only `code`/`nonSample` filters above would do, because a csproj is
+      # a non-markdown file under src/<name>/ - just burns runner minutes.
+      #
+      # This step is the ONE place that distinguishes a pure version bump from a
+      # substantive project-file change: it diffs each code-relevant changed
+      # file (the same exclusion set as the `code` filter) and sets
+      # version_only=true only when every such file is a *.csproj whose
+      # added/removed content lines are all `<Version>...</Version>` elements.
+      # Any other csproj edit (a PackageReference/Version="" attribute bump, a
+      # TargetFramework change, an added compile item, ...) or any non-csproj
+      # code change leaves version_only=false and the matrix runs as normal. The
+      # `<Version>` ELEMENT match is deliberately exact so a PackageReference's
+      # `Version=""` ATTRIBUTE never satisfies the carve-out.
+      #
+      # The refArch/apps lanes are intentionally NOT suppressed by this flag:
+      # their files are excluded from the code-relevant set, so a PR that pairs
+      # a version bump with a genuine reference-architecture/** or apps/** change
+      # still runs those lanes (and still sees version_only=true only for the
+      # core library matrix it legitimately skips).
+      - name: Classify version-only change
+        id: verbump
+        if: steps.filter.outputs.code == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Code-relevant changed files: mirror the `code` paths-filter
+          # exclusion set exactly (docs / text / benchmark / apps /
+          # reference-architecture / workflow files never gate the library
+          # matrix, so they must not influence the carve-out decision either).
+          # Three-dot: this branch's own changes, not the reverse of what
+          # merged into the base since it was cut. See `Detect benchmark
+          # harness changes`.
+          mapfile -t files < <(git diff --name-only "$BASE_SHA...$HEAD_SHA" \
+            | grep -vE '\.md$' \
+            | grep -vE '\.txt$' \
+            | grep -vE '^docs/' \
+            | grep -vE '^benchmark/' \
+            | grep -vE '^test/azure-throughput-silo/' \
+            | grep -vE '^apps/' \
+            | grep -vE '^reference-architecture/' \
+            | grep -vE '^\.github/workflows/' || true)
+
+          if [ ${#files[@]} -eq 0 ]; then
+            # `code` was true but nothing survived the exclusion set (e.g. the
+            # only code-relevant edits are workflow files). Not a version bump
+            # to act on; let the normal gates decide.
+            echo "version_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          version_only=true
+          for f in "${files[@]}"; do
+            # A non-csproj code-relevant file disqualifies the carve-out.
+            case "$f" in
+              *.csproj) ;;
+              *) version_only=false; echo "Non-csproj code change: $f"; break ;;
+            esac
+
+            # Every added/removed CONTENT line in this csproj must be a
+            # <Version> element. --unified=0 keeps the hunk bodies to just the
+            # changed lines; strip the +++/--- file headers, then flag any
+            # surviving +/- line that is not a <Version>...</Version> element.
+            # Three-dot, matching the file list above: a two-dot hunk body for
+            # a file the base moved would show that move REVERSED, so the two
+            # forms must not be mixed within one decision.
+            offending=$(git diff --unified=0 "$BASE_SHA...$HEAD_SHA" -- "$f" \
+              | grep -E '^[+-]' \
+              | grep -vE '^(\+\+\+|---)' \
+              | grep -vE '^[+-][[:space:]]*<Version>[^<]*</Version>[[:space:]]*$' \
+              || true)
+            if [ -n "$offending" ]; then
+              version_only=false
+              echo "Non-version csproj change in $f:"
+              echo "$offending"
+              break
+            fi
+          done
+
+          echo "version_only=$version_only" >> "$GITHUB_OUTPUT"
+          if [ "$version_only" = "true" ]; then
+            echo "::notice::Release version-bump-only change detected; skipping the per-package build/test matrix."
+          fi
+
+      # The selector is a script rather than an inline heredoc so it can be run
+      # and asserted over outside a CI run. This self-test is the control that
+      # a planted needle cannot be: a needle proves the selection reaches ONE
+      # package, whereas these assertions quantify over the whole emitted
+      # package list - what is selected, what is not, and why each exclusion is
+      # sound. Both controls are carried; neither substitutes for the other.
+      #
+      # Ungated on purpose. It is pure bash (no restore, no build, seconds), and
+      # a pull request that touches only `.github/workflows/**` sets `code` and
+      # `nonSample` to false, so nothing else in this job would validate a
+      # change to the selector itself.
+      - name: Self-test the package selector
+        run: .github/workflows/select-test-packages-selftest.sh
+
+      # Auto-discover packages by convention: each subdirectory of `src/` is a
+      # package; tests live at `test/{name}/`; docs at `docs/{name}/`.
+      #
+      # A changed **non-markdown** file under one of those three subtrees SEEDS
+      # that package, and the seed set is then expanded along the reverse
+      # ProjectReference edges to every package that could observe the change.
+      # Markdown-only edits (e.g. a design note) seed nothing - the top-level
+      # `nonSample` filter already gates the whole job on at least one non-doc
+      # edit somewhere in the tree, but per-package discovery without the
+      # extension filter would still pull a heavy package's chaos suite into CI
+      # for a markdown-only edit inside its subtree. When no package is seeded
+      # (e.g. the PR only edits `Orleans.Lattice.slnx` or a shared root file) we
+      # conservatively test every discovered package.
+      #
+      # The expansion is what issue #2330 is about. The lexical seed alone made
+      # a change to `src/lattice` - the core library nearly every other package
+      # references - run only `test/lattice`, so a break it caused anywhere else
+      # was indistinguishable from a pass because nothing looked. That is how a
+      # red `test/lattice.api.backup` assertion sat on `main` for an unknown
+      # number of merges (#2329). `lattice.dashboards` had already been
+      # hand-patched into every run for one instance of the same class; the
+      # closure generalises that remedy without retiring it (see the script).
+      #
+      # Rationale for not using dorny/paths-filter here: its filter set is
+      # static YAML, so adding a new src/{name}/ folder would still require a
+      # workflow edit. The script picks up new packages - and new project
+      # references - automatically.
+      - name: Discover changed packages
+        id: discover
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # THREE-dot: diff against the MERGE BASE, so this seeds from the
+          # files THIS branch changed.
+          #
+          # The two-dot form `git diff A B` is wrong here in both directions,
+          # and the second one is the reason this matters:
+          #
+          #   OVER-select. Two-dot reports what turns the base into the head,
+          #   so when the head is behind its base it also reports the REVERSE
+          #   of every commit merged into the base since the branch was cut.
+          #   Those files are attributed to this PR and seed their packages.
+          #   On an epic/bucket branch this is the COMMON case, not an edge
+          #   case: such a branch deliberately carries no strict protection
+          #   (that is the whole point - strict mode is what serialises PRs),
+          #   so a member PR is behind its base whenever any other member has
+          #   merged since it was cut.
+          #
+          #   UNDER-select, which is a false green rather than a slow one. If
+          #   this PR sets file F to content X and the base has INDEPENDENTLY
+          #   set F to the same content X, two-dot reports no difference for F
+          #   at all, and F's package is never seeded even though this PR
+          #   genuinely modifies it. That needs byte-identical content, so it
+          #   is narrower - but it is reachable exactly when it is most likely
+          #   to bite: two agents in one wave making the same small correction.
+          #
+          # Note this is UPSTREAM of the dependency closure below, so a seed
+          # lost here is not recovered by the expansion: the closure widens a
+          # seed set, it cannot invent a seed that was never in the file list.
+          #
+          # Requires the merge base to be present locally; see the fetch-depth
+          # note on the checkout step.
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > /tmp/changed-files.txt
+
+          # The report goes to the job summary, not just the log. A green
+          # `build-and-test` says nothing about its own scope - a run over one
+          # package and a run over every package are identical in the check name
+          # - so the run page states which packages were tested and which were
+          # not.
+          .github/workflows/select-test-packages.sh \
+            --changed-file /tmp/changed-files.txt \
+            --report-file "$GITHUB_STEP_SUMMARY" \
+            > /tmp/selected-packages.txt
+
+          matched=()
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            matched+=("$name")
+          done < /tmp/selected-packages.txt
+
+          if [ ${#matched[@]} -eq 0 ]; then
+            echo "::error::The package selector produced an empty selection; refusing to report a green run that tested nothing."
+            exit 1
+          fi
+
+          total=$(find src -mindepth 1 -maxdepth 1 -type d | wc -l)
+
+          # One whole-solution build beats looping project-by-project once the
+          # selection is broad: each per-project `dotnet build` pays its own
+          # MSBuild evaluation, and past roughly half the repository the
+          # evaluations cost more than compiling the packages that were not
+          # selected. The threshold only trades speed for speed - building a
+          # superset is always safe, because the `--no-build` test steps below
+          # consume only their own package's outputs - so it is a heuristic, not
+          # a correctness boundary.
+          if [ "${#matched[@]}" -ge $(( (total + 1) / 2 )) ]; then
+            echo "build_all=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_all=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "to_test=${matched[*]}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Testing ${#matched[@]} of ${total} packages."
+          echo "Packages to test: ${matched[*]}"
+
+      # The most dangerous denominator is zero. When the matrix is skipped
+      # entirely - a docs-only, samples-only, workflow-only, or version-bump-only
+      # change - the check still reports green, and nothing on the run page says
+      # that no package was built or tested. Say it.
+      - name: Report a skipped test matrix
+        if: steps.filter.outputs.nonSample != 'true' || steps.verbump.outputs.version_only == 'true'
+        run: |
+          {
+            echo "### Test selection: 0 packages"
+            echo
+            echo "The per-package build/test matrix did not run for this change"
+            echo "(docs-only, samples-only, workflow-only, or a release version bump)."
+            echo "A green \`build-and-test\` here means the gates that did run passed,"
+            echo "not that any package's tests were executed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup .NET
+        if: steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || steps.benchmark.outputs.changed == 'true' || (steps.filter.outputs.code == 'true' && steps.verbump.outputs.version_only != 'true')
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      # Cache ~/.nuget/packages between runs.
+      - name: Cache NuGet packages
+        if: steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || steps.benchmark.outputs.changed == 'true' || (steps.filter.outputs.code == 'true' && steps.verbump.outputs.version_only != 'true')
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      # Samples-only fast path: build (and test) each sample under samples/.
+      # The samples reference the library as a ProjectReference, so this
+      # transitively compiles Orleans.Lattice too - enough to catch breaks
+      # introduced by sample-side edits without paying for the full library
+      # test matrix.
+      #
+      # Per-sample change scoping:
+      #   The loop processes only the `samples/<name>/` directories that have
+      #   at least one non-markdown change between the PR base and head SHAs.
+      #   Markdown-only edits inside a sample (e.g. README.md) do not trigger
+      #   a rebuild - they cannot break the build, and pulling a heavyweight
+      #   sample's integration suite into CI for a docs edit wastes runner
+      #   minutes. This mirrors the per-package discovery convention used
+      #   above for `src/{name}/` ↔ `test/{name}/`.
+      #
+      #   When no per-sample match is found (e.g. a shared file under
+      #   `samples/` that doesn't belong to any specific sample), the loop
+      #   falls back to processing every sample, matching the conservative
+      #   fallback in the per-package discovery step.
+      #
+      # Per-sample dispatch:
+      #   1. If `samples/<name>/*.slnx` exists, build that solution. This is
+      #      the right path for multi-project samples (e.g. MultiSiteManufacturing,
+      #      VehicleFleetSimulator) where the sample owns its own slnx.
+      #   2. Otherwise, build every `*.csproj` found anywhere under the sample
+      #      directory. This handles single-project samples (e.g. HelloWorld).
+      #
+      # Test execution: after each sample is built, every `*.Tests.csproj`
+      # discovered under the sample directory is run with `--no-build` and
+      # the deterministic-only filter (chaos category excluded - samples are
+      # not the place to gate CI on flake-prone surface). Trx files are
+      # namespaced by sample so the upload artifact is browsable.
+      #
+      # NOTE: bash's `**` does not recurse without `shopt -s globstar`, so
+      # the previous `samples/**/*.csproj` glob silently missed nested csprojs.
+      # The slnx-first / `find`-fallback dispatch below avoids that footgun.
+      - name: Build and test samples (samples-only change)
+        if: steps.filter.outputs.code == 'true' && steps.filter.outputs.nonSample != 'true' && steps.verbump.outputs.version_only != 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          allSamples=(samples/*/)
+          if [ ${#allSamples[@]} -eq 0 ]; then
+            echo "No samples found under samples/."
+            exit 1
+          fi
+
+          # Per-sample change detection: only act on samples whose tree has at
+          # least one non-markdown change this branch actually made. Three-dot
+          # (diff against the merge base); see `Discover changed packages`. The
+          # diff is computed once and filtered per-sample below.
+          changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+
+          samples=()
+          for sampleDir in "${allSamples[@]}"; do
+            sampleName=$(basename "$sampleDir")
+            # Match files under samples/<name>/ whose extension is not .md.
+            # A sample whose only change is a markdown file (README, plan,
+            # etc.) is not pulled into the build matrix - its expensive
+            # build/test sequence would add minutes of CI runtime for a docs
+            # edit.
+            #
+            # See the package-discovery comment above for why the
+            # downstream grep must not use `-q` under `set -o pipefail`.
+            if echo "$changed" \
+                 | grep -E "^samples/${sampleName}/" \
+                 | grep -vE '\.md$' > /dev/null; then
+              samples+=("$sampleDir")
+            fi
+          done
+
+          if [ ${#samples[@]} -eq 0 ]; then
+            samples=("${allSamples[@]}")
+            echo "No per-sample changes detected; building every sample."
+          else
+            echo "Per-sample changes detected; building only:"
+            printf '  %s\n' "${samples[@]}"
+          fi
+
+          for sampleDir in "${samples[@]}"; do
+            sampleName=$(basename "$sampleDir")
+
+            echo "::group::Build sample: $sampleName"
+            slnxFiles=("${sampleDir}"*.slnx)
+            if [ ${#slnxFiles[@]} -gt 0 ]; then
+              echo "Building solution: ${slnxFiles[0]}"
+              dotnet build "${slnxFiles[0]}" --configuration Release
+            else
+              mapfile -t csprojs < <(find "$sampleDir" -type f -name '*.csproj')
+              if [ ${#csprojs[@]} -eq 0 ]; then
+                echo "::notice::Sample $sampleName has no slnx and no csproj - skipping."
+                echo "::endgroup::"
+                continue
+              fi
+              for proj in "${csprojs[@]}"; do
+                echo "Building project: $proj"
+                dotnet build "$proj" --configuration Release
+              done
+            fi
+            echo "::endgroup::"
+
+            mapfile -t testProjs < <(find "$sampleDir" -type f -name '*.Tests.csproj')
+            if [ ${#testProjs[@]} -eq 0 ]; then
+              echo "::notice::No test projects under $sampleDir - skipping tests."
+              continue
+            fi
+            for testProj in "${testProjs[@]}"; do
+              testName=$(basename "$testProj" .csproj)
+              echo "::group::Test sample: $sampleName / $testName"
+              dotnet test "$testProj" --no-build --configuration Release \
+                --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" \
+                --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+                --logger "trx;LogFileName=samples-${sampleName}-${testName}.trx"
+              echo "::endgroup::"
+            done
+          done
+
+      # Isolated reference-architecture lane. Runs only when a non-markdown file
+      # under reference-architecture/** changed (refArch), independently of the
+      # core library matrix above. The kit is not in Orleans.Lattice.slnx and
+      # references the core library by published PackageReference, so building it
+      # is self-contained and does not compile or test any src/ package. Build
+      # every kit csproj (the silo / MCP / Explorer / hosting-common projects and
+      # the hosting test project) so a host-side or bicep-adjacent change is
+      # compile-checked, then run the kit's own test project(s), deterministic
+      # only (chaos and Azure-emulator categories excluded, mirroring the samples
+      # lane). bin/obj are pruned so stale build outputs are never picked up.
+      - name: Build and test reference architecture (reference-architecture change)
+        if: steps.filter.outputs.refArch == 'true'
+        run: |
+          set -euo pipefail
+
+          mapfile -t csprojs < <(find reference-architecture -type f -name '*.csproj' \
+            -not -path '*/bin/*' -not -path '*/obj/*' | sort)
+          if [ ${#csprojs[@]} -eq 0 ]; then
+            echo "::notice::No reference-architecture csproj found - nothing to build."
+            exit 0
+          fi
+          for proj in "${csprojs[@]}"; do
+            echo "::group::Build $proj"
+            dotnet build "$proj" --configuration Release
+            echo "::endgroup::"
+          done
+
+          mapfile -t testProjs < <(find reference-architecture -type f -name '*.Tests.csproj' \
+            -not -path '*/bin/*' -not -path '*/obj/*' | sort)
+          if [ ${#testProjs[@]} -eq 0 ]; then
+            echo "::notice::No reference-architecture test projects - skipping tests."
+            exit 0
+          fi
+          for testProj in "${testProjs[@]}"; do
+            testName=$(basename "$testProj" .csproj)
+            echo "::group::Test $testName"
+            dotnet test "$testProj" --no-build --configuration Release \
+              --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=refarch-${testName}.trx"
+            echo "::endgroup::"
+          done
+
+      # Isolated apps lane. Runs only when a non-markdown file under apps/**
+      # changed (apps), independently of the core library matrix. The container
+      # host apps map to no src/<name>/ package (see the classification comment
+      # at the top of this job), so a change under apps/ is compile-checked and
+      # covered here instead of fanning out to every package. For each changed
+      # apps/<name>/ directory: build every csproj it owns (the repocontext host
+      # references src/ by ProjectReference, so this transitively compiles the
+      # core library too), then run every test project that covers a changed app
+      # - both a *.Tests.csproj living under the app directory and any
+      # test/**/ *.Tests.csproj that ProjectReferences a changed app csproj (e.g.
+      # test/lattice.api.mcp.repocontext covers apps/repocontext). Deterministic
+      # only (chaos and Azure-emulator categories excluded), mirroring the
+      # samples and reference-architecture lanes. An app with no csproj (e.g.
+      # apps/embedding, a pure Dockerfile build) and an app with no covering test
+      # are both clean no-ops in their respective phases.
+      - name: Build and test apps (apps change)
+        if: steps.filter.outputs.apps == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
+        run: |
+          set -euo pipefail
+
+          # Resolve which apps/<name>/ directories have a non-markdown change.
+          # Three-dot (diff against the merge base); see `Discover changed
+          # packages`.
+          changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          mapfile -t appDirs < <(echo "$changed" \
+            | grep -E '^apps/[^/]+/' \
+            | grep -vE '\.md$' \
+            | sed -E 's#^(apps/[^/]+)/.*#\1#' \
+            | sort -u || true)
+          if [ ${#appDirs[@]} -eq 0 ]; then
+            echo "::notice::No non-markdown apps change resolved to an app directory - nothing to build."
+            exit 0
+          fi
+          echo "Changed app directories: ${appDirs[*]}"
+
+          # Build each changed app's csproj(s). ProjectReferences into src/ mean
+          # this compile-checks the host and the core projects it consumes.
+          appProjs=()
+          for appDir in "${appDirs[@]}"; do
+            while IFS= read -r p; do
+              [ -n "$p" ] && appProjs+=("$p")
+            done < <(find "$appDir" -type f -name '*.csproj' \
+              -not -path '*/bin/*' -not -path '*/obj/*' | sort)
+          done
+          if [ ${#appProjs[@]} -eq 0 ]; then
+            echo "::notice::No csproj under the changed app directories (pure Dockerfile build) - nothing to compile."
+          else
+            for proj in "${appProjs[@]}"; do
+              echo "::group::Build $proj"
+              dotnet build "$proj" --configuration Release
+              echo "::endgroup::"
+            done
+          fi
+
+          # Collect covering test projects: any *.Tests.csproj under a changed
+          # app directory, plus any test/**/ *.Tests.csproj that ProjectReferences
+          # a changed app's csproj (matched by csproj file name).
+          testProjs=()
+          for appDir in "${appDirs[@]}"; do
+            while IFS= read -r t; do
+              [ -n "$t" ] && testProjs+=("$t")
+            done < <(find "$appDir" -type f -name '*.Tests.csproj' \
+              -not -path '*/bin/*' -not -path '*/obj/*' | sort)
+          done
+          for proj in "${appProjs[@]}"; do
+            projFile=$(basename "$proj")
+            while IFS= read -r t; do
+              [ -n "$t" ] && testProjs+=("$t")
+            done < <(grep -rlF "$projFile" test --include='*.Tests.csproj' 2>/dev/null | sort -u || true)
+          done
+          if [ ${#testProjs[@]} -eq 0 ]; then
+            echo "::notice::No test project covers the changed apps - build-only."
+            exit 0
+          fi
+          mapfile -t testProjs < <(printf '%s\n' "${testProjs[@]}" | sort -u)
+          echo "Covering test projects: ${testProjs[*]}"
+
+          for testProj in "${testProjs[@]}"; do
+            testName=$(basename "$testProj" .csproj)
+            echo "::group::Build $testName"
+            dotnet build "$testProj" --configuration Release
+            echo "::endgroup::"
+            echo "::group::Test $testName"
+            dotnet test "$testProj" --no-build --configuration Release \
+              --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=apps-${testName}.trx"
+            echo "::endgroup::"
+          done
+
+      # Dedicated benchmark-harness lane. Runs independently of the core library
+      # matrix whenever the benchmark harness changed (benchmark). The harness
+      # projects (benchmark/azure-throughput Silo/Producer, benchmark/host
+      # BenchmarkDotNet apps) are NOT in Orleans.Lattice.slnx and map to no
+      # src/<name>/ package, so - like the samples, reference-architecture and
+      # apps lanes - a change to them is compile-checked and covered here instead
+      # of fanning out to every package. Every csproj under benchmark/ is built
+      # (the Silo references src/ by ProjectReference, so this transitively
+      # compiles the core library too), then every test project that covers a
+      # benchmark csproj is run: any test/**/ *.Tests.csproj that
+      # ProjectReferences a benchmark csproj (e.g. test/azure-throughput-silo
+      # covers the Silo). Deterministic only (chaos and Azure-emulator categories
+      # excluded), mirroring the samples/reference-architecture/apps lanes.
+      #
+      # A small deny-list (BENCH_EXCLUDE) skips orphaned experimental harnesses
+      # that are neither in Orleans.Lattice.slnx nor referenced by the
+      # performance-report scripts and have bit-rotted against the current
+      # library API (they were never compiled by any build gate). They are
+      # skipped with a visible ::warning:: rather than silently, so the lane
+      # stays deterministically green while the drift remains tracked. Migrating
+      # them back to the current WAL API is separate follow-up work; drop a path
+      # from BENCH_EXCLUDE once its project compiles again.
+      - name: Build and test benchmark harness (benchmark change)
+        if: steps.benchmark.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+
+          # Build every csproj under benchmark/ (compile-check the harness),
+          # skipping the orphaned bit-rotted harnesses listed in BENCH_EXCLUDE.
+          BENCH_EXCLUDE=(
+            # Orphaned: not in the solution, unreferenced by the perf scripts,
+            # and no longer compiles against the current WalRecord WAL API.
+            'benchmark/host/Bench.WalAzureTable/Orleans.Lattice.Benchmark.WalAzureTable.csproj'
+          )
+          mapfile -t allBenchProjs < <(find benchmark -type f -name '*.csproj' \
+            -not -path '*/bin/*' -not -path '*/obj/*' | sort)
+          benchProjs=()
+          for proj in "${allBenchProjs[@]}"; do
+            skip=false
+            for ex in "${BENCH_EXCLUDE[@]}"; do
+              if [ "$proj" = "$ex" ]; then skip=true; break; fi
+            done
+            if [ "$skip" = true ]; then
+              echo "::warning::Skipping orphaned benchmark project (bit-rotted against current API): $proj"
+              continue
+            fi
+            benchProjs+=("$proj")
+          done
+          if [ ${#benchProjs[@]} -eq 0 ]; then
+            echo "::notice::No csproj under benchmark/ - nothing to compile."
+            exit 0
+          fi
+          for proj in "${benchProjs[@]}"; do
+            echo "::group::Build $proj"
+            dotnet build "$proj" --configuration Release
+            echo "::endgroup::"
+          done
+
+          # Collect covering test projects: any test/**/ *.Tests.csproj that
+          # ProjectReferences a benchmark csproj (matched by csproj file name).
+          testProjs=()
+          for proj in "${benchProjs[@]}"; do
+            projFile=$(basename "$proj")
+            while IFS= read -r t; do
+              [ -n "$t" ] && testProjs+=("$t")
+            done < <(grep -rlF "$projFile" test --include='*.Tests.csproj' 2>/dev/null | sort -u || true)
+          done
+          if [ ${#testProjs[@]} -eq 0 ]; then
+            echo "::notice::No test project covers the benchmark harness - build-only."
+            exit 0
+          fi
+          mapfile -t testProjs < <(printf '%s\n' "${testProjs[@]}" | sort -u)
+          echo "Covering test projects: ${testProjs[*]}"
+
+          for testProj in "${testProjs[@]}"; do
+            testName=$(basename "$testProj" .csproj)
+            echo "::group::Build $testName"
+            dotnet build "$testProj" --configuration Release
+            echo "::endgroup::"
+            echo "::group::Test $testName"
+            dotnet test "$testProj" --no-build --configuration Release \
+              --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=benchmark-${testName}.trx"
+            echo "::endgroup::"
+          done
+
+      - name: Restore
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
+        run: dotnet restore
+
+      # Whole-solution build, used only when a shared/root change fanned the
+      # test matrix out to every package (build_all=true). One solution build
+      # is faster than looping every project separately.
+      - name: Build (all packages - shared/root change)
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true' && steps.discover.outputs.build_all == 'true'
+        run: dotnet build --no-restore --configuration Release
+
+      # Selective build: compile only the in-scope packages. Building each
+      # package's test project transitively compiles its src project (and its
+      # dependency graph) in Release, which is exactly what the downstream
+      # `dotnet test --no-build` steps consume. Packages with no test project
+      # fall back to building the src csproj directly so a src-only change is
+      # still compile-checked. This mirrors the per-package test scoping - a PR
+      # that touches one package no longer pays to rebuild the whole solution.
+      - name: Build changed packages
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true' && steps.discover.outputs.build_all != 'true'
+        run: |
+          set -euo pipefail
+          for name in ${{ steps.discover.outputs.to_test }}; do
+            testProj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
+            if [ -n "$testProj" ]; then
+              echo "::group::Build ${name} (test project -> transitively builds src)"
+              dotnet build "$testProj" --no-restore --configuration Release
+              echo "::endgroup::"
+              continue
+            fi
+            srcProj=$(ls "src/${name}"/*.csproj 2>/dev/null | head -n 1 || true)
+            if [ -n "$srcProj" ]; then
+              echo "::group::Build ${name} (src project - no test project)"
+              dotnet build "$srcProj" --no-restore --configuration Release
+              echo "::endgroup::"
+            else
+              echo "::notice::No csproj found for ${name} - nothing to build."
+            fi
+          done
+
+      # Per-package test execution. Two separate top-level steps preserve the
+      # chaos-first / deterministic split from the previous static layout: all
+      # in-scope packages run their chaos suite first, then their deterministic
+      # suite. A failure in either step short-circuits the next via the default
+      # `success()` gate on subsequent steps. Per-package trx files keep test
+      # results identifiable in the upload artifact.
+      #
+      # Convention: tests at `test/{name}/*.Tests.csproj`. A discovered package
+      # without a matching test project is silently skipped (e.g. a future
+      # `src/foo/` that has no `test/foo/`).
+      # Ensure Azurite is accepting connections before the AzureStorageEmulator
+      # tests run (they self-skip on a connection failure, so a not-yet-ready
+      # emulator would silently drop that coverage rather than fail). The service
+      # starts at job start and restore/build precede this, so it is normally
+      # already satisfied; this is a cheap guard against a cold-start race.
+      - name: Wait for Azurite
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
+        run: |
+          for port in 10000 10001 10002; do
+            for i in $(seq 1 30); do
+              if (echo > "/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+                echo "Azurite port ${port} ready"; break
+              fi
+              if [ "$i" -eq 30 ]; then echo "::error::Azurite port ${port} not ready after 30s"; exit 1; fi
+              sleep 1
+            done
+          done
+
+      - name: Test changed packages (deterministic)
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
+        # The leaf-side projection-digest publish is coalesced behind a
+        # short one-shot grain timer, so the digest-settle integration
+        # oracles poll the chained-fold aggregate until it converges to
+        # the authoritative live count. Under full-suite parallel load a
+        # post-split aggregate can transiently overshoot (a new leaf's
+        # count folds in before the donor's corrective reduction is
+        # scheduled off the backlogged grain-call queue) and take longer
+        # than the 20s default to settle. The settle helper exposes
+        # LATTICE_DIGEST_SETTLE_TIMEOUT_MS precisely so a saturated runner
+        # can grant a longer convergence budget; wire it here. This does
+        # not mask a real convergence bug - a digest that settles on a
+        # wrong value still fails, it only grants more wall-clock time for
+        # a correct-but-slow convergence on a loaded runner.
+        env:
+          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
+        run: |
+          set -euo pipefail
+          for name in ${{ steps.discover.outputs.to_test }}; do
+            proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
+            if [ -z "$proj" ]; then
+              echo "::notice::No test project under test/${name}/ - skipping."
+              continue
+            fi
+            echo "::group::Test ${name} (deterministic)"
+            dotnet test "$proj" --no-build --configuration Release \
+              --filter "TestCategory!=Chaos&TestCategory!=Coyote" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=${name}-results.trx"
+            echo "::endgroup::"
+          done
+
+      - name: Test changed packages (Coyote systematic concurrency)
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
+        # Runs after the deterministic unit tests and before the chaos suite:
+        # normal -> coyote -> chaos. Opt-in tier. Coyote models drive the
+        # shared, dependency-free correctness cores (e.g. AtomicVisibilityGate)
+        # through systematic schedule exploration. They use no Orleans cluster,
+        # so they are fast and deterministic, but they are held out of the
+        # deterministic step (via TestCategory!=Coyote above) and run here on
+        # their own so a model regression is attributed to this tier rather than
+        # buried in the per-package suite.
+        run: |
+          set -euo pipefail
+          for name in ${{ steps.discover.outputs.to_test }}; do
+            proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
+            if [ -z "$proj" ]; then
+              continue
+            fi
+            echo "::group::Test ${name} (Coyote)"
+            dotnet test "$proj" --no-build --configuration Release \
+              --filter "TestCategory=Coyote" \
+              --logger "trx;LogFileName=${name}-coyote.trx"
+            echo "::endgroup::"
+          done
+
+      - name: Test changed packages (chaos)
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
+        # See the deterministic step above for why the digest-settle
+        # convergence budget is widened on a loaded CI runner via
+        # LATTICE_DIGEST_SETTLE_TIMEOUT_MS. The chaos digest suite leans on
+        # the same settle helper under even heavier fault-injection load.
+        # Runs last (normal -> coyote -> chaos) so the fast deterministic and
+        # Coyote tiers report first and a fault-injection failure is attributed
+        # to this tier rather than buried among the per-package suites.
+        env:
+          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
+        run: |
+          set -euo pipefail
+          for name in ${{ steps.discover.outputs.to_test }}; do
+            proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
+            if [ -z "$proj" ]; then
+              echo "::notice::No test project under test/${name}/ - skipping."
+              continue
+            fi
+            echo "::group::Test ${name} (chaos)"
+            dotnet test "$proj" --no-build --configuration Release \
+              --filter "TestCategory=Chaos&TestCategory!=AzureStorageEmulator" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=${name}-chaos.trx"
+            echo "::endgroup::"
+          done
+
+      # Upload test results even if the Test step fails. Gated on `code`,
+      # `refArch`, or `apps` rather than `nonSample` so trx files produced by the
+      # samples-only path, the reference-architecture lane, and the apps lane are
+      # also captured.
+      - name: Upload test results
+        if: always() && (steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || steps.benchmark.outputs.changed == 'true')
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-results
+          # Include blame-hang crash dumps (*.dmp) and the sequence file
+          # alongside the trx logs so a hung test can be diagnosed from the
+          # captured process state, not just inferred from a missing result.
+          path: |
+            **/*.trx
+            **/*.dmp
+            **/Sequence_*.xml

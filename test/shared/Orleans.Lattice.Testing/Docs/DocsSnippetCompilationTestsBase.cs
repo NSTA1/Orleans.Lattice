@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using NUnit.Framework;
+using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Testing.Docs;
 
@@ -64,9 +65,11 @@ public abstract class DocsSnippetCompilationTestsBase
 
         var failures = new List<string>();
         int compiled = 0;
+        int scanned = 0;
 
         foreach (var file in EnumerateOwnedMarkdown(docsRoot, repoRoot))
         {
+            scanned++;
             var text = File.ReadAllText(file);
             var matches = VerifyFenceRegex.Matches(text);
             if (matches.Count == 0)
@@ -87,6 +90,23 @@ public abstract class DocsSnippetCompilationTestsBase
                 }
             }
         }
+
+        // Anti-vacuity control on the scan's denominator, matching the hygiene
+        // gates. A scope that enumerates no markdown produces an empty failure
+        // list and reports a pass, which is indistinguishable from a scope whose
+        // snippets all compiled - and the collapse needs no obvious mistake:
+        // EnumerateOwnedMarkdown skips a package docs root that does not exist
+        // rather than complaining, so a renamed, moved, or mistyped root in the
+        // bound scope silently reduces this gate to a no-op. The denominator is
+        // files opened, not snippets compiled, so a docs slice that has markdown
+        // but no verify-fenced C# yet stays legal.
+        HygieneDenominator.RequireExamined(
+            scanned,
+            GetType().FullName ?? nameof(DocsSnippetCompilationTestsBase),
+            "markdown files",
+            Scope.IsCore
+                ? $"docs/ minus {Scope.ClaimedPackageDocsRoots.Count} claimed package root(s), plus README.md"
+                : $"package docs root(s) [{string.Join(", ", Scope.PackageDocsRoots)}]");
 
         Assert.That(
             failures,
@@ -454,6 +474,7 @@ public abstract class DocsSnippetCompilationTestsBase
 
         var refs = new List<MetadataReference>();
         var seen = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        var seenNames = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
 
         // Pull in everything the test host has loaded so far.
         foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
@@ -462,6 +483,7 @@ public abstract class DocsSnippetCompilationTestsBase
             var loc = asm.Location;
             if (string.IsNullOrEmpty(loc)) continue;
             if (!seen.Add(loc)) continue;
+            seenNames.Add(Path.GetFileNameWithoutExtension(loc));
             refs.Add(MetadataReference.CreateFromFile(loc));
         }
 
@@ -474,8 +496,56 @@ public abstract class DocsSnippetCompilationTestsBase
         {
             if (seen.Add(dll))
             {
+                seenNames.Add(Path.GetFileNameWithoutExtension(dll));
                 try { refs.Add(MetadataReference.CreateFromFile(dll)); }
                 catch { /* skip non-managed / unreadable */ }
+            }
+        }
+
+        // Backfill the rest of the base framework from the Microsoft.NETCore.App
+        // shared framework directory, exactly as the ASP.NET Core block below
+        // does for its own framework.
+        //
+        // Without this the reference set is a function of WHICH ASSEMBLIES THE
+        // TEST HOST HAPPENED TO LOAD FIRST, which made this gate order-dependent:
+        // the two loops above see only the BCL assemblies some earlier fixture
+        // pulled in, so a snippet using a lazily-loaded corner of the BCL
+        // compiles in a full-project run and fails with CS1069 ("has been
+        // forwarded to assembly ... Consider adding a reference") when the same
+        // fixture is run on its own - under a --filter, under a single-fixture
+        // re-run of a CI failure, or in an IDE. Hand-touching one more type per
+        // symptom only moves the boundary; enumerating the framework removes the
+        // order-dependence outright.
+        //
+        // Simple-name deduplication keeps the earlier passes authoritative, so a
+        // product or output-directory assembly is never shadowed by a
+        // same-named framework copy (which would raise CS0433 ambiguity).
+        var coreLibDir = Path.GetDirectoryName(typeof(object).Assembly.Location);
+        if (!string.IsNullOrEmpty(coreLibDir) && Directory.Exists(coreLibDir))
+        {
+            foreach (var dll in Directory.EnumerateFiles(coreLibDir, "*.dll"))
+            {
+                // The shared framework directory also holds native libraries
+                // (msquic.dll, mscordbi.dll, System.IO.Compression.Native.dll).
+                // MetadataReference.CreateFromFile does not read the file eagerly,
+                // so handing it a native image throws nothing here and instead
+                // surfaces later as a CS0009 compile error against every snippet.
+                // Probe for managed metadata first.
+                if (!IsManagedAssembly(dll))
+                {
+                    continue;
+                }
+
+                if (!seenNames.Add(Path.GetFileNameWithoutExtension(dll)))
+                {
+                    continue;
+                }
+
+                if (seen.Add(dll))
+                {
+                    try { refs.Add(MetadataReference.CreateFromFile(dll)); }
+                    catch { /* skip non-managed / unreadable */ }
+                }
             }
         }
 
@@ -504,6 +574,33 @@ public abstract class DocsSnippetCompilationTestsBase
         }
 
         return _metadataReferences = refs;
+    }
+
+    /// <summary>
+    /// Reports whether <paramref name="path"/> is a managed assembly, so native
+    /// images sitting alongside the framework assemblies are excluded from the
+    /// reference set rather than deferred into a CS0009 compile error.
+    /// </summary>
+    private static bool IsManagedAssembly(string path)
+    {
+        try
+        {
+            _ = System.Reflection.AssemblyName.GetAssemblyName(path);
+            return true;
+        }
+        catch (System.BadImageFormatException)
+        {
+            return false;
+        }
+        catch (System.IO.FileLoadException)
+        {
+            // Already loaded from a different path - it is managed.
+            return true;
+        }
+        catch (System.IO.IOException)
+        {
+            return false;
+        }
     }
 
     private string FindDocsRoot()

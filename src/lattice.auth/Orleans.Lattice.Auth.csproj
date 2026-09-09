@@ -7,9 +7,6 @@
     <PackageId>Orleans.Lattice.Auth</PackageId>
     <Version>9.6.1</Version>
     <Description>Authorization add-on for Orleans.Lattice. Ships the authorization rule model (subject selector, scope, operations, effect) and a durable, introspectable policy store backed by a reserved, dogfooded lattice tree with per-key history. The decision engine and read/write enforcement are layered by later releases.</Description>
-    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 

@@ -32,6 +32,33 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
   </ItemGroup>
 
+  <!--
+    Transitive security floors.
+
+    Orleans.Lattice.Api.Mcp 9.6.1 was packed before the 9.6.2 patch wave, so the
+    dependency floors it emits still name the pre-wave versions (Orleans.Lattice
+    >= 9.6.1, the facade gRPC clients >= 9.6.0). NuGet resolves a floor to the
+    LOWEST version that satisfies it, so without the pins below this head would
+    restore the unpatched graph - including the api.state.grpc lockout bypass
+    fixed in the wave.
+
+    These are deliberate version overrides, not new direct dependencies: the
+    packages still arrive transitively via Api.Mcp exactly as documented above,
+    and each pin only raises the resolved version to the patched release. Remove
+    a pin once Api.Mcp ships a version whose own floor is at or above it.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Orleans.Lattice" Version="9.6.2" />
+    <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="9.6.1" />
+    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="9.6.1" />
+    <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="9.6.1" />
+    <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="9.6.1" />
+    <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="9.6.1" />
+    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin.Grpc" Version="9.6.1" />
+    <PackageReference Include="Orleans.Lattice.Api.Schema.Grpc" Version="9.6.1" />
+    <PackageReference Include="Orleans.Lattice.Api.TenantAdmin.Grpc" Version="9.6.1" />
+  </ItemGroup>
+
   <!-- Shared reference-architecture hosting helpers (Front Door origin lock). -->
   <ItemGroup>
     <ProjectReference Include="..\Common\Orleans.Lattice.ReferenceArchitecture.Hosting.csproj" />

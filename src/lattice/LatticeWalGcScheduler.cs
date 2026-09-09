@@ -86,6 +86,27 @@ internal sealed class LatticeWalGcScheduler(
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
     /// <summary>
+    /// Longest delay <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/>
+    /// accepts. A larger value throws <see cref="ArgumentOutOfRangeException"/>
+    /// synchronously, so every delay this scheduler arms is clamped to it
+    /// first. None of the three cadence knobs
+    /// (<see cref="LatticeOptions.WalGcInterval"/>,
+    /// <see cref="LatticeOptions.WalGcMinInterval"/>,
+    /// <see cref="LatticeOptions.WalGcStartupDelay"/>) carries an upper bound or
+    /// is validated, so a startup stagger, cadence wait, or quiet backoff longer
+    /// than this (a configured interval above roughly 49 days) would otherwise
+    /// throw out of <see cref="SafeDelayAsync"/> and, because this is a
+    /// <see cref="BackgroundService"/> under the default
+    /// <see cref="BackgroundServiceExceptionBehavior.StopHost"/>, take the whole
+    /// silo host down. Clamping wakes the scheduler at least this often to
+    /// re-evaluate, which is strictly more collection than the extreme interval
+    /// asked for, never less. This mirrors the guard
+    /// <see cref="LatticeStorageUsagePoller"/> already applies to its
+    /// <see cref="System.Threading.PeriodicTimer"/> cadence.
+    /// </summary>
+    private static readonly TimeSpan MaxSchedulableDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    /// <summary>
     /// Per-tree cadence state, keyed by tree id. Bounded by the number of
     /// registered trees: an entry is seeded the first time a tree is seen and
     /// dropped once the registry stops reporting it, so a deleted tree cannot
@@ -184,6 +205,15 @@ internal sealed class LatticeWalGcScheduler(
 
     private async Task<bool> SafeDelayAsync(TimeSpan delay, CancellationToken stoppingToken)
     {
+        // Clamp before delegating: Task.Delay throws ArgumentOutOfRangeException
+        // synchronously for a delay above MaxSchedulableDelay, and that throw
+        // would escape ExecuteAsync and stop the host. An out-of-range cadence
+        // knob must degrade the scheduler, never fault the silo.
+        if (delay > MaxSchedulableDelay)
+        {
+            delay = MaxSchedulableDelay;
+        }
+
         try
         {
             await Task.Delay(delay, _time, stoppingToken).ConfigureAwait(false);
@@ -285,7 +315,7 @@ internal sealed class LatticeWalGcScheduler(
                 interval,
                 stoppingToken).ConfigureAwait(false);
 
-            var dueTicks = _time.GetUtcNow().UtcTicks + next.Ticks;
+            var dueTicks = SaturatingDueTicks(_time.GetUtcNow().UtcTicks, next.Ticks);
             _cadence[treeId] = new TreeCadence(next.Ticks, dueTicks, generation);
             if (dueTicks < earliestDueTicks)
             {
@@ -405,6 +435,22 @@ internal sealed class LatticeWalGcScheduler(
 
         LatticeMetrics.WalGcBacklogBytes.Record(backlogBytes, treeTag, tenantTag);
     }
+
+    /// <summary>
+    /// Adds <paramref name="addTicks"/> to <paramref name="nowTicks"/>,
+    /// saturating at <see cref="long.MaxValue"/> so the next-due time can never
+    /// overflow to a negative (past) tick count. <see cref="LatticeOptions.WalGcInterval"/>
+    /// carries no upper bound and is not validated, so an operator-supplied
+    /// interval near <see cref="TimeSpan.MaxValue"/> would otherwise wrap the
+    /// sum negative: the tree would then compare due on every subsequent pass,
+    /// <c>earliestDueTicks</c> would go negative, and the pass would return
+    /// <see cref="TimeSpan.Zero"/> - driving the scheduler into a zero-wait busy
+    /// loop, the exact opposite of the rare collection an extreme interval
+    /// expresses. Saturating instead schedules the tree far in the future and
+    /// lets the scheduler quiesce.
+    /// </summary>
+    private static long SaturatingDueTicks(long nowTicks, long addTicks)
+        => addTicks > long.MaxValue - nowTicks ? long.MaxValue : nowTicks + addTicks;
 
     /// <summary>
     /// Doubles <paramref name="current"/> toward <paramref name="max"/>, never

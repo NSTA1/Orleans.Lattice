@@ -135,6 +135,27 @@ public sealed class GrainIndexOutboxHostedServiceTests
     }
 
     [Test]
+    public async Task An_out_of_range_retry_interval_is_clamped_so_the_drain_still_runs()
+    {
+        var store = new RecordingEnrollmentStore();
+        // Far beyond PeriodicTimer's ~49.71-day ceiling (uint.MaxValue-1 ms).
+        // RetryInterval carries no upper bound and is not validated, so an
+        // unclamped value would throw ArgumentOutOfRangeException out of the
+        // PeriodicTimer constructor before the drain loop starts, leaving the
+        // outbox permanently undrained - the opposite of this service's
+        // convergence guarantee.
+        using var service = ServiceOver(store, options => options.RetryInterval = TimeSpan.FromDays(60));
+
+        await service.StartAsync(CancellationToken.None);
+        await store.ScanObserved.Task.WaitAsync(SignalBudget);
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.That(store.Log, Does.Contain("scan"),
+            "A RetryInterval past the timer ceiling must be clamped, not allowed to throw out of the "
+            + "loop and leave the outbox undrained.");
+    }
+
+    [Test]
     public void A_null_dependency_is_rejected_at_construction()
     {
         var drainer = DrainerOver(new RecordingEnrollmentStore());

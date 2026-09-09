@@ -8,9 +8,6 @@
     <PackageId>Orleans.Lattice.Explorer.Access</PackageId>
     <Version>9.4.0</Version>
     <Description>The Access (membership and access-control) Explorer plugin: a self-contained plugin package carrying its own auth-admin control-API gRPC client, its membership / policy / directory domain model, its Razor views, and its plugin-scoped stylesheet. Registered with AddExplorerPlugin, gated by its own four-state access gate, and styled against Orleans.Lattice.Explorer.DesignSystem. Served by a referencing app at _content/Orleans.Lattice.Explorer.Access.</Description>
-    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 
