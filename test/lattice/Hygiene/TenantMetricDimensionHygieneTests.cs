@@ -96,9 +96,10 @@ public sealed class TenantMetricDimensionHygieneTests
     ///   caller-chosen name, and an insecure-channel warning is keyed by peer and
     ///   transport; neither carries a tree.</item>
     ///   <item><b>Platform tooling</b> - the repository-context MCP surface meters
-    ///   its own usage, its own retrieval readiness, and which plane its retrieval
-    ///   was served from, all of which are properties of the operator-facing host
-    ///   process rather than of any tenant's traffic.</item>
+    ///   its own usage, its own retrieval readiness, which plane its retrieval
+    ///   was served from, and which arm of an indexing pass faulted, all of which
+    ///   are properties of the operator-facing host process rather than of any
+    ///   tenant's traffic.</item>
     /// </list>
     /// Adding an instrument here is a deliberate, reviewable act: it declares the
     /// series invisible to every tenant-scoped telemetry query.
@@ -168,6 +169,14 @@ public sealed class TenantMetricDimensionHygieneTests
         // the signal.
         "_annSearches",
         "_callsCounter",
+        // repocontext.bootstrap.pass_arm_faults - indexing-pass arm faults, tagged by
+        // arm and fault kind. An indexing pass is a single HOST-PROCESS background loop
+        // and the repocontext trees it reconciles are process-wide, shared across every
+        // registered repository, so which arm faulted is a property of this host rather
+        // than of any tenant's traffic. Same reason as _annSweeps. Uniformly the
+        // sentinel by necessity as well as by doctrine: a stalled scan names a tree but
+        // the other faults name none, and an instrument may not mix the two.
+        "_passArmFaults",
         // repocontext.retrieval.ready_seconds - time from host start to the retrieval
         // plane first serving. Readiness is a property of the HOST PROCESS, not of any
         // tenant's data: the box either can serve semantic retrieval or it cannot, so

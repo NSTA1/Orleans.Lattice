@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -33,9 +34,17 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// surface.
 /// </para>
 /// </summary>
-internal sealed class RepoContextBootstrapService
+internal sealed class RepoContextBootstrapService : IDisposable
 {
     private const int WriteChunkSize = 256;
+
+    /// <summary>
+    /// The instrument name for the per-arm pass-fault counter. Tagged by the arm
+    /// that faulted and the fault kind, so an operator watching a repository that
+    /// never completes a pass can read WHICH stage is aborting it without
+    /// correlating log lines by timestamp.
+    /// </summary>
+    private const string PassArmFaultInstrumentName = "repocontext.bootstrap.pass_arm_faults";
 
     /// <summary>
     /// How many additional files must embed between vectorising heartbeat log
@@ -64,6 +73,14 @@ internal sealed class RepoContextBootstrapService
     private readonly RepoContextIndexingOptions _options;
     private readonly ILogger<RepoContextBootstrapService> _logger;
     private readonly IRepoContextSourceScanner? _sourceScanner;
+
+    // The meter is declared above every instrument it owns, and each instrument is
+    // constructed from THIS field, so re-ordering the two throws loudly at type
+    // initialisation rather than publishing an instrument whose meter is still null
+    // (which would silently fail to enable, and surface as a phantom "expected 1,
+    // but was 0" in an unrelated fixture). Enforced by MeterFieldDeclarationOrderTests.
+    private readonly Meter _meter;
+    private readonly Counter<long> _passArmFaults;
 
     /// <summary>
     /// The per-repository cross-walk pruning cache, keyed by repository id. Each entry
@@ -158,6 +175,66 @@ internal sealed class RepoContextBootstrapService
         _options = options;
         _logger = logger;
         _sourceScanner = sourceScanner;
+
+        // Publish under the same meter name as the rest of the repocontext surface so
+        // a single scraper subscription covers it.
+        _meter = new Meter(RepoContextUsageRecorder.MeterName);
+        _passArmFaults = _meter.CreateCounter<long>(
+            PassArmFaultInstrumentName,
+            unit: "{fault}",
+            description: "Indexing-pass arm faults, tagged by the arm that faulted and the fault kind.");
+    }
+
+    /// <summary>Disposes the meter this service publishes its instruments on.</summary>
+    public void Dispose() => _meter.Dispose();
+
+    /// <summary>
+    /// Records that one arm of an indexing pass faulted: a counter tagged by the arm
+    /// and the fault kind, plus - when the fault is a stalled range-scan page - the
+    /// stall's own typed diagnostic context as structured log fields.
+    /// <para>
+    /// The stall already increments a lattice-layer counter at its throw site, tagged
+    /// by tree and shard. What that cannot say is WHICH consumer the abort cost, so a
+    /// repository that never completes a pass leaves an operator correlating log lines
+    /// by timestamp to find the stage that aborted it. This names the arm directly.
+    /// </para>
+    /// </summary>
+    private void RecordArmFault(string repoId, string arm, Exception ex)
+    {
+        // The stall arrives either directly or wrapped by the grain call boundary, so
+        // both are unwrapped before classifying; anything else is tagged by its type
+        // name, which is bounded by the exception types the arms can raise.
+        var stall = ex as ScanPageStalledException ?? ex.InnerException as ScanPageStalledException;
+        var kind = stall is not null ? "scan-page-stalled" : ex.GetType().Name;
+
+        _passArmFaults.Add(
+            1,
+            new KeyValuePair<string, object?>("arm", arm),
+            new KeyValuePair<string, object?>("kind", kind),
+            // An indexing pass is a host-process background loop, not tenant traffic:
+            // the repocontext trees are process-wide and shared across every indexed
+            // repository, so an arm fault is a property of this host rather than of any
+            // tenant. The same reason _annSweeps carries the sentinel. It is uniformly
+            // Platform - the stall names a tree, but the counter also fires for faults
+            // that name none, and an instrument may not mix a derived tenant with the
+            // sentinel.
+            LatticeTenantLabel.Platform);
+
+        // Deliberately NOT tagged by repository. Every instrument on this meter is
+        // documented as carrying only low-cardinality tags and "never a repository
+        // id", and a repository count is unbounded in principle because repositories
+        // are registered at runtime. Tagging by repo would also contradict the
+        // host-process reasoning above that puts this instrument on the platform
+        // sentinel. The identity is not lost: the warning below carries RepoId, which
+        // is where an unbounded identifier belongs.
+
+        if (stall is not null)
+        {
+            _logger.LogWarning(
+                "Repo {RepoId}: the {Arm} arm was aborted by a stalled range-scan page on tree {TreeId} "
+                + "shard {ShardIndex} during {Operation} (phase {Phase}, {LeavesVisited} leaf/leaves visited).",
+                repoId, arm, stall.TreeId, stall.ShardIndex, stall.Operation, stall.Phase, stall.LeavesVisited);
+        }
     }
 
     /// <summary>
@@ -433,6 +510,17 @@ internal sealed class RepoContextBootstrapService
                 "Repo {RepoId}: plan - {Added} added, {Updated} updated, {MetadataChanged} anchor-refreshed, {Removed} removed, {Unchanged} unchanged, {SymbolBackfill} symbol back-fill, {ContentBackfill} content back-fill, {XrefBackfill} xref back-fill; {Chunks} chunk(s) to commit.",
                 repoId, plan.Added.Count, plan.Updated.Count, plan.MetadataChanged.Count, plan.RemovedPaths.Count, plan.Unchanged.Count, symbolBackfill.Count, contentBackfill.Count, xrefBackfill.Count, chunksTotal);
 
+            // Hoisted above the apply block so the retirement arm can join the same
+            // collect-and-rethrow tolerance the embedding arms below already use. The
+            // pass is still reported as failed and re-driven; what changes is that a
+            // fault in ONE arm no longer costs every other arm its pass (#2395).
+            Exception? armFailure = null;
+
+            // The removals this pass will actually act on. A retirement failure empties
+            // this WHOLESALE - see the guard below - so the removal set is either
+            // applied in full or deferred in full, and never in part.
+            var removalsThisPass = plan.RemovedPaths;
+
             if (!plan.IsNoOp || backfill.Count > 0)
             {
                 phase = RepoIndexPhase.Applying;
@@ -455,8 +543,50 @@ internal sealed class RepoContextBootstrapService
                 // the structural record in place, so the next run re-drives the
                 // same removal (idempotently) rather than orphaning a vector - which
                 // keeps the membership set an honest tally of live embeddings.
-                await _vectorIngestor.RetireAsync(repoId, plan.RemovedPaths, cancellationToken)
-                    .ConfigureAwait(false);
+                //
+                // (#2395) A fault here - characteristically a ScanPageStalledException
+                // from the vector-metadata range scan the retirement reads - used to
+                // abort the WHOLE pass before a single structural record was written,
+                // so a repository re-scanned every file and banked nothing, forever.
+                // The fault is now collected and rethrown at the end of the pass with
+                // the other arms: adds, updates and back-fills still commit, the run is
+                // still reported failed, and the removals are deferred to the next pass.
+                //
+                // The deferral is ALL-OR-NOTHING and that is the load-bearing property.
+                // On failure the removal set is emptied wholesale and NOTHING partial is
+                // banked, consumed, or read as a skip signal, so no downstream decision
+                // is ever made on partial information. That is exactly the distinction
+                // from a tolerance model that banks a truncated read and treats it as an
+                // observation: an incomplete read that is indistinguishable from a
+                // genuine absence is how coverage fails to converge (#2287). Deferring
+                // wholesale cannot produce that shape, because it asserts nothing.
+                //
+                // It is safe to defer because RemovedPaths is recomputed from scratch on
+                // every pass (stored digests diffed against the fresh scan), so a skipped
+                // removal is re-derived next pass rather than lost - the same
+                // idempotent re-drive the ordering comment above already relies on for a
+                // crash between the two steps. Deferring leaves the tree holding the
+                // not-yet-pruned nodes while the repo marker's LiveFileCount counts only
+                // the scanned set, so that count under-reports the stored node population
+                // by exactly the deferred removals, for exactly one pass, and self-heals.
+                try
+                {
+                    await _vectorIngestor.RetireAsync(repoId, plan.RemovedPaths, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    armFailure = ex;
+                    removalsThisPass = [];
+                    RecordArmFault(repoId, "retire", ex);
+                    _logger.LogWarning(
+                        ex,
+                        "Repo {RepoId}: retiring {Removed} removed file(s)' vectors did not complete this "
+                        + "pass; deferring ALL {Removed} removal(s) wholesale (nothing is pruned on a partial "
+                        + "view) and continuing with the rest of the pass. The removals are re-derived and "
+                        + "re-driven on the next reconcile.",
+                        repoId, plan.RemovedPaths.Count, plan.RemovedPaths.Count);
+                }
 
                 // Reconcile the per-symbol structural records BEFORE the file nodes
                 // are rewritten. Ordering symbols first makes the pass resumable: a
@@ -468,7 +598,7 @@ internal sealed class RepoContextBootstrapService
                 // so a later incremental pass knows which symbols a changed or removed
                 // file used to declare.
                 var symbolResult = await _symbolReconciler.ReconcileAsync(
-                    repoId, repoRoot, plan.Added, plan.Updated, plan.RemovedPaths, symbolBackfill, storedMeta, cancellationToken)
+                    repoId, repoRoot, plan.Added, plan.Updated, removalsThisPass, symbolBackfill, storedMeta, cancellationToken)
                     .ConfigureAwait(false);
                 symbolsCaptured = symbolResult.SymbolsCaptured;
                 changedSymbolKeys = symbolResult.ChangedSymbolKeys;
@@ -495,7 +625,7 @@ internal sealed class RepoContextBootstrapService
                 // node written without the content marker is re-selected by the content
                 // back-fill next pass.
                 var contentResult = await _contentReconciler.ReconcileAsync(
-                    repoId, repoRoot, plan.Added, plan.Updated, plan.RemovedPaths, contentBackfill, cancellationToken)
+                    repoId, repoRoot, plan.Added, plan.Updated, removalsThisPass, contentBackfill, cancellationToken)
                     .ConfigureAwait(false);
                 await ReportAsync(
                     progress,
@@ -519,7 +649,7 @@ internal sealed class RepoContextBootstrapService
                 crossReferencedPaths.UnionWith(symbolProcessedPaths);
 
                 await ApplyPlanAsync(
-                    tree, repoId, plan, backfill, declaredEncoded, symbolProcessedPaths, contentProcessedPaths, crossReferencedPaths, contentResult.TokenCountsByPath, storedMeta, request.CommitSha, progress, cancellationToken)
+                    tree, repoId, plan, removalsThisPass, backfill, declaredEncoded, symbolProcessedPaths, contentProcessedPaths, crossReferencedPaths, contentResult.TokenCountsByPath, storedMeta, request.CommitSha, progress, cancellationToken)
                     .ConfigureAwait(false);
             }
             else
@@ -591,7 +721,8 @@ internal sealed class RepoContextBootstrapService
             // failed and retried - it just no longer costs the other arms their
             // pass. Silently reporting success here would be the exact
             // partial-view defect this sweep exists to remove.
-            Exception? armFailure = null;
+            // (armFailure is declared above the apply block so the retirement arm
+            // shares this same collect-and-rethrow discipline - see #2395.)
 
             var embedded = 0;
             var fileIngest = RepoFileVectorIngestOutcome.None;
@@ -619,7 +750,8 @@ internal sealed class RepoContextBootstrapService
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                armFailure = ex;
+                armFailure ??= ex;
+                RecordArmFault(repoId, "ingest-files", ex);
                 _logger.LogWarning(
                     ex,
                     "Repo {RepoId}: file vectorisation did not complete this pass; continuing with the "
@@ -694,6 +826,7 @@ internal sealed class RepoContextBootstrapService
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 armFailure ??= ex;
+                RecordArmFault(repoId, "ingest-symbols", ex);
                 _logger.LogWarning(
                     ex,
                     "Repo {RepoId}: symbol vectorisation did not complete this pass; continuing with the "
@@ -744,6 +877,7 @@ internal sealed class RepoContextBootstrapService
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 armFailure ??= ex;
+                RecordArmFault(repoId, "ingest-memory", ex);
                 _logger.LogWarning(
                     ex,
                     "Repo {RepoId}: memory vectorisation did not complete this pass; it will be retried on "
@@ -1128,6 +1262,7 @@ internal sealed class RepoContextBootstrapService
         ILattice tree,
         string repoId,
         RepoContextBootstrapPlan plan,
+        IReadOnlyList<string> removalsThisPass,
         IReadOnlyList<RepoFileEntry> backfill,
         IReadOnlyDictionary<string, string> declaredEncoded,
         IReadOnlySet<string> symbolProcessedPaths,
@@ -1224,8 +1359,12 @@ internal sealed class RepoContextBootstrapService
                     ingestToken, clock)));
         }
 
-        var deletes = new List<string>(plan.RemovedPaths.Count);
-        foreach (var path in plan.RemovedPaths)
+        // The removals to actually commit, which is plan.RemovedPaths on a healthy
+        // pass and EMPTY when the retirement arm faulted (#2395). Never a subset: a
+        // partially-retired set is deferred whole, so a structural record is deleted
+        // only when its vector was provably retired first.
+        var deletes = new List<string>(removalsThisPass.Count);
+        foreach (var path in removalsThisPass)
         {
             deletes.Add(RepoContextKeys.File(repoId, path));
         }
