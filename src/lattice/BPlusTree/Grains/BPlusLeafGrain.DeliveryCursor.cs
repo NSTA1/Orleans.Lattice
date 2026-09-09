@@ -172,6 +172,15 @@ internal sealed partial class BPlusLeafGrain
             var snapshot = new Dictionary<string, LwwValue<byte[]>>(
                 Cache.Count,
                 StringComparer.Ordinal);
+            // MUST stay EnumerateRows(). This is a full resync, so the delta it
+            // returns is the consumer's entire view and has to enumerate every
+            // row this leaf holds; EnumerateRows() hydrates all deferred rows
+            // first, so it is complete by construction. EnumerateRange(start,
+            // end) is deliberately partial (it hydrates only the requested
+            // span), so swapping it in here would silently ship an incomplete
+            // mirror under a green call - the same defect class PR #2420 closed
+            // on the rehydrate path, where a cache left short of the rows the
+            // leaf had persisted still reported a clean activation.
             foreach (var (key, lww) in Cache.EnumerateRows())
             {
                 snapshot[key] = lww;
