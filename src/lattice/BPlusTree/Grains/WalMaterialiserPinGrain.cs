@@ -136,6 +136,10 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// <param name="state">The durable pin state.</param>
     /// <param name="options">Monitor used to read the coalescing flush interval.</param>
     /// <param name="logger">Optional logger.</param>
+    /// <param name="pinStorage">Optional durable-storage handle used only when
+    /// <see cref="LatticeOptions.WalMaterialiserPinBuckets"/> is greater than one.
+    /// At the default of one the grain persists through <paramref name="state"/>
+    /// exactly as every pre-bucketing build did and this is never touched.</param>
     public WalMaterialiserPinGrain(
         IGrainContext context,
         [PersistentState(WalMaterialiserPinState.StateName, LatticeOptions.StorageProviderName)]

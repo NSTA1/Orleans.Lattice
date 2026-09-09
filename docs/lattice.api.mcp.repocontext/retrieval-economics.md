@@ -173,6 +173,28 @@ tag, so a host already scraping OpenTelemetry sees them flow through the existin
 The tool carries no body, query, path, or repository identity - aggregate figures
 only.
 
+### Emitted instruments
+
+Every instrument this package publishes is listed below, all on the
+`Orleans.Lattice.Api.Mcp.RepoContext` meter, so one scraper subscription covers the
+whole surface. Each carries only low-cardinality tags - never a repository id, path,
+query, or any body text.
+
+| Instrument | Kind | Unit | Tags | What it records |
+|---|---|---|---|---|
+| `repocontext.calls` | `Counter<long>` | `{call}` | `command` | Answered repocontext calls, by tool. |
+| `repocontext.response_tokens` | `Counter<long>` | `{token}` | `command` | The exact response tokens those calls spent. |
+| `repocontext.reads_replaced_tokens` | `Counter<long>` | `{token}` | `command` | The whole-file read tokens they conservatively replaced. Credited only for delivered whole-file-equivalent content, so it is a floor rather than an estimate. |
+| `repocontext.retrieval.ready_seconds` | `Histogram<double>` | `s` | `phase` | Seconds from host start to the retrieval plane first reporting ready, tagged by the phase it reached. Recorded once per process, so it is the cold-start time-to-retrieval-ready figure. |
+| `repocontext.retrieval.unavailable` | `Counter<long>` | `{event}` | `cause` | Observed vector-plane fault episodes that made semantic retrieval unavailable, tagged by cause. A non-zero rate is what distinguishes a keyword answer caused by a real capability loss from an intended keyword-only deployment. |
+| `repocontext.retrieval.ann.search` | `Counter<long>` | `{query}` | `state` | Semantic searches partitioned by the approximate-plane state that answered them: `bootstrapping` (the plane could not answer, so the fallback ladder ran), `exhaustive` (answered by scanning the vectors it holds), or `approximate` (answered from its trained partitioning). Because **every** answered query is counted, the total is a denominator: `approximate` pinned at zero beside a rising total is a measured absence of trained serving, not an absent measurement. |
+| `repocontext.ann.sweep` | `Counter<long>` | `{sweep}` | `outcome` | Approximate-index build sweeps partitioned by outcome: `armed` (armed at least one build coordinator), `empty` (completed with nothing to arm), or `faulted` (threw, so nothing is scheduled until a sweep gets through). Denominate by the **total across all three arms**, never by the configured sweep interval: a completing sweep advances at that interval, but `faulted` advances on the far faster retry backoff (250 ms doubling to a 30-second ceiling). All three reading zero means the sweep loop never ran at all, which the service's startup log line distinguishes. |
+| `repocontext.vectorplane.rederive` | `Counter<long>` | `{event}` | `tree`, `outcome` | Rebuildable vector-plane tree fall-off observations and re-derivations: `observed` (an allowlisted fall-off was seen and a reset triggered), `completed`, `failed` (the fault stands for the next pass to retry), or `refused` (the tree is not a rebuildable derived tree, so re-derivation is declined fail-closed and the fault propagates). The `tree` tag is one of the fixed vector-tree names, never a repository id. |
+
+Subtracting `repocontext.response_tokens` from `repocontext.reads_replaced_tokens`
+gives the same signed net saving `repocontext_stats` reports, so the dashboard and
+the tool cannot disagree.
+
 ## Enabling the surface
 
 All of these tools are read-only and are contributed to any caller whose data read-or-write permission unlocks the repository-context group; none requires `enableWrites`. Register the module as

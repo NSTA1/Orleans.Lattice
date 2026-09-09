@@ -35,9 +35,16 @@ The collapsed leaf state row carries only:
 - Topology fields (sibling pointers, parent reference, key range,
   shard index, split lifecycle).
 - The projection-digest XOR fold (`ProjectionHash`, 16 bytes).
-- The `ProjectionCheckpointOffset` pointing into the WAL.
+- The `ProjectionCheckpointOffset` pointing into the WAL, plus a
+  per-partition offset array on a multi-partition tree.
 - The HLC clock and version vector.
 - The last-compaction version.
+- The durable high-water mark of the digest-publish sequence, so a
+  re-activated leaf resumes above every sequence it already emitted.
+- A ledger of unresolved replay work - the saga prepares and deferred
+  terminals the flush ceiling has advanced past - which is empty in the
+  steady state and lets a partition bank forward progress instead of
+  re-reading the same WAL range on every activation.
 
 See [Tree Storage](tree-storage.md) for exact byte-level sizing.
 

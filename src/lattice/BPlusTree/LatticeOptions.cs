@@ -1479,10 +1479,20 @@ public class LatticeOptions
     /// <para>
     /// The bound exists for the pathological case only: a stream of sagas
     /// whose terminals never arrive would otherwise grow the persisted leaf
-    /// row without limit. Past the bound the leaf simply stops recording and
-    /// the ceiling falls back to the pre-#2165 clamping behaviour, which is
-    /// slow but never unsafe - it is the behaviour that shipped for every
-    /// release before this one.
+    /// row without limit. It bounds the <b>deferred terminals</b> alone. A
+    /// deferred terminal dropped at the bound is safe because pass 2 re-reads
+    /// and drains it, so the fall-back to the pre-#2165 clamping behaviour is
+    /// transient - slow but never unsafe.
+    /// </para>
+    /// <para>
+    /// A resident unresolved <b>prepare</b> is recorded unconditionally and is
+    /// never dropped at the bound (issue #2183). Nothing drains a prepare whose
+    /// saga never terminates, so dropping one would pin the flush ceiling at
+    /// <c>(prepare - 1)</c> permanently and the leaf would bank no durable
+    /// forward progress at all. Past the bound the row is therefore allowed to
+    /// grow, and the crossing is reported through
+    /// <see cref="LatticeMetrics.LeafUnresolvedPrepareLedgerBeyondCap"/> plus a
+    /// once-per-activation warning rather than by capping.
     /// </para>
     /// <para>
     /// Setting this to zero disables the mechanism, restoring the pre-#2165

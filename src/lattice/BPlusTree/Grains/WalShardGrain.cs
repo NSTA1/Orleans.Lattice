@@ -31,7 +31,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// by construction, but each flush's <c>AppendBatchAsync</c> call runs
 /// independently so the writer-side burst absorption is no longer capped
 /// at <c>1 / provider_latency</c>. The default
-/// (<see cref="LatticeOptions.DefaultWalMaxPendingBatches"/> = 8) is the
+/// (<see cref="LatticeOptions.DefaultWalMaxPendingBatches"/> = 16) is the
 /// measured Azure Tables Standard sweet spot at the c2-iii operating
 /// point; setting it to <c>1</c> restores the historical single-in-flight
 /// protocol bit-for-bit.
