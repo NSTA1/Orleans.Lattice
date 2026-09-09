@@ -218,7 +218,7 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchResilienceTests
         var injector = new LatticeTreeFaultInjector
         {
             TreeId = RepoContextTrees.VectorMembership,
-            Method = nameof(ILattice.GetManyAsync),
+            Method = nameof(ILattice.GetManyWithGateAccountingAsync),
             FailFirst = 1,
         };
 
@@ -268,7 +268,7 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchResilienceTests
         var injector = new LatticeTreeFaultInjector
         {
             TreeId = RepoContextTrees.VectorMembership,
-            Method = nameof(ILattice.GetManyAsync),
+            Method = nameof(ILattice.GetManyWithGateAccountingAsync),
             FailFirst = 1,
         };
 

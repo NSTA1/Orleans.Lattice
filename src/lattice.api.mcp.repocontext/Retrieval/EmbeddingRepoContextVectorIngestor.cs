@@ -294,6 +294,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // happened on the live deployment once the symbol arm was fixed.
         RepoContextEmbeddingCoverage coverage;
         var coverageProbeFailed = false;
+        var coverageGatePruned = false;
         var gapsSelected = 0;
         var gapSelectedFiles = new List<RepoFileEntry>();
 
@@ -321,7 +322,35 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 unchangedFiles.Count);
         }
 
-        var toEmbed = coverageProbeFailed || skipGapScan
+        // The probe was answered, but the store's read-path access gate removed keys
+        // from it before fan-out, so a file's absence from this coverage says nothing
+        // about whether it is embedded (issue #2277). Standing the gap sweep down for
+        // this pass is the only safe reading: classifying on it would mark already
+        // embedded files as gaps and re-embed them on every pass, forever, while
+        // every layer's log stayed clean.
+        //
+        // Kept as a SEPARATE flag from coverageProbeFailed rather than folded into
+        // it, even though the two produce the same selection this pass, because they
+        // call for opposite operator responses. A failed probe is transient and
+        // clears itself; a pruned probe is a standing misconfiguration that never
+        // clears, and reporting it as a probe failure would have an operator waiting
+        // out a condition that does not pass.
+        if (!coverageProbeFailed && !coverage.AbsenceIsConclusive)
+        {
+            coverageGatePruned = true;
+            _logger.LogWarning(
+                "Repo {RepoId}: the embedding-coverage probe had {Pruned} key(s) removed by the store's "
+                + "read-path access gate, so its absences are not evidence of missing embeddings; embedding "
+                + "the {Changed} changed file(s) and standing down the gap sweep over {Unchanged} unchanged "
+                + "file(s). This does NOT clear on the next pass - the ingestor must be able to read its own "
+                + "membership keys for the back-fill to heal this repository.",
+                repoId,
+                coverage.PrunedByAccessGate,
+                changedFiles.Count,
+                unchangedFiles.Count);
+        }
+
+        var toEmbed = coverageProbeFailed || coverageGatePruned || skipGapScan
             ? new List<RepoFileEntry>(changedFiles)
             : SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles, out gapsSelected, out gapSelectedFiles);
         if (toEmbed.Count == 0)
@@ -331,8 +360,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             // it was granted, and never accrue one either.
             RecordFileGapScanOutcome(repoId, saturated: false, skippedGapScan: skipGapScan);
             NoteAndLogUnmeasuredGapShape(
-                repoId, coverageProbeFailed, skipGapScan, changedFiles.Count, unchangedFiles.Count);
-            return new RepoFileVectorIngestOutcome(0, gapsSelected, !coverageProbeFailed, Deferred: false, skipGapScan);
+                repoId, coverageProbeFailed, coverageGatePruned, skipGapScan, changedFiles.Count, unchangedFiles.Count);
+            return new RepoFileVectorIngestOutcome(
+                0, gapsSelected, !coverageProbeFailed && !coverageGatePruned, Deferred: false, skipGapScan);
         }
 
         var sources = new List<EmbeddingSource>(toEmbed.Count);
@@ -526,7 +556,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         else
         {
             NoteAndLogUnmeasuredGapShape(
-                repoId, coverageProbeFailed, skipGapScan, changedFiles.Count, unchangedFiles.Count);
+                repoId, coverageProbeFailed, coverageGatePruned, skipGapScan, changedFiles.Count, unchangedFiles.Count);
         }
 
         // Fold this pass into the backoff. A pass that deferred batches saw the plane
@@ -539,29 +569,36 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             repoId, embedOutcome.Saturated || stalledGapProgress, skippedGapScan: skipGapScan);
 
         return new RepoFileVectorIngestOutcome(
-            embedded, gapsSelected, !coverageProbeFailed, embedOutcome.Saturated, skipGapScan);
+            embedded, gapsSelected, !coverageProbeFailed && !coverageGatePruned, embedOutcome.Saturated, skipGapScan);
     }
 
     /// <summary>
-    /// Records that a pass measured no gap-set shape, and says which of the three
+    /// Records that a pass measured no gap-set shape, and says which of the four
     /// mutually exclusive reasons produced it.
     /// <para>
     /// The reason is the whole point. An empty gap selection is reached by causes
     /// that mean OPPOSITE things - the probe failed so nothing was attempted, the
-    /// probe succeeded and found nothing left to do, or the back-fill was skipped
-    /// under backoff and never asked - and a pass that does not name which is
-    /// indistinguishable from the others in a deployed container's log. This is the
-    /// line an operator reads to tell "quiet because converged" from "quiet because
-    /// backed off" (issues #2208, #2253).
+    /// probe was answered incompletely because the store's access gate pruned it,
+    /// the probe succeeded and found nothing left to do, or the back-fill was
+    /// skipped under backoff and never asked - and a pass that does not name which
+    /// is indistinguishable from the others in a deployed container's log. This is
+    /// the line an operator reads to tell "quiet because converged" from "quiet
+    /// because backed off" (issues #2208, #2253).
     /// </para>
     /// </summary>
     /// <param name="repoId">The repository whose pass measured nothing.</param>
     /// <param name="coverageProbeFailed">Whether the coverage probe failed, so no gap sweep was attempted.</param>
+    /// <param name="coverageGatePruned">Whether the coverage probe was answered but pruned by the store's access gate, so its absences prove nothing.</param>
     /// <param name="skippedGapScan">Whether the back-fill was skipped under the gap-scan backoff.</param>
     /// <param name="changedFiles">Files the reconcile reported changed this pass.</param>
     /// <param name="unchangedFiles">Files the reconcile reported unchanged this pass.</param>
     private void NoteAndLogUnmeasuredGapShape(
-        string repoId, bool coverageProbeFailed, bool skippedGapScan, int changedFiles, int unchangedFiles)
+        string repoId,
+        bool coverageProbeFailed,
+        bool coverageGatePruned,
+        bool skippedGapScan,
+        int changedFiles,
+        int unchangedFiles)
     {
         // This pass measured no gap shape, so it advances no history. Record that it
         // happened, or the next measured pass compares itself against a pass that is
@@ -576,11 +613,16 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var reason = coverageProbeFailed
             ? "the embedding-coverage probe failed, so no gap sweep was attempted and this pass advanced "
               + "the back-fill by nothing. This is NOT convergence"
-            : skippedGapScan
-                ? "the gap back-fill was SKIPPED under the file-arm backoff, so no gap sweep was attempted "
-                  + "and this pass advanced the back-fill by nothing. This is NOT convergence"
-                : "the coverage probe succeeded and selected no gap files, so every walked file is already "
-                  + "covered or contentless. This IS convergence for the file arm";
+            : coverageGatePruned
+                ? "the embedding-coverage probe was answered but the store's read-path access gate pruned "
+                  + "keys from it, so its absences are not evidence of missing embeddings and no gap sweep "
+                  + "was attempted. This is NOT convergence, and unlike a failed probe it will NOT clear on "
+                  + "the next pass: the ingestor must be able to read its own membership keys"
+                : skippedGapScan
+                    ? "the gap back-fill was SKIPPED under the file-arm backoff, so no gap sweep was attempted "
+                      + "and this pass advanced the back-fill by nothing. This is NOT convergence"
+                    : "the coverage probe succeeded and selected no gap files, so every walked file is already "
+                      + "covered or contentless. This IS convergence for the file arm";
 
         _logger.LogInformation(
             "Repo {RepoId}: back-fill gap set shape not measured this pass: {Reason} (walked={Walked} file(s), "
@@ -590,7 +632,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             changedFiles + unchangedFiles,
             changedFiles,
             unchangedFiles,
-            coverageProbeFailed ? "failed" : "succeeded",
+            coverageProbeFailed ? "failed" : coverageGatePruned ? "gate-pruned" : "succeeded",
             skippedGapScan);
     }
 
@@ -687,7 +729,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             // whole arm: without coverage for this page we cannot tell embedded
             // from missing, so we skip the page rather than guess, and the next
             // pass picks up whatever it was hiding.
-            IReadOnlySet<string> embeddedMembers = EmptyKeySet;
+            var embeddedMembers = new RepoContextProbedSourceIds(EmptyKeySet, 0);
             if (!skipGapScan)
             {
                 try
@@ -706,6 +748,30 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                         + "the page and continuing. Its symbols are re-checked on the next reconcile.",
                         repoId,
                         pageKeys.Count);
+                    token = page.HasMore ? page.ContinuationToken : null;
+                    continue;
+                }
+
+                // The probe answered, but the store's access gate removed some of the
+                // keys before fan-out, so its silence about those symbols is not
+                // evidence that they are unembedded (issue #2277). Skip the page for
+                // the same reason a failed probe skips it - we cannot tell embedded
+                // from missing - rather than re-embed symbols that are already
+                // covered. This is deliberately not folded into the probe-failure
+                // counter above: the probe did not fail, the deployment is
+                // misconfigured, and conflating the two would hide a permanent
+                // condition inside a transient one's diagnostics.
+                if (!embeddedMembers.AbsenceIsConclusive)
+                {
+                    _logger.LogWarning(
+                        "Repo {RepoId}: the embedding-coverage probe for a page of {Count} symbol(s) had "
+                        + "{Pruned} key(s) removed by the store's read-path access gate, so absence from it "
+                        + "is not evidence of a missing embedding; skipping the page rather than re-embedding "
+                        + "symbols that may already be covered. The ingestor must be able to read its own "
+                        + "membership keys for the back-fill to heal this repository.",
+                        repoId,
+                        pageKeys.Count,
+                        embeddedMembers.PrunedByAccessGate);
                     token = page.HasMore ? page.ContinuationToken : null;
                     continue;
                 }
@@ -1149,7 +1215,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             // same evidence, so the walk can fall back to it alone and still make
             // the right decision for most entries. Only an entry that has neither
             // signal is re-embedded, which is idempotent.
-            IReadOnlySet<string> embeddedMembers;
+            RepoContextProbedSourceIds embeddedMembers;
             try
             {
                 embeddedMembers = await _writer
@@ -1158,13 +1224,32 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                embeddedMembers = EmptyKeySet;
+                embeddedMembers = new RepoContextProbedSourceIds(EmptyKeySet, 0);
                 _logger.LogWarning(
                     ex,
                     "Repo {RepoId}: the embedded-member probe failed for a page of {Count} memory entr(ies); "
                     + "falling back to the embedded-key markers alone for this page.",
                     repoId,
                     pageKeys.Count);
+            }
+
+            // The store's access gate removed keys from the probe, so its silence is
+            // not evidence that those entries are unembedded (issue #2277). This arm
+            // needs no page skip: the probe's POSITIVE answers remain sound - a key
+            // it did return was really there - and the marker set already backstops
+            // its absences, which is exactly the degradation the guard above uses.
+            // The warning is still worth emitting, because unlike a transient probe
+            // failure this condition does not clear on the next pass.
+            if (!embeddedMembers.AbsenceIsConclusive)
+            {
+                _logger.LogWarning(
+                    "Repo {RepoId}: the embedded-member probe for a page of {Count} memory entr(ies) had "
+                    + "{Pruned} key(s) removed by the store's read-path access gate; falling back to the "
+                    + "embedded-key markers for those entries. The ingestor must be able to read its own "
+                    + "membership keys for coverage to be measurable.",
+                    repoId,
+                    pageKeys.Count,
+                    embeddedMembers.PrunedByAccessGate);
             }
 
             foreach (var record in page.Records)
@@ -2377,6 +2462,24 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 var covered = await _writer
                     .ProbeCoveredSourceIdsAsync(repoId, selectedKeys.ToList(), cancellationToken)
                     .ConfigureAwait(false);
+                if (!covered.AbsenceIsConclusive)
+                {
+                    // The read-back was pruned by the store's access gate, so the
+                    // count below would undercount for a reason unrelated to
+                    // durability - and this line's whole reading is that a LOW
+                    // read-back means a write that did not stay observable. Emitting
+                    // it anyway would manufacture exactly the false durability
+                    // diagnosis an operator would then chase (issue #2277).
+                    _logger.LogWarning(
+                        "Repo {RepoId}: back-fill coverage read-back probe had {Pruned} key(s) removed by the "
+                        + "store's read-path access gate; suppressing the durability signal for this pass "
+                        + "rather than reporting a read-back that would understate coverage for an unrelated "
+                        + "reason. The pass is unaffected.",
+                        repoId,
+                        covered.PrunedByAccessGate);
+                    return stalled;
+                }
+
                 visibleNow = 0;
                 foreach (var key in selectedKeys)
                 {
