@@ -278,7 +278,7 @@ no shell-exec healthcheck:
 A `/health/ready` 503 that does not clear, on a container that is otherwise up,
 does **not** on its own mean the deployment is broken, and must not be used by
 itself as a rollback signal. The endpoint returns a bare `Unhealthy` with no
-per-component breakdown, so a 503 is ambiguous until you narrow it. Four steps,
+per-component breakdown, so a 503 is ambiguous until you narrow it. Five steps,
 each one ruling out a cause the previous step left open:
 
 1. `curl -fsS http://localhost:8080/health/live`. A 200 says the process and the
@@ -299,6 +299,41 @@ each one ruling out a cause the previous step left open:
    embedder out and places the fault host-side, in the vector plane, where
    restarting the embedder achieves nothing. Use `docker compose ps` rather than
    probing the embedder directly - its port is not published to the host.
+5. Separate **"never been ready"** from **"was ready and has since lost it"** on
+   `/metrics`. The two need different responses and steps 1 to 4 cannot tell them
+   apart:
+
+   ```bash
+   curl -fsS http://localhost:8080/metrics \
+     | grep -E 'repocontext_retrieval_(ready_seconds|unavailable)'
+   ```
+
+   `repocontext_retrieval_ready_seconds_count` is stamped **once per process**, on
+   the first transition into a ready phase. Its absence therefore means the
+   retrieval plane has never been ready in this container's current lifetime; its
+   presence alongside a 503 means the plane was ready and has since lost it. Its
+   `phase` label records which phase it first reached (`serving`, `keyword_only`,
+   or `nothing_registered`). `repocontext_retrieval_unavailable_total` counts fault
+   episodes, and its `cause` label carries the same vocabulary as step 3's
+   `retrievalPath`, so it separates a vector plane that cannot serve
+   (`keyword.vector_plane_unavailable`) from an index that has drifted from its
+   sources (`keyword.index_degraded`).
+
+**Issuing a query yourself does not clear it, and the host is already trying.** A
+warmup service issues the same semantic query from application start, retrying with
+backoff (2s, doubling to a 30s cap) until the plane answers or shutdown begins. So a
+persistent 503 is never "nobody has queried it yet" - it is that warmup failing
+repeatedly. In particular, a box that has a repository **registered** but holds no
+vectors for it stays not-ready by design: the search reports
+`keyword.vector_plane_unavailable`, and running another search by hand returns the
+same thing and changes nothing. (A box with **no** repository registered is the
+opposite case and reports ready, because there is nothing it could be asked to
+serve.)
+
+Readiness also lags a fault on purpose. Once the plane has served, a fault must
+persist for **30 seconds** before readiness is revoked, and any successful retrieval
+inside that window clears the episode outright - so a 503 can appear up to half a
+minute after the fault that caused it, and a brief blip may never surface at all.
 
 In that state **the box is still usable and the whole walkthrough still completes**:
 registration, keyword search, `repocontext_context`, and durability across a restart
