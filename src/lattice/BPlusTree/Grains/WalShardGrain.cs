@@ -456,15 +456,19 @@ internal sealed class WalShardGrain(
     }
 
     /// <summary>
-    /// Computes the Stopwatch-tick drain deadline for <paramref name="budget"/>,
-    /// saturating at <c>long.MaxValue</c> so an extreme <c>LatticeOptions.WalDrainBudget</c>
-    /// cannot overflow the cast to a negative deadline - which would make the drain
-    /// loop force-fault every in-flight slot immediately instead of granting the
-    /// configured (effectively unbounded) grace.
+    /// Computes a Stopwatch-tick deadline <paramref name="span"/> after
+    /// <paramref name="startTicks"/>, saturating at <c>long.MaxValue</c> so an
+    /// extreme span cannot overflow the cast to a negative (past) deadline. Both
+    /// the in-flight drain budget (<c>LatticeOptions.WalDrainBudget</c>) and the
+    /// placement-move quiesce lease use it: a negative deadline would make the
+    /// drain loop force-fault every in-flight slot on its first check, and would
+    /// make the move fence read as already expired on its first check - each the
+    /// exact opposite of the effectively-unbounded grace the extreme value
+    /// expresses.
     /// </summary>
-    internal static long SaturatingDrainDeadlineTicks(long startTicks, TimeSpan budget)
+    internal static long SaturatingStopwatchDeadlineTicks(long startTicks, TimeSpan span)
     {
-        var deltaTicks = budget.TotalSeconds * Stopwatch.Frequency;
+        var deltaTicks = span.TotalSeconds * Stopwatch.Frequency;
         return deltaTicks >= long.MaxValue - startTicks
             ? long.MaxValue
             : startTicks + (long)deltaTicks;
@@ -490,7 +494,7 @@ internal sealed class WalShardGrain(
         var startTicks = Stopwatch.GetTimestamp();
         var deadlineTicks = budget == Timeout.InfiniteTimeSpan
             ? long.MaxValue
-            : SaturatingDrainDeadlineTicks(startTicks, budget);
+            : SaturatingStopwatchDeadlineTicks(startTicks, budget);
 
         while (true)
         {
@@ -2279,7 +2283,7 @@ internal sealed class WalShardGrain(
         // stable before the coordinator copies it.
         var leaseTicks = lease <= TimeSpan.Zero
             ? long.MaxValue
-            : Stopwatch.GetTimestamp() + (long)(lease.TotalSeconds * Stopwatch.Frequency);
+            : SaturatingStopwatchDeadlineTicks(Stopwatch.GetTimestamp(), lease);
         bool hasPending;
         lock (_stateGate)
         {

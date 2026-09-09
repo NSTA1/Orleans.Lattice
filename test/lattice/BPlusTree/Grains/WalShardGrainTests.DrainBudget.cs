@@ -589,11 +589,11 @@ public partial class WalShardGrainTests
     }
 
     [Test]
-    public void SaturatingDrainDeadlineTicks_saturates_instead_of_overflowing_for_extreme_budget()
+    public void SaturatingStopwatchDeadlineTicks_saturates_instead_of_overflowing_for_extreme_span()
     {
         var start = System.Diagnostics.Stopwatch.GetTimestamp();
 
-        var deadline = WalShardGrain.SaturatingDrainDeadlineTicks(start, TimeSpan.MaxValue);
+        var deadline = WalShardGrain.SaturatingStopwatchDeadlineTicks(start, TimeSpan.MaxValue);
 
         // The unguarded cast this replaces produces a negative deadline, so the
         // drain loop would force-fault every in-flight slot on the first check
@@ -606,12 +606,12 @@ public partial class WalShardGrainTests
     }
 
     [Test]
-    public void SaturatingDrainDeadlineTicks_is_exact_for_ordinary_budget()
+    public void SaturatingStopwatchDeadlineTicks_is_exact_for_ordinary_span()
     {
         const long start = 1_000_000L;
         var budget = TimeSpan.FromSeconds(2);
 
-        var deadline = WalShardGrain.SaturatingDrainDeadlineTicks(start, budget);
+        var deadline = WalShardGrain.SaturatingStopwatchDeadlineTicks(start, budget);
 
         Assert.That(
             deadline,
