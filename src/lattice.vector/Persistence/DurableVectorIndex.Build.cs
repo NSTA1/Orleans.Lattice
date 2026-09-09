@@ -149,6 +149,22 @@ public sealed partial class DurableVectorIndex
         var consumed = 0;
         var chunkSize = _options.MaxItemsPerChunk;
 
+        // Exhaustion is recorded where it is OBSERVED rather than inferred once
+        // the loop is over, and the distinction is load-bearing. Running the loop
+        // to its end is the source signalling that the corpus is finished, and it
+        // is the only positive evidence of that there is. The inference it
+        // replaces - "I consumed fewer than I was allowed, so the source must have
+        // run out" - is sound only while exhaustion and the work budget are the
+        // ONLY ways out of this loop, which is a property nobody wrote down and
+        // which any new early exit silently breaks.
+        //
+        // Getting that wrong is not a build that stalls, which is loud and costs
+        // nothing but time. It is a build that trains on a fraction of the corpus,
+        // persists it, reports Ready, and serves approximate answers from a corpus
+        // missing an arbitrary tail, with no error anywhere. Any early exit added
+        // below must therefore clear this flag.
+        var exhausted = true;
+
         var entries = _source.EnumerateAsync(_cursor, cancellationToken);
         await foreach (var entry in entries.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
@@ -169,14 +185,14 @@ public sealed partial class DurableVectorIndex
             _cursor = entry.Id;
             if (++consumed >= budget)
             {
+                exhausted = false;
                 break;
             }
         }
 
-        var complete = consumed < budget;
-        await WriteIngestCheckpointAsync(complete, cancellationToken).ConfigureAwait(false);
+        await WriteIngestCheckpointAsync(exhausted, cancellationToken).ConfigureAwait(false);
 
-        if (complete)
+        if (exhausted)
         {
             _phase = VectorIndexBuildPhase.Training;
         }
