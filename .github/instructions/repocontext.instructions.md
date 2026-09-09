@@ -111,6 +111,34 @@ non-obvious, you pinned down an unwritten norm, or you are handing work to
 another session. Capture it then, with `remember`, under the right topic. See
 [Capture](#capture---durable-agent-memory).
 
+**Gotchas are also mandatory at two action-time moments - recall, not
+re-coverage.** Moment 1 gives you *coverage*: you read the whole `gotchas` topic
+once, so you have seen them all. What it cannot give you is *recall at the instant
+one applies* - you read forty gotchas at the start of the session and the one that
+matters has fallen out of working memory by the time you act. So a gotcha check is
+mandatory again at two high-stakes junctures, and both are about re-reading the
+*relevant entry*, not re-reading the topic:
+
+- **Before an irreversible or high-blast-radius action** - committing to a push,
+  opening / merging / force-pushing / rebasing a pull request, deleting a branch,
+  or any destructive write tool (`remove_repo`, `reset_index`, `forget`). This is
+  the point of no return, where a missed gotcha is both most likely (many gotchas
+  are *about* exactly these operations) and least recoverable. Re-read the gotchas
+  bearing on the operation before you commit to it, not after it fails.
+- **At an unexpected failure, before you retry or conclude** - a command errors, a
+  test or CI run goes red, or something "looks broken / missing / wrong". A gotcha
+  is most often precisely a "when you see X, it is actually Y" note, so this is
+  where they pay off most. Check for a known cause before you spend time
+  diagnosing, and before you conclude the symptom is real.
+
+What is deliberately **not** on this list: a per-package or per-subsystem re-read
+of `gotchas` when the task pivots into new code. That is redundant now that
+moment 1 reads the whole topic in full - the *component-specific* topics
+(`decisions`, a component name) are the ones worth re-scanning on a pivot;
+`gotchas` you have already read end to end. Do not turn this into ceremony: these
+two moments are the ones where the cost of a forgotten gotcha is high and
+irreversible, and no others need a mandatory re-check.
+
 **Self-check - symptoms of under-use.** If any of these describes your session so
 far, you are leaving most of the surface unused - fix it on the next step, not
 next session:
@@ -123,6 +151,10 @@ next session:
   change it;
 - you re-derived something - a convention, a workaround, a rationale - that a
   `scan` of `decisions` / `gotchas` / `conventions` would have handed you;
+- you pushed, merged, force-pushed, rebased, or ran a destructive write tool
+  without first re-reading the `gotchas` that bear on that operation - or you
+  spent time on an unexpected failure before checking `gotchas` for a known
+  cause;
 - you read three or more whole files with `view` to answer one question, without
   first trying `outline` / `related` / `context`;
 - you concluded the repo "isn't indexed" because your current directory (a git
