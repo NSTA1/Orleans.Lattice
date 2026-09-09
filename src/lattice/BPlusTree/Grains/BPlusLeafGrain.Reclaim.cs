@@ -265,14 +265,11 @@ internal sealed partial class BPlusLeafGrain
         // to another shard. Deleting the leaf would delete the seal, and the
         // seal outliving the rows is the entire point of it.
         //
-        // NOTE (see issue #2143): this guards the *victim* only. Nothing
-        // checks the predecessor's seal before the fold widens it to cover
-        // the victim's span, so a sealed predecessor can end up owning a
-        // range it will answer for while its own seal still suppresses
-        // slots inside it. Latent rather than live - deliberately left
-        // unfixed here to keep this change reviewable - but it is the
-        // asymmetry to close if the seal ever gains a second reader.
-        if (state.State.MovedAwaySlots is { Length: > 0 })
+        // This guards the leaf being REMOVED. The mirror-image hazard on the
+        // leaf being WIDENED is guarded separately by
+        // HasWidenBlockingState, which is where the asymmetry issue #2143
+        // reported is closed; read that first if you are here about seals.
+        if (HasWidenBlockingState())
             return true;
 
         // A prepared saga bucket commits onto this leaf later. Unlinking now
@@ -287,6 +284,67 @@ internal sealed partial class BPlusLeafGrain
 
         return false;
     }
+
+    /// <summary>
+    /// Whether this leaf carries state that forbids WIDENING it over a range
+    /// it does not currently declare, however legitimately that range has
+    /// been vacated.
+    /// <para>
+    /// This is the mirror image of <see cref="HasReclaimBlockingState"/> and
+    /// the two must not be conflated. That one asks "may this leaf be
+    /// removed" and is asked of a fold's victim. This one asks "may this leaf
+    /// take over somebody else's range" and is asked of a fold's predecessor.
+    /// Issue #2143 is the report that only the first question was ever being
+    /// asked, so a sealed predecessor could be widened into the legitimate
+    /// owner of keys it would then refuse to serve.
+    /// </para>
+    /// <para>
+    /// The moved-away seal is the answer to the second question and it is the
+    /// only one, because it is the only leaf state that makes a leaf refuse a
+    /// key it legitimately owns. Every other arm of
+    /// <see cref="HasReclaimBlockingState"/> - a prepared saga bucket, a
+    /// shadowed saga, an in-flight split - forbids destroying the leaf while
+    /// being perfectly compatible with growing it, so reusing that predicate
+    /// here would decline healthy folds on any busy tree.
+    /// </para>
+    /// <para>
+    /// The seal is tested whole rather than intersected with the range being
+    /// absorbed, and that is precision rather than conservatism.
+    /// <c>IsKeyMovedAway</c> hashes a key into a virtual slot
+    /// (<c>ShardMap.GetVirtualSlot</c>) and tests membership, so the seal is
+    /// keyed by HASH, not by range: a sealed slot is a residue class
+    /// scattered across the whole keyspace, not a contiguous span. There is
+    /// therefore no "slots inside the absorbed range" to compute - any
+    /// non-empty seal intersects any non-trivial range absorbed - and a
+    /// narrower test would be more code and wrong.
+    /// </para>
+    /// <para>
+    /// READ THIS BEFORE CHANGING THE FIELD THIS TESTS. The declination is
+    /// TEMPORARY because <c>MovedAwaySlots</c> is cleared:
+    /// <c>UnmarkSlotsMovedAwayAsync</c> nulls it when consolidation drains the
+    /// slots back, so a previously-sealed predecessor folds again with no
+    /// operator action. <c>MovedAwayVirtualShardCount</c> is NOT cleared - it
+    /// is deliberately retained forever as the wire signal that distinguishes
+    /// "never sealed" from "seal just lifted" for a
+    /// <see cref="LeafCacheGrain"/>. Re-keying this predicate onto that stamp
+    /// reads more naturally and would be permanent: every leaf that had ever
+    /// sealed anything would refuse to absorb a successor for the rest of its
+    /// life, on precisely the post-shard-split trees where this path is
+    /// reachable at all, silently but for a debug log. Test the slots.
+    /// </para>
+    /// <para>
+    /// Latent today, and guarded anyway. <c>MovedAwaySlots</c> is written only
+    /// by <c>MarkSlotsMovedAwayAsync</c>, reached only through a shard split
+    /// or consolidation, and reclaim does not currently fold a sealed
+    /// predecessor in that configuration. That is safety by reachability,
+    /// which stops holding silently the moment reclaim and shard-count changes
+    /// are made to co-exist - and the end state it would produce is invisible
+    /// to every structural invariant the tree has, because the chain still
+    /// tiles, routing still lands correctly, and only the read returns null.
+    /// </para>
+    /// </summary>
+    private bool HasWidenBlockingState()
+        => state.State.MovedAwaySlots is { Length: > 0 };
 
     /// <summary>
     /// Compare-and-swap on this leaf's successor pointer: unlinks
@@ -396,6 +454,36 @@ internal sealed partial class BPlusLeafGrain
             {
                 return false;
             }
+
+            // THIRD declination, and the only one that is about US rather
+            // than about the successor. See issue #2143.
+            //
+            // The two checks above ask whether the successor is safe to
+            // remove. This one asks whether THIS leaf is safe to widen, which
+            // nothing asked before: HasReclaimBlockingState refuses to fold a
+            // VICTIM carrying a moved-away seal, but the fold's whole purpose
+            // is to make the PREDECESSOR the legitimate owner of the range the
+            // victim gives up, and no equivalent question was put to it.
+            //
+            // Widening a sealed leaf produces a leaf that owns keys it will
+            // refuse to serve. GetAsync opens with `if (IsKeyMovedAway(key))
+            // return null`, and that gate is keyed by the key's HASH, so it
+            // does not care that the key sits in a range this leaf has only
+            // just absorbed. The result is invisible to every structural
+            // invariant the tree has - the leaf chain tiles perfectly, there
+            // are no routing orphans, a descent lands on a leaf correctly
+            // declaring the key's span, a cache probe reports the row present
+            // - and the read still returns null.
+            //
+            // Declining is safe for the same reason the two checks above are:
+            // reclaim is background work, the caller unlatches the victim on
+            // this path (ShardRootGrain.TryReclaimLeafAsync calls
+            // AbandonRetirementAsync when this returns false), and nothing has
+            // been mutated yet, so the tree is left exactly as it was found.
+            // And the declination is temporary - consolidation lifts the seal
+            // through UnmarkSlotsMovedAwayAsync, after which this leaf folds
+            // again. See HasWidenBlockingState.
+            if (HasWidenBlockingState()) return false;
 
             var prevNext = state.State.NextSibling;
             var prevHigh = state.State.HighKeyExclusive;
