@@ -118,18 +118,58 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
 
     /// <summary>
     /// Returns the recorded outcome for <paramref name="txid"/>. Returns
-    /// <see cref="TxStatus.InFlight"/> when no decision has been recorded
-    /// (the saga is still preparing or has been forgotten via
-    /// <see cref="ForgetAsync"/>).
+    /// <see cref="TxStatus.InFlight"/> when no decision has ever been recorded
+    /// (the saga is still preparing, or was dropped outright by
+    /// <see cref="ForgetAsync"/> with no tombstone left behind), and
+    /// <see cref="TxStatus.Indeterminate"/> when a decision <i>is</i> recorded
+    /// but is no longer reportable - because its tombstone has outlived
+    /// <see cref="LatticeOptions.TxDecisionRetention"/>, or because the saga is
+    /// delegated to a coordinator this registry could not reach.
+    /// <para>
+    /// The two are deliberately not collapsed. <see cref="TxStatus.InFlight"/>
+    /// is an affirmative claim that the saga has not decided, and the visibility
+    /// gate acts on it by serving each prepared key's pre-saga value; returning
+    /// it for a saga that may well have committed turns a retention boundary or
+    /// a single unreachable grain into a silent disclosure of superseded data.
+    /// </para>
     /// </summary>
     Task<TxStatus> GetStatusAsync(Guid txid);
 
     /// <summary>
     /// Batched form of <see cref="GetStatusAsync"/>. Returns a map from
     /// every requested <paramref name="txids"/> to its current status
-    /// (<see cref="TxStatus.InFlight"/> for unknown ids).
+    /// (<see cref="TxStatus.InFlight"/> for unknown ids, and
+    /// <see cref="TxStatus.Indeterminate"/> for a recorded-but-aged-out one,
+    /// exactly as the single-key form).
     /// </summary>
     Task<Dictionary<Guid, TxStatus>> GetStatusManyAsync(IReadOnlyList<Guid> txids);
+
+    /// <summary>
+    /// Returns the decision physically stored for <paramref name="txid"/>,
+    /// bypassing the retention mask that <see cref="GetStatusAsync"/> applies:
+    /// a decision whose tombstone has aged out is returned as the terminal
+    /// verdict it actually is, and only a txid with no stored row at all comes
+    /// back as <see cref="TxStatus.InFlight"/>.
+    /// <para>
+    /// <b>This is not a general-purpose read.</b> It exists for the leaf's
+    /// self-terminalisation sweep, which is trying to finish a prepare it is
+    /// still holding, and for which the honest answer to "did this commit?" is
+    /// the recorded one. Answering a <i>reader</i> from this method would make
+    /// the value a client observes depend on when the prune pass happened to
+    /// run, which is precisely the non-determinism the retention mask exists to
+    /// remove, so the read path must keep using <see cref="GetStatusAsync"/> and
+    /// hiding the key. The distinction is between finishing work the node
+    /// already owns and disclosing an outcome to a caller.
+    /// </para>
+    /// <para>
+    /// A mixed-version cluster whose registry activation predates this method
+    /// fails the call rather than answering it. Every caller is a per-saga
+    /// sweep step that already tolerates a failed step by leaving the prepare in
+    /// place for the next sweep, so the degradation is a delayed terminalisation
+    /// and never an incorrect one.
+    /// </para>
+    /// </summary>
+    Task<TxStatus> GetRecordedStatusAsync(Guid txid);
 
     /// <summary>
     /// Returns a snapshot of every recorded saga decision currently in
@@ -612,7 +652,7 @@ internal enum TxStatus
     /// authorises neither draining a prepared bucket nor discarding one. A sweep
     /// that needs to resolve a prepare whose decision has aged out must ask for
     /// the recorded row explicitly through
-    /// <c>ITxRegistryGrain.GetRecordedStatusAsync</c>,
+    /// <see cref="ITxRegistryGrain.GetRecordedStatusAsync"/>,
     /// which is a deliberate, narrowly-scoped bypass of the retention mask and
     /// not something a read path may do.
     /// </para>

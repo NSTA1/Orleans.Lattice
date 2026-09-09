@@ -196,8 +196,7 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Registry_failure_during_resolution_leaves_prepare_resident_and_activation_survives()
-    {
+    public async Task Registry_failure_during_resolution_leaves_prepare_resident_and_activation_survives()    {
         // GUARD (must PASS on BOTH arms).
         // The registry resolution RPC FAULTS (a TimeoutException models the
         // registry-path timeouts observed on the deployed box, under exactly the
@@ -230,5 +229,102 @@ public partial class BPlusLeafGrainTests
         // outside the scope of this activation-time containment. The clamped
         // checkpoint and the resident count already establish that the heal left
         // the prepare and its clamp exactly as the pre-heal path would.
+    }
+
+    // As BuildSelfTerminaliseLeaf, but the registry masks the saga's outcome
+    // behind its tombstone-retention window: GetStatusAsync answers
+    // Indeterminate ("a row exists, but I can no longer report it"), while
+    // GetRecordedStatusAsync - the sweep-only bypass added for issue #2318 -
+    // still returns the stored verdict.
+    private static (BPlusLeafGrain Grain, FakePersistentState<LeafNodeState> State) BuildSelfTerminaliseLeafWithMaskedOutcome(
+        Guid txId,
+        TxStatus recordedOutcome,
+        out ILeafReplayCoordinatorGrain coordinator)
+    {
+        var registry = Substitute.For<ITxRegistryGrain>();
+        registry.GetStatusAsync(txId).Returns(TxStatus.Indeterminate);
+        registry.GetRecordedStatusAsync(txId).Returns(recordedOutcome);
+        return BuildSelfTerminaliseLeafCore(txId, registry, out coordinator, persistedCheckpoint: 0);
+    }
+
+    [Test]
+    public async Task Indeterminate_prepare_self_terminalises_from_the_recorded_committed_outcome()
+    {
+        // DISCRIMINATOR for issue #2318. The saga IS decided, but its tombstone
+        // aged past the retention window, so GetStatusAsync now answers
+        // Indeterminate rather than Committed. Before #2318 that read came back
+        // as InFlight and the prepare pinned the ceiling forever - the exact
+        // wedge #2190's heal exists to clear, reintroduced by the retention mask.
+        // The backstop reads the recorded row directly and applies the commit.
+        var txId = Guid.NewGuid();
+        var (grain, state) = BuildSelfTerminaliseLeafWithMaskedOutcome(txId, TxStatus.Committed, out _);
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(4L),
+            "A retention-masked but recorded-committed prepare must still self-terminalise.");
+        Assert.That(grain.PendingTransactionCount, Is.EqualTo(0),
+            "The masked-but-decided prepare must drain rather than pin the ceiling forever.");
+        var value = await grain.GetAsync("p2");
+        Assert.That(value, Is.Not.Null,
+            "The recorded commit's write must land, exactly as an unmasked commit's would.");
+        Assert.That(Encoding.UTF8.GetString(value!), Is.EqualTo("v2"));
+    }
+
+    [Test]
+    public async Task Indeterminate_prepare_self_terminalises_from_the_recorded_aborted_outcome()
+    {
+        // DISCRIMINATOR for issue #2318, abort arm.
+        var txId = Guid.NewGuid();
+        var (grain, state) = BuildSelfTerminaliseLeafWithMaskedOutcome(txId, TxStatus.Aborted, out _);
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(4L),
+            "A retention-masked but recorded-aborted prepare must still self-terminalise.");
+        Assert.That(grain.PendingTransactionCount, Is.EqualTo(0),
+            "The masked-but-decided prepare must be discarded rather than pin the ceiling forever.");
+        Assert.That(await grain.GetAsync("p2"), Is.Null,
+            "An aborted prepare's value must be discarded, never surfaced.");
+    }
+
+    [Test]
+    public async Task Indeterminate_prepare_with_no_recorded_row_stays_resident()
+    {
+        // GUARD. The registry answered Indeterminate because a delegated dial
+        // failed, so there is no local row either and GetRecordedStatusAsync
+        // reports InFlight. The backstop must NOT invent a terminal: the prepare
+        // stays resident and the clamp holds, exactly as for a genuinely
+        // undecided saga.
+        var txId = Guid.NewGuid();
+        var (grain, state) = BuildSelfTerminaliseLeafWithMaskedOutcome(txId, TxStatus.InFlight, out _);
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1L),
+            "Indeterminate with no recorded row must clamp exactly as an undecided prepare does.");
+        Assert.That(grain.PendingTransactionCount, Is.EqualTo(1),
+            "The backstop must never fabricate a terminal for a saga the registry cannot vouch for.");
+    }
+
+    [Test]
+    public async Task Indeterminate_prepare_survives_a_failing_recorded_status_probe()
+    {
+        // GUARD. The backstop's own probe faults. Activation must still complete
+        // and degrade to the resident-prepare behaviour, matching the containment
+        // guarantee the primary resolution path already provides.
+        var txId = Guid.NewGuid();
+        var registry = Substitute.For<ITxRegistryGrain>();
+        registry.GetStatusAsync(txId).Returns(TxStatus.Indeterminate);
+        registry.GetRecordedStatusAsync(txId)
+            .ThrowsAsync(new TimeoutException("registry unavailable during recorded-status probe"));
+        var (grain, state) = BuildSelfTerminaliseLeafCore(txId, registry, out _, persistedCheckpoint: 0);
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1L),
+            "A failing recorded-status probe must clamp exactly as the pre-heal path did.");
+        Assert.That(grain.PendingTransactionCount, Is.EqualTo(1),
+            "A failing recorded-status probe must leave the prepare resident for a later activation.");
     }
 }

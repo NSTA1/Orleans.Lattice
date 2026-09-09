@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -38,7 +39,7 @@ public partial class TxRegistryGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(effectiveOptions);
         grainFactory ??= Substitute.For<IGrainFactory>();
-        var grain = new TxRegistryGrain(context, grainFactory, optionsMonitor, state);
+        var grain = new TxRegistryGrain(context, grainFactory, optionsMonitor, NullLogger<TxRegistryGrain>.Instance, state);
         if (timeProvider is not null) grain.TimeProvider = timeProvider;
         return (grain, state);
     }
@@ -524,7 +525,7 @@ public partial class TxRegistryGrainTests
     }
 
     [Test]
-    public async Task GetStatusAsync_returns_InFlight_after_tombstone_TTL_elapses()
+    public async Task GetStatusAsync_reports_indeterminate_after_tombstone_TTL_elapses()
     {
         var start = DateTimeOffset.UtcNow;
         var clock = new ManualTimeProvider(start);
@@ -538,8 +539,9 @@ public partial class TxRegistryGrainTests
         clock.Advance(retention + TimeSpan.FromSeconds(1));
 
         var status = await grain.GetStatusAsync(txid);
-        Assert.That(status, Is.EqualTo(TxStatus.InFlight),
-            "Expired tombstones must be masked from GetStatusAsync so the orphan-resolution path stops surfacing forgotten outcomes indefinitely.");
+        Assert.That(status, Is.EqualTo(TxStatus.Indeterminate),
+            "Expired tombstones must stop surfacing the forgotten outcome, but the registry still holds "
+            + "the row and so must say it cannot answer rather than claim the saga never decided (#2318).");
     }
 
     [Test]
@@ -562,9 +564,11 @@ public partial class TxRegistryGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(result[fresh], Is.EqualTo(TxStatus.Committed));
-            Assert.That(result[tombstoned], Is.EqualTo(TxStatus.InFlight),
-                "Expired tombstone must be masked even when read via the batch API.");
-            Assert.That(result[unknown], Is.EqualTo(TxStatus.InFlight));
+            Assert.That(result[tombstoned], Is.EqualTo(TxStatus.Indeterminate),
+                "Expired tombstone must be masked even when read via the batch API, and masked to "
+                + "Indeterminate rather than InFlight - the batch API must not disagree with the single-key one.");
+            Assert.That(result[unknown], Is.EqualTo(TxStatus.InFlight),
+                "A txid with no stored row is genuinely absent, which is still InFlight.");
         });
     }
 

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
@@ -41,6 +42,7 @@ internal sealed class TxRegistryGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    ILogger<TxRegistryGrain> logger,
     [PersistentState("tx-registry", LatticeOptions.StorageProviderName)]
     IPersistentState<TxRegistryState> state) : ITxRegistryGrain, IGrainBase
 {
@@ -229,7 +231,7 @@ internal sealed class TxRegistryGrain(
 
     /// <summary>
     /// Clears a tombstone and its stale decision, returning the undo token that
-    /// <see cref="RestoreTombstone(Guid, TombstoneClear)"/> consumes. When the
+    /// <see cref="RestoreTombstone(Guid, in TombstoneClear)"/> consumes. When the
     /// tombstone was already masked from readers at <paramref name="now"/>, the
     /// removal is also accounted into
     /// <see cref="TxRegistryState.TombstoneRetirementEpoch"/> so the effective
@@ -293,7 +295,7 @@ internal sealed class TxRegistryGrain(
     /// <summary>
     /// Drops both cross-tree delegation rows for <paramref name="txid"/>,
     /// returning the undo token that
-    /// <see cref="RestoreDelegations(Guid, DelegationDrop)"/> consumes.
+    /// <see cref="RestoreDelegations(Guid, in DelegationDrop)"/> consumes.
     /// </summary>
     private DelegationDrop DropDelegations(Guid txid)
     {
@@ -468,7 +470,9 @@ internal sealed class TxRegistryGrain(
     /// barrier. Returns <see cref="TxStatus.InFlight"/> while the receiver
     /// coordinator's wait set is incomplete; caches a terminal verdict into
     /// <see cref="TxRegistryState.Decisions"/> and drops the delegation entry
-    /// once resolved. Dial failures surface as <c>InFlight</c> (conservative).
+    /// once resolved. A failed coordinator dial surfaces as
+    /// <see cref="TxStatus.Indeterminate"/>, which hides the saga's prepared
+    /// keys rather than disclosing their pre-saga values.
     /// </summary>
     private async Task<TxStatus> ResolveReceiverDelegatedAsync(Guid txid, string receiverCoordinatorKey)
     {
@@ -478,9 +482,29 @@ internal sealed class TxRegistryGrain(
             var coordinator = grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(receiverCoordinatorKey);
             verdict = await coordinator.GetDecisionAsync();
         }
-        catch
+        catch (Exception ex)
         {
-            return TxStatus.InFlight;
+            // We could not reach the only authority for this saga, so we do not
+            // know its outcome. That is Indeterminate, not InFlight: InFlight is
+            // a positive claim that the saga has not yet decided, and the
+            // visibility gate acts on it by serving the pre-saga value. One
+            // failed grain call - a rolling restart, a rebalance - is enough to
+            // reach here, so the disclosure flapped rather than persisting,
+            // which is why it presented as an intermittent read anomaly.
+            //
+            // Note the state-write catch further down deliberately does the
+            // opposite and returns the true verdict: there we HAVE the answer
+            // and merely failed to cache it, so suppressing it would discard
+            // knowledge we hold. The two catches differ because what is unknown
+            // differs, not because one of them is conservative and the other is
+            // not.
+            logger.LogWarning(
+                ex,
+                "Registry {TreeId} could not reach receiver coordinator {Coordinator} for saga {TxId}; reporting the outcome as indeterminate.",
+                this.GetPrimaryKeyString(),
+                receiverCoordinatorKey,
+                txid);
+            return TxStatus.Indeterminate;
         }
 
         if (verdict == TxStatus.InFlight)
@@ -544,10 +568,10 @@ internal sealed class TxRegistryGrain(
     /// <see cref="TxStatus.InFlight"/> without touching state. Once the
     /// coordinator's verdict is terminal it is cached into
     /// <see cref="TxRegistryState.Decisions"/> (bumping the revision) and the
-    /// delegation entry is dropped, so later reads resolve locally. Coordinator
-    /// dial failures are swallowed and surface as <c>InFlight</c> (conservative:
-    /// the cross-tree batch stays invisible on this tree until it can be
-    /// resolved).
+    /// delegation entry is dropped, so later reads resolve locally. A failed
+    /// coordinator dial surfaces as <see cref="TxStatus.Indeterminate"/>, which
+    /// keeps the cross-tree batch hidden on this tree until it can be resolved
+    /// rather than disclosing the participating keys' pre-saga values.
     /// </summary>
     private async Task<TxStatus> ResolveDelegatedAsync(Guid txid, string coordinatorKey)
     {
@@ -557,9 +581,20 @@ internal sealed class TxRegistryGrain(
             var coordinator = grainFactory.GetGrain<ILatticeCrossTreeTxGrain>(coordinatorKey);
             verdict = await coordinator.GetDecisionAsync();
         }
-        catch
+        catch (Exception ex)
         {
-            return TxStatus.InFlight;
+            // Authoring-side twin of the receiver-side catch above, and fixed
+            // for the same reason: an unreachable coordinator means we do not
+            // know the outcome, which is Indeterminate. Patching only one of
+            // the two looks complete while leaving the other live, because
+            // ResolveAnyDelegatedAsync reaches both.
+            logger.LogWarning(
+                ex,
+                "Registry {TreeId} could not reach cross-tree coordinator {Coordinator} for saga {TxId}; reporting the outcome as indeterminate.",
+                this.GetPrimaryKeyString(),
+                coordinatorKey,
+                txid);
+            return TxStatus.Indeterminate;
         }
 
         if (verdict == TxStatus.InFlight)
@@ -599,8 +634,16 @@ internal sealed class TxRegistryGrain(
     /// view). In-flight delegations are left in place to be retried on the next
     /// snapshot.
     /// </summary>
-    private async Task ResolveAllDelegatedAsync()
+    /// <returns>
+    /// The number of delegations whose coordinator could not be reached, so a
+    /// caller can tell "still preparing" apart from "could not find out". Every
+    /// such delegation is also still counted among the remaining entries, which
+    /// is the correct conservative accounting; this figure names the subset of
+    /// that count which is unreachable rather than pending.
+    /// </returns>
+    private async Task<int> ResolveAllDelegatedAsync()
     {
+        var unresolvable = 0;
         if (state.State.ExternalAuthorities.Count > 0)
         {
             // Snapshot the pending delegations: ResolveDelegatedAsync mutates the
@@ -609,7 +652,10 @@ internal sealed class TxRegistryGrain(
             foreach (var (txid, coordinatorKey) in pending)
             {
                 if (state.State.Decisions.ContainsKey(txid)) continue;
-                await ResolveDelegatedAsync(txid, coordinatorKey);
+                if (await ResolveDelegatedAsync(txid, coordinatorKey) == TxStatus.Indeterminate)
+                {
+                    unresolvable++;
+                }
             }
         }
         if (state.State.ReceiverDecisionAuthorities.Count > 0)
@@ -621,9 +667,13 @@ internal sealed class TxRegistryGrain(
             foreach (var (txid, receiverKey) in pendingReceiver)
             {
                 if (state.State.Decisions.ContainsKey(txid)) continue;
-                await ResolveReceiverDelegatedAsync(txid, receiverKey);
+                if (await ResolveReceiverDelegatedAsync(txid, receiverKey) == TxStatus.Indeterminate)
+                {
+                    unresolvable++;
+                }
             }
         }
+        return unresolvable;
     }
 
     /// <inheritdoc />
@@ -631,14 +681,26 @@ internal sealed class TxRegistryGrain(
     {
         // Resolve every active delegation against its coordinator first, so a
         // saga whose coordinator has already decided is caches-and-dropped and
-        // no longer counts as in-flight. What remains delegated afterwards is
-        // genuinely still preparing.
-        await ResolveAllDelegatedAsync();
+        // no longer counts as in-flight.
+        //
+        // What remains delegated afterwards is NOT uniformly "genuinely still
+        // preparing". A resolve whose coordinator dial fails returns early
+        // without dropping the entry, so the saga stays counted here. That is
+        // the right conservative accounting - an unreachable coordinator is not
+        // evidence of a decision - but it is a different fact, and folding it
+        // into the in-flight count made a connectivity fault report as healthy
+        // pipelining. UnresolvableCount below reports the unreachable subset
+        // separately so a fence reading this observation can distinguish
+        // "sagas are still running" from "I could not find out".
+        var unresolvable = await ResolveAllDelegatedAsync();
 
         var inFlight = state.State.ExternalAuthorities.Count
             + state.State.ReceiverDecisionAuthorities.Count;
 
-        return new CrossTreeInFlightObservation(inFlight, state.State.CrossTreeRegistrationEpoch);
+        return new CrossTreeInFlightObservation(
+            inFlight,
+            state.State.CrossTreeRegistrationEpoch,
+            unresolvable);
     }
 
     /// <inheritdoc />
@@ -646,11 +708,23 @@ internal sealed class TxRegistryGrain(
     {
         if (IsTombstoneExpired(txid))
         {
-            // Tombstone TTL elapsed: treat as absent. The decision is
-            // not physically purged here (purging happens lazily inside
-            // ForgetAsync via PruneExpired) so GetStatusAsync stays a
-            // pure read with no state-write side effects.
-            return TxStatus.InFlight;
+            // Tombstone TTL elapsed. The decision is not physically purged here
+            // (purging happens lazily inside ForgetAsync via PruneExpired) so
+            // GetStatusAsync stays a pure read with no state-write side effects.
+            //
+            // If a row is still stored we know a decision was made and know we
+            // are no longer entitled to report it, which is Indeterminate - NOT
+            // InFlight. Reporting InFlight here was the defect: the visibility
+            // gate reads InFlight as "fall through to the pre-saga value", which
+            // is an affirmative claim that the saga did not commit, and it also
+            // told the leaf sweep the saga was still running so the stranded
+            // prepare it would have resolved was left in place. One line both
+            // corrupted the read and disabled the heal.
+            //
+            // A txid with no stored row is genuinely absent and stays InFlight.
+            return state.State.Decisions.ContainsKey(txid)
+                ? TxStatus.Indeterminate
+                : TxStatus.InFlight;
         }
         if (state.State.Decisions.TryGetValue(txid, out var status))
         {
@@ -661,6 +735,12 @@ internal sealed class TxRegistryGrain(
         // single global decision.
         return await ResolveAnyDelegatedAsync(txid);
     }
+
+    /// <inheritdoc />
+    public Task<TxStatus> GetRecordedStatusAsync(Guid txid) =>
+        Task.FromResult(state.State.Decisions.TryGetValue(txid, out var status)
+            ? status
+            : TxStatus.InFlight);
 
     /// <inheritdoc />
     public async Task<Dictionary<Guid, TxStatus>> GetStatusManyAsync(IReadOnlyList<Guid> txids)
@@ -677,7 +757,12 @@ internal sealed class TxRegistryGrain(
         {
             if (IsTombstoneExpiredAt(txid, now, retention))
             {
-                result[txid] = TxStatus.InFlight;
+                // Same rule as GetStatusAsync: a stored row we may no longer
+                // report is Indeterminate, a txid we have never heard of is
+                // InFlight. Kept textually parallel so the two cannot drift.
+                result[txid] = state.State.Decisions.ContainsKey(txid)
+                    ? TxStatus.Indeterminate
+                    : TxStatus.InFlight;
                 continue;
             }
             if (state.State.Decisions.TryGetValue(txid, out var status))
@@ -989,6 +1074,7 @@ internal sealed class TxRegistryGrain(
                     {
                         state.State.SnapshotPins[pinId] = pin;
                     }
+                    InvalidatePinMemo();
                 }
                 if (revisionBumped)
                 {
@@ -1280,6 +1366,7 @@ internal sealed class TxRegistryGrain(
             Txids = proposed,
             ExpiresAt = now + effectiveTtl,
         };
+        InvalidatePinMemo();
         try
         {
             await state.WriteStateAsync();
@@ -1288,6 +1375,7 @@ internal sealed class TxRegistryGrain(
         {
             if (hadPrior && prior is not null) state.State.SnapshotPins[pinId] = prior;
             else state.State.SnapshotPins.Remove(pinId);
+            InvalidatePinMemo();
             throw;
         }
     }
@@ -1326,6 +1414,9 @@ internal sealed class TxRegistryGrain(
 
         var prior = pin.ExpiresAt;
         pin.ExpiresAt = newExpiresAt;
+        // The txid membership is unchanged but the union's validity horizon is
+        // derived from pin expiries, so extending one moves the horizon.
+        InvalidatePinMemo();
         try
         {
             await state.WriteStateAsync();
@@ -1333,6 +1424,7 @@ internal sealed class TxRegistryGrain(
         catch
         {
             pin.ExpiresAt = prior;
+            InvalidatePinMemo();
             throw;
         }
         return true;
@@ -1346,6 +1438,7 @@ internal sealed class TxRegistryGrain(
             return;
         }
         state.State.SnapshotPins.Remove(pinId);
+        InvalidatePinMemo();
         try
         {
             await state.WriteStateAsync();
@@ -1353,6 +1446,7 @@ internal sealed class TxRegistryGrain(
         catch
         {
             state.State.SnapshotPins[pinId] = prior;
+            InvalidatePinMemo();
             throw;
         }
     }
@@ -1403,7 +1497,8 @@ internal sealed class TxRegistryGrain(
 
     /// <summary>
     /// Returns <see langword="true"/> when <paramref name="txid"/> has
-    /// a tombstone whose age exceeds the per-tree retention window.
+    /// a tombstone whose age exceeds the per-tree retention window and
+    /// is not held by a live snapshot pin.
     /// Used by the read-side APIs to mask expired-but-not-yet-purged
     /// tombstones from callers.
     /// </summary>
@@ -1419,12 +1514,71 @@ internal sealed class TxRegistryGrain(
     private bool IsTombstoneExpiredAt(Guid txid, DateTimeOffset now, TimeSpan retention)
     {
         if (!state.State.ForgottenAt.TryGetValue(txid, out var ts)) return false;
+        // A pinned txid is not expired. PruneExpired has always skipped pinned
+        // entries, so the row is guaranteed to still be here; the read mask used
+        // to ignore pins and hide it anyway, which meant a cursor that had taken
+        // a pin precisely to keep reading a decision across a long walk was
+        // refused the very row its pin was protecting. Pin-awareness is checked
+        // second because it is the rarer condition and the dictionary probe
+        // above already filtered out every txid with no tombstone at all.
+        if (IsPinnedAt(txid, now)) return false;
         // TimeSpan.Zero retention: any tombstone observed here is
         // expired (this branch is only reachable from GetStatus* /
         // SnapshotAsync; ForgetAsync's own zero-retention path drops
         // the decision directly without writing to ForgottenAt).
         if (retention == TimeSpan.Zero) return true;
         return now - ts > retention;
+    }
+
+    /// <summary>
+    /// Memoised union of every live snapshot pin's txid set, together with the
+    /// earliest instant at which that union could change by a pin lapsing.
+    /// Rebuilt on demand and dropped by <see cref="InvalidatePinMemo"/> at every
+    /// mutation of <see cref="TxRegistryState.SnapshotPins"/>.
+    /// <para>
+    /// The union is consulted from the read-side expiry mask, which sits on the
+    /// <c>[AlwaysInterleave]</c> reader hot path, so rebuilding it per call would
+    /// put an allocation and a walk of every pin on every status read. Like the
+    /// expiry memo above it is a pure function of persisted state and the clock,
+    /// so losing it costs a rebuild and can never change an answer.
+    /// </para>
+    /// </summary>
+    private HashSet<Guid>? _pinnedMemo;
+    private long _pinnedMemoValidBeforeTicks;
+
+    /// <summary>
+    /// Drops the memoised pin union. Called from every site that mutates
+    /// <see cref="TxRegistryState.SnapshotPins"/>.
+    /// </summary>
+    private void InvalidatePinMemo() => _pinnedMemo = null;
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="txid"/> is held by a
+    /// snapshot pin that has not itself lapsed at <paramref name="now"/>. Uses
+    /// exactly the liveness rule <see cref="PruneExpired"/> applies, so the read
+    /// mask and the prune pass can never disagree about which rows survive.
+    /// </summary>
+    private bool IsPinnedAt(Guid txid, DateTimeOffset now)
+    {
+        // Overwhelmingly the common case: no cursor holds a point-in-time pin on
+        // this tree, so the hot path costs one int comparison and no allocation.
+        if (state.State.SnapshotPins.Count == 0) return false;
+
+        if (_pinnedMemo is null || now.UtcTicks >= _pinnedMemoValidBeforeTicks)
+        {
+            var union = new HashSet<Guid>();
+            var nextExpiry = long.MaxValue;
+            foreach (var pin in state.State.SnapshotPins.Values)
+            {
+                if (pin.ExpiresAt <= now) continue;
+                foreach (var pinned in pin.Txids) union.Add(pinned);
+                if (pin.ExpiresAt.UtcTicks < nextExpiry) nextExpiry = pin.ExpiresAt.UtcTicks;
+            }
+            _pinnedMemo = union;
+            _pinnedMemoValidBeforeTicks = nextExpiry;
+        }
+
+        return _pinnedMemo.Contains(txid);
     }
 
     /// <summary>
@@ -1469,6 +1623,12 @@ internal sealed class TxRegistryGrain(
         }
 
         var forgotten = state.State.ForgottenAt;
+        // A live pin un-expires the rows it holds, so the count has to apply the
+        // same pin-aware predicate the mask does, and its validity horizon has
+        // to end no later than the first pin lapse - a lapsing pin turns rows
+        // expired with no mutation to invalidate the memo, exactly as a
+        // retention crossing does.
+        var pinned = state.State.SnapshotPins.Count > 0;
         int expired;
         long validBefore;
         if (forgotten.Count == 0)
@@ -1478,7 +1638,7 @@ internal sealed class TxRegistryGrain(
             // invalidates the memo, so an unbounded horizon is safe.
             validBefore = long.MaxValue;
         }
-        else if (retention == TimeSpan.Zero)
+        else if (retention == TimeSpan.Zero && !pinned)
         {
             // Every row is masked the instant it is observed, and no clock
             // advance can change that, so the horizon is unbounded too.
@@ -1489,9 +1649,16 @@ internal sealed class TxRegistryGrain(
         {
             expired = 0;
             validBefore = long.MaxValue;
-            foreach (var ts in forgotten.Values)
+            foreach (var (txid, ts) in forgotten)
             {
-                if (now - ts > retention)
+                if (pinned && IsPinnedAt(txid, now))
+                {
+                    // Held by a live pin. It becomes countable when that pin
+                    // lapses, which the horizon clamp below covers.
+                    continue;
+                }
+
+                if (retention == TimeSpan.Zero || now - ts > retention)
                 {
                     expired++;
                     continue;
@@ -1509,6 +1676,11 @@ internal sealed class TxRegistryGrain(
                 {
                     validBefore = becomesExpiredAt;
                 }
+            }
+
+            if (pinned && _pinnedMemoValidBeforeTicks < validBefore)
+            {
+                validBefore = _pinnedMemoValidBeforeTicks;
             }
         }
 
@@ -1615,6 +1787,7 @@ internal sealed class TxRegistryGrain(
             {
                 state.State.SnapshotPins.Remove(pinId);
             }
+            InvalidatePinMemo();
         }
 
         if (state.State.ForgottenAt.Count == 0)
