@@ -211,7 +211,15 @@ internal sealed class RepoContextBootstrapService : IDisposable
             1,
             new KeyValuePair<string, object?>("repo", repoId),
             new KeyValuePair<string, object?>("arm", arm),
-            new KeyValuePair<string, object?>("kind", kind));
+            new KeyValuePair<string, object?>("kind", kind),
+            // An indexing pass is a host-process background loop, not tenant traffic:
+            // the repocontext trees are process-wide and shared across every indexed
+            // repository, so an arm fault is a property of this host rather than of any
+            // tenant. The same reason _annSweeps carries the sentinel. It is uniformly
+            // Platform - the stall names a tree, but the counter also fires for faults
+            // that name none, and an instrument may not mix a derived tenant with the
+            // sentinel.
+            LatticeTenantLabel.Platform);
 
         if (stall is not null)
         {
