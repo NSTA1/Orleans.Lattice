@@ -37,7 +37,13 @@ repository you are in (**derive it from the listing, never from your current
 directory** - see [The repo id](#the-repo-id), which matters most in a git
 worktree), then `index_status {repoId}` (which also calibrates you -
 see [Health and degraded mode](#health-and-degraded-mode)), then **sweep the
-memory you are about to need**.
+memory you are about to need** - and, whatever the task, **always read the whole
+`gotchas` topic in full**. Unlike the component-specific topics below, `gotchas`
+is not swept conditionally on what you think you are about to touch: a full
+`repocontext_scan` scope `MemoryTopic` topic `gotchas` is a **fixed orientation
+step every session**, because an unread gotcha is an hour you are about to lose
+to something a past session already paid for, and you cannot know in advance
+which gotcha that is.
 
 **`list_topics` + `recall` is the primary memory mechanism.** Memory is a small,
 keyed, topic-partitioned store, so the right way into it is to *enumerate* it,
@@ -53,9 +59,10 @@ The ladder, in order:
    entry count. One call, small payload, no ranking. **This is the step everyone
    skips and the one that makes the rest work**, because every other memory read
    needs a topic or a key you must already know.
-2. **`repocontext_scan` scope `MemoryTopic`** for the one or two topics the
-   listing shows are relevant (the epic, component, or package you are about to
-   touch, plus `decisions` / `gotchas` / `conventions`). Targeted and complete.
+2. **`repocontext_scan` scope `MemoryTopic`** for `gotchas` **in full, every
+   session and unconditionally** (see moment 1), then for the one or two further
+   topics the listing shows are relevant (the epic, component, or package you are
+   about to touch, plus `decisions` / `conventions`). Targeted and complete.
 3. **`repocontext_recall`** by key when you know it - the cheapest and most
    precise path of all, and the reason a stable, predictable `id` on capture
    matters so much.
