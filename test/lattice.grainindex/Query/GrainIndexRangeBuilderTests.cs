@@ -10,7 +10,7 @@ namespace Orleans.Lattice.GrainIndex.Tests.Query;
 /// wrote them.
 /// </summary>
 [TestFixture]
-public sealed class GrainIndexRangeBuilderTests
+public sealed partial class GrainIndexRangeBuilderTests
 {
     private static readonly GrainIndexQueryProperty Age = new(0, "Age", typeof(int));
     private static readonly GrainIndexQueryProperty LastSeen = new(1, "LastSeen", typeof(DateTimeOffset?));
