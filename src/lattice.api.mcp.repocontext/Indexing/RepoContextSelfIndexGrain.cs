@@ -346,7 +346,31 @@ internal sealed class RepoContextSelfIndexGrain(
         // configured interval rather than the shared mounted-walk interval.
         var interval = sourceGate.RefreshIntervalFor(RepoId, options.ReconcileInterval);
         var jitterTicks = (long)(Random.Shared.NextDouble() * options.ReconcileIntervalJitter.Ticks);
-        state.State.NextReconcileAfterTicks = nowTicks + interval.Ticks + jitterTicks;
+        // Saturate the sum: ReconcileInterval is settable per second through
+        // LATTICE_RECONCILE_INTERVAL_SECONDS with no upper bound, so an extreme
+        // interval would otherwise overflow the add to a negative (past) instant,
+        // and the tick gate (nowTicks >= NextReconcileAfterTicks) would then fire
+        // the reconcile on every tick - the busiest cadence in place of the
+        // rarest one the operator configured.
+        state.State.NextReconcileAfterTicks =
+            SaturatingAddTicks(SaturatingAddTicks(nowTicks, interval.Ticks), jitterTicks);
+    }
+
+    /// <summary>
+    /// <c>a + b</c> in ticks, clamped to <see cref="long.MaxValue"/> /
+    /// <see cref="long.MinValue"/> instead of wrapping, so an extreme configured
+    /// <see cref="RepoContextIndexingOptions.ReconcileInterval"/> cannot overflow a
+    /// scheduled reconcile deadline to a past instant.
+    /// </summary>
+    internal static long SaturatingAddTicks(long a, long b)
+    {
+        var sum = unchecked(a + b);
+        // Overflow iff the operands share a sign that the result does not.
+        if (((a ^ sum) & (b ^ sum)) < 0)
+        {
+            return b < 0 ? long.MinValue : long.MaxValue;
+        }
+        return sum;
     }
 
     /// <summary>
