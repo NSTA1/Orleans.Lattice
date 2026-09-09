@@ -448,6 +448,118 @@ public class ShardRootGrainScanPageStallTests
         });
     }
 
+    /// <summary>
+    /// Builds a shard with an internal root over one leaf, whose leaf
+    /// <c>CountAsync</c> parks forever, so the <em>diagnostics</em> leaf walk
+    /// stalls with a real leaf read outstanding.
+    /// <para>
+    /// Deliberately not a <c>GetSortedEntriesBatchAsync</c> shape: that path
+    /// lives in <c>ShardRootGrain.cs</c> and already named its leaf. This one
+    /// reaches <c>ShardRootGrain.Diagnostics.cs</c>, which stood down without
+    /// recording an identity until issue 2365.
+    /// </para>
+    /// <para>
+    /// The ceiling is deliberately far wider than the 250ms its siblings use.
+    /// The clock starts in <c>BeginScanPage</c>, and the guard builds the
+    /// exception on a timer thread <em>concurrently</em> with the core task, so
+    /// it reports whatever the walk has recorded by the time it fires. This
+    /// harness descends through an internal root before it reaches the leaf
+    /// walk, where the others park almost immediately; under a loaded machine
+    /// that setup can outlast a 250ms ceiling, and the guard then reads a phase
+    /// that has been set with an identity that has not, failing the test for a
+    /// reason that has nothing to do with what it asserts.
+    /// </para>
+    /// </summary>
+    private static (ShardRootGrain Grain, GrainId LeafId) CreateParkedDiagnosticsWalk(
+        TimeSpan stallDuration)
+    {
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("shard", ShardKey));
+
+        var state = new FakePersistentState<ShardRootState>();
+        var rootId = GrainId.Create("internal", Guid.NewGuid().ToString("N"));
+        state.State.RootNodeId = rootId;
+        // An internal root, so the walk takes the descent-then-chain branch
+        // rather than the leaf-root fast path, which does no bounded walk.
+        state.State.RootIsLeaf = false;
+
+        var factory = Substitute.For<IGrainFactory>();
+        var leafId = GrainId.Create("leaf", Guid.NewGuid().ToString("N"));
+
+        var root = Substitute.For<IBPlusInternalGrain>();
+        root.GetLeftmostChildWithMetadataAsync().Returns(
+            Task.FromResult<(GrainId ChildId, bool ChildrenAreLeaves)>((leafId, true)));
+        factory.GetGrain<IBPlusInternalGrain>(rootId.GetGuidKey()).Returns(root);
+
+        var leaf = Substitute.For<IBPlusLeafGrain>();
+        leaf.CountAsync().Returns(_ => new TaskCompletionSource<int>(
+            TaskCreationOptions.RunContinuationsAsynchronously).Task);
+        leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        {
+            LowKeyInclusive = null,
+            HighKeyExclusive = null,
+        }));
+        leaf.GetNextSiblingAsync().Returns(Task.FromResult((GrainId?)null));
+        factory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leaf);
+
+        var optionsResolver = TestOptionsResolver.Create(
+            baseOptions: new LatticeOptions
+            {
+                MaxLeavesPerScanPage = 64,
+                MaxScanPageDuration = TimeSpan.Zero,
+                MaxScanPageStallDuration = stallDuration,
+            },
+            shardCount: 1,
+            factory: factory);
+
+        var grain = new ShardRootGrain(context, state, factory, optionsResolver,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance,
+            TestMutationObservers.NoObservers());
+
+        return (grain, leafId);
+    }
+
+    /// <summary>
+    /// The identity contract holds on a walk outside
+    /// <c>ShardRootGrain.cs</c> too (issue 2365).
+    /// <para>
+    /// The three tests above all drive <c>GetSortedEntriesBatchAsync</c>, which
+    /// recorded an identity from the day the slot was added. Five other leaf
+    /// walks - two here in the diagnostics surface, three in the projection
+    /// admin surface - stood down through the identity-free overload, so a
+    /// stall raised from any of them reported <c>LeafInFlight = null</c>:
+    /// indistinguishable, to a reader, from
+    /// <see cref="A_stall_between_leaf_reads_names_no_leaf"/>, where null is a
+    /// measured fact about the walk. The absence of instrumentation was
+    /// rendering as a statement about the tree.
+    /// </para>
+    /// <para>
+    /// This test is the behavioural half of the fix; the source guard in
+    /// <c>ShardRootGrainScanPageStandDownCoverageTests</c> is the structural
+    /// half that covers the other four walks and any future one.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void A_stalled_diagnostics_walk_names_the_leaf_it_was_waiting_on()
+    {
+        var (grain, leafId) = CreateParkedDiagnosticsWalk(TimeSpan.FromSeconds(2));
+
+        var ex = Assert.ThrowsAsync<ScanPageStalledException>(async () =>
+            await grain.GetDiagnosticsBoundedAsync(deep: false, resumeFromInclusive: null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Phase, Is.EqualTo("leaf-walk"),
+                "the stall must be attributed to the leaf walk, not the descent that preceded it");
+            Assert.That(ex.LeavesVisited, Is.Zero);
+            Assert.That(ex.LeafInFlight, Is.EqualTo(leafId.ToString()),
+                "the diagnostics walk must name the leaf whose count was outstanding; "
+                + "before issue 2365 it named nothing and the null read as 'between reads'");
+            Assert.That(ex.Message, Does.Contain(leafId.ToString()),
+                "and the message must carry it, because a stall report is read as log text");
+        });
+    }
+
     [Test]
     public void Every_scan_page_entry_point_arms_its_budget_before_any_await()
     {

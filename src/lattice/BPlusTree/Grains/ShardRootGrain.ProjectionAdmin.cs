@@ -83,7 +83,7 @@ internal sealed partial class ShardRootGrain
 
         while (true)
         {
-            StandDownIfCeilingFired(scan);
+            StandDownIfCeilingFired(scan, leafId);
             cancellationToken.ThrowIfCancellationRequested();
 
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
@@ -265,7 +265,7 @@ internal sealed partial class ShardRootGrain
 
         while (walk.HasLeaf)
         {
-            StandDownIfCeilingFired(scan);
+            StandDownIfCeilingFired(scan, walk.CurrentLeafId!.Value);
             cancellationToken.ThrowIfCancellationRequested();
 
             // GetProjectionCheckpointOffsetAsync returns the legacy
@@ -395,7 +395,7 @@ internal sealed partial class ShardRootGrain
             var leafId = leftmostId.Value;
             while (true)
             {
-                StandDownIfCeilingFired(scan);
+                StandDownIfCeilingFired(scan, leafId);
                 cancellationToken.ThrowIfCancellationRequested();
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
                 var freeze = await leaf.FreezeProjectionAsync(cancellationToken);
@@ -479,6 +479,10 @@ internal sealed partial class ShardRootGrain
                 for (var i = 0; i < frozen.Count; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    // The non-recording overload on purpose (issue 2365): this
+                    // pass is fanned out, so no single leaf is "the read in
+                    // flight", and the ordinal freshness test cannot work here
+                    // because the fold pass never advances LeavesVisited.
                     StandDownIfCeilingFired(scan);
                     var slot = i % window;
                     var rows = await inFlight[slot];
