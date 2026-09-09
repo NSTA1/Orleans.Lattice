@@ -414,8 +414,9 @@ public sealed class LatticeWalGc(
     /// <see cref="LatticeOptions.WalMaterialiserPinShards"/> grains; the GC must
     /// reconstruct the full floor by reading all of them. The dual-read of the
     /// legacy key keeps pins written before the upgrade counted. Shards are read
-    /// concurrently; per consumer id the lowest (most conservative) pin wins so a
-    /// stale duplicate can only retain more WAL.
+    /// concurrently; per consumer id the pin at the key the current build would
+    /// write to wins outright, and only when that key holds nothing do the
+    /// remaining (stranded) pins fold to the lowest.
     /// </summary>
     private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> ReadDurablePinsAsync(
         IGrainFactory factory,
@@ -442,16 +443,37 @@ public sealed class LatticeWalGc(
         // grow-and-rehash chain the prior grown-from-empty map paid.
         var union = new Dictionary<string, HybridLogicalClock>(
             WidestResultCount(results), StringComparer.Ordinal);
+        HashSet<string>? authoritative = null;
         for (var i = 0; i < results.Length; i++)
         {
             foreach (var (consumerId, pin) in results[i])
             {
-                // Single-probe min-fold: the prior shape probed `union` twice
-                // per consumer (a TryGetValue then an indexer set on the same
-                // key) in both branches. Nothing mutates `union` while the ref
-                // is live.
+                var isAuthoritative = i < shardCount
+                    && WalMaterialiserPinRouting.AuthoritativeKeyIndex(consumerId, shardCount) == i;
+
+                // Single-probe fold: the prior shape probed `union` twice per
+                // consumer (a TryGetValue then an indexer set on the same key)
+                // in both branches. Nothing mutates `union` while the ref is
+                // live - the authoritative set is a separate collection.
                 ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(union, consumerId, out var existed);
-                if (!existed || pin < slot)
+                if (isAuthoritative)
+                {
+                    // Only one key in the enumeration is authoritative for a
+                    // given consumer, and it is the only key the current build
+                    // writes to, so its pin supersedes every stranded duplicate
+                    // outright rather than folding against it.
+                    slot = pin;
+                    (authoritative ??= new HashSet<string>(StringComparer.Ordinal)).Add(consumerId);
+                    continue;
+                }
+
+                if (!existed)
+                {
+                    slot = pin;
+                    continue;
+                }
+
+                if (authoritative?.Contains(consumerId) != true && pin < slot)
                 {
                     slot = pin;
                 }
@@ -585,8 +607,9 @@ public sealed class LatticeWalGc(
     /// Reads and unions the durable leaf-materialiser checkpoint offsets for
     /// <paramref name="treeName"/> across every shard activation plus the legacy
     /// unsuffixed key, mirroring <see cref="ReadDurablePinsAsync"/>. Per consumer
-    /// id the lowest (most conservative) offset wins so a stale duplicate can only
-    /// retain more WAL. A grain that returns <see langword="null"/> (an older
+    /// id the offset at the key the current build would write to wins outright,
+    /// and only when that key holds nothing do the remaining (stranded) offsets
+    /// fold to the lowest. A grain that returns <see langword="null"/> (an older
     /// activation predating the offset contract, surfaced by a substitute in
     /// tests) contributes nothing rather than faulting the read.
     /// </summary>
@@ -612,6 +635,7 @@ public sealed class LatticeWalGc(
         // Presized on the same reasoning as ReadDurablePinsAsync above.
         var union = new Dictionary<string, long>(
             WidestResultCount(results), StringComparer.Ordinal);
+        HashSet<string>? authoritative = null;
         for (var i = 0; i < results.Length; i++)
         {
             if (results[i] is null)
@@ -621,9 +645,28 @@ public sealed class LatticeWalGc(
 
             foreach (var (consumerId, offset) in results[i])
             {
-                // Single-probe min-fold, as in ReadDurablePinsAsync above.
+                var isAuthoritative = i < shardCount
+                    && WalMaterialiserPinRouting.AuthoritativeKeyIndex(consumerId, shardCount) == i;
+
+                // Single-probe route-authority fold, as in ReadDurablePinsAsync
+                // above. This plane carries the same defect and must be fixed
+                // with it: a floor repaired on one plane and left stranded on
+                // the other still pins the WAL.
                 ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(union, consumerId, out var existed);
-                if (!existed || offset < slot)
+                if (isAuthoritative)
+                {
+                    slot = offset;
+                    (authoritative ??= new HashSet<string>(StringComparer.Ordinal)).Add(consumerId);
+                    continue;
+                }
+
+                if (!existed)
+                {
+                    slot = offset;
+                    continue;
+                }
+
+                if (authoritative?.Contains(consumerId) != true && offset < slot)
                 {
                     slot = offset;
                 }
