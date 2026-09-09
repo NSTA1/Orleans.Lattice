@@ -233,6 +233,49 @@ public sealed class TenantObservabilityGaugePublishingTests
             "the loop must have run through the interval-fallback path and exited on stop");
     }
 
+    /// <summary>
+    /// The longest period <see cref="PeriodicTimer"/> accepts. A cadence beyond
+    /// this must be clamped, not allowed to throw out of the publish loop.
+    /// </summary>
+    private static readonly TimeSpan TimerCeiling = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    [Test]
+    public void ResolvePublishInterval_clamps_a_configured_interval_beyond_the_timer_ceiling()
+    {
+        // Regression: RunLoopAsync fed PublishInterval straight into
+        // new PeriodicTimer(...), which throws ArgumentOutOfRangeException for a
+        // finite period above ~49.71 days. An out-of-range operator value must
+        // degrade to the slowest legal cadence, not fault the loop.
+        var publisher = Publisher(
+            new FakeTenantUsageIndex(),
+            new FakeTenantOverageBilling(),
+            new TenantObservabilityOptions { PublishInterval = TimeSpan.FromDays(60) });
+
+        Assert.That(publisher.ResolvePublishInterval(), Is.EqualTo(TimerCeiling));
+    }
+
+    [Test]
+    public void ResolvePublishInterval_falls_back_to_the_default_when_non_positive()
+    {
+        var publisher = Publisher(
+            new FakeTenantUsageIndex(),
+            new FakeTenantOverageBilling(),
+            new TenantObservabilityOptions { PublishInterval = TimeSpan.Zero });
+
+        Assert.That(publisher.ResolvePublishInterval(), Is.EqualTo(TenantObservabilityOptions.DefaultPublishInterval));
+    }
+
+    [Test]
+    public void ResolvePublishInterval_returns_a_configured_in_range_interval_unchanged()
+    {
+        var publisher = Publisher(
+            new FakeTenantUsageIndex(),
+            new FakeTenantOverageBilling(),
+            new TenantObservabilityOptions { PublishInterval = TimeSpan.FromSeconds(45) });
+
+        Assert.That(publisher.ResolvePublishInterval(), Is.EqualTo(TimeSpan.FromSeconds(45)));
+    }
+
     [Test]
     public async Task RunLoopAsync_fires_a_second_publish_on_the_next_tick()
     {
