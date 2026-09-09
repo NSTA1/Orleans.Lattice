@@ -209,7 +209,6 @@ internal sealed class RepoContextBootstrapService : IDisposable
 
         _passArmFaults.Add(
             1,
-            new KeyValuePair<string, object?>("repo", repoId),
             new KeyValuePair<string, object?>("arm", arm),
             new KeyValuePair<string, object?>("kind", kind),
             // An indexing pass is a host-process background loop, not tenant traffic:
@@ -220,6 +219,14 @@ internal sealed class RepoContextBootstrapService : IDisposable
             // that name none, and an instrument may not mix a derived tenant with the
             // sentinel.
             LatticeTenantLabel.Platform);
+
+        // Deliberately NOT tagged by repository. Every instrument on this meter is
+        // documented as carrying only low-cardinality tags and "never a repository
+        // id", and a repository count is unbounded in principle because repositories
+        // are registered at runtime. Tagging by repo would also contradict the
+        // host-process reasoning above that puts this instrument on the platform
+        // sentinel. The identity is not lost: the warning below carries RepoId, which
+        // is where an unbounded identifier belongs.
 
         if (stall is not null)
         {

@@ -416,6 +416,7 @@ Every instrument here carries the derived `tenant` label with the reserved `_pla
 | `repocontext.retrieval.ready_seconds` | histogram (`s`) | `phase` = `serving`, `keyword_only`, `nothing_registered` | (none) | **not charted** |
 | `repocontext.retrieval.unavailable` | counter (`{event}`) | `cause` | (none) | **not charted** |
 | `repocontext.vectorplane.rederive` | counter (`{event}`) | `tree`, `outcome` | (none) | **not charted** |
+| `repocontext.bootstrap.pass_arm_faults` | counter (`{fault}`) | `arm` = `retire`, `ingest-files`, `ingest-symbols`, `ingest-memory`; `kind` = `scan-page-stalled` or an exception type name | (none) | **not charted** |
 
 Three of these are partitions of a total rather than free-standing counts, and reading them as free-standing counts inverts their meaning. `repocontext.ann.sweep` counts **every** sweep including the faulting one, and a faulting sweep is re-run on a retry backoff rather than at the sweep interval, so `outcome="faulted"` must not be denominated by the sweep interval. `repocontext.retrieval.ann.search` counts every query including the ones the approximate plane could not answer. In both cases a zero on one tag value beside a non-zero total is a **measured** absence; all series reading zero instead means the loop is not running at all, which is a different fact and is distinguished by the service's startup line rather than by these counters.
 
