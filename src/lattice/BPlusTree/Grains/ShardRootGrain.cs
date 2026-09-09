@@ -163,6 +163,14 @@ internal sealed partial class ShardRootGrain(
     /// </summary>
     /// <param name="kind">The loop that gave up, used as the metric's kind tag.</param>
     /// <param name="ex">The failure observed on the final attempt.</param>
+    /// <remarks>
+    /// The tenant dimension is named inline via
+    /// <see cref="LatticeTenantLabel.ForTree(string)"/> rather than taken from the
+    /// activation-cached tag set, matching <c>LeafAccessMetricTags()</c>: the site
+    /// fires at most twice per activation, so the allocation is immaterial, and
+    /// naming it here keeps it directly verifiable by the tenant-dimension hygiene
+    /// gate instead of needing an allow-list entry.
+    /// </remarks>
     private void ReportFlushRetriesSuspended(string kind, Exception ex)
     {
         logger.LogWarning(ex,
@@ -172,7 +180,8 @@ internal sealed partial class ShardRootGrain(
         LatticeMetrics.ShardRootFlushRetriesSuspended.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, kind));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, kind),
+            LatticeTenantLabel.ForTree(TreeId));
     }
 
     /// <summary>
