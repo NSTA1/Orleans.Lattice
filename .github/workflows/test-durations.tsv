@@ -1,65 +1,105 @@
-# Per work-item duration estimates, in minutes, used ONLY to bin-pack the test
-# matrix. Nothing about correctness depends on these numbers: a wrong estimate
-# makes a leg longer or shorter than its neighbours, it never changes which
-# tests run. Treat the file as a scheduling hint, not a specification.
+# Per-work-item duration estimates, in minutes, used only to bin-pack the
+# matrix. Format: package<TAB>shard<TAB>tier<TAB>minutes, with `-` for the
+# shard of an unsharded package and `all` for its single untiered invocation.
+# A missing row falls back to DEFAULT_ESTIMATE in plan-test-matrix.py, so this
+# file can never make the plan wrong - only less well balanced.
 #
-# Format:  <package> <TAB> <shard> <TAB> <tier> <TAB> <minutes>
-# A shard of "-" means the package runs unsharded, and an unsharded package
-# runs every tier in ONE invocation, so its tier here is "all". Only a sharded
-# package is split into deterministic | coyote | chaos rows, because only there
-# does the split buy concurrency rather than extra process starts.
+# PROVENANCE. Every row is MEASURED, from run 34380270243: the second full
+# fan-out (45 packages, 32023 tests, all legs green), which is also the run
+# that first exercised the bplustree-publicapi split. The figures are the
+# wall-clock each work item took on its leg - test time plus that invocation's
+# own process start - and the aggregate report emits them in exactly this
+# format at the end of every run, so refreshing this file is a copy-paste.
 #
-# These are test times only. plan-test-matrix.py adds a fixed per-invocation
-# overhead on top, so do not try to bake process start into the numbers here.
+# The zero rows are real and are deliberately kept. A sharded package is
+# crossed with all three tiers, so most shards have tiers with no tests in
+# them at all - `primitives` has no chaos fixtures, `bplustree-chaos` has no
+# deterministic ones. Each such item still costs one `dotnet test` process
+# start, and recording it as 0.0 does not hide that: the packer adds
+# PER_ITEM_OVERHEAD to every item on top of its estimate, so a leg carrying
+# five empty items is correctly priced above one carrying none.
 #
-# Only non-trivial items are listed. Anything absent falls back to the defaults
-# in plan-test-matrix.py, which are deliberately small: the long tail of this
-# repository really is near-instant (37 of 46 packages run in about 0.1 min
-# each), so defaulting them low is right and the packages that matter are all
-# named below.
-#
-# PROVENANCE. Every row below is MEASURED, from the first full-fan-out run of
-# the matrix prototype (run 34378766327, 46 packages selected, all legs green).
-# The figures are the wall-clock a work item took on its leg, which is test time
-# plus that invocation's own process start, and they are what the aggregate
-# report emits at the end of each run in exactly this format.
-#
-# The `bplustree` deterministic row is the critical path and the reason
-# `bplustree-publicapi` was later split out of it: the trx for that leg showed
-# 245s of test time, of which 66s was the 339 reflection-driven assertions in
-# PublicApiContract alone. Its row here is a projection of the remainder and is
-# the one number in this file that has not been directly observed.
+# They are not pruned, and that is the deliberate choice rather than an
+# oversight. Pruning would mean deciding ahead of time that a (shard, tier)
+# pair is empty, which is true today and is exactly the kind of fact that
+# stops being true the moment somebody adds the first chaos fixture to
+# Primitives. The tests would then simply stop running, with nothing to say
+# so: the vacuity guard fires when a shard is empty across every tier, so it
+# would not catch a single tier silently disappearing from a shard that is
+# otherwise busy. Roughly 1.9 min of aggregate overhead, spread across ten
+# legs, buys the property that a new fixture is picked up wherever it lands.
 
 # -- lattice, sharded --------------------------------------------------------
-lattice	bplustree	deterministic	4.0
-lattice	bplustree-publicapi	deterministic	1.3
-lattice	bplustree	chaos	3.6
-lattice	bplustree-chaos	chaos	2.7
+lattice	bplustree	chaos	3.9
+lattice	bplustree	deterministic	3.8
+lattice	bplustree-chaos	chaos	2.6
+lattice	bplustree-grains	deterministic	2.5
 lattice	bplustree-chaos-predicate	chaos	2.4
-lattice	bplustree-grains	deterministic	2.4
+lattice	bplustree-publicapi	deterministic	1.4
 lattice	crdt-views-wal	deterministic	1.0
-lattice	rest	deterministic	0.6
-lattice	crdt-views-wal	chaos	0.3
-lattice	bplustree	coyote	0.2
+lattice	rest	deterministic	0.4
+lattice	bplustree	coyote	0.3
+lattice	crdt-views-wal	chaos	0.2
+lattice	primitives	deterministic	0.1
+lattice	bplustree-state	deterministic	0.1
+lattice	bplustree-state	chaos	0.0
+lattice	bplustree-state	coyote	0.0
+lattice	primitives	chaos	0.0
+lattice	primitives	coyote	0.0
+lattice	rest	chaos	0.0
+lattice	rest	coyote	0.0
+lattice	crdt-views-wal	coyote	0.0
+lattice	bplustree-grains	chaos	0.0
+lattice	bplustree-grains	coyote	0.0
+lattice	bplustree-publicapi	chaos	0.0
+lattice	bplustree-publicapi	coyote	0.0
+lattice	bplustree-chaos	deterministic	0.0
+lattice	bplustree-chaos	coyote	0.0
+lattice	bplustree-chaos-predicate	deterministic	0.0
+lattice	bplustree-chaos-predicate	coyote	0.0
 
 # -- other packages, unsharded -----------------------------------------------
-lattice.replication	-	all	3.0
-lattice.api.mcp.repocontext	-	all	2.4
-lattice.backup	-	all	1.9
-lattice.api.state	-	all	1.8
+lattice.api.mcp.repocontext	-	all	2.7
+lattice.replication	-	all	2.3
+lattice.backup	-	all	2.1
 lattice.storage.azuretable	-	all	1.4
-lattice.api.backup	-	all	1.4
-lattice.api.state.grpc	-	all	0.9
-lattice.backup.azureblob	-	all	0.8
-lattice.auth	-	all	0.7
-lattice.tenancy	-	all	0.5
-lattice.grainindex	-	all	0.4
-lattice.api.backup.grpc	-	all	0.3
-lattice.vector	-	all	0.3
+lattice.api.state	-	all	1.3
+lattice.api.backup	-	all	1.0
+lattice.api.state.grpc	-	all	1.0
+lattice.backup.azureblob	-	all	0.9
+lattice.auth	-	all	0.6
+lattice.replication.grpc	-	all	0.4
+lattice.api.backup.grpc	-	all	0.4
 lattice.explorer	-	all	0.3
-lattice.replication.grpc	-	all	0.3
+lattice.grainindex	-	all	0.3
+lattice.tenancy	-	all	0.3
+lattice.vector	-	all	0.2
 lattice.membership.oidc	-	all	0.2
 lattice.schema	-	all	0.2
 lattice.api.data	-	all	0.2
+lattice.api.data.grpc	-	all	0.2
+lattice.api.tenantadmin.grpc	-	all	0.2
 lattice.membership	-	all	0.2
-lattice.api.mcp	-	all	0.2
+lattice.api.mcp	-	all	0.1
+lattice.api.tenantadmin	-	all	0.1
+lattice.api.auth.grpc	-	all	0.1
+lattice.api.auth	-	all	0.1
+lattice.membership.entra	-	all	0.1
+lattice.api.treeadmin.grpc	-	all	0.1
+lattice.api.telemetry.grpc	-	all	0.1
+lattice.api.schema.grpc	-	all	0.1
+lattice.scaling	-	all	0.1
+lattice.api.mcp.telemetry	-	all	0.1
+lattice.api.abstractions	-	all	0.1
+lattice.api.telemetry	-	all	0.1
+lattice.api.mcp.telemetry.azure	-	all	0.1
+lattice.storage.file	-	all	0.1
+lattice.api.mcp.repocontext.replication	-	all	0.1
+lattice.explorer.entra.web	-	all	0.1
+lattice.api.replication.grpc	-	all	0.0
+lattice.api.treeadmin	-	all	0.0
+lattice.membership.entra.graph	-	all	0.0
+lattice.api.schema	-	all	0.0
+lattice.api.replication	-	all	0.0
+lattice.dashboards	-	all	0.0
+lattice.explorer.entra	-	all	0.0
