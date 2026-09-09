@@ -774,6 +774,18 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_snapshot_load_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{reason}}/s" }
       ]
+    },
+    {
+      "id": 132,
+      "title": "Self-reinforcing cold replay loop (rate) - issue #2280",
+      "description": "Cold leaf activations cancelled at or past the consecutive-cancellation escalation threshold (orleans.lattice.leaf.activation.cold_replay_loop). READ THIS AS A DEFECT SIGNAL, NOT A COST SIGNAL, AND THAT IS THE WHOLE POINT OF IT EXISTING SEPARATELY FROM THE ACTIVATION-FAILURE PANEL ABOVE. That counter is an aggregate: it cannot distinguish one leaf cancelled five times from five leaves cancelled once, and those are a defect and a cost respectively. This one counts only cancellations on a leaf that has been cancelled repeatedly IN A ROW WITH NO SUCCESSFUL ACTIVATION IN BETWEEN, which is the pathology: a cold activation replays the whole readable WAL window, and when it is cancelled it latches neither of the two signals the snapshot capture gate requires, so no snapshot is banked, the next activation finds no anchor and replays the whole window again - the condition that causes the cancellation is REPRODUCED BY the cancellation. The count is CONSECUTIVE and resets on any successful activation, so the threshold measures leaf health and not how long the process has been up; a cumulative count would reach any fixed threshold eventually on a healthy leaf and fire falsely. The threshold is set one above the highest value seen in the field measurement behind issue #2280 (79 runtime cancellations over ~40 minutes across 67 distinct leaves: 55 cancelled once, 12 twice, none more than twice), so ZERO IS THE EXPECTED READING and any sustained non-zero rate is a real finding rather than background. Not tagged by leaf - that population is unbounded - so take the leaf identity, the consecutive count and the mid-replay / queued-for-permit split from the paired warning, which names the pathology in full. A high queued-for-permit share points at replay concurrency (issues #2279, #2256); a high mid-replay share points at bounding a cold replay (issue #2411). This instrument is a DIAGNOSTIC ONLY: it changes no leaf behaviour, and the underlying activations still fail exactly as they did before it existed.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 179 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_activation_cold_replay_loop_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "loop-escalated cancellations {{tree}}/s" }
+      ]
     }
   ]
 }

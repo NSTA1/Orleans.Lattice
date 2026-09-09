@@ -1462,6 +1462,50 @@ public static class LatticeMetrics
             description: "Leaf activations that threw out of OnActivateAsync, tagged by tree, activation temperature and reason (canceled/canceled_awaiting_permit/faulted). LOWER BOUND: faults raised before the guarded replay region, and outright process kills, are not counted.");
 
     /// <summary>
+    /// Counter of leaf activations cancelled while COLD that carried the leaf's
+    /// run of consecutive cold cancellations to or past the escalation
+    /// threshold - the self-reinforcing cold replay loop of issue #2280 caught
+    /// in the act. Tagged with <see cref="TagTree"/> only (plus the tenant label
+    /// derived from it).
+    /// <para>
+    /// <b>Why this is not derivable from <see cref="LeafActivationFailures"/>.</b>
+    /// That counter is an aggregate over the tree, as is the distinct-cold-leaf
+    /// population carried on the activation-temperature sample line. Neither can
+    /// express <em>this same leaf again, with no successful activation in
+    /// between</em>, which is the whole pathology: a leaf whose cancellation
+    /// reproduces exactly the condition that caused it. Summing cancellations
+    /// cannot recover that, because the sum cannot tell one leaf cancelled five
+    /// times from five leaves cancelled once - and those are a defect and a
+    /// cost respectively.
+    /// </para>
+    /// <para>
+    /// <b>Not tagged by leaf, deliberately</b>, for the same reason
+    /// <see cref="LeafDeactivationCheckpointDelta"/> is not: the leaf population
+    /// is unbounded and would be an unbounded metric dimension. The leaf
+    /// identity is carried on the accompanying warning instead, which is where
+    /// an operator needs it anyway - this counter answers "is it happening and
+    /// how often", the log line answers "to which leaf".
+    /// </para>
+    /// <para>
+    /// It counts EVERY cancellation at or above the threshold, not just the
+    /// crossing, so a leaf that stays stuck keeps registering and the series
+    /// carries a rate rather than a one-shot edge. The paired warning is
+    /// throttled per leaf; this is not, because a counter has no flood to
+    /// prevent.
+    /// </para>
+    /// <para>
+    /// A zero here is a genuine and expected reading: it is the healthy state,
+    /// and the threshold is calibrated so that the measured field distribution
+    /// (55 leaves cancelled once, 12 twice, none more) produces no observations
+    /// at all. That is the point - a diagnostic that fired on that distribution
+    /// would be muted, and would take the real signal with it.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafColdReplayLoop =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.activation.cold_replay_loop", unit: "{activation}",
+            description: "Cold leaf activations cancelled at or past the consecutive-cancellation escalation threshold, tagged by tree: the self-reinforcing cold WAL replay loop (issue #2280). Per-leaf identity is on the paired warning, never a tag. Zero is the healthy reading.");
+
+    /// <summary>
     /// Counter of activation-time leaf-snapshot loads that FAILED, emitted by
     /// <c>BPlusLeafGrain.TryRehydrateFromSnapshotAsync</c> (issue #2364).
     /// Tagged with <see cref="TagTree"/> and <see cref="TagReason"/>:
