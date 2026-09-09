@@ -57,6 +57,18 @@ internal sealed class RepoContextAnnIndexSweepService(
     private bool _announcedContradiction;
 
     /// <summary>
+    /// The repositories whose arming call has already been reported as deferred, so
+    /// a build that legitimately runs for hours is announced once rather than on
+    /// every sweep.
+    /// <para>
+    /// Not synchronised, for the same reason as
+    /// <see cref="_announcedContradiction"/>: every access is on the single
+    /// <see cref="ExecuteAsync"/> loop.
+    /// </para>
+    /// </summary>
+    private readonly HashSet<string> _deferred = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// The sweep's outcome counters, cumulative since process start. Exposed so a
     /// test can assert on the partition without standing up a meter listener.
     /// </summary>
@@ -157,6 +169,8 @@ internal sealed class RepoContextAnnIndexSweepService(
     {
         var armed = 0;
         var observed = 0;
+        var deferred = 0;
+        Exception? faulted = null;
         try
         {
             // Stamp the run authority's fixed identity onto the whole sweep, so both
@@ -193,9 +207,76 @@ internal sealed class RepoContextAnnIndexSweepService(
             foreach (var repoId in repoIds)
             {
                 stoppingToken.ThrowIfCancellationRequested();
-                if (await scheduler.TryArmAsync(repoId, stoppingToken).ConfigureAwait(false))
+
+                // Per-repository, and deliberately so. Arming is a call into a
+                // NON-REENTRANT build coordinator, so while that grain is inside a
+                // long build turn the call waits behind it and expires on Orleans'
+                // default call timeout. Before this catch existed that timeout
+                // escaped the loop, which had two consequences that between them
+                // account for the whole shape of issue #2252: every repository
+                // ordered after the busy one was never visited at all, and the
+                // sweep recorded 'faulted' - a failure signal - for a coordinator
+                // that was in fact doing exactly the work it was armed to do.
+                //
+                // A build over a large corpus legitimately runs for hours. On this
+                // box the coordinator for a 161,840-vector repository was measured
+                // mid-ingest with every checkpoint cursor advancing between two
+                // heap captures six minutes apart, while the sweep counted a fault
+                // roughly twice a minute against it. So a timeout here is not
+                // evidence of a broken coordinator and must not be reported as one;
+                // it is the expected answer from a healthy one that is busy.
+                try
                 {
-                    armed++;
+                    if (await scheduler.TryArmAsync(repoId, stoppingToken).ConfigureAwait(false))
+                    {
+                        armed++;
+                        if (_deferred.Remove(repoId))
+                        {
+                            logger.LogInformation(
+                                "Repo {RepoId}: approximate-index build coordinator answered the arming call again "
+                                + "after previously deferring it.",
+                                repoId);
+                        }
+                    }
+                }
+                catch (TimeoutException ex)
+                {
+                    deferred++;
+
+                    // Announced once per repository per episode, then counted. A
+                    // coordinator busy for hours would otherwise warn on every
+                    // sweep for as long as it is doing useful work.
+                    if (_deferred.Add(repoId))
+                    {
+                        logger.LogWarning(
+                            ex,
+                            "Repo {RepoId}: the approximate-index build coordinator did not answer the arming call "
+                            + "within the grain call timeout, so this sweep is leaving it alone. This is the "
+                            + "expected answer from a coordinator already inside a long build turn, and it is NOT "
+                            + "counted as a fault. Arming is idempotent, so the next sweep retries it. Further "
+                            + "deferrals for this repository are not logged until it answers again.",
+                            repoId);
+                    }
+                    else
+                    {
+                        logger.LogDebug(
+                            "Repo {RepoId}: approximate-index arming deferred again; the coordinator is still busy.",
+                            repoId);
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Any other failure IS a fault, but it is this repository's
+                    // fault and not the sweep's. Record it, name the repository the
+                    // counter cannot name, and keep going so a single bad
+                    // repository cannot hide every repository behind it.
+                    faulted ??= ex;
+                    logger.LogWarning(
+                        ex,
+                        "Repo {RepoId}: arming the approximate-index build coordinator failed. The sweep is "
+                        + "continuing to the remaining repositories and will report this fault once they have all "
+                        + "been attempted.",
+                        repoId);
                 }
             }
         }
@@ -205,17 +286,24 @@ internal sealed class RepoContextAnnIndexSweepService(
         }
         catch (Exception ex)
         {
-            Announce(RepoContextAnnSweepOutcome.Faulted, armed, observed, ex);
+            Announce(RepoContextAnnSweepOutcome.Faulted, armed, observed, deferred, ex);
+            return RepoContextAnnSweepOutcome.Faulted;
+        }
+
+        if (faulted is not null)
+        {
+            Announce(RepoContextAnnSweepOutcome.Faulted, armed, observed, deferred, faulted);
             return RepoContextAnnSweepOutcome.Faulted;
         }
 
         var outcome = armed > 0 ? RepoContextAnnSweepOutcome.Armed : RepoContextAnnSweepOutcome.Empty;
-        Announce(outcome, armed, observed, exception: null);
+        Announce(outcome, armed, observed, deferred, exception: null);
         return outcome;
     }
 
     /// <summary>Records one outcome and writes the log line its transition warrants.</summary>
-    private void Announce(RepoContextAnnSweepOutcome outcome, int armed, int observed, Exception? exception)
+    private void Announce(
+        RepoContextAnnSweepOutcome outcome, int armed, int observed, int deferred, Exception? exception)
     {
         var report = _reporter.Record(outcome);
         switch (report.Announcement)
@@ -251,12 +339,17 @@ internal sealed class RepoContextAnnIndexSweepService(
             case RepoContextAnnSweepAnnouncement.ArmedNothing:
                 logger.LogInformation(
                     "Repository-context approximate-index sweep completed without arming anything, so no build is "
-                    + "scheduled. It observed {ObservedRepositoryCount} repository id(s) in the store listing. This "
-                    + "line reports what the sweep observed rather than what the store contains, because those two "
-                    + "differ exactly when the listing is itself wrong - and a listing that returns nothing while "
-                    + "repositories are registered is the defect issue #2406 records. Repetitions are counted onto "
-                    + "the '{Outcome}' arm of '{Instrument}' rather than logged.",
+                    + "scheduled. It observed {ObservedRepositoryCount} repository id(s) in the store listing, and "
+                    + "{DeferredRepositoryCount} of them did not answer the arming call within the grain call "
+                    + "timeout. Read those two numbers together: equal and non-zero means every coordinator is busy "
+                    + "in a build turn and nothing is wrong, whereas an observed count of zero is the empty-listing "
+                    + "defect issue #2406 records. Reporting only the outcome collapses those two into one "
+                    + "observation and they need opposite responses. This line reports what the sweep observed "
+                    + "rather than what the store contains, because those two differ exactly when the listing is "
+                    + "itself wrong. Repetitions are counted onto the '{Outcome}' arm of '{Instrument}' rather than "
+                    + "logged.",
                     observed,
+                    deferred,
                     RepoContextAnnIndexSweepReporter.OutcomeEmptyTag,
                     RepoContextAnnIndexSweepReporter.SweepInstrumentName);
                 break;
