@@ -645,6 +645,70 @@ public sealed class LatticeWalGcSchedulerCadenceTests
         }
     }
 
+    // ---------------------------------------------- out-of-range cadence knobs
+
+    [Test]
+    public async Task ExecuteAsync_an_interval_that_overflows_the_tick_space_does_not_busy_loop()
+    {
+        var gc = Substitute.For<ILatticeWalGc>();
+        // A reclaiming pass sets the tree's next interval to the floor. With the
+        // band pinned at TimeSpan.MaxValue, "now + interval" would overflow the
+        // signed-tick space to a past instant, marking the tree due on every
+        // pass: earliestDueTicks goes negative, the pass returns TimeSpan.Zero,
+        // and the scheduler spins. The saturating due-time keeps the wait real.
+        gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Report(entriesTrimmed: 1));
+        var time = new VirtualTimeProvider();
+
+        // WalGcInterval / WalGcMinInterval carry no upper bound and are not
+        // validated, so TimeSpan.MaxValue is a reachable configuration.
+        var options = new LatticeOptions
+        {
+            WalGcInterval = TimeSpan.MaxValue,
+            WalGcMinInterval = TimeSpan.MaxValue,
+            WalGcStartupDelay = TimeSpan.Zero,
+        };
+        var scheduler = CreateScheduler(FactoryWithTrees("alpha"), gc, options, time);
+
+        await StartArmedAsync(scheduler, time);
+
+        // The distinguishing symptom of the overflow bug is a zero-wait busy
+        // loop, which never arms a timer at all (StartArmedAsync would then time
+        // out). A real positive wait is the fix.
+        Assert.That(time.LastScheduledDelay, Is.GreaterThan(TimeSpan.Zero),
+            "an interval near TimeSpan.MaxValue must schedule far ahead, never collapse to a zero-wait busy loop.");
+
+        await scheduler.StopAsync(CancellationToken.None);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_a_wait_beyond_the_timer_ceiling_is_clamped_rather_than_faulting_the_host()
+    {
+        var gc = Substitute.For<ILatticeWalGc>();
+        gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Report(entriesTrimmed: 1));
+        var time = new VirtualTimeProvider();
+
+        // 60 days is a valid tick sum (no overflow) but past the ~49.71-day
+        // ceiling Task.Delay accepts, so an unclamped wait would throw
+        // ArgumentOutOfRangeException out of ExecuteAsync and, because the
+        // scheduler is a BackgroundService under the default StopHost, take the
+        // whole silo down. The clamp turns it into a finite, valid delay.
+        var options = new LatticeOptions
+        {
+            WalGcInterval = TimeSpan.FromDays(60),
+            WalGcMinInterval = TimeSpan.FromDays(60),
+            WalGcStartupDelay = TimeSpan.Zero,
+        };
+        var scheduler = CreateScheduler(FactoryWithTrees("alpha"), gc, options, time);
+
+        await StartArmedAsync(scheduler, time);
+
+        var timerCeiling = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+        Assert.That(time.LastScheduledDelay, Is.EqualTo(timerCeiling),
+            "a cadence wait past the timer ceiling must be clamped to it, not allowed to fault the host.");
+
+        await scheduler.StopAsync(CancellationToken.None);
+    }
+
     /// <summary>One captured measurement: its value coerced to <see cref="double"/> and the tags it carried.</summary>
     private sealed record Captured(double Value, KeyValuePair<string, object?>[] Tags)
     {
