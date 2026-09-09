@@ -89,9 +89,10 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.atomic_action.duration` | histogram (ms) | `outcome` | Overview | Atomic action - saga duration |
 | `orleans.lattice.leaf.replay.duration` | histogram (ms) | `tree`, `outcome` | CommitPath | Activation replay duration by outcome |
 | `orleans.lattice.leaf.replay.entries` | counter | `tree`, `outcome` | CommitPath | Replay entries (applied vs skipped) |
-| `orleans.lattice.shard_root.forward.timeouts` | counter | `tree` | CommitPath | Shard-root wedge guards (forward timeouts and scan-page stalls) |
-| `orleans.lattice.shard_root.scan_page.stalls` | counter | `tree`, `shard`, `phase` | CommitPath | Shard-root wedge guards (forward timeouts and scan-page stalls) |
-| `orleans.lattice.shard_root.flush.retries_suspended` | counter | `tree`, `shard`, `kind` | CommitPath | Shard-root wedge guards (forward timeouts and scan-page stalls) |
+| `orleans.lattice.shard_root.forward.timeouts` | counter | `tree` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
+| `orleans.lattice.shard_root.scan_page.stalls` | counter | `tree`, `shard`, `phase` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
+| `orleans.lattice.scan.stall_resumptions` | counter | `tree`, `phase`, `outcome` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
+| `orleans.lattice.shard_root.flush.retries_suspended` | counter | `tree`, `shard`, `kind` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.wal.writer.append.admission_saturation_refusals` | counter | `tree` | CommitPath | WAL writer admission & dispatch (rate) |
 | `orleans.lattice.wal.writer.append.admission_timeouts` | counter | `tree` | CommitPath | WAL writer admission & dispatch (rate) |
 | `orleans.lattice.wal.writer.append.dispatched` | counter | `tree` | CommitPath | WAL writer admission & dispatch (rate) |
@@ -122,6 +123,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.leaf.activation_cursor_publish_failures` | counter | `tree` | CommitPath | Leaf-materialiser durable pin path (issue #1030) |
 | `orleans.lattice.leaf.deactivation.checkpoint_delta` | histogram | `tree`, `deactivation_reason`, `activation_temperature` | CommitPath | Checkpoint offsets banked by an activation during graceful deactivation (issue #2280). LOWER BOUND, not a census: crash teardowns bypass the hook and a failed activation never reaches it. A zero on the `cold` arm is arithmetically forced, not symptomatic |
 | `orleans.lattice.leaf.activation.failures` | counter | `tree`, `activation_temperature`, `reason` | CommitPath | Leaf activations that threw out of `OnActivateAsync`, by `canceled`/`canceled_awaiting_permit`/`faulted` (issue #2280). Counts the population the deactivation histogram is structurally blind to; read the two together |
+| `orleans.lattice.leaf.activation.cold_replay_loop` | counter | `tree` | CommitPath | Cold activations cancelled at or past the consecutive-cancellation escalation threshold: the self-reinforcing cold WAL replay loop (issue #2280). A DEFECT signal, where `leaf.activation.failures` above is a COST signal - that counter is an aggregate and cannot separate one leaf cancelled five times from five leaves cancelled once. The count is consecutive and resets on any successful activation, so it measures leaf health rather than process age, and the threshold sits one above the highest value in the field measurement, so zero is the expected reading. Not tagged by leaf; identity, the consecutive count and the mid-replay/queued-for-permit split are on the paired warning |
 | `orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap` | counter | `tree`, `partition` | CommitPath | Resident unresolved prepares recorded beyond `MaxDurableUnresolvedReplayWork` (issue #2183); benign on the SQLite `local` profile, a persist hazard on Azure Table (1MB entity cap) - alert there |
 | `orleans.lattice.leaf.snapshot.load_failures` | counter | `tree`, `reason` | CommitPath | Snapshot rehydrate attempts that failed to load, by `resource_exhausted`/`faulted` (issue #2364). A load failure and a leaf that has no snapshot both decline and both take the full-window cold replay, so without this counter the two are indistinguishable; `resource_exhausted` is the container-memory-limit arm and is self-reinforcing, since the cold replay it forces raises heap pressure further |
 | `orleans.lattice.materialiser.drain_lag` | histogram (ms) | `tree` | CommitPath | Leaf-materialiser drain lag p50/p95 (issue #1030 back-pressure) |
@@ -166,9 +168,9 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.shard_root.set_many.shadow_forward.duration` | histogram (ms) | `tree` | CommitPath | ShardRoot.SetMany sub-attribution p95 (ms) |
 | `orleans.lattice.warmup.invocations` | counter (`{call}`) | `tree` | CommitPath | WarmUpAsync - invocations and duration |
 | `orleans.lattice.warmup.duration` | histogram (ms) | `tree` | CommitPath | WarmUpAsync - invocations and duration |
-| `orleans.lattice.warmup.leaf_cache.prewarmed` | counter (`{leaf}`) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (opt-in) - leaves primed, fan-out cost, model size |
-| `orleans.lattice.warmup.leaf_cache.duration` | histogram (ms) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (opt-in) - leaves primed, fan-out cost, model size |
-| `orleans.lattice.leaf_access.model.leaves` | histogram (`{leaf}`) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (opt-in) - leaves primed, fan-out cost, model size |
+| `orleans.lattice.warmup.leaf_cache.prewarmed` | counter (`{leaf}`) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (on by default) - leaves primed, fan-out cost, model size |
+| `orleans.lattice.warmup.leaf_cache.duration` | histogram (ms) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (on by default) - leaves primed, fan-out cost, model size |
+| `orleans.lattice.leaf_access.model.leaves` | histogram (`{leaf}`) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (on by default) - leaves primed, fan-out cost, model size |
 | `orleans.lattice.leaf.commit.in_flight` | histogram (`{commit}`) | `tree` | CommitPath | Leaf commit concurrency (in-flight) p95 |
 | `orleans.lattice.leaf.digest.publishes` | counter (`{publish}`) | `tree`, `path` | CommitPath | Digest publish path attribution (ops/s) - coalescing efficacy |
 | `orleans.lattice.provider.commit.duration` | histogram (ms) | `tree`, `shard`, `phase`, `pipeline_phase2` | CommitPath | Storage-provider phase-2 commit p95 (ms) + batch size |
