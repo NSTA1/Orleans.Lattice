@@ -47,6 +47,12 @@ public partial class BootstrapAtomicVisibilityTests
 {
     private const string ClusterId = "snap-prep-site";
 
+    /// <summary>
+    /// Tree configured with a sub-second <c>TxDecisionRetention</c> so the
+    /// aged-out-decision export regression can drive a real retention crossing.
+    /// </summary>
+    private const string AgedTree = "snap-prep-aged";
+
     private TestCluster _cluster = null!;
     private LatticeSnapshotProvider _provider = null!;
 
@@ -256,6 +262,70 @@ public partial class BootstrapAtomicVisibilityTests
     }
 
     /// <summary>
+    /// Regression for the aged-out-decision export hole. A saga that committed
+    /// and whose recorded terminal then outlived <c>TxDecisionRetention</c> used
+    /// to vanish from the frozen registry snapshot entirely, which the export
+    /// read as "no decision recorded". Neither pass then covered it: the
+    /// committed projection hid the keys (it only surfaces a prepared value for a
+    /// saga snap0 has as <see cref="TxStatus.Committed"/>), and the prepared pass
+    /// skipped them too because the skip test was written as "anything that is
+    /// not <see cref="TxStatus.InFlight"/>". The committed write was therefore
+    /// dropped from the bootstrap payload outright, and the terminal that would
+    /// have repaired it on the receiver was already behind the incremental stream
+    /// the receiver drains next.
+    /// <para>
+    /// The registry now reports such a row as
+    /// <see cref="TxStatus.Indeterminate"/> rather than omitting it, and the
+    /// prepared pass skips only genuinely decided sagas, so the rows ship and the
+    /// receiver holds exactly what the source holds.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task ExportAsync_still_emits_prepared_rows_when_the_decision_has_aged_out()
+    {
+        const string keyA = "aged-alpha";
+        const string keyB = "aged-beta";
+        var sourceHlc = Hlc(2_000);
+        var txid = Guid.NewGuid();
+
+        var apply = _cluster.Client.GetGrain<IReplicationApplyGrain>(AgedTree);
+        await apply.ApplyPreparedSetAsync(
+            keyA, new byte[] { 1 }, sourceHlc, ClusterId, sourceVectorClock: null,
+            expiresAtTicks: 0, txid, atomicBatchSize: 2, atomicBatchIndex: 0);
+        await apply.ApplyPreparedSetAsync(
+            keyB, new byte[] { 2 }, sourceHlc, ClusterId, sourceVectorClock: null,
+            expiresAtTicks: 0, txid, atomicBatchSize: 2, atomicBatchIndex: 1);
+
+        // Record the commit, then retire it and let the retention window lapse.
+        // The decision row itself survives (pruning only runs inside a later
+        // ForgetAsync), so what the export sees is a row it may no longer vouch
+        // for - exactly the state the old code mistook for "never happened".
+        var registry = _cluster.Client.GetGrain<ITxRegistryGrain>(AgedTree);
+        await registry.MarkCommittedAsync(txid);
+        await registry.ForgetAsync(txid);
+        await Task.Delay(TimeSpan.FromMilliseconds(700));
+
+        var snapshot = await registry.SnapshotAsync();
+        Assert.That(snapshot.TryGetValue(txid, out var aged) ? aged : TxStatus.InFlight,
+            Is.EqualTo(TxStatus.Indeterminate),
+            "Precondition: the decision must have aged out of the readable window "
+            + "while its row is still stored.");
+
+        var stream = await _provider.ExportAsync(AgedTree, HybridLogicalClock.Zero);
+        var entries = await DrainAsync(stream);
+
+        var preparedKeys = entries
+            .Where(e => e.IsPrepared && e.TransactionId == txid)
+            .Select(e => e.Key)
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(preparedKeys, Is.EqualTo(new[] { keyA, keyB }),
+            "An indeterminate saga's prepared rows must ship. Skipping them drops "
+            + "the write from the bootstrap payload with nothing left to repair it.");
+    }
+
+    /// <summary>
     /// End-to-end bootstrap-boundary check: drives a saga's prepared
     /// rows from a producer's export through the receiver-side apply
     /// seam (<see cref="IReplicationApplyGrain.ApplyPreparedSetAsync"/>),
@@ -355,6 +425,11 @@ public partial class BootstrapAtomicVisibilityTests
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
+            // One tree with a sub-second decision retention so a test can age a
+            // recorded terminal past its window without sleeping for the default.
+            siloBuilder.ConfigureLattice(
+                AgedTree,
+                o => o.TxDecisionRetention = TimeSpan.FromMilliseconds(300));
             siloBuilder.AddLatticeReplication(opts => opts.ClusterId = ClusterId);
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
         }

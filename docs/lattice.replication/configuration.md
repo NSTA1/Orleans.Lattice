@@ -157,6 +157,8 @@ Startup options validation rejects empty cluster ids, invalid replicated-tree de
 
 The local cluster id stamped onto authored mutations and used for cycle-breaking. Set a stable, non-empty value that is unique within the replication topology.
 
+`ClusterId` is a **per-tree named option**, but a cross-tree atomic write carries a guard verdict reached on one participating tree across the tree boundary to another, and that step is sound only when the trees resolve the *same* origin cluster id. No options validator can check that relation, because it is handed one tree's options at a time; the check therefore runs where a participant set first exists - at admission of a cross-tree write, and at the replicated cross-tree barrier's wait-set freeze on the receiver - and throws `InvalidOperationException` naming both trees and their resolved ids before anything is staged or dispatched. The check is on *agreement*, not on any particular value, so a host that never configured replication (uniform empty cluster id) always passes. Configure `ClusterId` cluster-wide - `AddLatticeReplication` registers it for every named options instance - and avoid per-tree overrides on trees you span in a single cross-tree write. See [Atomic Writes](../lattice/atomic-writes.md#guarantees-and-non-guarantees).
+
 ### `ReplicatedTrees`
 
 Per-tree opt-in map from tree id to merge mode. A tree absent from the map does not replicate. See [Replication Modes](replication-modes.md) for mode selection.

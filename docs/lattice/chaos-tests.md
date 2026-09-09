@@ -489,7 +489,7 @@ through the receiver-side prepared/terminal apply seam
 |---|---|
 | Every saga's keys land all-or-nothing on every receiver site | Receiver-side prepared/terminal apply seam staging prepared writes in the leaf's per-tx pending bucket, then flipping them on terminal arrival |
 | Source HLC rides through the wire verbatim | `LatticeHlcOverrideContext` wrapping the apply call so the receiver does not stamp a fresh local HLC |
-| Repeated terminal delivery is idempotent | Per-tree `ITxRegistry` LWW-resolves duplicate terminals; per-leaf `_recentlyTerminal` `HashSet<Guid>` absorbs second-delivery within the activation |
+| Repeated terminal delivery is idempotent | The per-tree transaction registry classifies an arriving terminal against the decision already recorded and returns without a write when the outcome matches, so a redelivery inside the retention window changes nothing; the leaf additionally absorbs a second delivery within one activation from its recently-terminal set |
 | Mid-workload partition does not produce partial-saga visibility on any site | Prepares queued behind the partition and the matching terminal both ship after heal; the receiver-side staging buffer holds prepared entries off the visible projection until the terminal arrives |
 | Producer-side per-key WAL filter does not strand terminals | `ReplicationShipperGrain.ShouldShip` bypasses `KeyFilter` / `KeyPrefixes` for `TxCommit` / `TxAbort` records |
 

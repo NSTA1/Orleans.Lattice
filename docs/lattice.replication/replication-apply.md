@@ -247,8 +247,9 @@ and commit/abort vote. The coordinator decides only once a terminal has
 arrived for every tree in the wait set, committing iff every arrived tree
 voted commit. Before the decision, a delegated read on any participating
 tree's registry resolves `InFlight` against the coordinator, so every
-tree stays invisible; after it, the receiver flips every participating
-tree together. The coordinator only ever returns the decision (it never
+tree stays invisible (an unreachable coordinator resolves `Indeterminate`,
+which likewise keeps the keys invisible); after it, the receiver flips every
+participating tree together. The coordinator only ever returns the decision (it never
 calls back into a tree grain); the calling tree grain performs the
 per-tree finalizes - itself inline, siblings via their apply grains - so
 there is no circular wait. A null/empty `crossTreeOperationId` routes the

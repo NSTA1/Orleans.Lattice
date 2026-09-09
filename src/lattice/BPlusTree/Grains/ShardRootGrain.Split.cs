@@ -172,7 +172,7 @@ internal sealed partial class ShardRootGrain
     /// Writes at <see cref="ShardSplitPhase.Swap"/> are intentionally
     /// admitted: the source's local write is mirrored to the new owner via
     /// the shadow-forward pipeline, keeping both sides consistent through
-    /// the swap → reject transition. Only the
+    /// the swap -> reject transition. Only the
     /// <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/> phase actively rejects writes
     /// on moved slots (because at that point the source has stopped
     /// accepting new mirrored work).
@@ -340,13 +340,13 @@ internal sealed partial class ShardRootGrain
     /// <list type="bullet">
     /// <item><description><b>(A) Active split</b> - <c>SplitInProgress</c>
     /// is non-null and the slot is moved. Phases admitted: BeginShadowWrite,
-    /// Drain, Swap, AND Reject (closes the Swap → Reject race where an
+    /// Drain, Swap, AND Reject (closes the Swap -> Reject race where an
     /// in-flight mutation that passed <c>ThrowIfRejectedForKey</c> at phase
-    /// ≤ Swap reaches this helper after the coordinator advanced to
+    /// Swap or earlier reaches this helper after the coordinator advanced to
     /// Reject).</description></item>
     /// <item><description><b>(B) Post-complete</b> - <c>SplitInProgress</c>
     /// is null but <c>MovedAwaySlots</c> records the slot's post-split owner
-    /// (closes the Reject → Complete race where the split state is cleared
+    /// (closes the Reject -> Complete race where the split state is cleared
     /// and <c>MovedAwaySlots</c> populated between the local mutation and
     /// this helper).</description></item>
     /// </list>
@@ -430,7 +430,7 @@ internal sealed partial class ShardRootGrain
     /// </para>
     /// <para>
     /// <b>Post-complete fallback.</b> A symmetric race exists at
-    /// the Reject → Complete boundary: the coordinator clears
+    /// the Reject -> Complete boundary: the coordinator clears
     /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.SplitInProgress"/> and populates
     /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/> +
     /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwayVirtualShardCount"/> in the
@@ -503,8 +503,12 @@ internal sealed partial class ShardRootGrain
             // value. That is the non-atomic mixed-round batch the reshard
             // chaos fixture catches (round=N: split (pre=k, post=m)). The
             // marker makes the destination read gate raise
-            // StaleShardRoutingException for the Committed-without-backstop
-            // window (see BPlusLeafGrain.IsShadowedReadSafeAsync), forcing the
+            // StaleShardRoutingException for the window in which the saga is
+            // not known to be undecided and its backstop terminal has not yet
+            // landed - the Committed case above, and equally the case where the
+            // decision has aged out of the registry's retention window and the
+            // registry can only answer Indeterminate
+            // (see BPlusLeafGrain.IsShadowedReadSafeAsync), forcing the
             // LatticeGrain deadline-bounded retry loop to re-fan once the
             // backstop lands.
             //

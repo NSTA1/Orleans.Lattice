@@ -27,6 +27,7 @@ internal sealed class LatticeCrossTreeReceiverGrain(
     IGrainContext context,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    ILatticeOriginClusterIdResolver originClusterIdResolver,
     ILogger<LatticeCrossTreeReceiverGrain> logger,
     [PersistentState("cross-tree-receiver", LatticeOptions.StorageProviderName)]
     IPersistentState<CrossTreeReceiverState> state)
@@ -139,7 +140,19 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             // First terminal: freeze the wait set and identity. The wait set is
             // canonicalized (ordinal-sorted, de-duplicated) so the exact-match
             // validation below is order-insensitive.
-            state.State.WaitSet = CanonicalStringSet.SortedDistinct(terminal.WaitSet);
+            var frozen = CanonicalStringSet.SortedDistinct(terminal.WaitSet);
+
+            // The receiver-side twin of the coordinator's admission check. The
+            // barrier carries one global verdict across every tree in the wait
+            // set, which is the same tree-boundary transitivity step, so it
+            // rests on the same premise: the trees must agree on cluster
+            // identity. Checked at the freeze because that is the only moment
+            // the receiver holds the whole participant set and has not yet
+            // recorded anything. Placed with the wait-set-drift check below, on
+            // the same reasoning that put that one here.
+            ThrowIfWaitSetClusterIdsDisagree(frozen);
+
+            state.State.WaitSet = frozen;
             state.State.OriginClusterId = terminal.OriginClusterId;
             state.State.OperationId = terminal.OperationId;
             state.State.StartedAtTicks = DateTime.UtcNow.Ticks;
@@ -282,5 +295,44 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             if (string.Equals(list[i], value, StringComparison.Ordinal)) return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Rejects a replicated cross-tree barrier whose participating trees do not
+    /// all resolve the same origin cluster id. The receiver-side twin of
+    /// <c>LatticeCrossTreeTxGrain.ThrowIfParticipantClusterIdsDisagree</c>; see
+    /// that member for why the premise exists and why no per-tree options
+    /// validator can discharge it. Runs at the wait-set freeze, before anything
+    /// is recorded, so a rejected first terminal leaves the barrier unstarted.
+    /// <para>
+    /// A uniform resolver - the core default, which returns
+    /// <see cref="string.Empty"/> for every tree - satisfies this for any
+    /// single-cluster host, so the check costs one resolver call per
+    /// participant and changes no existing deployment's behaviour.
+    /// </para>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Two trees in the wait set resolve different cluster ids.
+    /// </exception>
+    private void ThrowIfWaitSetClusterIdsDisagree(List<string> waitSet)
+    {
+        if (waitSet.Count < 2) return;
+
+        var expected = originClusterIdResolver.Resolve(waitSet[0]);
+        for (var i = 1; i < waitSet.Count; i++)
+        {
+            var actual = originClusterIdResolver.Resolve(waitSet[i]);
+            if (string.Equals(expected, actual, StringComparison.Ordinal)) continue;
+
+            throw new InvalidOperationException(
+                $"Cross-tree receiver '{GrainContext.GrainId.Key}' was handed a wait set spanning trees "
+                + $"that resolve different origin cluster ids: tree '{waitSet[0]}' resolves '{expected}' "
+                + $"but tree '{waitSet[i]}' resolves '{actual}'. Every tree barriered by one cross-tree "
+                + "operation must resolve the same cluster id, because the barrier carries a single global "
+                + "verdict across the tree boundary and that step is sound only when the trees agree on "
+                + "cluster identity. This is a configuration fault on the receiving cluster: "
+                + "LatticeReplicationOptions.ClusterId is a per-tree option, so a named override for one "
+                + "participating tree silently defeats the cluster-wide value the others inherit.");
+        }
     }
 }

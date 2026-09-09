@@ -56,6 +56,43 @@ public sealed class AtomicVisibilityGateTests
     }
 
     [Test]
+    public void Indeterminate_always_hides_key([Values] bool alreadyTerminal, [Values] bool preparedHidden)
+    {
+        // An indeterminate reading is a refusal to answer, not an answer. The
+        // gate must hide rather than fall through: falling through would publish
+        // the pre-saga value, which is an affirmative claim that the saga did not
+        // commit - the one thing an indeterminate reading says nobody knows.
+        // Hiding is the only outcome that is never wrong for a committed saga
+        // and never wrong for an aborted one.
+        Assert.That(
+            AtomicVisibilityGate.ResolveKey(TxStatus.Indeterminate, alreadyTerminal, preparedHidden),
+            Is.EqualTo(PendingReadOutcome.Hidden));
+    }
+
+    [Test]
+    public void Indeterminate_is_checked_before_the_already_terminal_orphan_rule()
+    {
+        // Ordering guard. `alreadyTerminal` short-circuits Committed to
+        // FallThroughToPreSaga; if the Indeterminate branch sat below that test
+        // it would inherit the same fall-through and silently reintroduce the
+        // very disclosure this case exists to prevent.
+        Assert.That(
+            AtomicVisibilityGate.ResolveKey(TxStatus.Indeterminate, alreadyTerminal: true, preparedHiddenByTombstoneOrExpiry: false),
+            Is.EqualTo(PendingReadOutcome.Hidden));
+    }
+
+    [Test]
+    public void DecisionView_resolves_present_indeterminate_txid_without_collapsing_it()
+    {
+        // The view must carry Indeterminate through verbatim. Collapsing it onto
+        // InFlight here would restore the ambiguity the status exists to remove,
+        // one layer below the gate.
+        var txid = Guid.NewGuid();
+        var view = new TxDecisionView(new Dictionary<Guid, TxStatus> { [txid] = TxStatus.Indeterminate });
+        Assert.That(view.Resolve(txid), Is.EqualTo(TxStatus.Indeterminate));
+    }
+
+    [Test]
     public void DecisionView_resolves_present_txid_to_recorded_status()
     {
         var txid = Guid.NewGuid();

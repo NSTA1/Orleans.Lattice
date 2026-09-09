@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -66,6 +67,7 @@ public partial class TxRegistryGrainTests
             context,
             Substitute.For<IGrainFactory>(),
             optionsMonitor,
+            NullLogger<TxRegistryGrain>.Instance,
             new FakePersistentState<TxRegistryState>());
 
         Assert.That(((IGrainBase)grain).GrainContext, Is.SameAs(context));
@@ -213,16 +215,19 @@ public partial class TxRegistryGrainTests
     // ============================================================================
 
     [Test]
-    public async Task GetStatusAsync_returns_InFlight_when_the_authoring_coordinator_dial_throws()
+    public async Task GetStatusAsync_reports_indeterminate_when_the_authoring_coordinator_dial_throws()
     {
         var txid = Guid.NewGuid();
         var (grain, _, coordinator) = CreateGrainWithCoordinator("op-dial");
         await grain.RegisterExternalDecisionAuthorityAsync(txid, "op-dial");
         coordinator.GetDecisionAsync().Returns<Task<TxStatus>>(_ => throw new TimeoutException("unreachable"));
 
-        // A dial failure is swallowed conservatively: the cross-tree batch stays
-        // invisible on this tree rather than surfacing a fault to the reader.
-        Assert.That(await grain.GetStatusAsync(txid), Is.EqualTo(TxStatus.InFlight));
+        // A dial failure means we do not know the outcome, which is Indeterminate
+        // and keeps the cross-tree batch invisible on this tree. It is emphatically
+        // not InFlight: the visibility gate reads InFlight as "fall through to the
+        // pre-saga value", so answering InFlight here disclosed superseded data
+        // every time one grain call failed (#2318).
+        Assert.That(await grain.GetStatusAsync(txid), Is.EqualTo(TxStatus.Indeterminate));
     }
 
     [Test]
@@ -254,14 +259,14 @@ public partial class TxRegistryGrainTests
     }
 
     [Test]
-    public async Task GetStatusAsync_returns_InFlight_when_the_receiver_coordinator_dial_throws()
+    public async Task GetStatusAsync_reports_indeterminate_when_the_receiver_coordinator_dial_throws()
     {
         var txid = Guid.NewGuid();
         var (grain, _, coordinator) = CreateGrainWithReceiverCoordinator("rop-dial");
         await grain.RegisterReceiverDecisionAuthorityAsync(txid, "rop-dial");
         coordinator.GetDecisionAsync().Returns<Task<TxStatus>>(_ => throw new TimeoutException("unreachable"));
 
-        Assert.That(await grain.GetStatusAsync(txid), Is.EqualTo(TxStatus.InFlight));
+        Assert.That(await grain.GetStatusAsync(txid), Is.EqualTo(TxStatus.Indeterminate));
     }
 
     [Test]
@@ -717,7 +722,7 @@ public partial class TxRegistryGrainTests
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("tx-registry", "tree-flush"));
         var state = new FakePersistentState<TxRegistryState>();
-        var grain = new TxRegistryGrain(context, Substitute.For<IGrainFactory>(), optionsMonitor, state);
+        var grain = new TxRegistryGrain(context, Substitute.For<IGrainFactory>(), optionsMonitor, NullLogger<TxRegistryGrain>.Instance, state);
 
         var stale = Guid.NewGuid();
         await grain.MarkCommittedAsync(stale);
@@ -754,7 +759,7 @@ public partial class TxRegistryGrainTests
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("tx-registry", "tree-pinned-flush"));
         var state = new FakePersistentState<TxRegistryState>();
-        var grain = new TxRegistryGrain(context, Substitute.For<IGrainFactory>(), optionsMonitor, state)
+        var grain = new TxRegistryGrain(context, Substitute.For<IGrainFactory>(), optionsMonitor, NullLogger<TxRegistryGrain>.Instance, state)
         {
             TimeProvider = new ManualTimeProvider(PinEpoch),
         };

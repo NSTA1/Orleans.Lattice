@@ -19,13 +19,14 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// idempotent redelivery paths are exercised without a silo.
 /// </summary>
 [TestFixture]
-public class LatticeCrossTreeReceiverGrainTests
+public partial class LatticeCrossTreeReceiverGrainTests
 {
     private const string Origin = "cluster-a";
     private const string OperationId = "xop-recv-1";
 
     private static (LatticeCrossTreeReceiverGrain grain, FakePersistentState<CrossTreeReceiverState> state) CreateGrain(
-        FakePersistentState<CrossTreeReceiverState>? existingState = null)
+        FakePersistentState<CrossTreeReceiverState>? existingState = null,
+        IReadOnlyDictionary<string, string>? clusterIds = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("cross-tree-receiver", LatticeCrossTreeReceiverGrain.ComputeKey(Origin, OperationId)));
@@ -38,8 +39,17 @@ public class LatticeCrossTreeReceiverGrainTests
         optionsMonitor.CurrentValue.Returns(new LatticeOptions());
 
         var state = existingState ?? new FakePersistentState<CrossTreeReceiverState>();
+
+        // Mirrors the core default resolver (uniform empty cluster id) unless a
+        // test deliberately configures divergence.
+        var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
+        clusterIdResolver.Resolve(Arg.Any<string>()).Returns(call =>
+            clusterIds is not null && clusterIds.TryGetValue(call.Arg<string>(), out var id)
+                ? id
+                : string.Empty);
+
         var grain = new LatticeCrossTreeReceiverGrain(
-            context, reminderRegistry, optionsMonitor,
+            context, reminderRegistry, optionsMonitor, clusterIdResolver,
             new LoggerFactory().CreateLogger<LatticeCrossTreeReceiverGrain>(), state);
         return (grain, state);
     }

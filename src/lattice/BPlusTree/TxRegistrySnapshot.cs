@@ -26,11 +26,17 @@ internal readonly record struct TxRegistrySnapshot
     [Id(0)] public Dictionary<Guid, TxStatus> Decisions { get; init; }
 
     /// <summary>
-    /// Monotonic revision counter value at the moment
-    /// <see cref="Decisions"/> was captured. A subsequent
-    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.GetDecisionsRevisionAsync"/> probe
-    /// returning the same value is proof that no decision mutation
-    /// occurred in the intervening window.
+    /// Monotonic comparison token for the readable surface that produced
+    /// <see cref="Decisions"/>, stamped at the same instant and against
+    /// the same retention window as the mask that filtered it. A
+    /// subsequent
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.GetDecisionsRevisionAsync"/>
+    /// probe returning the same value is proof that the surface did not
+    /// change in the intervening window - which covers a decision
+    /// mutation and, because the token folds in a live-expired tombstone
+    /// count, also covers a tombstone silently ageing past its retention
+    /// boundary with no write at all. Opaque: compare it, never do
+    /// arithmetic on it.
     /// </summary>
     [Id(1)] public long Revision { get; init; }
 }
