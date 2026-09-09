@@ -2,6 +2,7 @@ using System.Diagnostics.Metrics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
+using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Testing;
 
@@ -188,6 +189,23 @@ public abstract class MeterDashboardCoverageTestsBase
         {
             names.Add(name);
         }
+
+        // Anti-vacuity control on the SHARED discovery root of both tests in this
+        // fixture. Discovering nothing renders identically to discovering a fully
+        // paneled meter: the forward gate's `unpaneled` list stays empty and the
+        // reverse gate's `known` set is never consulted, so both report a pass
+        // while auditing nothing. The collapse is reachable without any obvious
+        // mistake - MeterListener.Start() replays already-published instruments
+        // re-entrantly, so a metrics class whose `Meter` field is declared below
+        // its instruments hands this callback a null meter and ReferenceEquals
+        // silently matches nothing (see the Metrics section of
+        // .github/copilot-instructions.md). A subclass exists precisely because
+        // its package owns instruments on this meter, so zero is never correct.
+        HygieneDenominator.RequireExamined(
+            names.Count,
+            GetType().Name,
+            "instruments",
+            $"meter '{MeterName}' (plus {AdditionalInstrumentNames.Count()} explicitly named instrument(s))");
 
         return names;
     }
