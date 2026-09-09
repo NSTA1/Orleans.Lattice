@@ -203,8 +203,13 @@ internal sealed class TxRegistryGrain(
     }
 
     /// <summary>
-    /// Undo token for the tombstone-clearing prologue the <c>Mark*</c> paths run
-    /// before their write-once guard. Captures whether the clear actually removed
+    /// Undo token for the tombstone-clearing step the <c>Mark*</c> paths run
+    /// immediately <b>after</b> their write-once guard. The ordering is
+    /// load-bearing and the guard's own comment explains why: clearing first
+    /// hides the existing row from <c>Classify</c>, so a same-outcome repeat is
+    /// classified <c>Record</c> rather than <c>Idempotent</c> and resurrects a
+    /// decision the tree had already retired.
+    /// Captures whether the clear actually removed
     /// a <see cref="TxRegistryState.ForgottenAt"/> row and a
     /// <see cref="TxRegistryState.Decisions"/> row, plus the values to put back,
     /// so a failing <c>WriteStateAsync</c> restores both rather than leaving the
@@ -264,7 +269,7 @@ internal sealed class TxRegistryGrain(
 
     /// <summary>
     /// Restores the rows a <see cref="ClearTombstone(Guid, DateTimeOffset, TimeSpan)"/>
-    /// prologue removed, including the retirement accounting. Must run
+    /// call removed, including the retirement accounting. Must run
     /// <b>after</b> the decision core's own rollback, which restores the
     /// decision map to its post-clear state.
     /// </summary>
@@ -1361,6 +1366,29 @@ internal sealed class TxRegistryGrain(
         // prior pin wholesale (matches the OpenAsync contract: one
         // cursor, one pinId).
         var hadPrior = state.State.SnapshotPins.TryGetValue(pinId, out var prior);
+
+        // Count the rows this pin is about to un-mask: tombstoned decisions that
+        // are masked from readers right now and will not be once the pin lands.
+        // The read mask is pin-aware, so those rows re-enter the readable
+        // surface, and the live-expired term of the revision token drops by
+        // exactly this count. Compensate it (see TombstonePinUnmaskEpoch) so the
+        // token cannot fall, and add one more so it moves strictly across a
+        // mutation that genuinely changed what readers can see.
+        var newlyUnmasked = 0;
+        if (state.State.ForgottenAt.Count > 0)
+        {
+            foreach (var txid in proposed)
+            {
+                if (IsTombstoneExpiredAt(txid, now, options.TxDecisionRetention)) newlyUnmasked++;
+            }
+        }
+
+        var priorUnmaskEpoch = state.State.TombstonePinUnmaskEpoch;
+        if (newlyUnmasked > 0)
+        {
+            state.State.TombstonePinUnmaskEpoch += newlyUnmasked + 1;
+        }
+
         state.State.SnapshotPins[pinId] = new SnapshotPin
         {
             Txids = proposed,
@@ -1375,6 +1403,7 @@ internal sealed class TxRegistryGrain(
         {
             if (hadPrior && prior is not null) state.State.SnapshotPins[pinId] = prior;
             else state.State.SnapshotPins.Remove(pinId);
+            state.State.TombstonePinUnmaskEpoch = priorUnmaskEpoch;
             InvalidatePinMemo();
             throw;
         }
@@ -1539,7 +1568,7 @@ internal sealed class TxRegistryGrain(
     /// The union is consulted from the read-side expiry mask, which sits on the
     /// <c>[AlwaysInterleave]</c> reader hot path, so rebuilding it per call would
     /// put an allocation and a walk of every pin on every status read. Like the
-    /// expiry memo above it is a pure function of persisted state and the clock,
+    /// expiry memo below it is a pure function of persisted state and the clock,
     /// so losing it costs a rebuild and can never change an answer.
     /// </para>
     /// </summary>
@@ -1547,10 +1576,27 @@ internal sealed class TxRegistryGrain(
     private long _pinnedMemoValidBeforeTicks;
 
     /// <summary>
-    /// Drops the memoised pin union. Called from every site that mutates
+    /// Drops the memoised pin union, and with it the memoised expiry scan.
+    /// Called from every site that mutates
     /// <see cref="TxRegistryState.SnapshotPins"/>.
+    /// <para>
+    /// Both memos have to go, because the expired-tombstone count is pin-aware
+    /// (a live pin un-masks the rows it holds) and so is a function of the pin
+    /// map as well as of <see cref="TxRegistryState.ForgottenAt"/>. The expiry
+    /// memo's validity horizon covers the clock-driven half of that dependency -
+    /// it is clamped to the first pin lapse - but an explicit pin, unpin, or
+    /// refresh changes the answer with no clock advance at all, so the horizon
+    /// cannot see it. Invalidating only <c>_pinnedMemo</c> would leave the count
+    /// serving a pre-mutation answer, the token would not move across a real
+    /// surface change, and the reader's revision fast path would accept a stale
+    /// snapshot - the precise defect the composite token exists to close.
+    /// </para>
     /// </summary>
-    private void InvalidatePinMemo() => _pinnedMemo = null;
+    private void InvalidatePinMemo()
+    {
+        _pinnedMemo = null;
+        InvalidateExpiryMemo();
+    }
 
     /// <summary>
     /// Returns <see langword="true"/> when <paramref name="txid"/> is held by a
@@ -1595,8 +1641,11 @@ internal sealed class TxRegistryGrain(
 
     /// <summary>
     /// Drops the memoised expiry scan. Called from every site that mutates
-    /// <see cref="TxRegistryState.ForgottenAt"/>, because the cached count and
-    /// its validity horizon are both derived from that map's contents.
+    /// <see cref="TxRegistryState.ForgottenAt"/>, and - through
+    /// <see cref="InvalidatePinMemo"/> - from every site that mutates
+    /// <see cref="TxRegistryState.SnapshotPins"/>, because the cached count and
+    /// its validity horizon are derived from both maps: the tombstone rows
+    /// supply the candidates and the pin set decides which of them are masked.
     /// </summary>
     private void InvalidateExpiryMemo() => _expiryMemoRetention = TimeSpan.MinValue;
 
@@ -1611,8 +1660,11 @@ internal sealed class TxRegistryGrain(
     /// runs on every revision probe, so the scan also records the earliest tick
     /// at which any still-live tombstone becomes expired. Until the clock
     /// reaches that tick the cached count is provably still correct and the
-    /// probe costs two comparisons. Any mutation of the map invalidates the
-    /// memo through <see cref="InvalidateExpiryMemo"/>.
+    /// probe costs two comparisons. Mutating either input map invalidates the
+    /// memo: <see cref="TxRegistryState.ForgottenAt"/> through
+    /// <see cref="InvalidateExpiryMemo"/> and
+    /// <see cref="TxRegistryState.SnapshotPins"/> through
+    /// <see cref="InvalidatePinMemo"/>.
     /// </para>
     /// </summary>
     private int CountExpiredTombstones(DateTimeOffset now, TimeSpan retention)
@@ -1707,7 +1759,8 @@ internal sealed class TxRegistryGrain(
 
     /// <summary>
     /// The token readers compare across a fan-out:
-    /// <c>DecisionsRevision + TombstoneRetirementEpoch + liveExpiredTombstones(now)</c>.
+    /// <c>DecisionsRevision + TombstoneRetirementEpoch + TombstonePinUnmaskEpoch
+    /// + liveExpiredTombstones(now)</c>.
     /// <para>
     /// <see cref="TxRegistryState.DecisionsRevision"/> alone tracks the
     /// <see cref="TxRegistryState.Decisions"/> map, but the surface a reader can
@@ -1721,7 +1774,7 @@ internal sealed class TxRegistryGrain(
     /// count into the token makes that transition announce itself.
     /// </para>
     /// <para>
-    /// The sum is non-decreasing because each of the three terms only ever loses
+    /// The sum is non-decreasing because each of the terms only ever loses
     /// value to another: physically retiring an expired tombstone drops the
     /// count by one and raises
     /// <see cref="TxRegistryState.TombstoneRetirementEpoch"/> by one, and the
@@ -1731,6 +1784,17 @@ internal sealed class TxRegistryGrain(
     /// <c>k - 1</c> (the prune advances the revision once per batch, not once
     /// per row), letting the token revisit a value it previously carried under a
     /// different surface.
+    /// </para>
+    /// <para>
+    /// <see cref="TxRegistryState.TombstonePinUnmaskEpoch"/> is the same
+    /// argument applied to the other input that can push the count down. The
+    /// count is pin-aware because the read mask is, so a pin taking cover of
+    /// <c>m</c> already-masked rows un-masks all <c>m</c> at once; the pin path
+    /// adds <c>m + 1</c> here, which both restores monotonicity and makes the
+    /// token move strictly across a mutation that really did change what readers
+    /// can see. A pin <i>lapsing</i> needs no term of its own: it re-masks its
+    /// rows, so the count rises on its own and the memo horizon is clamped to
+    /// the first lapse so the rise is observed on time.
     /// </para>
     /// <para>
     /// It stays a <see cref="long"/> deliberately.
@@ -1744,6 +1808,7 @@ internal sealed class TxRegistryGrain(
     private long EffectiveDecisionsRevision(DateTimeOffset now, TimeSpan retention)
         => state.State.DecisionsRevision
             + state.State.TombstoneRetirementEpoch
+            + state.State.TombstonePinUnmaskEpoch
             + CountExpiredTombstones(now, retention);
 
     /// <summary>

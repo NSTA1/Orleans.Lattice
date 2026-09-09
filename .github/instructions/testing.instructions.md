@@ -258,7 +258,10 @@ garbage-collected once its tombstone retention elapses, and finally asserts the 
 terminal state was reached. The garbage-collection step is load-bearing: a committed
 saga is visible the instant its durable decision is recorded, so the progress
 obligation is that every leaf *drains* its prepared bucket before the decision is
-forgotten; a leaf that never drains then resolves the txid to `InFlight` and the read
+forgotten; a leaf that never drains then resolves the txid to `InFlight` once the
+decision row has been physically pruned (while the row survives but is masked by
+the retention window, the reading is `Indeterminate` and the read gate hides the
+key instead), and the read
 gate falls its value through to the pre-saga value, so the commit becomes invisible.
 The guard tests remove the backstop and prove Coyote re-finds the stalled schedule (a
 dropped or restart-lost terminal that is never recovered), so the passing liveness
@@ -418,7 +421,8 @@ is safe):**
 - **Delegated cross-tree decision resolution**
   (`TxRegistryGrain.ResolveDelegatedAsync` / `ResolveReceiverDelegatedAsync`).
   These make a real RPC to a coordinator grain and cache a terminal verdict,
-  conservatively surfacing `InFlight` on dial failure. The safety-bearing pieces
+  conservatively surfacing `Indeterminate` on dial failure (not `InFlight`,
+  which would assert the saga did not commit). The safety-bearing pieces
   (the recorded-verdict apply and the never-flip guard) already route through
   `TxRegistryDecisionCore` and `TerminalDecisionGuard`; what remains is real
   network the model does not encode.

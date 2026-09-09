@@ -41,7 +41,9 @@ namespace Orleans.Lattice.Replication;
 /// projection by the per-leaf scan (Committed surfaces the prepared
 /// value as the live one; Aborted drops the prepared mutation
 /// entirely). Sagas the snapshot recorded as
-/// <see cref="TxStatus.InFlight"/> have their per-key prepared
+/// <see cref="TxStatus.InFlight"/> or
+/// <see cref="TxStatus.Indeterminate"/>, and sagas it has no row for
+/// at all, have their per-key prepared
 /// mutations emitted explicitly with
 /// <see cref="SnapshotEntry.IsPrepared"/> set, routed on the receiver
 /// through

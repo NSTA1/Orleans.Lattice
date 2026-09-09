@@ -1133,10 +1133,15 @@ internal sealed partial class BPlusLeafGrain
     /// registry call collapses N per-key dial-backs into one round
     /// trip. Callers iterate the runtime entry cache as usual and,
     /// for each key found in <c>pendingKeys</c>, branch on
-    /// the resolved outcome: <see cref="TxStatus.Committed"/> surfaces
-    /// the prepared value, <see cref="TxStatus.InFlight"/> hides the
-    /// key, and <see cref="TxStatus.Aborted"/> falls through to the
-    /// pre-saga cache value.
+    /// the resolved outcome through
+    /// <see cref="AtomicVisibilityGate.ResolveKey"/>:
+    /// <see cref="TxStatus.Committed"/> surfaces the prepared value,
+    /// <see cref="TxStatus.Indeterminate"/> hides the key, and
+    /// <see cref="TxStatus.InFlight"/> / <see cref="TxStatus.Aborted"/>
+    /// fall through to the pre-saga cache value. (An in-flight saga
+    /// falling through rather than hiding is the strict-isolation
+    /// contract: the prepared value is invisible until the registry
+    /// records a commit, so the reader sees the last committed one.)
     /// </para>
     /// </summary>
     private async ValueTask<(
@@ -1946,6 +1951,14 @@ internal sealed partial class BPlusLeafGrain
     ///     against any sibling leaf whose backstop has already landed.
     ///     Returns <c>false</c> so the caller raises
     ///     <see cref="StaleShardRoutingException"/>.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="TxStatus.Indeterminate"/>: resolved exactly as
+    ///     <see cref="TxStatus.Committed"/> is. Passing through would
+    ///     assert the saga did not commit, which is precisely what an
+    ///     indeterminate reading does not know; with the backstop
+    ///     already applied the projected value is correct either way,
+    ///     and without it the read gates.
     ///   </description></item>
     /// </list>
     /// </summary>

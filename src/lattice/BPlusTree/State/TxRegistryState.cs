@@ -181,12 +181,14 @@ internal sealed class TxRegistryState
     /// the current instant, and a tombstone crossing its retention boundary
     /// changes that surface with no write anywhere to hang a bump on. The
     /// registry therefore exposes the composite
-    /// <c>DecisionsRevision + TombstoneRetirementEpoch + liveExpiredTombstones(now)</c>
+    /// <c>DecisionsRevision + TombstoneRetirementEpoch + TombstonePinUnmaskEpoch
+    /// + liveExpiredTombstones(now)</c>
     /// from <c>GetDecisionsRevisionAsync</c> and stamps the same value onto
     /// <c>SnapshotWithRevisionAsync</c>; see
-    /// <see cref="TombstoneRetirementEpoch"/> for why the third term needs the
-    /// second. This field remains the <see cref="Decisions"/> component of that
-    /// sum and is the value <c>TxRegistryDecisionCore</c> owns.
+    /// <see cref="TombstoneRetirementEpoch"/> and
+    /// <see cref="TombstonePinUnmaskEpoch"/> for why the live-expired term needs
+    /// the two epochs. This field remains the <see cref="Decisions"/> component
+    /// of that sum and is the value <c>TxRegistryDecisionCore</c> owns.
     /// </para>
     /// <para>
     /// Wire-compatibility: legacy persisted state with no Id-6 slot
@@ -313,8 +315,10 @@ internal sealed class TxRegistryState
     /// Monotonically non-decreasing count of tombstones that were <b>already
     /// expired</b> at the instant they were physically removed from
     /// <see cref="ForgottenAt"/> - by the inline prune inside
-    /// <c>ForgetAsync</c>, or by the tombstone-clearing prologue of
-    /// <c>MarkCommittedAsync</c> / <c>MarkAbortedAsync</c>. It exists solely to
+    /// <c>ForgetAsync</c>, or by the tombstone-clearing step of
+    /// <c>MarkCommittedAsync</c> / <c>MarkAbortedAsync</c> (which runs after
+    /// those calls have classified the incoming terminal, so it fires only for a
+    /// terminal that is not an inert same-outcome repeat). It exists solely to
     /// keep the registry's <i>effective</i> revision (the token readers compare
     /// across a fan-out) non-decreasing.
     /// <para>
@@ -323,7 +327,8 @@ internal sealed class TxRegistryState
     /// function of <c>(Decisions, ForgottenAt, retention, now)</c>: the read
     /// paths mask a decision whose tombstone has outlived the retention window.
     /// The registry therefore exposes
-    /// <c>DecisionsRevision + TombstoneRetirementEpoch + liveExpiredTombstones(now)</c>,
+    /// <c>DecisionsRevision + TombstoneRetirementEpoch + TombstonePinUnmaskEpoch
+    /// + liveExpiredTombstones(now)</c>,
     /// where the last term counts the tombstone rows still present in
     /// <see cref="ForgottenAt"/> that are already masked at <c>now</c>. That sum
     /// rises when a tombstone crosses its expiry instant (the count goes up with
@@ -349,4 +354,37 @@ internal sealed class TxRegistryState
     /// </para>
     /// </summary>
     [Id(10)] public long TombstoneRetirementEpoch { get; set; }
+
+    /// <summary>
+    /// Monotone count of the mask-surface changes caused by a snapshot pin
+    /// taking cover of a decision that was <i>already</i> masked, plus one per
+    /// such pin. The second compensating term in the revision token, alongside
+    /// <see cref="TombstoneRetirementEpoch"/>.
+    /// <para>
+    /// The live-expired term of the token is pin-aware, because the read mask
+    /// is: a pin exists precisely so a point-in-time cursor keeps reading the
+    /// decisions its snapshot captured, including ones that have since aged out
+    /// of retention. That makes <see cref="SnapshotPins"/> a second input to the
+    /// count, and it is an input that can push the count <i>down</i> - a pin
+    /// covering <c>m</c> already-masked rows un-masks all <c>m</c> of them at
+    /// once. A falling token can revisit a value it previously carried under a
+    /// different surface, which is exactly the aliasing a revision exists to
+    /// prevent.
+    /// </para>
+    /// <para>
+    /// Compensating by exactly <c>m</c> would restore monotonicity but not
+    /// soundness: the sum would be unchanged across a mutation that really did
+    /// change what readers can see. The bump is therefore <c>m + 1</c> whenever
+    /// <c>m &gt; 0</c>, so the token strictly increases across precisely the pin
+    /// mutations that move the mask surface and does not move across the ones
+    /// that do not. Dropping a txid from a pin needs no entry here: that raises
+    /// the live-expired count on its own.
+    /// </para>
+    /// <para>
+    /// Wire-compatibility: legacy persisted state with no Id-11 slot decodes to
+    /// <c>0L</c>, which is its correct value on a registry that has never
+    /// pinned an already-masked decision.
+    /// </para>
+    /// </summary>
+    [Id(11)] public long TombstonePinUnmaskEpoch { get; set; }
 }

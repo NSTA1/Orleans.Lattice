@@ -41,6 +41,7 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "origin and break replication cycles; an empty value would produce unattributable "
                 + "change-feed entries and is rejected.");
         }
+
         if (options.ReplogPartitions < 1)
         {
             return ValidateOptionsResult.Fail(
