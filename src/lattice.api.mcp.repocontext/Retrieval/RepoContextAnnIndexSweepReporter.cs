@@ -30,9 +30,16 @@ internal enum RepoContextAnnSweepOutcome
     Armed = 1,
 
     /// <summary>
-    /// The sweep completed but armed nothing, because no repository is registered
-    /// (or every one of them declined arming). A successful sweep with nothing to
-    /// do, not a failure - and not progress either.
+    /// The sweep completed but armed nothing, because it observed no repository in
+    /// the store listing (or every one it observed declined arming). A successful
+    /// sweep with nothing to do, not a failure - and not progress either.
+    /// <para>
+    /// Note what this tag does and does not assert. It records what the sweep
+    /// <i>observed</i>, never what the store <i>contains</i>: the listing is an
+    /// observation like any other and can be wrong, which is the failure mode issue
+    /// #2406 records. Anything that reports this outcome must report the observed
+    /// count rather than assert an empty store.
+    /// </para>
     /// </summary>
     Empty = 2,
 }
@@ -56,9 +63,12 @@ internal enum RepoContextAnnSweepAnnouncement
     FirstArmed = 1,
 
     /// <summary>
-    /// The first sweep in this process that completed with nothing to arm.
+    /// The first sweep in this process that completed without arming anything.
+    /// Named for what was observed - nothing was armed - rather than for a cause,
+    /// because the two causes the <see cref="RepoContextAnnSweepOutcome.Empty"/> tag
+    /// covers are not distinguishable from here.
     /// </summary>
-    NoRepositories = 2,
+    ArmedNothing = 2,
 
     /// <summary>
     /// The first fault of a new run of consecutive faults. The exception belongs on
@@ -199,7 +209,9 @@ internal sealed class RepoContextAnnIndexSweepReporter : IDisposable
             unit: "{sweep}",
             description:
                 "Approximate-index build sweeps partitioned by outcome: 'armed' (the sweep completed and armed at "
-                + "least one build coordinator), 'empty' (it completed with no repository to arm), or 'faulted' "
+                + "least one build coordinator), 'empty' (it completed without arming anything, either because it "
+                + "observed no repository in the store listing or because every repository it observed declined "
+                + "arming - this arm reports what the sweep observed, never that the store is empty), or 'faulted' "
                 + "(it threw, so nothing is scheduled until it gets through). Every sweep that runs is counted, so "
                 + "the total advances once per sweep - at the sweep interval while sweeps complete, and at the "
                 + "faster retry cadence (250 ms doubling to a 30-second ceiling) while they fault, so do not "
@@ -271,7 +283,7 @@ internal sealed class RepoContextAnnIndexSweepReporter : IDisposable
             }
 
             _announcedEmpty = true;
-            return new RepoContextAnnSweepReport(RepoContextAnnSweepAnnouncement.NoRepositories, 0);
+            return new RepoContextAnnSweepReport(RepoContextAnnSweepAnnouncement.ArmedNothing, 0);
         }
     }
 

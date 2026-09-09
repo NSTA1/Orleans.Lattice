@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -23,7 +24,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class RepoContextAnnIndexSweepServiceTests
+public sealed partial class RepoContextAnnIndexSweepServiceTests
 {
     private static readonly Serializer Serializer = new ServiceCollection()
         .AddSerializer()
@@ -55,12 +56,17 @@ public sealed class RepoContextAnnIndexSweepServiceTests
             withEmbedder ? StubEmbedder.Instance : null);
 
     private static RepoContextAnnIndexSweepService Sweep(
-        RepoContextStore store, RepoContextAnnIndexScheduler scheduler, RepoContextIndexingOptions? options = null)
+        RepoContextStore store,
+        RepoContextAnnIndexScheduler scheduler,
+        RepoContextIndexingOptions? options = null,
+        RepoContextRetrievalReadinessState? readiness = null,
+        ILogger<RepoContextAnnIndexSweepService>? logger = null)
         => new(
             store,
             scheduler,
             options ?? new RepoContextIndexingOptions(),
-            NullLogger<RepoContextAnnIndexSweepService>.Instance);
+            readiness ?? new RepoContextRetrievalReadinessState(TimeProvider.System),
+            logger ?? NullLogger<RepoContextAnnIndexSweepService>.Instance);
 
     /// <summary>Spins until <paramref name="condition"/> holds or the budget runs out.</summary>
     private static async Task<bool> WaitForAsync(Func<bool> condition, CancellationToken cancellationToken)

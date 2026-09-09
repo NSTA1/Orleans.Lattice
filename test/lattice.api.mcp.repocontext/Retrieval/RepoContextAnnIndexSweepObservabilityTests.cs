@@ -162,7 +162,7 @@ public sealed class RepoContextAnnIndexSweepObservabilityTests
     [Test]
     public void A_sweep_that_armed_nothing_is_announced_separately_from_one_that_armed_something()
     {
-        // A sweep that completes with no repository to arm returns cleanly, settles
+        // A sweep that completes without arming anything returns cleanly, settles
         // into the long cadence, and schedules nothing - which reads exactly like
         // success in every signal except this one.
         using var reporter = new RepoContextAnnIndexSweepReporter();
@@ -172,7 +172,7 @@ public sealed class RepoContextAnnIndexSweepObservabilityTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(empty.Announcement, Is.EqualTo(RepoContextAnnSweepAnnouncement.NoRepositories));
+            Assert.That(empty.Announcement, Is.EqualTo(RepoContextAnnSweepAnnouncement.ArmedNothing));
             Assert.That(armed.Announcement, Is.EqualTo(RepoContextAnnSweepAnnouncement.FirstArmed));
             Assert.That(
                 reporter.Record(RepoContextAnnSweepOutcome.Armed).Announcement,
