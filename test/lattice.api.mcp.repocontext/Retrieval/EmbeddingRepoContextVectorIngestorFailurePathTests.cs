@@ -216,7 +216,7 @@ public sealed class EmbeddingRepoContextVectorIngestorFailurePathTests
         var injector = new LatticeTreeFaultInjector
         {
             TreeId = RepoContextTrees.VectorMembership,
-            Method = nameof(ILattice.GetManyAsync),
+            Method = nameof(ILattice.GetManyWithGateAccountingAsync),
         };
         await using var harness = await RepoContextMcpHarness.StartAsync(
             FaultingOptions(injector), Ct);

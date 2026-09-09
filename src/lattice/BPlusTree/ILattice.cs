@@ -32,6 +32,30 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns the values for the given <paramref name="keys"/> exactly as
+    /// <see cref="GetManyAsync"/> does, together with the number of keys the
+    /// read-path access gate pruned before fan-out.
+    /// <para>
+    /// Use this overload instead of <see cref="GetManyAsync"/> when the caller
+    /// draws a conclusion from a key's <em>absence</em> from the result. A pruned
+    /// key and a key that was never written are the same observation through
+    /// <see cref="GetManyAsync"/> - both are simply missing - so a caller that
+    /// reads absence as "no such entry" silently misclassifies every entry an
+    /// active gate hides from it. When
+    /// <see cref="GatedMultiReadResult.PrunedByAccessGate"/> is <c>0</c> that
+    /// reading is sound; when it is non-zero the caller must not classify on
+    /// absence at all.
+    /// </para>
+    /// <para>
+    /// The count never names the pruned keys. Identities would disclose the keys
+    /// the caller is not authorized to see.
+    /// </para>
+    /// </summary>
+    /// <param name="keys">The keys to read. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the routing and shard dispatch.</param>
+    Task<GatedMultiReadResult> GetManyWithGateAccountingAsync(List<string> keys, CancellationToken cancellationToken = default);
+
     /// <summary>Inserts or updates the value for <paramref name="key"/>.</summary>
     Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default);
 

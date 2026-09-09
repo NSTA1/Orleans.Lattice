@@ -1141,6 +1141,22 @@ internal sealed partial class LatticeGrain(
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default)
     {
+        var gated = await GetManyGatedAsync(keys, cancellationToken);
+        return gated.Values;
+    }
+
+    /// <summary>
+    /// The gate-accounting entry point (issue #2277). Identical read, and it
+    /// additionally reports how many requested keys the read-path filter removed,
+    /// which is the one fact a caller cannot recover from the returned rows: a
+    /// pruned key and a never-written key are the same observation there.
+    /// </summary>
+    public Task<GatedMultiReadResult> GetManyWithGateAccountingAsync(
+        List<string> keys, CancellationToken cancellationToken = default) =>
+        GetManyGatedAsync(keys, cancellationToken);
+
+    private async Task<GatedMultiReadResult> GetManyGatedAsync(List<string> keys, CancellationToken cancellationToken)
+    {
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
         ArgumentNullException.ThrowIfNull(keys);
@@ -1153,6 +1169,15 @@ internal sealed partial class LatticeGrain(
         // silo, let alone returned to the caller. On the default (null gate /
         // system-origin) path the filter is null and the caller's list is used
         // unchanged with no per-key work or allocation.
+        //
+        // The prune COUNT is carried out to the caller (issue #2277). It is the
+        // only seam that knows it: downstream, a pruned key is byte-identical to
+        // a key that was never written, so a caller reading coverage from the
+        // returned rows classifies an entry it is merely not authorized to see as
+        // an entry that does not exist. Never the identities - a prune list names
+        // the keys the caller was refused and turns any multi-get into an
+        // authorization oracle.
+        var prunedByAccessGate = 0;
         var keyFilter = await ResolveMultiReadKeyFilterAsync(cancellationToken);
         if (keyFilter is not null)
         {
@@ -1162,6 +1187,8 @@ internal sealed partial class LatticeGrain(
                 if (k is not null && keyFilter(k))
                     filtered.Add(k);
             }
+
+            prunedByAccessGate = keys.Count - filtered.Count;
             keys = filtered;
         }
 
@@ -1204,7 +1231,11 @@ internal sealed partial class LatticeGrain(
                     {
                         await DecodeManyInPlaceAsync(many, cancellationToken);
                     }
-                    return many;
+                    return new GatedMultiReadResult
+                    {
+                        Values = many,
+                        PrunedByAccessGate = prunedByAccessGate,
+                    };
                 }
                 catch (StaleShardRoutingException)
                 {

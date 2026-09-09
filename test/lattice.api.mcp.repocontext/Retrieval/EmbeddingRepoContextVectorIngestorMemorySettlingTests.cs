@@ -202,13 +202,13 @@ public sealed class EmbeddingRepoContextVectorIngestorMemorySettlingTests
         // The memory arm's own page probe - the last of the four membership reads
         // in this path to be guarded. It can fall back rather than skip, because
         // the marker set is an independent source of the same evidence.
-        // The probe and the membership write both go through GetManyAsync, and the
-        // probe runs first, so failing exactly the first call isolates the probe
-        // while leaving the write that follows it healthy.
+        // The probe reads through the gate-accounting seam (issue #2277) while the
+        // membership write that follows it uses the plain multi-get, so naming that
+        // method isolates the probe outright rather than relying on call ordering.
         var injector = new LatticeTreeFaultInjector
         {
             TreeId = RepoContextTrees.VectorMembership,
-            Method = nameof(ILattice.GetManyAsync),
+            Method = nameof(ILattice.GetManyWithGateAccountingAsync),
             FailFirst = 1,
         };
 

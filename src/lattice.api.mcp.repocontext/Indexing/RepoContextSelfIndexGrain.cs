@@ -290,7 +290,24 @@ internal sealed class RepoContextSelfIndexGrain(
             .ScanFilePageAsync(RepoId, state.State.ResumeKey, PageSize, cancellationToken)
             .ConfigureAwait(true);
 
-        if (page.GapFound)
+        if (page.CoverageUnavailable)
+        {
+            // The sweep could not classify this page: the coverage probe was pruned
+            // by the store's read-path access gate, so absence from it proves nothing
+            // (issue #2277). Deliberately NOT re-driven - a re-drive on an
+            // unclassifiable page would repeat on every sweep and heal nothing - and
+            // deliberately not recorded as a clean cycle either.
+            logger.LogWarning(
+                "Repo {RepoId}: self-index could not classify a file page because {Pruned} coverage key(s) "
+                + "were removed by the store's read-path access gate; no gap is claimed and no re-drive is "
+                + "triggered. This does not clear on the next sweep - the ingestor must be able to read its "
+                + "own membership keys for the self-heal sweep to work.",
+                RepoId,
+                page.PrunedByAccessGate);
+
+            EndScan(nowTicks);
+        }
+        else if (page.GapFound)
         {
             // A file has no live embedding: re-drive the whole repository index. The
             // back-fill re-embeds every missing file, so one trigger heals all of

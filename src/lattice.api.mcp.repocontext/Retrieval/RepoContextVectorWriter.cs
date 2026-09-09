@@ -961,16 +961,16 @@ internal sealed class RepoContextVectorWriter
     /// <param name="repoId">The repository whose embedded members to probe. Must not be <see langword="null"/>.</param>
     /// <param name="candidateSourceKeys">The bounded set of canonical record keys to probe. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the probe.</param>
-    /// <returns>The live embedded source identifiers restricted to the probed candidates.</returns>
+    /// <returns>The live embedded source identifiers restricted to the probed candidates, with the gate-prune count that qualifies their absence.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="candidateSourceKeys"/> is null.</exception>
-    public async Task<IReadOnlySet<string>> ProbeEmbeddedMembersAsync(
+    public async Task<RepoContextProbedSourceIds> ProbeEmbeddedMembersAsync(
         string repoId, IReadOnlyList<string> candidateSourceKeys, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(candidateSourceKeys);
         var coverage = await ProbeMembershipAsync(
             repoId, candidateSourceKeys, includeContentless: false, cancellationToken).ConfigureAwait(false);
-        return coverage.Embedded;
+        return new RepoContextProbedSourceIds(coverage.Embedded, coverage.PrunedByAccessGate);
     }
 
     /// <summary>
@@ -984,9 +984,9 @@ internal sealed class RepoContextVectorWriter
     /// <param name="repoId">The repository whose covered set to probe. Must not be <see langword="null"/>.</param>
     /// <param name="candidateSourceKeys">The bounded set of canonical record keys to probe. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the probe.</param>
-    /// <returns>The union of embedded and contentless-marker source identifiers restricted to the probed candidates.</returns>
+    /// <returns>The union of embedded and contentless-marker source identifiers restricted to the probed candidates, with the gate-prune count that qualifies their absence.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="candidateSourceKeys"/> is null.</exception>
-    public async Task<IReadOnlySet<string>> ProbeCoveredSourceIdsAsync(
+    public async Task<RepoContextProbedSourceIds> ProbeCoveredSourceIdsAsync(
         string repoId, IReadOnlyList<string> candidateSourceKeys, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
@@ -995,19 +995,21 @@ internal sealed class RepoContextVectorWriter
             repoId, candidateSourceKeys, includeContentless: true, cancellationToken).ConfigureAwait(false);
         if (coverage.Contentless.Count == 0)
         {
-            return coverage.Embedded;
+            return new RepoContextProbedSourceIds(coverage.Embedded, coverage.PrunedByAccessGate);
         }
 
         var covered = new HashSet<string>(coverage.Embedded, StringComparer.Ordinal);
         covered.UnionWith(coverage.Contentless);
-        return covered;
+        return new RepoContextProbedSourceIds(covered, coverage.PrunedByAccessGate);
     }
 
     /// <summary>
     /// Shared bounded point-probe: reduces the candidate keys to distinct source
-    /// identifiers, batches them through <see cref="ILattice.GetManyAsync(System.Collections.Generic.List{string}, CancellationToken)"/>
+    /// identifiers, batches them through <see cref="ILattice.GetManyWithGateAccountingAsync(System.Collections.Generic.List{string}, CancellationToken)"/>
     /// in <see cref="MembershipProbeBatchSize"/>-sized chunks, and decodes each
-    /// returned row exactly as a whole-set scan would.
+    /// returned row exactly as a whole-set scan would. The gate-accounting read seam
+    /// is used rather than the plain multi-get so a key the store's access gate
+    /// pruned is distinguishable from one that was never written (issue #2277).
     /// </summary>
     private Task<RepoContextEmbeddingCoverage> ProbeMembershipAsync(
         string repoId,
@@ -1054,7 +1056,10 @@ internal sealed class RepoContextVectorWriter
             }
 
             ReportProbeAccounting(repoId, accounting);
-            return new RepoContextEmbeddingCoverage(embedded, contentless);
+            return new RepoContextEmbeddingCoverage(embedded, contentless)
+            {
+                PrunedByAccessGate = accounting.Pruned,
+            };
         }, cancellationToken);
 
     /// <summary>
@@ -1079,9 +1084,15 @@ internal sealed class RepoContextVectorWriter
             + "requested={Requested} returned={Returned} accounted={Accounted} "
             + "embedded={Embedded} contentless={Contentless} memoryMarker={MemoryMarker} "
             + "disabled={Disabled} unparseable={Unparseable} notReturned={NotReturned} "
-            + "unrequested={Unrequested}. "
-            + "A not-returned key is read as an absent presence flag, so an incomplete read is "
-            + "indistinguishable from a genuinely unembedded source and re-selects it for embedding; "
+            + "pruned={Pruned} unrequested={Unrequested}. "
+            + "A not-returned key is one the store did not answer with: it was either never "
+            + "written - a genuinely unembedded source, the normal and expected state of any "
+            + "corpus with a real gap - or it was removed from the read by the store's access "
+            + "gate before fan-out, and those two are byte-identical in the read's output; "
+            + "pruned is that second population counted by the gate itself, so genuinely "
+            + "absent = notReturned - pruned, and a non-zero pruned count (possible only on a "
+            + "gated deployment) means this probe is INCOMPLETE rather than negative and its "
+            + "absences must not be classified as missing embeddings; "
             + "an unparseable key was written by this writer and cannot be read back; "
             + "an unrequested row is one the store returned that this probe never asked for.";
 
@@ -1099,6 +1110,7 @@ internal sealed class RepoContextVectorWriter
                 accounting.Disabled,
                 accounting.Unparseable,
                 accounting.NotReturned,
+                accounting.Pruned,
                 accounting.Unrequested);
             return;
         }
@@ -1120,6 +1132,7 @@ internal sealed class RepoContextVectorWriter
             accounting.Disabled,
             accounting.Unparseable,
             accounting.NotReturned,
+            accounting.Pruned,
             accounting.Unrequested);
     }
 
@@ -1132,7 +1145,18 @@ internal sealed class RepoContextVectorWriter
         CancellationToken cancellationToken)
     {
         accounting.Requested += keys.Count;
-        var found = await tree.GetManyAsync(keys, cancellationToken).ConfigureAwait(false);
+        var gated = await tree.GetManyWithGateAccountingAsync(keys, cancellationToken).ConfigureAwait(false);
+        var found = gated.Values;
+
+        // The distinction this item was opened on, obtained from the only layer that
+        // has it (issue #2277). A key the read-path access gate pruned is absent from
+        // `found` for a reason that has nothing to do with whether it was embedded,
+        // and it is byte-identical there to a key that was never written - so no
+        // comparison of `found` against `keys` in this method could ever separate the
+        // two. The grain reports the COUNT (never the identities, which would name
+        // the keys the caller was refused and make this probe an authorization
+        // oracle), which is exactly enough: genuinely absent = NotReturned - Pruned.
+        accounting.Pruned += gated.PrunedByAccessGate;
         var requested = new HashSet<string>(keys, StringComparer.Ordinal);
         var seen = new HashSet<string>(keys.Count, StringComparer.Ordinal);
         var returned = 0;
@@ -1283,9 +1307,33 @@ internal sealed class RepoContextVectorWriter
 
         /// <summary>
         /// Keys the store did not return. Read as "no presence flag exists" by every
-        /// caller, which is correct only if the store is complete.
+        /// caller, which is correct only if the read was complete - see
+        /// <see cref="Pruned"/> for the population that makes it incomplete.
         /// </summary>
         public int NotReturned { get; set; }
+
+        /// <summary>
+        /// Keys the store's read-path access gate removed before fan-out, so the read
+        /// never looked for them (issue #2277).
+        /// <para>
+        /// An overlay counter like <see cref="Unrequested"/> and deliberately NOT one
+        /// of the partition categories: a pruned key is a requested key the store did
+        /// not answer with, so it is already counted in <see cref="NotReturned"/> and
+        /// folding it into <see cref="Accounted"/> would break the identity. It is a
+        /// SUBSET of <see cref="NotReturned"/>, which is what makes the subtraction
+        /// meaningful: genuinely absent = <see cref="NotReturned"/> - <see cref="Pruned"/>.
+        /// </para>
+        /// <para>
+        /// The count is reported and the identities are not, and that asymmetry is the
+        /// design rather than an economy. Naming the pruned keys would tell a caller
+        /// exactly which keys it was refused, which is precisely the fact the gate
+        /// exists to withhold, and would turn every coverage probe into an
+        /// authorization oracle - a strictly worse defect than the one this counter
+        /// fixes. The count is enough: no consumer needs to know WHICH key was hidden,
+        /// only that this probe's silence is not evidence of absence.
+        /// </para>
+        /// </summary>
+        public int Pruned { get; set; }
 
         /// <summary>
         /// Rows the store returned whose key was not in the requested batch.
@@ -1328,8 +1376,20 @@ internal sealed class RepoContextVectorWriter
         /// level on every probe, because the diagnostic gain of issue #2287 is the
         /// DENOMINATOR and the breakdown, not an alarm.
         /// </para>
+        /// <para>
+        /// <see cref="Pruned"/> IS part of this test, and the contrast with
+        /// <see cref="NotReturned"/> is the point rather than an inconsistency. The
+        /// argument for excluding not-returned is that it is the ordinary healthy
+        /// case, so warning on it fires always and gets muted. Pruned has no healthy
+        /// case at all: the ingestor probes its own membership keys, so a gate that
+        /// hides them from it is a misconfiguration in every deployment, gated or
+        /// not, and one that silently stops the back-fill from ever healing the
+        /// repository. It will repeat on every pass for as long as that
+        /// misconfiguration stands, which is the intended behaviour for a condition
+        /// that is never benign and never self-corrects.
+        /// </para>
         /// </summary>
-        public bool IsAnomalous => Unparseable > 0 || Unrequested > 0;
+        public bool IsAnomalous => Unparseable > 0 || Unrequested > 0 || Pruned > 0;
     }
 
     /// <summary>

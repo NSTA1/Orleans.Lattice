@@ -115,6 +115,7 @@ internal static class TypeAliases
     internal const string CrdtApplyResult = "ol.cap";
     internal const string Versioned = "ol.ver";
     internal const string VersionedValue = "ol.vvl";
+    internal const string GatedMultiReadResult = "ol.gmr";
     internal const string ShardHotness = "ol.sh";
     internal const string ShardMap = "ol.sm";
     internal const string RoutingInfo = "ol.ri";

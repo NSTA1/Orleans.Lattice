@@ -101,6 +101,23 @@ internal sealed class RepoContextEmbeddingGapScanner
             .ProbeCoveredSourceIdsAsync(repoId, pageKeys, cancellationToken)
             .ConfigureAwait(false);
 
+        if (!covered.AbsenceIsConclusive)
+        {
+            // The store's read-path access gate removed keys from the probe, so a
+            // file's absence from the covered set is not evidence that its embedding
+            // is missing (issue #2277). Reporting a gap on that basis would re-drive
+            // the WHOLE repository index on every sweep, forever, healing nothing -
+            // the sweep's own re-drive is what makes a false negative here so much
+            // more expensive than a missed page. Report no gap and end the walk, and
+            // flag the page so the caller says why rather than recording a clean
+            // sweep this scan did not earn.
+            return new GapScanPage(GapFound: false, HasMore: false, NextResumeKey: null)
+            {
+                CoverageUnavailable = true,
+                PrunedByAccessGate = covered.PrunedByAccessGate,
+            };
+        }
+
         foreach (var key in pageKeys)
         {
             if (!covered.Contains(VectorCodec.SourceId(key)))
@@ -127,4 +144,25 @@ internal sealed class RepoContextEmbeddingGapScanner
 /// <param name="GapFound">Whether the page contained a file with no live embedding.</param>
 /// <param name="HasMore">Whether more files remain to scan after this page.</param>
 /// <param name="NextResumeKey">The inclusive key to resume the next page from, or <see langword="null"/> when the walk is complete or a gap ended it.</param>
-internal readonly record struct GapScanPage(bool GapFound, bool HasMore, string? NextResumeKey);
+internal readonly record struct GapScanPage(bool GapFound, bool HasMore, string? NextResumeKey)
+{
+    /// <summary>
+    /// Whether this page could not be classified because the store's read-path
+    /// access gate pruned keys from the coverage probe (issue #2277), so
+    /// <see cref="GapFound"/> being <see langword="false"/> means "not measured"
+    /// rather than "clean".
+    /// <para>
+    /// Reported separately rather than by returning a gap, because the caller's
+    /// response to a gap is to re-drive the entire repository index: a false gap
+    /// here costs a full re-index on every sweep and heals nothing, which is a
+    /// strictly worse failure than declining to classify one page.
+    /// </para>
+    /// </summary>
+    public bool CoverageUnavailable { get; init; }
+
+    /// <summary>
+    /// How many of the page's probed keys the access gate removed. Zero unless
+    /// <see cref="CoverageUnavailable"/> is <see langword="true"/>.
+    /// </summary>
+    public int PrunedByAccessGate { get; init; }
+}
