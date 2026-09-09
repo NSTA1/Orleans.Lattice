@@ -13,19 +13,22 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// ingestion path funnels through - <see cref="RepoContextBootstrapService"/> -
 /// so the <c>repocontext_bootstrap</c> and <c>repocontext_add_repo</c> tools can
 /// never diverge on what they will read. When the host configures no roots the
-/// guard is inert (it only normalises the path), preserving the behaviour of
-/// hosts that intentionally ingest arbitrary local paths; the container host
-/// always configures the mounted workspace root, so the product is fail-closed.
+/// guard is inert (it only normalises the path); the container host always
+/// configures the mounted workspace root, so the product is fail-closed.
 /// </para>
 /// <para>
-/// <b>The inert guard is scoped to the single-repository surface.</b> It is the
-/// opt-out for <c>repocontext_bootstrap</c>, whose path is host configuration.
-/// It is <i>not</i> a shape <c>repocontext_add_repo</c> may run under: that
-/// tool's path arrives from the wire, so an inert guard would turn a
-/// caller-supplied string into an arbitrary local filesystem read. The add-repo
-/// handler therefore checks <see cref="IsEnforcing"/> and refuses before
-/// resolving anything, so the boundary its own tool description promises can
-/// never be silently absent.
+/// <b>An inert guard admits no wire-supplied path at all.</b> Both onboarding
+/// tools take their path from an MCP tool parameter, so neither may run under an
+/// inert guard: it would turn a caller-supplied string into an arbitrary local
+/// filesystem read whose contents the retrieval tools then serve back. An earlier
+/// revision exempted <c>repocontext_bootstrap</c> on the grounds that its path is
+/// "host configuration rather than caller input" - that was wrong, <c>repoRoot</c>
+/// is a wire parameter - so the exemption is gone. Both handlers funnel through
+/// <c>StartIndexAsync</c>, which checks <see cref="IsEnforcing"/> and refuses
+/// before resolving anything, and the registration extension withholds both tools
+/// when no root is configured. The inert guard remains meaningful only for the
+/// host-driven <see cref="RepoContextBootstrapService"/>, whose path really does
+/// come from host configuration.
 /// </para>
 /// <para>
 /// <b>Allocation.</b> Every allowed root is canonicalised once in the constructor;

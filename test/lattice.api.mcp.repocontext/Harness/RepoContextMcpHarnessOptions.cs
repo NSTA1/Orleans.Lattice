@@ -28,15 +28,25 @@ public sealed class RepoContextMcpHarnessOptions
     /// <c>repocontext_remove_repo</c> tools replace the single-repository
     /// <c>repocontext_bootstrap</c>, and the workspace guard enforces
     /// <see cref="WorkspaceRoot"/>. Defaults to <see langword="false"/> so existing
-    /// fixtures keep the single-repository surface.
+    /// fixtures keep the single-repository surface. Note the guard enforces
+    /// <see cref="WorkspaceRoot"/> in either mode.
     /// </summary>
     public bool WorkspaceMode { get; set; }
 
     /// <summary>
-    /// The read-only workspace root that runtime-added repositories must resolve
-    /// under when <see cref="WorkspaceMode"/> is set. Ignored otherwise.
+    /// The read-only workspace root that a caller-supplied repository root must
+    /// resolve under. It applies in <b>both</b> modes: since the fail-closed
+    /// boundary fix, <c>repocontext_bootstrap</c> takes its path from the wire
+    /// exactly as <c>repocontext_add_repo</c> does, so neither tool is contributed
+    /// (nor will it run) without a configured root.
+    /// <para>
+    /// Defaults to the process temp directory because every fixture builds its
+    /// repository under <see cref="Path.GetTempPath"/>, so the default keeps the
+    /// harness usable without each fixture restating its own root. Assert the
+    /// boundary itself with a narrower root, or with the unit-level guard tests.
+    /// </para>
     /// </summary>
-    public string? WorkspaceRoot { get; set; }
+    public string? WorkspaceRoot { get; set; } = Path.GetTempPath();
 
     /// <summary>
     /// An optional hook to configure the co-hosted Orleans silo beyond the

@@ -153,7 +153,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
 
         var configurator = CreateConfigurator(
-            new LatticeCredential("alice"),
+            new LatticeCredential("alice-token", principalId: "alice"),
             LatticeApiMcpAccessSet.None,
             dataGroup);
 
@@ -333,8 +333,22 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         Assert.That(plan.Capabilities.Groups.All(g => g.Endpoint is null), Is.True);
     }
 
+    /// <summary>
+    /// Security regression: <c>lattice_capabilities</c> is the one <b>ungated</b>
+    /// advertisement, so whatever it reports is handed to every caller and lands
+    /// in the MCP client's transcript. The subject id used to fall back to
+    /// <c>credential.Token</c> when no principal id had been resolved - which is
+    /// the ordinary shape for a bearer credential whose bridge finds no
+    /// oid/sub/name claim - so the caller's live bearer secret was echoed back and
+    /// written into the server's logs alongside it.
+    /// <para>
+    /// The replacement must still identify: it is a stable one-way fingerprint, so
+    /// it correlates a caller across sessions without being usable to
+    /// authenticate.
+    /// </para>
+    /// </summary>
     [Test]
-    public async Task Subject_id_falls_back_to_the_token_when_no_principal_id()
+    public async Task Subject_id_never_carries_the_raw_token_when_no_principal_id()
     {
         var configurator = CreateConfigurator(
             new LatticeCredential("opaque-token"),
@@ -342,7 +356,49 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
 
-        Assert.That(plan.Capabilities.SubjectId, Is.EqualTo("opaque-token"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Capabilities.SubjectId, Is.Not.Null, "an authenticated caller still gets a subject id");
+            Assert.That(
+                plan.Capabilities.SubjectId,
+                Does.Not.Contain("opaque-token"),
+                "the bearer secret must never be echoed to the client");
+            Assert.That(
+                plan.Capabilities.SubjectId,
+                Does.StartWith("token:"),
+                "a fingerprinted subject is marked as such, so it is not mistaken for a principal id");
+        });
+    }
+
+    [Test]
+    public async Task Subject_id_fingerprint_is_stable_for_the_same_token()
+    {
+        // Stability is what makes the fingerprint a usable identifier: two
+        // sessions on one credential must correlate.
+        var first = await CreateConfigurator(new LatticeCredential("opaque-token"), LatticeApiMcpAccessSet.None)
+            .BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+        var same = await CreateConfigurator(new LatticeCredential("opaque-token"), LatticeApiMcpAccessSet.None)
+            .BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+        var other = await CreateConfigurator(new LatticeCredential("another-token"), LatticeApiMcpAccessSet.None)
+            .BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(same.Capabilities.SubjectId, Is.EqualTo(first.Capabilities.SubjectId));
+            Assert.That(other.Capabilities.SubjectId, Is.Not.EqualTo(first.Capabilities.SubjectId));
+        });
+    }
+
+    [Test]
+    public async Task Subject_id_prefers_the_principal_id_over_the_fingerprint()
+    {
+        var configurator = CreateConfigurator(
+            new LatticeCredential("opaque-token", principalId: "alice"),
+            LatticeApiMcpAccessSet.None);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        Assert.That(plan.Capabilities.SubjectId, Is.EqualTo("alice"));
     }
 
     [Test]

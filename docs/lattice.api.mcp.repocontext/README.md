@@ -20,6 +20,8 @@ Every record is stored as a CRDT value on a named Lattice tree, so concurrent up
 
 The module adds no authorization path of its own. The permission-aware discovery core advertises its tools only to a caller holding one of the data-plane operations that makes the built-in data group usable, and the fail-closed gate enforces the verdict at both advertisement and invocation. The mutating tools (`bootstrap`, `remember`, `update`, `forget`, and the claim trio `claim`, `renew_claim`, `release_claim`) are contributed only when the host opts writes in via `AddRepoContextTools(enableWrites: true)`; a reader-only caller never sees them. `repocontext_claim_status` is a read and is always contributed.
 
+The write opt-in is not on its own enough for the two **onboarding** tools. `repocontext_bootstrap` and `repocontext_add_repo` both take the working tree to walk from the wire, so they are contributed - and will run - only when a workspace root is configured, either by passing `workspaceRoot` or by registering an enforcing `RepoContextWorkspaceGuard` first. Without one the guard admits every absolute path on the host, which would let any caller holding a write grant have the server index a directory it never should have read and then hand the contents back through `repocontext_context` and `repocontext_search`. Everything else the write opt-in contributes keys on a repository id rather than a path and is unaffected.
+
 ## Quick Start
 
 Register the module as a companion to `AddLatticeMcp`:
@@ -30,7 +32,11 @@ using Microsoft.Extensions.DependencyInjection;
 
 var services = new ServiceCollection();
 services.AddLatticeMcp(o => o.RequireAuthorization = true);
-services.AddRepoContextTools(enableWrites: true);
+
+// The workspace root bounds every path a caller can ask the server to index.
+// Omit it and the onboarding tool is withheld; the capture, claim, and
+// retrieval tools still work.
+services.AddRepoContextTools(enableWrites: true, workspaceRoot: "/workspace");
 ```
 
 The host must also map the MCP endpoint (`app.MapLatticeMcp()`) and, for `repocontext_search` to run a semantic query, bind an `IEmbeddingProvider` (for example the Onyx provider from `Orleans.Lattice.Api.Mcp.RepoContext`'s embedding companion). Without one, search still answers by keyword.
