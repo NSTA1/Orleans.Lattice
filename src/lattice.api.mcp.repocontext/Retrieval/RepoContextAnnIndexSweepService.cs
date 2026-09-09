@@ -301,9 +301,16 @@ internal sealed class RepoContextAnnIndexSweepService(
     /// same shape as the fault-episode pacing above, so a condition that persists for
     /// hours does not write a line per sweep.
     /// </para>
+    /// <para>
+    /// Internal rather than private so a test can drive the episode across several
+    /// passes - announce, hold, clear, announce again - without waiting out
+    /// <see cref="MinimumSweepInterval"/> once per transition. The re-arm is the half
+    /// that only matters at the <i>second</i> incident, so leaving it to a timing
+    /// seam would leave it permanently unproven.
+    /// </para>
     /// </summary>
     /// <param name="observed">How many repository ids this sweep's listing yielded.</param>
-    private void AnnounceReadinessContradiction(int observed)
+    internal void AnnounceReadinessContradiction(int observed)
     {
         var phase = readiness.Phase;
         if (observed != 0 || phase != RepoContextRetrievalReadinessPhase.Serving)
