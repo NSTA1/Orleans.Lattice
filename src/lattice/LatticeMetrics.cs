@@ -718,6 +718,27 @@ public static class LatticeMetrics
         Meter.CreateHistogram<int>("orleans.lattice.leaf_access.model.leaves", unit: "{leaf}",
             description: "Leaves resident in a shard root's leaf-access histogram at persist time.");
 
+    /// <summary>
+    /// Counter of shard-root coalescing flush loops that suspended themselves after
+    /// hitting the consecutive-failure ceiling. Tagged by <see cref="TagKind"/> with
+    /// the loop that gave up (<c>dirty-leaves</c> or <c>leaf-access</c>).
+    /// <para>
+    /// Any non-zero value means a shard root is persistently unable to write its own
+    /// state - most commonly a stale ETag that no longer matches the stored row, which
+    /// no amount of retrying resolves. Before this counter existed the leaf-access loop
+    /// reported such a failure only at <c>Debug</c>, so a shard root could fail every
+    /// flush indefinitely with nothing visible above the storage provider.
+    /// </para>
+    /// <para>
+    /// Alert on any increase. Suspension bounds the wasted writes, it does not repair
+    /// the shard: the loop stays suspended until the activation is collected and a
+    /// later one re-reads its state.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardRootFlushRetriesSuspended =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.flush.retries_suspended", unit: "{suspension}",
+            description: "Shard-root coalescing flush loops suspended after repeated consecutive failures.");
+
     // --- Cache instruments (LeafCacheGrain) --------------------------------------
 
     /// <summary>

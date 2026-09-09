@@ -84,6 +84,19 @@ internal sealed partial class ShardRootGrain
     private IDisposable? _dirtyFlushTimer;
 
     /// <summary>
+    /// Consecutive failed dirty-mark flushes on this activation. Reset by any flush
+    /// that lands, so only an unbroken run of failures counts toward suspension.
+    /// </summary>
+    private int _dirtyFlushConsecutiveFailures;
+
+    /// <summary>
+    /// Latched once the dirty-mark flush loop has given up for this activation.
+    /// Checked by <see cref="EnsureDirtyFlushTimerArmed"/> because marking a leaf
+    /// dirty re-arms the timer, which would otherwise defeat the ceiling.
+    /// </summary>
+    private bool _dirtyFlushSuspended;
+
+    /// <summary>
     /// Records <paramref name="leafId"/> as dirty by max-merging a
     /// freshly-ticked HLC into <c>state</c>.State and arming the
     /// coalescing flush timer. Returns synchronously - the storage
@@ -142,6 +155,7 @@ internal sealed partial class ShardRootGrain
     private void EnsureDirtyFlushTimerArmed()
     {
         if (_dirtyFlushTimer is not null) return;
+        if (_dirtyFlushSuspended) return;
 
         var intervalMs = _cachedOptions?.DirtyLeafFlushIntervalMs
             ?? LatticeOptions.DefaultDirtyLeafFlushIntervalMs;
@@ -177,12 +191,29 @@ internal sealed partial class ShardRootGrain
         try
         {
             await FlushPendingDirtyMarksAsync();
+            _dirtyFlushConsecutiveFailures = 0;
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex,
-                "Coalesced dirty-leaf flush failed for shard {ShardKey}; will retry on next tick.",
-                context.GrainId.Key.ToString());
+            _dirtyFlushConsecutiveFailures++;
+            if (_dirtyFlushConsecutiveFailures < MaxConsecutiveFlushFailures)
+            {
+                logger.LogWarning(ex,
+                    "Coalesced dirty-leaf flush failed for shard {ShardKey} ({FailureCount} of {FailureCeiling} consecutive); will retry on next tick.",
+                    context.GrainId.Key.ToString(),
+                    _dirtyFlushConsecutiveFailures,
+                    MaxConsecutiveFlushFailures);
+                return;
+            }
+
+            // Give up for this activation rather than retrying a permanent fault
+            // forever (issue 2419). The marks stay in memory - the coordinator
+            // reads them from there - and the chain-walk fallback re-discovers
+            // them, so suspending costs a colder rediscovery, never correctness.
+            _dirtyFlushSuspended = true;
+            _dirtyFlushTimer?.Dispose();
+            _dirtyFlushTimer = null;
+            ReportFlushRetriesSuspended("dirty-leaves", ex);
         }
     }
 

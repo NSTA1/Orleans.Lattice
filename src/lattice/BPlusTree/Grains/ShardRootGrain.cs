@@ -124,6 +124,58 @@ internal sealed partial class ShardRootGrain(
     private ResolvedLatticeOptions? _cachedOptions;
 
     /// <summary>
+    /// Consecutive failures a coalescing flush loop tolerates before suspending
+    /// itself for the remainder of the activation.
+    /// <para>
+    /// Both flush loops re-arm on failure and would otherwise retry for the life of
+    /// the activation. That is correct for a transient fault and useless for a
+    /// permanent one: a shard root whose in-memory ETag no longer matches its stored
+    /// row fails identically on every tick, and no number of retries repairs it.
+    /// Issue 2419 measured that shape in production - thirteen shard roots retrying
+    /// on a 30 s cadence with a byte-identical ETag for over twenty-five minutes.
+    /// </para>
+    /// <para>
+    /// Five is deliberately generous relative to the cause it bounds. At the 30 s
+    /// leaf-access cadence it spends about two and a half minutes before giving up,
+    /// which rides out a storage blip comfortably, while at the 50 ms dirty-leaf
+    /// cadence it costs a quarter of a second. Suspension never discards pending
+    /// work: the in-memory state is retained, the deactivation flush still attempts
+    /// a final best-effort write, and both subsystems document their own recovery
+    /// (dirty marks are re-discovered by the chain-walk fallback, and the
+    /// leaf-access model rebuilds from live traffic).
+    /// </para>
+    /// <para>
+    /// Suspension bounds wasted writes and makes the condition visible. It is not a
+    /// repair: a grain timer does not extend an activation's lifetime
+    /// (<c>GrainTimerCreationOptions.KeepAlive</c> defaults to <see langword="false"/>),
+    /// so stopping the loop does not by itself hasten collection, and a shard root
+    /// held active by inbound traffic stays poisoned until it is collected and a
+    /// later activation re-reads its state.
+    /// </para>
+    /// </summary>
+    internal const int MaxConsecutiveFlushFailures = 5;
+
+    /// <summary>
+    /// Reports a coalescing flush loop suspending itself after
+    /// <see cref="MaxConsecutiveFlushFailures"/> consecutive failures. Emits the
+    /// operator-visible warning and the metric; the caller disposes its own timer
+    /// and latches its own suspension flag.
+    /// </summary>
+    /// <param name="kind">The loop that gave up, used as the metric's kind tag.</param>
+    /// <param name="ex">The failure observed on the final attempt.</param>
+    private void ReportFlushRetriesSuspended(string kind, Exception ex)
+    {
+        logger.LogWarning(ex,
+            "Shard {ShardKey} suspended its {FlushKind} flush loop after {FailureCount} consecutive failures; retries are stopped for this activation and pending state will not reach storage until it is re-read. A repeating version conflict here means this shard root's ETag no longer matches its stored row.",
+            context.GrainId.Key.ToString(), kind, MaxConsecutiveFlushFailures);
+
+        LatticeMetrics.ShardRootFlushRetriesSuspended.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, kind));
+    }
+
+    /// <summary>
     /// Returns the effective options for this tree. Cached for the grain's
     /// lifetime. Structural sizing is sourced from the tree registry pin;
     /// non-structural fields flow through from <see cref="LatticeOptions"/>.
