@@ -87,6 +87,13 @@ public class LatticeOptionsResolverPropagationGuardTests
             .Where(p => p.GetSetMethod(nonPublic: false) is not null)
             .ToList();
 
+        // Denominator guard. This gate's whole claim is "every configurable
+        // option round-trips; there is no bypass list" - and an empty property
+        // scan is the ultimate bypass list, because `failures` would stay empty
+        // and the guard would pass having proved nothing about any option.
+        Assert.That(latticeOptionProps, Is.Not.Empty,
+            "the LatticeOptions property scan found nothing to check, so the failure assertion below would pass vacuously");
+
         foreach (var prop in latticeOptionProps)
         {
             // ResolvedLatticeOptions inherits from LatticeOptions, so every

@@ -237,7 +237,15 @@ public sealed class TenantMetricDimensionHygieneTests
         var repoRoot = HygieneRepository.FindRepoRoot();
         var unwired = new List<string>();
 
-        foreach (var (file, tagExpression, _) in PreBuiltTagCollections.DistinctBy(static e => e.File))
+        var registered = PreBuiltTagCollections.DistinctBy(static e => e.File).ToList();
+
+        // Denominator guard, matching the one the sibling scans already carry on
+        // `Sites` and on the observable-instrument `registrars`. An empty
+        // registry leaves `unwired` empty and passes without opening a file.
+        Assert.That(registered, Is.Not.Empty,
+            "the pre-built tag collection registry is empty, so the unwired assertion below would pass vacuously");
+
+        foreach (var (file, tagExpression, _) in registered)
         {
             var text = File.ReadAllText(Path.Combine(repoRoot, file));
             if (!MetricEmissionScanner.TenantDimension.IsMatch(text))
@@ -377,6 +385,14 @@ public sealed class TenantMetricDimensionHygieneTests
         }
 
         mixed.Sort(StringComparer.Ordinal);
+
+        // Denominator guard. `Sites` is guarded by a sibling test, but the
+        // denominator here is what survives the two `continue` filters above,
+        // which is a narrower set that can collapse on its own (a filter that
+        // over-matches would empty `byInstrument` while the sibling stays
+        // green). Grouping is the work this test does, so assert it happened.
+        Assert.That(byInstrument, Is.Not.Empty,
+            "no instrument survived the emission-site filters, so the mixed-attribution assertion below would pass vacuously");
         Assert.That(mixed, Is.Empty,
             "An instrument that sometimes derives a tenant and sometimes reports the platform sentinel splits " +
             "its own series across two attribution rules, so an operator cannot tell an unattributable " +
