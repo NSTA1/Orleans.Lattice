@@ -110,6 +110,14 @@ internal sealed class TenantRateBudgetCoordinatorHostedService : IHostedService
     /// </summary>
     private const int MaxBackoffShift = 16;
 
+    /// <summary>
+    /// Longest period <see cref="PeriodicTimer"/> accepts. A configured lease
+    /// interval or backoff ceiling beyond this is clamped rather than allowed to
+    /// throw out of the loop, which under the host's default background-service
+    /// exception behaviour would take the silo down.
+    /// </summary>
+    private static readonly TimeSpan MaxTimerPeriod = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     private TimeSpan ResolveLeaseInterval()
     {
         var interval = _options.CurrentValue.LeaseInterval;
@@ -119,13 +127,15 @@ internal sealed class TenantRateBudgetCoordinatorHostedService : IHostedService
     /// <summary>
     /// The effective tick period: the configured interval, doubled once per
     /// consecutive failure and clamped to the configured backoff ceiling. A ceiling
-    /// below the interval simply disables backoff.
+    /// below the interval simply disables backoff. The result is finally clamped to
+    /// <see cref="MaxTimerPeriod"/> so an out-of-range interval or ceiling degrades
+    /// the cadence instead of throwing out of the loop.
     /// </summary>
     internal TimeSpan NextPeriod(TimeSpan interval, int consecutiveFailures)
     {
         if (consecutiveFailures <= 0)
         {
-            return interval;
+            return ClampPeriod(interval);
         }
 
         var ceiling = _options.CurrentValue.MaxLeaseBackoff;
@@ -136,7 +146,7 @@ internal sealed class TenantRateBudgetCoordinatorHostedService : IHostedService
 
         if (ceiling <= interval)
         {
-            return interval;
+            return ClampPeriod(interval);
         }
 
         var multiplier = 1L << Math.Min(consecutiveFailures, MaxBackoffShift);
@@ -150,8 +160,16 @@ internal sealed class TenantRateBudgetCoordinatorHostedService : IHostedService
             ? ceiling
             : TimeSpan.FromTicks(interval.Ticks * multiplier);
 
-        return backedOff > ceiling ? ceiling : backedOff;
+        return ClampPeriod(backedOff > ceiling ? ceiling : backedOff);
     }
+
+    /// <summary>
+    /// Clamps a computed tick period into the range <see cref="PeriodicTimer"/>
+    /// accepts, so neither the ctor nor the <see cref="PeriodicTimer.Period"/>
+    /// setter can throw out of the loop for an out-of-range configured value.
+    /// </summary>
+    private static TimeSpan ClampPeriod(TimeSpan period)
+        => period > MaxTimerPeriod ? MaxTimerPeriod : period;
 
     /// <summary>
     /// The bound on one cycle: the configured timeout, falling back to the default

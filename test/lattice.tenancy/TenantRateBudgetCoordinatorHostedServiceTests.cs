@@ -169,6 +169,40 @@ public sealed class TenantRateBudgetCoordinatorHostedServiceTests
             Is.EqualTo(LatticeTenantRateLimiterOptions.DefaultMaxLeaseBackoff));
     }
 
+    /// <summary>
+    /// The longest period <see cref="PeriodicTimer"/> accepts. A period beyond this
+    /// throws out of both the ctor and the <see cref="PeriodicTimer.Period"/> setter.
+    /// </summary>
+    private static readonly TimeSpan TimerCeiling = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    [Test]
+    public void NextPeriod_clamps_a_configured_interval_beyond_the_timer_ceiling()
+    {
+        // Regression: the loop fed NextPeriod's result straight into
+        // new PeriodicTimer(...) and timer.Period, both of which throw
+        // ArgumentOutOfRangeException for a finite period above ~49.71 days. An
+        // out-of-range lease interval must clamp to the ceiling, not fault the loop
+        // and (under the host default) take the silo down.
+        var (service, _, _) = Build(Options(new LatticeTenantRateLimiterOptions()));
+
+        Assert.That(service.NextPeriod(TimeSpan.FromDays(60), 0), Is.EqualTo(TimerCeiling));
+    }
+
+    [Test]
+    public void NextPeriod_clamps_a_backoff_ceiling_beyond_the_timer_ceiling()
+    {
+        // The backed-off period can exceed the timer ceiling even from an in-range
+        // interval when MaxLeaseBackoff is set out of range, so the clamp must apply
+        // to the backoff result too. A one-day base interval is large enough that the
+        // 60-day ceiling is selected as the backed-off value (the doubling shift is
+        // capped, so a small base could not reach it), which then clamps to the
+        // timer ceiling.
+        var options = new LatticeTenantRateLimiterOptions { MaxLeaseBackoff = TimeSpan.FromDays(60) };
+        var (service, _, _) = Build(Options(options));
+
+        Assert.That(service.NextPeriod(TimeSpan.FromDays(1), int.MaxValue), Is.EqualTo(TimerCeiling));
+    }
+
     [Test]
     public void ResolveCycleTimeout_never_exceeds_one_lease_interval()
     {
