@@ -13,6 +13,11 @@ using System.Runtime.InteropServices;
 /// pointwise-max per replica, making the CRDT commutative, associative, and
 /// idempotent under arbitrary delivery order.
 /// </summary>
+// CI PROBE (ci/matrix-test-fanout-prototype): this comment exists only to seed
+// the ProjectReference closure from src/lattice so the pull request fans out to
+// all 45 dependent packages, which is what makes the serial `build-and-test`
+// job and the parallel matrix prototype comparable on the same run. Revert this
+// hunk before the branch goes anywhere near main.
 [GenerateSerializer]
 [Alias(TypeAliases.GCounter)]
 public sealed class GCounter : ICrdt<GCounter>
