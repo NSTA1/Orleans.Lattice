@@ -15,9 +15,6 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Version>9.4.0</Version>
     <Description>The Orleans.Lattice Explorer plugin contract: the plugin descriptor and surface discriminator, the four-state access model with its keyed, fault-isolated access store, the ambient host context a plugin may read, and the controlled domain-model seam through which a plugin declares the domain contract it operates against. Contains no UI and no cluster access; plugin packages implement these contracts and register through AddExplorerPlugin.</Description>
-    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 
