@@ -67,35 +67,38 @@ jobs:
   plan:
     name: Plan
     runs-on: ubuntu-latest
-    # Entry gate. Without one, this workflow would fan out on every pull
-    # request in the repository and compete with `build-and-test` for runners.
-    # There are three ways in:
+    # The plan job itself is cheap (about 0.2 min: a checkout, a diff, and the
+    # selector) and runs for every pull request, because the decision about
+    # whether to fan out depends on WHICH files changed, and a job-level `if:`
+    # cannot see the diff. The decision is therefore made inside, in the
+    # "Decide whether to run" step, which sets `skip` and short-circuits every
+    # expensive step after it. The three ways in are:
     #
     #  1. `workflow_dispatch`, for measuring a simulated change set by hand.
     #  2. The `ci-matrix-prototype` label, for opting a single pull request in.
     #  3. Any pull request whose BASE is an epic or bucket integration branch.
+    #  4. Any pull request that touches `.github/workflows/**`.
     #
-    # The third is deliberate, and it is the safest place in the repository to
-    # adopt this. Repository policy forbids branch protection on an epic branch
-    # (that is the whole reason the branch exists - `strict` protection on main
-    # is what serialises pull requests and costs O(N^2) CI cycles). With no
-    # protection there is no REQUIRED status check, so `build-and-test` on a
-    # member pull request is already advisory. Adding a second, faster advisory
-    # signal therefore cannot block a merge, cannot break a required-check
-    # contract, and needs no branch-protection change to try or to revert.
+    # The third is the safest place in the repository to adopt this. Repository
+    # policy forbids branch protection on an epic branch (that is the whole
+    # reason the branch exists - `strict` protection on main is what serialises
+    # pull requests and costs O(N^2) CI cycles). With no protection there is no
+    # REQUIRED status check, so `build-and-test` on a member pull request is
+    # already advisory. A second, faster advisory signal therefore cannot block
+    # a merge, cannot break a required-check contract, and needs no
+    # branch-protection change to try or to revert. It is also where the serial
+    # cost hurts most, since an epic fans out by construction.
     #
-    # It is also where the serial cost hurts most: an epic fans out by
-    # construction, and the epic's own pull request into main is large by
-    # design, so it is the worst case for a single-runner serial suite.
+    # The fourth exists to close #2351: a workflow-only pull request is the one
+    # shape that ci.yml refuses to test, and it is the shape most able to break
+    # the test infrastructure for every subsequent pull request. See the
+    # "Decide whether to run" step for the argument and the measurement.
     #
     # `contains` rather than a glob because GitHub expressions have no pattern
     # matching. `/epic/` is a reserved segment in the branch convention
     # (`<type>/epic/<slug>`), and buckets reuse that same segment by policy, so
     # a substring test on it catches both and nothing else.
-    if: >-
-      github.event_name == 'workflow_dispatch'
-      || contains(github.event.pull_request.labels.*.name, 'ci-matrix-prototype')
-      || contains(github.base_ref, '/epic/')
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     outputs:
       # Defaulted so that a skipped plan yields a well-formed empty matrix
       # rather than an empty string, which `fromJson` would reject and turn a
@@ -152,17 +155,27 @@ jobs:
           echo "Changed files considered:"
           cat /tmp/changed-files.txt
 
-          # Mirror the `code` paths-filter that gates the discover step in
-          # ci.yml. This is load-bearing rather than an optimisation: the
+      - name: Decide whether to run
+        id: gate
+        env:
+          # True when this run was opted in explicitly: dispatched by hand,
+          # labelled, or targeting an epic/bucket integration branch.
+          OPTED_IN: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci-matrix-prototype') || contains(github.base_ref, '/epic/') }}
+        run: |
+          set -euo pipefail
+
+          # Which changed paths can possibly affect a test outcome. This
+          # mirrors the `code` paths-filter that gates the discover step in
+          # ci.yml, with ONE deliberate difference, called out below.
+          #
+          # The gate is load-bearing rather than an optimisation. The package
           # selector's documented behaviour when NO package matches the changed
-          # paths is to fall back to selecting ALL of them, on the reasoning
-          # that a shared or root change could affect anything. That fallback
-          # is correct for a root change like Directory.Build.props, but a
-          # markdown-only or workflow-only diff also matches no package, so
-          # without this gate a docs typo would fan out to all 46 packages.
-          # ci.yml never hits that because paths-filter stops it earlier; this
-          # workflow calls the selector directly, so it has to gate it here.
-          # Keep this list in step with the `code` filter in ci.yml.
+          # paths is to select ALL of them, on the reasoning that a shared or
+          # root change could affect anything. That is right for a root change
+          # like Directory.Build.props, but a markdown-only diff also matches
+          # no package, so without this gate a docs typo fans out to all 46.
+          # ci.yml never reaches that fallback because paths-filter stops it
+          # first; this workflow calls the selector directly, so it gates here.
           grep -E -v \
             -e '\.md$' \
             -e '\.txt$' \
@@ -173,33 +186,82 @@ jobs:
             -e '^test/lattice\.explorer\.uitests/' \
             -e '^apps/' \
             -e '^reference-architecture/' \
-            -e '^\.github/workflows/' \
             -e '^\.gitignore$' \
             /tmp/changed-files.txt > /tmp/code-files.txt || true
 
-          if [ ! -s /tmp/code-files.txt ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "No test-relevant changes; the matrix will be empty."
+          # THE DELIBERATE DIFFERENCE, and the fix for #2351.
+          #
+          # ci.yml's `code` and `nonSample` filters both carry
+          # '!.github/workflows/**', so a diff confined to workflow files is
+          # skipped outright and `build-and-test` reports a green that is
+          # indistinguishable from a run over all 46 packages. That is the
+          # unsafe direction: a workflow-only change is the shape most able to
+          # break the test infrastructure for every SUBSEQUENT pull request,
+          # and it is the one shape guaranteed not to be tested before it
+          # merges.
+          #
+          # #2351 declined to prescribe a fix because the obvious one - let the
+          # selector's fallback run - "would put a 46-package run on every
+          # workflow edit", and it required the cost to be measured rather than
+          # asserted before choosing. That measurement is what this workflow
+          # provides, and it changes the answer: a 45-package fan-out costs
+          # 8.9 min end-to-end here against 43.9 min serial on the identical
+          # commit. A full run on every workflow edit is affordable now that it
+          # is not serialised onto one runner.
+          #
+          # So `.github/workflows/**` is absent from the exclusion list above:
+          # it counts as a code change, matches no package, and falls through
+          # to the selector's select-all fallback exactly as #2351 describes.
+          #
+          # The predicate is "touches workflows AT ALL", not "touches only
+          # workflows". The hazard #2351 describes is a workflow change
+          # reaching main untested, and that hazard is present whether or not
+          # the same pull request happens to also edit a README.
+          if grep -q -E '^\.github/workflows/' /tmp/changed-files.txt; then
+            touches_workflows=true
           else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Test-relevant changed files:"
-            cat /tmp/code-files.txt
+            touches_workflows=false
+          fi
+          echo "touches_workflows=$touches_workflows"
+          echo "opted_in=$OPTED_IN"
+
+          if [ ! -s /tmp/code-files.txt ]; then
+            # Nothing that can change a test outcome. An empty matrix is the
+            # correct plan, and the `report` job is skipped rather than green,
+            # so the run is not mistakable for one that executed tests.
+            reason="no test-relevant files changed"
+            skip=true
+          elif [ "$OPTED_IN" = "true" ] || [ "$touches_workflows" = "true" ]; then
+            reason="opted in (label, epic base, dispatch) or touches workflows"
+            skip=false
+          else
+            # An ordinary pull request into main that did not opt in. While
+            # this is a prototype it must not compete with `build-and-test`
+            # for runners on unrelated work.
+            reason="ordinary pull request, not opted in to the prototype"
+            skip=true
           fi
 
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "Decision: skip=$skip ($reason)"
+
       - name: Report a skipped run
-        if: steps.changes.outputs.skip == 'true'
+        if: steps.gate.outputs.skip == 'true'
         run: |
           set -euo pipefail
           {
             echo "### Test selection: skipped"
             echo ""
-            echo "No test-relevant files changed, so no packages were selected"
-            echo "and no test legs ran. Documentation, workflow, and other"
-            echo "excluded paths do not gate on the test suite."
+            echo "No test legs ran: ${{ steps.gate.outputs.reason }}."
+            echo ""
+            echo "The \`Matrix result\` check is reported as **skipped** rather"
+            echo "than green, so this run cannot be mistaken for one that"
+            echo "executed tests."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Select packages
-        if: steps.changes.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           .github/workflows/select-test-packages.sh \
@@ -221,7 +283,7 @@ jobs:
 
       - name: Plan the matrix
         id: plan
-        if: steps.changes.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true'
         env:
           MAX_LEGS: ${{ github.event.inputs.max_legs || '10' }}
         run: |
