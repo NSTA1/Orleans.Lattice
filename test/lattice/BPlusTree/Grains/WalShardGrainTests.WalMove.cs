@@ -89,4 +89,32 @@ public partial class WalShardGrainTests
             async () => await grain.AppendAsync(MakeEntry("b"), CancellationToken.None),
             Throws.TypeOf<LatticeWalQuiescingException>());
     }
+
+    /// <summary>
+    /// An extreme but validated quiesce lease - the coordinator-supplied lease
+    /// carries no upper bound - once overflowed the Stopwatch-tick fence deadline
+    /// cast to a negative, past instant, so <c>ThrowIfMoveFenced</c> read the fence
+    /// as already expired on the first append: it self-deactivated and re-resolved
+    /// placement instead of holding the shard still for the coordinator, defeating
+    /// the quiesce entirely. The deadline now saturates, so an extreme lease holds
+    /// the fence as an active move (asserted through the active-fence message,
+    /// since the lapsed path throws the same exception type) rather than a lapsed
+    /// one (siblings of issues 2221 and 2342).
+    /// </summary>
+    [Test]
+    public async Task AppendAsync_reports_an_active_fence_under_an_extreme_quiesce_lease()
+    {
+        var grain = await CreateGrainAsync();
+        await grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
+
+        await grain.QuiesceForMoveAsync(0, TimeSpan.MaxValue, CancellationToken.None);
+
+        var thrown = Assert.ThrowsAsync<LatticeWalQuiescingException>(
+            async () => await grain.AppendAsync(MakeEntry("b"), CancellationToken.None));
+        Assert.That(
+            thrown!.Message,
+            Does.Contain("is quiesced for a placement move"),
+            "an extreme lease must hold the fence as an active move, not read as a lapsed one " +
+            "that re-resolves placement");
+    }
 }
