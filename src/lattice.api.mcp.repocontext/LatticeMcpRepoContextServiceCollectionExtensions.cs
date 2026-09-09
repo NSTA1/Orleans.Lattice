@@ -170,7 +170,14 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // response says which guarantee it carries through its retrieval path.
         services.TryAddSingleton<ExactKnnSemanticIndex>();
         services.TryAddSingleton<RepoContextExactScanBudget>();
-        services.TryAddSingleton<RepoContextExactScanBreaker>();
+
+        // Constructed rather than resolved by convention because the breaker's
+        // half-open probe is timed, and the container's constructor selection does
+        // not fill optional parameters - a plain type registration would leave the
+        // breaker on the system clock, which is precisely the dependency that made
+        // the recovery path untestable before issue #2362.
+        services.TryAddSingleton(
+            sp => new RepoContextExactScanBreaker(sp.GetRequiredService<TimeProvider>()));
 
         // Both guards above suppress work, and neither could be verified from a
         // deployed container before this: the budget logged only when it skipped,
