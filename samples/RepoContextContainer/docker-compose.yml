@@ -74,7 +74,8 @@ services:
         max-file: "5"
 
   # The RepoContext MCP host: its ONLY application listener is the MCP endpoint on
-  # 8080 (plus the HTTP health probes). No gRPC facade, no Explorer UI.
+  # 8080 (plus the HTTP health probes and the /metrics scrape endpoint). No gRPC
+  # facade, no Explorer UI.
   repocontext:
     build:
       context: ../..

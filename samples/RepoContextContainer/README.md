@@ -15,7 +15,8 @@ Two containers, one private network:
 
 - **`repocontext`** - the MCP host image (`apps/repocontext/Dockerfile`). Its
   ONLY application listener is the MCP endpoint on port 8080 (plus the HTTP health
-  probes). No gRPC facade and no Explorer UI are exposed. It runs the default
+  probes and the Prometheus `/metrics` scrape endpoint). No gRPC facade and no
+  Explorer UI are exposed. It runs the default
   `local` durability profile: Orleans ADO.NET grain storage and reminders over a
   single SQLite file, plus the file-backed Lattice WAL - all under `/data`, which
   is a named volume, so state survives `docker compose restart`, `docker compose
@@ -290,6 +291,15 @@ registration, keyword search, `repocontext_context`, and durability across a res
 all work, and steps 3 to 6 demonstrate exactly that. What is degraded is semantic
 ranking, not the service. Treat it as a capability to restore, not as a deployment
 to roll back.
+
+The same listener also serves `GET /metrics`, a Prometheus text exposition of every
+instrument on a meter whose name starts with `orleans.lattice` - the core meter and
+every per-package meter, `Orleans.Lattice.Api.Mcp.RepoContext` included. It needs no
+second port and no sidecar:
+
+```bash
+curl -fsS http://localhost:8080/metrics | head -n 20
+```
 
 ## Notes on durability and shutdown
 
