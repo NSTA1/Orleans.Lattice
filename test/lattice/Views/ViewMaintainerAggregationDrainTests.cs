@@ -184,6 +184,12 @@ public class ViewMaintainerAggregationDrainTests
         // auto-returns an EMPTY ARRAY for a byte[]-returning member, which the
         // aggregation row codec then tries to decode and throws on. Null is what a
         // genuinely absent accumulator row looks like.
+        //
+        // GetManyAsync must be stubbed for the same reason in reverse: NSubstitute
+        // auto-returns a completed task whose RESULT IS NULL for a
+        // Dictionary-returning member, which the batched shard reads then
+        // dereference. An empty dictionary is what a real tree returns when none
+        // of the requested keys are present.
         var trees = new Dictionary<string, ILattice>(StringComparer.Ordinal);
         factory.GetGrain<ILattice>(Arg.Any<string>()).Returns(call =>
         {
@@ -193,6 +199,8 @@ public class ViewMaintainerAggregationDrainTests
                 tree = Substitute.For<ILattice>();
                 tree.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                     .Returns(Task.FromResult<byte[]?>(null));
+                tree.GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+                    .Returns(_ => Task.FromResult(new Dictionary<string, byte[]>(StringComparer.Ordinal)));
                 trees[treeId] = tree;
             }
             return tree;
