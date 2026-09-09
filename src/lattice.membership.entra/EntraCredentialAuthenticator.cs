@@ -31,6 +31,15 @@ public class EntraCredentialAuthenticator : JwtCredentialAuthenticator
     /// validator's "empty means accept anything" behaviour (CWE-347). Mirrors the
     /// <c>OidcCredentialAuthenticator</c> sibling. Cached in a static field so
     /// installing it costs no allocation per authentication.
+    /// <para>
+    /// This is the second of two layers and is deliberately not the primary one.
+    /// <c>LatticeEntraAuthenticatorOptionsValidator</c> refuses an empty
+    /// <see cref="LatticeEntraAuthenticatorOptions.Algorithms"/> at startup, naming
+    /// the option, because denying here instead would present a configuration error
+    /// as a total authentication outage with nothing pointing at its cause. This
+    /// branch remains for the direct-construction path that bypasses options
+    /// validation, so the fail-closed default holds on every branch.
+    /// </para>
     /// </summary>
     private static readonly AlgorithmValidator DenyAllAlgorithms =
         static (algorithm, key, token, parameters) => false;

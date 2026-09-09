@@ -73,8 +73,19 @@ public sealed class LatticeEntraAuthenticatorOptions
     /// Defaults to <c>RS256</c>, the asymmetric algorithm Entra issues v2.0 tokens
     /// with, so the validator refuses a token advertising any other algorithm -
     /// a defense-in-depth measure against algorithm-confusion attacks (CWE-347).
-    /// Clear and repopulate to accept a different set; leaving it empty disables
-    /// algorithm pinning (not recommended). Populate the collection in place.
+    /// Clear and repopulate to accept a different set. Populate the collection in
+    /// place.
+    /// <para>
+    /// <b>An empty collection is refused, not treated as "accept any algorithm".</b>
+    /// <c>LatticeEntraAuthenticatorOptionsValidator</c> fails startup when this is
+    /// empty, and <c>EntraCredentialAuthenticator</c> independently installs a
+    /// deny-all algorithm validator for the direct-construction path the validator
+    /// does not sit on. Earlier versions documented an empty collection as
+    /// disabling algorithm pinning and silently accepted any algorithm the
+    /// resolved key supported; that behaviour is gone. A host that cleared this
+    /// collection without repopulating it now fails at startup with the option
+    /// named, rather than authenticating with no pin.
+    /// </para>
     /// </summary>
     public IList<string> Algorithms { get; } = new List<string> { DefaultAlgorithm };
 
