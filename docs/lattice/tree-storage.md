@@ -12,7 +12,7 @@ There are therefore three distinct storage surfaces with three distinct sizing m
 
 | Surface | Stored where | Grows with | Sized against |
 |---|---|---|---|
-| **Leaf grain state row** (`LeafNodeState`) | Lattice storage provider (`LatticeOptions.StorageProviderName`) | Topology and per-replica history only (sibling pointers, key range, split lifecycle, version vector, projection digest, checkpoint offset). **Does not grow with `MaxLeafKeys`.** | Storage provider per-row limit |
+| **Leaf grain state row** (`LeafNodeState`) | Lattice storage provider (`LatticeOptions.StorageProviderName`) | Topology and per-replica history (sibling pointers, key range, split lifecycle, version vector, projection digest, checkpoint offset), plus a ledger of unresolved replay work that is empty in the steady state. **Does not grow with `MaxLeafKeys`.** | Storage provider per-row limit |
 | **WAL row** (one `LatticeMutation` per commit) | WAL provider (`LatticeOptions.WalStorageProvider`) | The single largest mutation: key bytes + value bytes + optional vector clock + optional dependency summary + framing | WAL provider per-row limit, capped by `LatticeOptions.WalMaxBatchBytes` (default 4 MiB) |
 | **Leaf snapshot blob** (`LeafSnapshotBlob`) | Lattice storage provider (separate `leaf-snapshot` storage name) | One `LeafSnapshotRow` per live key in the source leaf, captured when a checkpoint is about to fall off WAL retention | Storage provider per-row limit |
 
@@ -39,11 +39,16 @@ The first two are the common case (every leaf has one state row; every mutation 
 | `LowKeyInclusive` / `HighKeyExclusive` | `string?` | 4 bytes + UTF-8 bytes each when present |
 | `MovedAwaySlots` | `int[]?` | 0 bytes on a non-resharded leaf; 4 bytes per moved slot otherwise |
 | `MovedAwayVirtualShardCount` | `int?` | ~5 bytes when set |
+| `ProjectionCheckpointOffsetsByPartition` | `long[]?` | 0 bytes on a single-partition tree (`null`); 8 bytes per WAL partition otherwise |
+| `DigestPublishSequence` | `long` | 8 bytes |
+| `UnresolvedReplayWork` | `List<UnresolvedReplayWorkEntry>?` | 0 bytes in the steady state (`null` or empty); ~20 bytes plus the recorded mutation's own key and value bytes per outstanding entry - see the caveat below |
 | Orleans state envelope | - | ~100-200 bytes |
 
 **Steady-state leaf state row size: roughly 0.6 to 1.2 KB**, dominated by the two version vectors when the tree has been written to by many clusters. The row does **not** scale with `MaxLeafKeys`, `MaxInternalChildren`, or live-entry count, so the leaf state row is comfortably within every supported storage provider's per-row limit (including DynamoDB at 400 KB) regardless of structural sizing.
 
-The only way to grow this row past a provider limit is to write the same leaf from many thousands of distinct origin clusters (each one mints a fresh `VersionVector` entry that is retained indefinitely unless `LatticeOptions.VersionVectorRetention` is set to a finite value). In a typical single-cluster or small-replicated deployment this is not a concern.
+There are two ways to grow this row past a provider limit, and neither is structural. The first is to write the same leaf from many thousands of distinct origin clusters (each one mints a fresh `VersionVector` entry that is retained indefinitely unless `LatticeOptions.VersionVectorRetention` is set to a finite value). In a typical single-cluster or small-replicated deployment this is not a concern.
+
+The second is a backlog of unresolved saga work in `UnresolvedReplayWork`. Entries are struck off as each saga resolves, so the list is empty in the steady state, and `LatticeOptions.MaxDurableUnresolvedReplayWork` (default 1 024) bounds the deferred terminals it holds. It does **not** bound resident unresolved prepares: dropping one would pin the leaf's flush ceiling permanently, so past the bound a prepare is still recorded and the row is allowed to grow, with the crossing reported through the `orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap` counter instead. A leak of saga terminals can therefore grow this row without limit. That is a write-amplification cost on a SQLite-backed `local` deployment, and a genuine persist hazard on `Orleans.Lattice.Storage.AzureTable`, whose 1 MB entity ceiling this row would eventually breach - alert on that counter there. See [`MaxDurableUnresolvedReplayWork`](configuration.md#maxdurableunresolvedreplaywork).
 
 ## Sizing surface 2 - WAL row
 

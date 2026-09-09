@@ -173,6 +173,24 @@ tag, so a host already scraping OpenTelemetry sees them flow through the existin
 The tool carries no body, query, path, or repository identity - aggregate figures
 only.
 
+### Emitted instruments
+
+Every instrument below is published on the `Orleans.Lattice.Api.Mcp.RepoContext`
+meter, so one scraper subscription covers the whole surface. Each carries only a
+low-cardinality tag - never a repository id, path, query, or any body text.
+
+| Instrument | Kind | Unit | Tag | What it records |
+|---|---|---|---|---|
+| `repocontext.calls` | `Counter<long>` | `{call}` | `command` | Answered repocontext calls, by tool. |
+| `repocontext.response_tokens` | `Counter<long>` | `{token}` | `command` | The exact response tokens those calls spent. |
+| `repocontext.reads_replaced_tokens` | `Counter<long>` | `{token}` | `command` | The whole-file read tokens they conservatively replaced. Credited only for delivered whole-file-equivalent content, so it is a floor rather than an estimate. |
+| `repocontext.retrieval.ready_seconds` | `Histogram<double>` | `s` | `phase` | Seconds from host start to the retrieval plane first reporting ready, tagged by the phase it reached. Recorded once per process, so it is the cold-start time-to-retrieval-ready figure. |
+| `repocontext.retrieval.unavailable` | `Counter<long>` | `{event}` | `cause` | Observed vector-plane fault episodes that made semantic retrieval unavailable, tagged by cause. A non-zero rate is what distinguishes a keyword answer caused by a real capability loss from an intended keyword-only deployment. |
+
+Subtracting `repocontext.response_tokens` from `repocontext.reads_replaced_tokens`
+gives the same signed net saving `repocontext_stats` reports, so the dashboard and
+the tool cannot disagree.
+
 ## Enabling the surface
 
 All of these tools are read-only and are contributed to any caller whose data read-or-write permission unlocks the repository-context group; none requires `enableWrites`. Register the module as

@@ -156,6 +156,7 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// from its siblings without also removing its separator here would leave
     /// a leaf that routing still reaches but no scan can walk to, so a write
     /// to the reclaimed range would land where no reader looks.
+    /// </para>
     /// <para>
     /// This runs BEFORE the left neighbour's bound is widened onto the
     /// departing range, not after. Widening first would have two leaves

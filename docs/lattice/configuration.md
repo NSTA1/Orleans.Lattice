@@ -146,6 +146,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`MaxConcurrentStorageUsageSurfaces`](#maxconcurrentstorageusagesurfaces) | `int` | 16 | Yes |
 | [`MaxConcurrentStorageUsageTrees`](#maxconcurrentstorageusagetrees) | `int` | 8 | No (cluster-wide) |
 | [`MaxCursorSnapshotPinTtl`](#maxcursorsnapshotpinttl) | `TimeSpan` | 7 days | Yes |
+| [`MaxDurableUnresolvedReplayWork`](#maxdurableunresolvedreplaywork) | `int` | 1 024 | Yes |
 | [`MaxEstimatedBytes`](#maxestimatedbytes) | `long?` | `null` (unbounded) | Yes |
 | [`MaxKeyLength`](#maxkeylength) | `int?` | `null` (unbounded) | Yes |
 | [`MaxLeafEntriesBeforeForcedCompaction`](#maxleafentriesbeforeforcedcompaction) | `int` | 0 (disabled) | Yes |
@@ -810,6 +811,16 @@ This option can be changed freely at any time; a new value applies to the next s
 Hard upper bound on how long the per-tree `ITxRegistryGrain` will retain the saga-decision snapshot captured by a point-in-time durable cursor (default: 7 days). A live point-in-time cursor slides this TTL on every `Next*Async`; a stalled cursor that misses the slide will eventually have its pin reaped by the registry, after which the next call surfaces `LatticeCursorSnapshotExpiredException` and the cursor must be reopened.
 
 The cap exists so a forgotten point-in-time cursor cannot stall registry-tombstone pruning forever. Set `Timeout.InfiniteTimeSpan` to disable the registry-side cap entirely - cursor lifetime then depends solely on `CursorIdleTtl` and on `MaxPinnedSagaDecisions`. See [Durable Cursors - Point-in-time cursors](durable-cursors.md#point-in-time-cursors).
+
+This option can be changed freely at any time.
+
+### `MaxDurableUnresolvedReplayWork`
+
+Maximum number of unresolved replay-work records a leaf carries in its durable state so that its incremental flush ceiling may advance past them (default: 1 024). A leaf's flush ceiling is clamped below every unresolved saga prepare and every undrained deferred terminal, because neither survives an activation teardown in memory. Recording that work durably removes the need to re-read it, which is what lets a WAL partition that never wins the single first-pass drain slot bank forward progress instead of replaying the identical range on every activation. Records are struck off as the work resolves, so in the steady state the list is empty and this bound is never approached.
+
+The bound applies to **deferred terminals only**. Dropping a deferred terminal at the bound is safe because the second replay pass re-reads and drains it, so the fall-back to the older clamping behaviour is transient. A resident unresolved **prepare** is recorded unconditionally and is never dropped at the bound: nothing drains a prepare whose saga never terminates, so dropping one would pin the flush ceiling one below the prepare offset permanently and the leaf would bank no durable forward progress at all. Past the bound the persisted row is therefore allowed to grow and the crossing is reported through the `orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap` counter and a once-per-activation warning, rather than by capping. That growth is benign on the SQLite-backed `local` durability profile and is a persist hazard on an Azure Table deployment, whose 1 MB entity cap makes an unbounded row a genuine write failure - alert on that counter there. See [Metrics](metrics.md).
+
+Setting this to `0` disables the mechanism entirely, restoring the behaviour in which the in-memory clamp is the only thing keeping unresolved work alive across a teardown.
 
 This option can be changed freely at any time.
 
