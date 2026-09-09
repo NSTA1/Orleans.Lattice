@@ -148,14 +148,31 @@ internal static class RepoContextClaimFence
     /// record's high-water mark is always refused, even when the claim has since
     /// been released, because a superseded holder must never be able to write.
     /// </para>
+    /// <para>
+    /// A token <b>ahead</b> of the high-water mark is the one case this function
+    /// cannot settle on its own. It is legitimate in the window where a holder has
+    /// been granted a token but its <c>StampClaim</c> has not yet landed, so
+    /// refusing it outright would lock a holder out of its own record; but
+    /// admitting it on the caller's assertion alone makes the fence decorative,
+    /// since any caller can name a larger integer. The caller therefore supplies
+    /// <paramref name="lockCurrentToken"/>, re-resolved from the lock that would
+    /// have issued it, and an ahead-of-stamp token is admitted only when the lock
+    /// confirms it. The parameter stays optional and defaults to
+    /// <see langword="null"/>, which refuses every ahead-of-stamp token - the
+    /// fail-closed reading, so a caller that cannot consult the lock cannot
+    /// accidentally reopen the hole by omitting it.
+    /// </para>
     /// </summary>
     /// <param name="record">The record being written. Must not be <see langword="null"/>.</param>
     /// <param name="presentedToken">The fencing token the caller presented, or <see langword="null"/> for an unfenced write.</param>
     /// <param name="region">The region identity serving this write. Must not be <see langword="null"/>.</param>
+    /// <param name="lockCurrentToken">The token the lock currently holds, re-resolved
+    /// from the lock grain, or <see langword="null"/> when it holds none or was not
+    /// consulted. Only ever consulted for a token ahead of the record's stamp.</param>
     /// <returns>The admission decision.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="record"/> or <paramref name="region"/> is null.</exception>
     internal static RepoContextFenceVerdict Evaluate(
-        MemoryRecord record, long? presentedToken, string region)
+        MemoryRecord record, long? presentedToken, string region, long? lockCurrentToken = null)
     {
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(region);
@@ -180,6 +197,13 @@ internal static class RepoContextClaimFence
         if (presented < highWaterMark)
         {
             return RepoContextFenceVerdict.StaleToken;
+        }
+
+        // Ahead of the stamp: admissible only if the lock actually issued it and is
+        // still holding it. Anything else is a caller-chosen integer.
+        if (presented > highWaterMark && lockCurrentToken != presented)
+        {
+            return RepoContextFenceVerdict.UnissuedToken;
         }
 
         if (!live)
@@ -263,6 +287,11 @@ internal static class RepoContextClaimFence
                 $"The record '{key}' is claimed in region '{state.Region}' but this write is served from "
                 + $"region '{region}'. Claims are cluster-scoped, so the write fails closed; claim it in "
                 + "its home region instead.",
+            RepoContextFenceVerdict.UnissuedToken =>
+                $"The write to '{key}' presented fencing token {presentedToken}, which is ahead of the "
+                + $"record's fence ({state.FencingToken}) but is not held on the lock that grants it. A "
+                + "token is only honoured when the lock confirms it was issued; call the claim tool to "
+                + "obtain one instead of presenting a token of your own choosing.",
             _ => $"The write to '{key}' was admitted.",
         };
 }

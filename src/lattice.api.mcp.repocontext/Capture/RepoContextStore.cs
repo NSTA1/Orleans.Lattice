@@ -539,7 +539,7 @@ internal sealed partial class RepoContextStore
 
         var existing = RepoContextMemoryCodec.Fold(
             await tree.GetAsync(key, cancellationToken).ConfigureAwait(false), _serializer);
-        EnforceFence(key, existing, fencingToken);
+        await EnforceFenceAsync(key, existing, fencingToken, cancellationToken).ConfigureAwait(false);
         var created = existing is null;
 
         var delta = new MemoryRecord
@@ -713,7 +713,7 @@ internal sealed partial class RepoContextStore
         if (parsed.Kind == RepoContextRecordKind.Memory)
         {
             var folded = RepoContextMemoryCodec.Fold(existing, _serializer)!;
-            EnforceFence(key, folded, fencingToken);
+            await EnforceFenceAsync(key, folded, fencingToken, cancellationToken).ConfigureAwait(false);
             patchInput = _serializer.SerializeToArray(folded);
         }
         else
@@ -807,10 +807,11 @@ internal sealed partial class RepoContextStore
 
         if (parsed.Kind == RepoContextRecordKind.Memory)
         {
-            EnforceFence(
+            await EnforceFenceAsync(
                 key,
                 await ReadMemoryAsync(tree, key, cancellationToken).ConfigureAwait(false),
-                fencingToken);
+                fencingToken,
+                cancellationToken).ConfigureAwait(false);
         }
 
         if (!lapse)

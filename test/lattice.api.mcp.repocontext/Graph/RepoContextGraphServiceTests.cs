@@ -70,6 +70,16 @@ public sealed class RepoContextGraphServiceTests
 
         public IRepoIndexJobGrain JobGrain { get; }
 
+        /// <summary>
+        /// Records that the repository was onboarded from <paramref name="repoRoot"/>,
+        /// which is the walk root the drift projection re-resolves. Without it the
+        /// repository is un-indexed and the projection refuses outright, so every
+        /// drift test must declare one.
+        /// </summary>
+        public void IndexedAt(string repoRoot) =>
+            JobGrain.GetRequestAsync().Returns(Task.FromResult<RepoIndexJobRequest?>(
+                new RepoIndexJobRequest { RepoRoot = repoRoot, RepoId = RepoId }));
+
         public void Put(string treeName, string key, byte[] value) => Records(treeName)[key] = value;
 
         private SortedDictionary<string, byte[]> Records(string treeName)
@@ -456,6 +466,7 @@ public sealed class RepoContextGraphServiceTests
         File.WriteAllText(Path.Combine(workspace, "src", "A.cs"), "namespace N; public class A { }");
 
         var trees = new Trees();
+        trees.IndexedAt(workspace);
         // A.cs is stored with a digest that cannot match the file on disk, so it drifts.
         PutFile(trees, "src/A.cs", "stale-digest", ["N.A"]);
         // Two distinct referrers, so the dependent ordering comparer is exercised.
@@ -485,6 +496,7 @@ public sealed class RepoContextGraphServiceTests
         File.WriteAllText(Path.Combine(workspace, "src", "Consumer.cs"), "namespace N; public class Consumer { }");
 
         var trees = new Trees();
+        trees.IndexedAt(workspace);
         PutFile(trees, "src/A.cs", "stale-digest", ["N.A"]);
         PutFile(trees, "src/Consumer.cs", "stale-digest-2", ["N.Consumer"]);
         PutSymbol(trees, "N.Consumer", "src/Consumer.cs");
@@ -507,6 +519,7 @@ public sealed class RepoContextGraphServiceTests
         File.WriteAllText(Path.Combine(workspace, "src", "Kept.cs"), "namespace N; public class Kept { }");
 
         var trees = new Trees();
+        trees.IndexedAt(workspace);
         PutFile(trees, "src/Gone.cs", "d-gone", ["N.Gone"]);
         PutSymbol(trees, "N.Consumer", "src/Consumer.cs");
         PutCrossReference(trees, "Gone", referrers: ["N.Consumer"]);
@@ -533,6 +546,7 @@ public sealed class RepoContextGraphServiceTests
         File.WriteAllText(Path.Combine(workspace, "src", "Pair.cs"), "namespace N; public class A { } public class B { }");
 
         var trees = new Trees();
+        trees.IndexedAt(workspace);
         PutFile(trees, "src/Pair.cs", "stale-digest", ["N.A", "N.B"]);
         PutSymbol(trees, "N.Consumer", "src/Consumer.cs");
         PutCrossReference(trees, "A", referrers: ["N.Consumer"]);
@@ -552,6 +566,7 @@ public sealed class RepoContextGraphServiceTests
         File.WriteAllText(Path.Combine(workspace, "src", "A.cs"), "namespace N; public class A { }");
 
         var trees = new Trees();
+        trees.IndexedAt(workspace);
         PutFile(trees, "src/A.cs", "stale-digest", ["N.A"]);
 
         var result = await Service(trees, TokenCounter(1), workspace).ChangedAsync(RepoId, workspace, Ct);
@@ -570,6 +585,7 @@ public sealed class RepoContextGraphServiceTests
         File.WriteAllText(Path.Combine(workspace, "notes.txt"), "plain text");
 
         var trees = new Trees();
+        trees.IndexedAt(workspace);
         PutFile(trees, "notes.txt", "stale-digest");
 
         var result = await Service(trees, TokenCounter(1), workspace).ChangedAsync(RepoId, workspace, Ct);
@@ -580,5 +596,61 @@ public sealed class RepoContextGraphServiceTests
             Assert.That(result.Dependents, Is.Empty,
                 "no declared symbol means no simple name to resolve, so the reverse index is never consulted");
         });
+    }
+
+    /// <summary>
+    /// The drift projection is the only graph verb that touches the filesystem, so
+    /// it is the only one that can be turned into an arbitrary-read primitive. These
+    /// two cases pin the two halves of its containment, each of which was previously
+    /// skippable from the wire.
+    /// </summary>
+    /// <remarks>
+    /// The path argument is caller-supplied, and containment was enforced only by
+    /// re-resolving it against the walk root recovered from the repository's
+    /// persisted onboarding request. Both halves of that sentence could fail open:
+    /// with no configured workspace root the guard is inert and admits any absolute
+    /// path on the host, and with no persisted request the walk root fell back to
+    /// the caller's own path, which is a containment check against itself. Naming an
+    /// un-indexed repository was therefore enough to walk any readable directory and
+    /// have every file in it returned as <c>Added</c>, since an empty stored set
+    /// classifies everything as new.
+    /// </remarks>
+    [Test]
+    public void Changed_refuses_to_walk_when_no_workspace_root_is_configured()
+    {
+        var workspace = NewWorkspace();
+        Directory.CreateDirectory(Path.Combine(workspace, "src"));
+        File.WriteAllText(Path.Combine(workspace, "src", "Secret.cs"), "namespace N; public class Secret { }");
+
+        var trees = new Trees();
+        trees.IndexedAt(workspace);
+
+        // No allowed roots: the guard is inert, which is the DEFAULT posture of
+        // AddRepoContextTools. An inert guard admits no wire-supplied path at all.
+        var service = Service(trees, TokenCounter(1));
+
+        Assert.That(
+            async () => await service.ChangedAsync(RepoId, workspace, Ct),
+            Throws.InstanceOf<RepoContextWorkspaceViolationException>(),
+            "an unconfigured workspace boundary must refuse, not degrade to admitting every host path");
+    }
+
+    [Test]
+    public void Changed_refuses_a_repository_that_was_never_indexed()
+    {
+        var workspace = NewWorkspace();
+        Directory.CreateDirectory(Path.Combine(workspace, "src"));
+        File.WriteAllText(Path.Combine(workspace, "src", "Secret.cs"), "namespace N; public class Secret { }");
+
+        // Trees deliberately left un-indexed: GetRequestAsync yields null, exactly as
+        // it does for a repoId that was simply invented on the wire.
+        var trees = new Trees();
+        var service = Service(trees, TokenCounter(1), workspace);
+
+        Assert.That(
+            async () => await service.ChangedAsync(RepoId, workspace, Ct),
+            Throws.ArgumentException.With.Property("ParamName").EqualTo("repoId"),
+            "with no persisted walk root there is nothing to contain the caller's path against, "
+                + "so the only safe answer is a refusal rather than a walk rooted at the caller's own path");
     }
 }

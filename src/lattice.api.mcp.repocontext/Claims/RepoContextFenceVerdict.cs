@@ -43,4 +43,20 @@ internal enum RepoContextFenceVerdict
     /// observable here and the write fails closed rather than racing it.
     /// </summary>
     ForeignRegion,
+
+    /// <summary>
+    /// The caller presented a fencing token ahead of the record's stamp that the
+    /// lock did not issue and is not currently holding.
+    /// <para>
+    /// A token ahead of the stamp is admissible in principle, because
+    /// <c>ClaimAsync</c> takes the lock and only then stamps the record, so a
+    /// genuine holder can present its token in the window before its own stamp
+    /// lands. That window is the sole reason the ahead-of-stamp case is not simply
+    /// refused - but the token that fills it has to be re-resolved against the lock
+    /// that would have issued it rather than taken on the caller's word, or the
+    /// exclusion the whole surface exists to provide is bought with nothing more
+    /// than an integer the caller chose.
+    /// </para>
+    /// </summary>
+    UnissuedToken,
 }

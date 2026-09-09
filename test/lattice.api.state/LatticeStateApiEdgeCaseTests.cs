@@ -41,13 +41,15 @@ public sealed partial class LatticeStateApiEdgeCaseTests
     [TestCase("options")]
     [TestCase("apiOptions")]
     [TestCase("services")]
+    [TestCase("tenantResolver")]
     public void LatticeStateObserver_constructor_rejects_a_null_dependency(string parameter)
     {
         var ex = Assert.Throws<ArgumentNullException>(() => _ = new LatticeStateObserver(
             parameter == "grainFactory" ? null! : Substitute.For<IGrainFactory>(),
             parameter == "options" ? null! : OptionsMonitor(),
             parameter == "apiOptions" ? null! : Options.Create(new LatticeApiStateOptions()),
-            parameter == "services" ? null! : new ServiceCollection().BuildServiceProvider()));
+            parameter == "services" ? null! : new ServiceCollection().BuildServiceProvider(),
+            parameter == "tenantResolver" ? null! : new NullTenantContextResolver()));
 
         Assert.That(ex!.ParamName, Is.EqualTo(parameter));
     }
@@ -122,7 +124,8 @@ public sealed partial class LatticeStateApiEdgeCaseTests
         Substitute.For<IGrainFactory>(),
         OptionsMonitor(),
         Options.Create(new LatticeApiStateOptions()),
-        new ServiceCollection().BuildServiceProvider());
+        new ServiceCollection().BuildServiceProvider(),
+        new NullTenantContextResolver());
 
     private static IOptionsMonitor<LatticeOptions> OptionsMonitor()
     {
@@ -208,7 +211,8 @@ public sealed partial class LatticeStateApiEdgeCaseTests
             grainFactory,
             OptionsMonitor(),
             Options.Create(apiOptions),
-            new ServiceCollection().BuildServiceProvider());
+            new ServiceCollection().BuildServiceProvider(),
+            new NullTenantContextResolver());
     }
 
     private static bool TryProject(

@@ -22,6 +22,8 @@ The module adds no authorization path of its own. The permission-aware discovery
 
 The write opt-in is not on its own enough for the two **onboarding** tools. `repocontext_bootstrap` and `repocontext_add_repo` both take the working tree to walk from the wire, so they are contributed - and will run - only when a workspace root is configured, either by passing `workspaceRoot` or by registering an enforcing `RepoContextWorkspaceGuard` first. Without one the guard admits every absolute path on the host, which would let any caller holding a write grant have the server index a directory it never should have read and then hand the contents back through `repocontext_context` and `repocontext_search`. Everything else the write opt-in contributes keys on a repository id rather than a path and is unaffected.
 
+The rule is about **paths, not writes**, so the read-only `repocontext_changed` is bound by it too. It also takes the directory to walk from the wire, and it answers with the name of every file it walked, so under an inert guard it is an arbitrary-local-read primitive that needs no write grant at all to reach. It is therefore contributed only when a workspace root is configured, and refuses at invocation as well: a repository with no persisted onboarding request has no walk root to contain the caller's path against, and is refused rather than walked from the caller's own path. The other two graph verbs, `repocontext_outline` and `repocontext_related`, project stored records and never touch disk, so neither is affected.
+
 ## Quick Start
 
 Register the module as a companion to `AddLatticeMcp`:
@@ -33,8 +35,9 @@ using Microsoft.Extensions.DependencyInjection;
 var services = new ServiceCollection();
 services.AddLatticeMcp(o => o.RequireAuthorization = true);
 
-// The workspace root bounds every path a caller can ask the server to index.
-// Omit it and the onboarding tool is withheld; the capture, claim, and
+// The workspace root bounds every path a caller can ask the server to index
+// or walk. Omit it and the path-taking tools (onboarding, and the read-only
+// repocontext_changed) are withheld; the capture, claim, and record-projecting
 // retrieval tools still work.
 services.AddRepoContextTools(enableWrites: true, workspaceRoot: "/workspace");
 ```
