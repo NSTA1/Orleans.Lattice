@@ -102,6 +102,23 @@ public sealed class ScanPageStalledException : TimeoutException
     /// differ.
     /// </summary>
     [Id(5)] public double TimeoutSeconds { get; set; }
+
+    /// <summary>
+    /// The leaf whose read was still outstanding when the ceiling fired, as
+    /// its grain identity (for example
+    /// <c>bplusleaf/7b16d935344e4206bc6e0d161f52ff6b</c>), or
+    /// <see langword="null"/> when no read was outstanding (the prologue and
+    /// descent phases, and a ceiling that fired between two leaf reads).
+    /// <para>
+    /// <see cref="LeavesVisited"/> says <em>which</em> read stalled by
+    /// position; this says which leaf that position was. Position alone cannot
+    /// be joined to anything else recorded about that leaf, and a stall at
+    /// zero leaves has several candidate causes that are only distinguishable
+    /// by what the named leaf was doing - so without it a recurrence is
+    /// attributable to a shard but not to a cause (issue 2278).
+    /// </para>
+    /// </summary>
+    [Id(6)] public string? LeafInFlight { get; set; }
 }
 
 /// <summary>

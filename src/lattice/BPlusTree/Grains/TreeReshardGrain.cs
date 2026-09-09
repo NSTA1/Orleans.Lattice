@@ -413,8 +413,10 @@ internal sealed class TreeReshardGrain(
     /// <c>physicalShards[i]</c>.
     /// </summary>
     /// <remarks>
-    /// Physical shard indices form a small, dense, non-negative domain
-    /// (typically 1..16) while <paramref name="slots"/> spans the virtual slot
+    /// Physical shard indices form a small, dense, non-negative domain bounded
+    /// by the tree's pinned physical shard count (64 by default, and at most
+    /// <see cref="LatticeOptions.MaxPhysicalShardsPerTree"/> - 256 by default -
+    /// under autonomic splitting) while <paramref name="slots"/> spans the virtual slot
     /// space (4096 by default), so the prior
     /// <c>Dictionary&lt;int, int&gt;</c> histogram paid a hash read plus a hash
     /// write for every virtual slot on every migrating tick. A dense counter
