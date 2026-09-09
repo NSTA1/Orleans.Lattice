@@ -67,14 +67,41 @@ jobs:
   plan:
     name: Plan
     runs-on: ubuntu-latest
-    # The label gate. Without it this workflow would fan out on every pull
+    # Entry gate. Without one, this workflow would fan out on every pull
     # request in the repository and compete with `build-and-test` for runners.
+    # There are three ways in:
+    #
+    #  1. `workflow_dispatch`, for measuring a simulated change set by hand.
+    #  2. The `ci-matrix-prototype` label, for opting a single pull request in.
+    #  3. Any pull request whose BASE is an epic or bucket integration branch.
+    #
+    # The third is deliberate, and it is the safest place in the repository to
+    # adopt this. Repository policy forbids branch protection on an epic branch
+    # (that is the whole reason the branch exists - `strict` protection on main
+    # is what serialises pull requests and costs O(N^2) CI cycles). With no
+    # protection there is no REQUIRED status check, so `build-and-test` on a
+    # member pull request is already advisory. Adding a second, faster advisory
+    # signal therefore cannot block a merge, cannot break a required-check
+    # contract, and needs no branch-protection change to try or to revert.
+    #
+    # It is also where the serial cost hurts most: an epic fans out by
+    # construction, and the epic's own pull request into main is large by
+    # design, so it is the worst case for a single-runner serial suite.
+    #
+    # `contains` rather than a glob because GitHub expressions have no pattern
+    # matching. `/epic/` is a reserved segment in the branch convention
+    # (`<type>/epic/<slug>`), and buckets reuse that same segment by policy, so
+    # a substring test on it catches both and nothing else.
     if: >-
       github.event_name == 'workflow_dispatch'
       || contains(github.event.pull_request.labels.*.name, 'ci-matrix-prototype')
+      || contains(github.base_ref, '/epic/')
     outputs:
-      legs: ${{ steps.plan.outputs.legs }}
-      leg_count: ${{ steps.plan.outputs.leg_count }}
+      # Defaulted so that a skipped plan yields a well-formed empty matrix
+      # rather than an empty string, which `fromJson` would reject and turn a
+      # deliberate no-op into a workflow-level error.
+      legs: ${{ steps.plan.outputs.legs || '[]' }}
+      leg_count: ${{ steps.plan.outputs.leg_count || '0' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -125,7 +152,54 @@ jobs:
           echo "Changed files considered:"
           cat /tmp/changed-files.txt
 
+          # Mirror the `code` paths-filter that gates the discover step in
+          # ci.yml. This is load-bearing rather than an optimisation: the
+          # selector's documented behaviour when NO package matches the changed
+          # paths is to fall back to selecting ALL of them, on the reasoning
+          # that a shared or root change could affect anything. That fallback
+          # is correct for a root change like Directory.Build.props, but a
+          # markdown-only or workflow-only diff also matches no package, so
+          # without this gate a docs typo would fan out to all 46 packages.
+          # ci.yml never hits that because paths-filter stops it earlier; this
+          # workflow calls the selector directly, so it has to gate it here.
+          # Keep this list in step with the `code` filter in ci.yml.
+          grep -E -v \
+            -e '\.md$' \
+            -e '\.txt$' \
+            -e '^docs/' \
+            -e '^docs-site/' \
+            -e '^benchmark/' \
+            -e '^test/azure-throughput-silo/' \
+            -e '^test/lattice\.explorer\.uitests/' \
+            -e '^apps/' \
+            -e '^reference-architecture/' \
+            -e '^\.github/workflows/' \
+            -e '^\.gitignore$' \
+            /tmp/changed-files.txt > /tmp/code-files.txt || true
+
+          if [ ! -s /tmp/code-files.txt ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No test-relevant changes; the matrix will be empty."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Test-relevant changed files:"
+            cat /tmp/code-files.txt
+          fi
+
+      - name: Report a skipped run
+        if: steps.changes.outputs.skip == 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "### Test selection: skipped"
+            echo ""
+            echo "No test-relevant files changed, so no packages were selected"
+            echo "and no test legs ran. Documentation, workflow, and other"
+            echo "excluded paths do not gate on the test suite."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Select packages
+        if: steps.changes.outputs.skip != 'true'
         run: |
           set -euo pipefail
           .github/workflows/select-test-packages.sh \
@@ -147,6 +221,7 @@ jobs:
 
       - name: Plan the matrix
         id: plan
+        if: steps.changes.outputs.skip != 'true'
         env:
           MAX_LEGS: ${{ github.event.inputs.max_legs || '10' }}
         run: |
@@ -172,6 +247,11 @@ jobs:
   test:
     name: ${{ matrix.leg.name }}
     needs: plan
+    # An empty matrix is a valid plan, not a failure: it is what a docs-only or
+    # workflow-only change should produce. GitHub would treat `fromJson('[]')`
+    # as a matrix with no combinations and skip the job anyway, but stating it
+    # explicitly keeps the intent readable in the run graph.
+    if: needs.plan.outputs.leg_count != '0'
     runs-on: ubuntu-latest
     strategy:
       # Never fail-fast. A cancelled sibling leg is an unreported leg, and an
@@ -262,7 +342,9 @@ jobs:
   report:
     name: Matrix result
     needs: [plan, test]
-    if: always() && needs.plan.result == 'success'
+    if: >-
+      always() && needs.plan.result == 'success'
+      && needs.plan.outputs.leg_count != '0'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
