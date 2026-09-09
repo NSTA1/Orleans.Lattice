@@ -84,9 +84,20 @@ public sealed partial class RepoContextDrainSignalTests
                 Is.True,
                 "an abandoned drain must be reported at Error, not buried at Information alongside success");
             Assert.That(
-                lines.Any(line => line.Message.Contains("stop_grace_period does NOT fix this", StringComparison.Ordinal)),
+                lines.Any(line => line.Message.Contains(
+                    RepoContextShutdownBudget.StopGracePeriodKey, StringComparison.Ordinal)),
                 Is.True,
-                "the line must name the knob that actually binds, since the obvious one does not");
+                "the line must name the knob that actually binds - since #2402 the budget is derived from the "
+                + "declared container grant, so an operator told to raise RepoContextHostBuilder.ShutdownBudget "
+                + "would edit a default that a deployment declaring a grant never reads");
+            Assert.That(
+                lines.Any(line => line.Message.Contains(
+                    "Raising only the declaration buys no drain time and silences this line",
+                    StringComparison.Ordinal)),
+                Is.True,
+                "the line must warn against the half of the remedy that reintroduces the silent kill of #2389: "
+                + "a declaration above the real grace period arms the alarm for an instant the process never "
+                + "reaches");
         });
     }
 

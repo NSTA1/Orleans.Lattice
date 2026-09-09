@@ -345,10 +345,10 @@ curl -fsS http://localhost:8080/metrics | head -n 20
     70% of the budget. Nothing has failed; treat it as a lead indicator, because
     drain time grows with resident state.
   - **`drain ABANDONED after 90s` at `Error`, and the container exits `70`.** The
-    *host* stopped waiting and deactivation was abandoned part-way. No
-    `stop_grace_period` can rescue this:
-    `RepoContextHostBuilder.ShutdownBudget` is the binding ceiling and must rise,
-    with `stop_grace_period` raised to stay strictly greater.
+    *host* stopped waiting and deactivation was abandoned part-way. Raise the
+    service's `stop_grace_period` and the `LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD`
+    that declares it, together and to the same value; the budget is derived from
+    the second and bounded by the first, so raising either alone achieves nothing.
 - **The abandoned drain is also visible without reading the log** (issue #2401).
   An orchestrator does not read logs, it reads the exit code, and before #2401
   the abandoned case did not reliably produce a distinctive one. Measured against
@@ -385,6 +385,26 @@ curl -fsS http://localhost:8080/metrics | head -n 20
   flush has no observed ceiling (idle-deactivation sweeps ranging from 1 to 4,418
   activations, still climbing between readings). A fixed ceiling on an unbounded
   quantity moves the threshold without changing the failure mode, so #2397
-  shipped the diagnostic instead of a new number. Raising `ShutdownBudget` past
-  your own observed drain is a legitimate local remedy, but it buys time rather
-  than fixing the shape.
+  shipped the diagnostic instead of a new number, and #2402 - which proposed
+  raising it - did not ship one either.
+- The 90s is no longer written down as an independent constant. Since issue #2402
+  the host derives it from the grace period the deployment declares through
+  `LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD`, taking 75% of it or all but a
+  two-second unwind reserve, whichever is smaller. The declared `120s` in
+  `docker-compose.yml` yields exactly the 90s the container has always run with,
+  so nothing moved; what changed is that there is one number to set instead of
+  two, and a budget larger than the grace period can no longer be expressed. That
+  matters because such a budget is not merely useless - the container kills the
+  process at the real grace period regardless, so the `ABANDONED` line above is
+  armed for an instant that never arrives and is never emitted, which is the
+  silent teardown of issue #2389 all over again.
+- **The variable declares the grant; it is not the grant.** Nothing inside the
+  container can read the real `stop_grace_period`, so a deployment that declares
+  `120s` while granting `20s` runs a 90s budget under a 20s guillotine and cannot
+  detect it. Keeping the two adjacent in the same compose service is the
+  mitigation, and `RepoContextComposeShutdownBudgetTests` asserts they are equal
+  here - but that adjacency is **a convention, not an enforcement**. Change them
+  together, always.
+- None of this bounds the resident set. Raising both values past your own
+  observed drain is a legitimate local remedy, but it buys time rather than
+  fixing the shape.
