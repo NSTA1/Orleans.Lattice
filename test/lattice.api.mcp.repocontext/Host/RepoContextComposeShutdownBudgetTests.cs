@@ -130,14 +130,108 @@ public sealed class RepoContextComposeShutdownBudgetTests
             + "is distinguishable from a decision");
     }
 
+    /// <summary>
+    /// Reads the declared container grant (<see cref="RepoContextShutdownBudget.StopGracePeriodKey"/>)
+    /// from each service's <c>environment</c> block, keyed by the service it belongs
+    /// to. Scoped by service for the same reason as the grace-period scan above: a
+    /// value attached to the wrong service is indistinguishable from a correct one to
+    /// a substring search, and would leave the defect fully in place.
+    /// </summary>
+    private static Dictionary<string, string> ReadDeclaredGrants()
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var service = string.Empty;
+
+        foreach (var raw in File.ReadAllLines(ComposePath))
+        {
+            var trimmed = raw.TrimStart();
+            if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+            {
+                continue;
+            }
+
+            var indent = raw.Length - trimmed.Length;
+
+            if (indent == 2 && trimmed.EndsWith(':') && !trimmed.Contains(' ', StringComparison.Ordinal))
+            {
+                service = trimmed[..^1];
+                continue;
+            }
+
+            var prefix = RepoContextShutdownBudget.StopGracePeriodKey + ":";
+            if (!trimmed.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            result[service] = trimmed[prefix.Length..].Trim().Trim('"');
+        }
+
+        return result;
+    }
+
+    [Test]
+    public void The_declared_grant_equals_the_stop_grace_period_it_declares()
+    {
+        var periods = ReadStopGracePeriods();
+        var grants = ReadDeclaredGrants();
+
+        Assert.That(
+            grants.ContainsKey("repocontext"),
+            Is.True,
+            $"the repocontext service must declare {RepoContextShutdownBudget.StopGracePeriodKey}, or the host "
+            + "derives its shutdown budget from an assumed grant rather than the one this file grants");
+
+        Assert.That(
+            periods.ContainsKey("repocontext"),
+            Is.True,
+            "the repocontext service sets no stop_grace_period, so there is nothing for the declared grant "
+            + "to agree with");
+
+        // The load-bearing assertion of this change (issue #2402). The declared grant
+        // and the real stop_grace_period are two halves of one statement, and the
+        // process cannot read the second half: it derives its whole shutdown budget
+        // from the declaration. Asserting only that both are PRESENT would pass while
+        // they said different things, which is precisely the dangerous state - a
+        // declaration larger than the actual grant silences the drain-abandoned line
+        // and reintroduces the silent kill of issue #2389.
+        Assert.That(
+            RepoContextShutdownBudget.ParseStopGracePeriod(grants["repocontext"]),
+            Is.EqualTo(periods["repocontext"]),
+            $"{RepoContextShutdownBudget.StopGracePeriodKey} ('{grants["repocontext"]}') must equal the "
+            + $"stop_grace_period it declares ({periods["repocontext"].TotalSeconds}s); the host derives its "
+            + "shutdown budget from the declaration and cannot observe the real value");
+    }
+
+    [Test]
+    public void The_budget_derived_from_the_declared_grant_is_the_shipped_budget()
+    {
+        var grants = ReadDeclaredGrants();
+
+        Assert.That(grants.ContainsKey("repocontext"), Is.True);
+
+        // Pins the end-to-end derivation, not just its inputs: what this sample
+        // compose file declares must still produce the 90s the container has run with
+        // since it shipped. A change to the fraction, the reserve, or the declared
+        // grant that silently moved the deployed budget fails here.
+        Assert.That(
+            RepoContextShutdownBudget.Derive(
+                RepoContextShutdownBudget.ParseStopGracePeriod(grants["repocontext"])),
+            Is.EqualTo(TimeSpan.FromSeconds(90)));
+    }
+
     [Test]
     public void The_host_shutdown_budget_is_the_value_the_host_actually_configures()
     {
         // Guards the constant against being edited to satisfy the assertion above
         // rather than to describe the host. 90s is the value the container has run
-        // with since it shipped; changing it is a deliberate act that should also
+        // with since it shipped; it is now the DEFAULT, applied when a deployment
+        // declares no grant, and changing it is a deliberate act that should also
         // move the compose value, which the test above then re-checks.
         Assert.That(RepoContextHostBuilder.ShutdownBudget, Is.EqualTo(TimeSpan.FromSeconds(90)));
+        Assert.That(
+            RepoContextShutdownBudget.DefaultShutdownBudget,
+            Is.EqualTo(RepoContextHostBuilder.ShutdownBudget));
     }
 
     [Test]

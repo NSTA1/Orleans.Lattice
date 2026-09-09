@@ -188,6 +188,21 @@ services:
       # grain's out-of-band paged sweep forces an immediate in-pass scan whenever it
       # actually finds a gap.
       LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS: "300"
+      # The container's stop_grace_period, DECLARED to the process that has to fit
+      # inside it. The host derives its own shutdown budget from this (issue #2402)
+      # instead of holding a second, independent constant: 120s here yields the 90s
+      # budget the container has always run with, and the remainder is reserve for
+      # the host to unwind and report a cut-short drain before SIGKILL.
+      #
+      # It must EQUAL the stop_grace_period set on this same service below, and
+      # RepoContextComposeShutdownBudgetTests asserts exactly that. The adjacency is
+      # a convention, not an enforcement: the process cannot read the real grace
+      # period from inside the container, so a value edited here but not below (or
+      # vice versa) leaves the budget derived from a stale figure, and the dangerous
+      # direction - declaring MORE than the container actually grants - is
+      # undetectable at run time and reintroduces the silent kill of issue #2389.
+      # Change the two together, always.
+      LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD: "120s"
     ports:
       # The MCP streamable-HTTP endpoint (and the health probes) on the host.
       #
@@ -239,9 +254,12 @@ services:
     # and with a number that looked carefully chosen. Clearing the host budget is
     # what makes the value stable as the corpus grows.
     #
-    # Do not lower this below the host budget. If you raise ShutdownBudget, raise
-    # this too: RepoContextComposeShutdownBudgetTests asserts the relationship, so
-    # the two cannot drift apart unnoticed.
+    # THIS IS NOW THE ONLY NUMBER TO CHANGE. The host derives its own budget from
+    # the grant declared in LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD above (issue
+    # #2402), so raising the grace period raises the budget with it and a budget
+    # above the grant is unrepresentable. Keep the two in step: they are two
+    # halves of one statement, and the process cannot read this line.
+    # RepoContextComposeShutdownBudgetTests asserts they are equal.
     #
     # The drain is observable rather than inferred. The host logs
     # "RepoContext drain complete in <n>s" once every hosted service has stopped,

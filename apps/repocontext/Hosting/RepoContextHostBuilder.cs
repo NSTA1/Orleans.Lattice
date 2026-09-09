@@ -60,9 +60,10 @@ public static class RepoContextHostBuilder
     public const string ReadinessTag = "ready";
 
     /// <summary>
-    /// The host's own shutdown budget: how long the generic host will wait for
-    /// every hosted service - the silo, and with it the WAL commit-log drainer - to
-    /// stop before it abandons the drain and exits.
+    /// The host's shutdown budget when the deployment declares no container grant:
+    /// how long the generic host will wait for every hosted service - the silo, and
+    /// with it the WAL commit-log drainer - to stop before it abandons the drain and
+    /// exits.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -71,13 +72,18 @@ public static class RepoContextHostBuilder
     /// 10 seconds, which is a ninth of it, so a deployment that leaves the default
     /// in place can never exercise this budget: every teardown is a crash teardown,
     /// the graceful deactivation path never completes, and the documented behaviour
-    /// silently does not hold. That is the defect recorded as issue #2389, and it is
-    /// why this budget is a named constant rather than a literal buried in a lambda
-    /// - the sample compose file's <c>stop_grace_period</c> is asserted against it,
-    /// so the two numbers cannot drift apart unnoticed.
+    /// silently does not hold. That is the defect recorded as issue #2389.
+    /// </para>
+    /// <para>
+    /// It is a <b>default</b> rather than the budget itself because the budget is
+    /// derived from the grant the deployment declares - see
+    /// <see cref="RepoContextShutdownBudget"/>, which also explains why raising a
+    /// budget above its grant is strictly worse than leaving it alone. A deployment
+    /// that declares nothing gets exactly this value, so nothing moves for a
+    /// container that does not opt in.
     /// </para>
     /// </remarks>
-    public static readonly TimeSpan ShutdownBudget = TimeSpan.FromSeconds(90);
+    public static readonly TimeSpan ShutdownBudget = RepoContextShutdownBudget.DefaultShutdownBudget;
 
     /// <summary>
     /// Builds the fully-wired <see cref="WebApplication"/> from the ambient
@@ -118,17 +124,23 @@ public static class RepoContextHostBuilder
         // interfaces so it is reachable on the container network.
         builder.WebHost.UseUrls($"http://0.0.0.0:{config.McpPort}");
 
-        // A generous shutdown budget so the silo's WAL commit-log drainer can flush
-        // buffered records before the process exits on SIGTERM. It is only reachable
-        // if the container's stop_grace_period exceeds it - see ShutdownBudget.
+        // The shutdown budget is derived from the grant the deployment declares, not
+        // fixed independently of it: a budget above the container's stop_grace_period
+        // is not merely unreachable, it silences the drain-abandoned alarm by arming
+        // it for an instant the process never lives to reach. See
+        // RepoContextShutdownBudget. The same resolved value feeds the host timeout
+        // and the drain signal, so the alarm cannot report against a different
+        // ceiling from the one actually enforced.
+        var shutdown = RepoContextShutdownBudget.Resolve(builder.Configuration);
+
         builder.Services.Configure<HostOptions>(options =>
-            options.ShutdownTimeout = ShutdownBudget);
+            options.ShutdownTimeout = shutdown.ShutdownBudget);
 
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton<RepoContextReadinessState>();
         builder.Services.AddSingleton(sp => new RepoContextDrainSignal(
             sp.GetRequiredService<ILogger<RepoContextDrainSignal>>(),
-            ShutdownBudget,
+            shutdown.ShutdownBudget,
             // The production process-exit-code reporter, supplied explicitly because
             // the signal deliberately defaults to reporting nothing: this is the one
             // composition root where assigning the real Environment.ExitCode is
@@ -317,6 +329,37 @@ public static class RepoContextHostBuilder
 
         app.MapGet(MetricsPath, (RepoContextMetricsCollector collector) =>
             Results.Text(collector.Render(), RepoContextPrometheusExposition.ContentType));
+
+        // The derivation, stated once at startup. Without it the relationship between
+        // the budget the host enforces and the grant it was derived from is only
+        // recoverable by reading two files, one of which is not in the image. The
+        // declared/defaulted distinction is carried because a stale declaration is
+        // undetectable at run time, so a reader has to be able to see which of the
+        // two the process believed.
+        if (shutdown.GrantWasDeclared)
+        {
+            app.Logger.LogInformation(
+                "RepoContext shutdown budget {ShutdownBudgetSeconds:F0}s, derived from the declared container "
+                + "stop_grace_period of {StopGracePeriodSeconds:F0}s ({Key}). The remainder is reserve for the "
+                + "host to unwind and report a cut-short drain before SIGKILL. This value is the deployment's "
+                + "DECLARATION of the grant: if it disagrees with the container's real stop_grace_period the "
+                + "budget is derived from a stale figure, and that cannot be detected from inside the process.",
+                shutdown.ShutdownBudget.TotalSeconds,
+                shutdown.StopGracePeriod.TotalSeconds,
+                RepoContextShutdownBudget.StopGracePeriodKey);
+        }
+        else
+        {
+            app.Logger.LogInformation(
+                "RepoContext shutdown budget {ShutdownBudgetSeconds:F0}s, derived from an assumed container "
+                + "stop_grace_period of {StopGracePeriodSeconds:F0}s because {Key} is unset. Docker's own "
+                + "default grace period is 10s, which would kill this drain long before the budget expires "
+                + "and without emitting the drain-abandoned line; declare the grant beside stop_grace_period "
+                + "so the budget is derived from what the deployment actually grants.",
+                shutdown.ShutdownBudget.TotalSeconds,
+                shutdown.StopGracePeriod.TotalSeconds,
+                RepoContextShutdownBudget.StopGracePeriodKey);
+        }
 
         // Dispose is idempotent, so registering it here is safe whether or not the
         // service provider also disposes the instance it did not create.
