@@ -1445,6 +1445,23 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         Exception? firstBatchFailure = null;
         var pendingMembers = new List<string>();
 
+        // The denominator, and the reason it is counted here rather than inferred.
+        // Every count this method used to emit was a NUMERATOR: a failed batch named
+        // itself, a successful batch said nothing at all. So "63 batch-record
+        // failures" could not be turned into a rate, and establishing one meant
+        // reconstructing the attempt total from the sidecar embedder's HTTP access
+        // log - one POST per EmbedAsync call - which is an instrument that belongs to
+        // a different container, is not present in every deployment, and disappears
+        // when that container is recycled. A bare numerator cannot distinguish 63
+        // failures in 70 attempts from 63 in 70,000, and those warrant opposite
+        // responses (issue #2346). These four counters and the summary line at the
+        // end of the pass make the rate readable from this arm's own log.
+        var attemptedBatches = 0;
+        var embedFailedBatches = 0;
+        var storeFailedBatches = 0;
+        var recordFailedBatches = 0;
+        var strandedSources = 0;
+
         // Naming a failed batch's sources is what separates a deterministic write
         // fault - a key range served by a permanently stalled leaf, say - from
         // ordinary contention that will drain, and that ambiguity is what left the
@@ -1472,8 +1489,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // is already failing and lands nothing, so the arm stops here and lets the next
         // reconcile retry from a quieter store. Whatever already landed is kept, and
         // every deferred source is simply unmarked, so the next pass picks it up.
-        // The stage word keeps the two failure kinds distinguishable in the log while
-        // rendering the record case exactly as it did before.
+        // The stage word distinguishes the three failure kinds - embed, store, and
+        // record - so a saturation deferral names the seam that actually saturated
+        // rather than collapsing the store and record stages into one word.
         void ReportSaturationDeferral(int from, int length, string stage)
         {
             var deferred = unitTexts.Count - (from + length);
@@ -1493,6 +1511,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             cancellationToken.ThrowIfCancellationRequested();
             var count = Math.Min(EmbedBatchSize, unitTexts.Count - start);
             var batchTexts = unitTexts.GetRange(start, count);
+            attemptedBatches++;
 
             var result = await _embeddingProvider!
                 .EmbedAsync(batchTexts, EmbeddingTextType.Passage, cancellationToken)
@@ -1511,6 +1530,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // and leave a healthy-looking outcome behind (issue #2272).
                 var failedSources = NameBatchSources(start, count);
                 failedBatches++;
+                embedFailedBatches++;
+                strandedSources += failedSources.Count;
                 consecutiveBatchFailures++;
 
                 _logger.LogWarning(
@@ -1554,6 +1575,21 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             // back-fill could never finish however many passes it was given.
             // Losing one batch costs one batch: its sources stay unmarked and are
             // retried next pass, which is already the contract.
+            //
+            // The stage is tracked because this one try spans TWO distinct
+            // operations and its catch used to report both as "could not record".
+            // That mis-attribution is not cosmetic: the only fault ever captured on
+            // the deployed container was a ScanPageStalledException raised by the
+            // paged metadata scan inside StoreAsync's RetireStaleAsync - a READ, in
+            // the store stage, that never reached AddMembersAsync at all. Logged as
+            // a record failure, it framed the defect as "the membership write fails
+            // while the embed batch succeeds" and sent the investigation looking for
+            // a write fault that does not exist (issue #2346). Naming the stage that
+            // actually threw is what makes the two futures distinguishable: a store
+            // fault leaves no vectors and no membership, a record fault leaves
+            // vectors with no membership, and only the second is a candidate for an
+            // in-pass retry.
+            var stage = "store";
             try
             {
                 foreach (var owner in completed)
@@ -1572,6 +1608,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     // their vectors have landed. The writer lands the whole batch in one
                     // batched CRDT write (one read to mint the deltas, one apply), not
                     // one round trip per source.
+                    stage = "record";
                     await _writer.AddMembersAsync(repoId, pendingMembers, cancellationToken).ConfigureAwait(false);
 
                     // Only now is a source genuinely landed: its vectors are stored
@@ -1593,20 +1630,31 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // convenient.
                 firstBatchFailure ??= ex;
                 failedBatches++;
+                if (stage == "record")
+                {
+                    recordFailedBatches++;
+                }
+                else
+                {
+                    storeFailedBatches++;
+                }
+
                 consecutiveBatchFailures++;
                 pendingMembers.Clear();
 
                 // Name the batch's sources, so a residue that persists across passes can
                 // be told apart from contention that will drain (see NameBatchSources).
                 var batchSources = NameBatchSources(start, count);
+                strandedSources += batchSources.Count;
 
                 _logger.LogWarning(
                     ex,
-                    "Repo {RepoId}: the {Arm} arm could not record a batch of {Count} passage(s) spanning "
+                    "Repo {RepoId}: the {Arm} arm could not {Stage} a batch of {Count} passage(s) spanning "
                     + "{Sources} source(s); they stay unmarked and are retried on the next reconcile. Continuing "
                     + "with the remaining batches. sample: {Sample}",
                     repoId,
                     arm,
+                    stage,
                     count,
                     batchSources.Count,
                     string.Join(", ", batchSources.Take(6)));
@@ -1614,7 +1662,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 if (consecutiveBatchFailures >= MaxConsecutiveBatchFailures)
                 {
                     saturated = true;
-                    ReportSaturationDeferral(start, count, "record");
+                    ReportSaturationDeferral(start, count, stage);
                     break;
                 }
 
@@ -1631,6 +1679,36 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             {
                 await onProgress(embedded, cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        // The pass census. It is logged unconditionally, including on a clean pass,
+        // because a rate needs its denominator on every observation and not only on
+        // the ones that went wrong: a line emitted only when something failed is
+        // another numerator, and reading "no failures" from the ABSENCE of a line
+        // cannot be told apart from an arm that never ran, an arm that selected
+        // nothing, or a log fetch that returned short. That indistinguishability -
+        // a bare absence standing in for a measured zero - is the defect, so the
+        // measured zero is what gets written (issue #2346).
+        //
+        // Information rather than Warning: it fires once per arm per pass, a handful
+        // of lines per reconcile, and it is a measurement rather than a fault. The
+        // failure lines above keep their own severity.
+        if (attemptedBatches > 0)
+        {
+            _logger.LogInformation(
+                "Repo {RepoId}: {Arm} arm pass census - {Attempted} batch(es) attempted, {Succeeded} succeeded, "
+                + "{EmbedFailed} failed to embed, {StoreFailed} failed to store, {RecordFailed} failed to record; "
+                + "{Landed} source(s) landed, {Stranded} left unmarked for the next reconcile. saturated={Saturated}",
+                repoId,
+                arm,
+                attemptedBatches,
+                attemptedBatches - failedBatches,
+                embedFailedBatches,
+                storeFailedBatches,
+                recordFailedBatches,
+                landed.Count,
+                strandedSources,
+                saturated);
         }
 
         // Surfacing the fault only when nothing landed is what makes a partial pass
