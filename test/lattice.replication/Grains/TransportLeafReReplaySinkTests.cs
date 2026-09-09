@@ -164,13 +164,17 @@ public sealed class TransportLeafReReplaySinkTests
 
         Assert.That(shipped, Is.EqualTo(2));
 
-        // The in-memory envelope carries the resolved mode on every entry.
+        // The in-memory envelope carries the resolved mode on every entry. Pin
+        // the entry count first: Is.All over an empty envelope would pass while
+        // the re-stamp under test never ran.
         var envelope = transport.Sent!.Value.Envelope!.Value;
+        Assert.That(envelope.Entries, Has.Count.EqualTo(2));
         Assert.That(envelope.Entries.Select(e => e.Mode), Is.All.EqualTo(LatticeMergeMode.OrMap));
 
         // And so does the batch after a real wire round-trip through the
         // encoder, proving the receiver decodes the corrected mode.
         var decoded = _encoder.Decode(transport.Sent!.Value.Payload);
+        Assert.That(decoded.Entries, Has.Count.EqualTo(2));
         Assert.That(decoded.Entries.Select(e => e.Mode), Is.All.EqualTo(LatticeMergeMode.OrMap));
         Assert.That(decoded.Entries.Select(e => e.TreeId), Is.All.EqualTo(Tree));
     }

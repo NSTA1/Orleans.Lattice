@@ -212,6 +212,10 @@ public partial class LatticeCrossTreeTxGrainTests
         ]);
 
         Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+        // "Skips the empty leg" is only meaningful if the non-empty leg still
+        // reached the gate: an authorization pass that ran for no leg at all
+        // would satisfy Is.All vacuously.
+        Assert.That(gate.Requests, Is.Not.Empty, "the non-empty leg must still be authorized");
         Assert.That(gate.Requests.Select(r => r.TreeId), Is.All.EqualTo("orders"));
         Assert.That(state.State.Participants.Select(p => p.TreeId), Is.EqualTo(new[] { "orders" }));
     }

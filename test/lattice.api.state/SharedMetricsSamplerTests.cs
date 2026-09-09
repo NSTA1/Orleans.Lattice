@@ -148,6 +148,43 @@ public partial class SharedMetricsSamplerTests
         });
     }
 
+    [Test]
+    public async Task Subscribe_does_not_coalesce_tree_id_lists_that_alias_under_a_bare_delimiter_join()
+    {
+        // Two requests name genuinely different tree sets that a bare ',' join
+        // renders identically: one tree literally named "a,b" versus two trees
+        // "a" and "b". Visibility is disabled here, so the signature is
+        // identity-free and its tree-id component is the only differentiator.
+        // Before that component was length-prefixed both requests rendered the
+        // same "a,b" signature, collapsing them onto one sampling loop so the
+        // second subscriber silently received the first request's tree set
+        // instead of its own. A length-prefixed signature keeps them apart.
+        var query = new RecordingStateQuery
+        {
+            Shards =
+            {
+                ["a,b"] = new[] { Shard(index: 0, depth: 1, liveKeys: 1, tombstones: 0, opsPerSecond: 0, splitting: false) },
+                ["a"] = new[] { Shard(index: 0, depth: 1, liveKeys: 1, tombstones: 0, opsPerSecond: 0, splitting: false) },
+                ["b"] = new[] { Shard(index: 0, depth: 1, liveKeys: 1, tombstones: 0, opsPerSecond: 0, splitting: false) },
+            },
+        };
+        var sampler = CreateSampler(query, signal: null);
+
+        var single = new TreeMetricsRequest { TreeIds = new[] { "a,b" }, SampleInterval = TimeSpan.FromMilliseconds(40) };
+        var split = new TreeMetricsRequest { TreeIds = new[] { "a", "b" }, SampleInterval = TimeSpan.FromMilliseconds(40) };
+
+        await using var singleProbe = new SubscriptionProbe(sampler, single, token: "n/a");
+        await singleProbe.FirstAsync();
+
+        await using var splitProbe = new SubscriptionProbe(sampler, split, token: "n/a");
+        await splitProbe.FirstAsync();
+
+        Assert.That(
+            sampler.ActiveSamplerCount,
+            Is.EqualTo(2),
+            "distinct tree-id lists that alias under a bare-delimiter join must run on separate sampling loops");
+    }
+
     private static SharedMetricsSampler CreateSampler(ILatticeStateQuery query, IWalSaturationSignal? signal)
     {
         var services = new ServiceCollection();

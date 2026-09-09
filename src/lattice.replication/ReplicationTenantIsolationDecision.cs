@@ -38,4 +38,15 @@ public enum ReplicationTenantIsolationDecision
     /// resolver. The entry is dead-lettered rather than applied.
     /// </summary>
     RejectOutOfRegion = 2,
+
+    /// <summary>
+    /// The write is refused because its tenant, while it exists, is not in the
+    /// <c>Active</c> lifecycle state - it has been suspended or disabled by an
+    /// operator. The authoring path already refuses every request for a non-active
+    /// tenant, so admitting its inbound replication would leave suspension a
+    /// one-sided control that stops local writes while a peer region goes on
+    /// changing the same tenant's data. The entry is dead-lettered rather than
+    /// applied, so it can be replayed if the tenant is reinstated.
+    /// </summary>
+    RejectSuspendedTenant = 3,
 }

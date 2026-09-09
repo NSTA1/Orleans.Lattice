@@ -2,6 +2,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
@@ -97,7 +98,7 @@ internal sealed partial class ReplicationApplier
         // would under fully-sequential apply. The default DOP of 1
         // takes the sequential walk, bit-identical to the historical
         // behaviour.
-        var plan = BuildParallelApplyPlanOrNull(entries);
+        var plan = BuildParallelApplyPlanOrNull(entries, options);
         if (plan is null)
         {
             LatticeReplicationMetrics.ApplyParallelRuns.Record(1, LatticeTenantLabel.Platform);
@@ -357,6 +358,7 @@ internal sealed partial class ReplicationApplier
     /// greater than <c>1</c>.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Independence is defined at the tree granularity: the contiguous
     /// <c>(treeId, originClusterId)</c> run segments are grouped by tree
     /// (preserving write-ahead-log order within each tree), and the
@@ -367,8 +369,21 @@ internal sealed partial class ReplicationApplier
     /// per-tree causal-apply buffer, shadow-forward dedupe cache, and
     /// per-origin FIFO / high-water-mark invariants are observed exactly
     /// as in the sequential path.
+    /// </para>
+    /// <para>
+    /// Both bail-outs are resolved by allocation-free scans before any
+    /// grouping is materialised. That ordering is deliberate: parallel
+    /// apply is opt-in and
+    /// <see cref="LatticeReplicationOptions.ApplyMaxParallelRuns"/>
+    /// defaults to <c>1</c>, so on the default posture a multi-tree batch
+    /// would otherwise build the whole per-tree grouping purely to throw
+    /// it away, and the sequential path would then re-derive the identical
+    /// run boundaries for itself.
+    /// </para>
     /// </remarks>
-    private ParallelApplyPlan? BuildParallelApplyPlanOrNull(IReadOnlyList<WalRecord> entries)
+    internal static ParallelApplyPlan? BuildParallelApplyPlanOrNull(
+        IReadOnlyList<WalRecord> entries,
+        IOptionsMonitor<LatticeReplicationOptions> options)
     {
         // Cheap first pass: bail to the sequential walk the moment the
         // batch is confirmed single-tree. This keeps the steady-state
@@ -388,9 +403,62 @@ internal sealed partial class ReplicationApplier
             return null;
         }
 
-        // Multi-tree batch: materialise the contiguous (tree, origin)
-        // run segments grouped by tree, preserving WAL order within each
-        // tree.
+        // Second cheap pass: resolve the effective degree of parallelism
+        // BEFORE materialising anything. Parallel apply is opt-in and
+        // ApplyMaxParallelRuns defaults to 1, so on the default posture this
+        // method's whole reason to allocate - the per-tree run-segment
+        // grouping - is built only to be discarded by the `maxParallel <= 1`
+        // test that used to sit below it. Hoisting that test above the
+        // grouping makes the bail allocation-free: a multi-tree batch on a
+        // cluster that never opted in now costs one extra scan and zero
+        // allocations, where it previously cost a Dictionary, one List per
+        // participating tree, a List<string> of tree ids, and the full
+        // run-segmentation walk - all of it garbage, and all of it redone
+        // immediately afterwards by ApplyRunsSequentiallyAsync's own
+        // FindRunEndExclusive walk.
+        //
+        // The max is taken at run-key boundaries rather than over a
+        // materialised distinct set, which is what keeps this pass
+        // allocation-free. Every participating tree heads at least one
+        // boundary, so the maximum is identical to the one the old
+        // post-grouping loop computed over the distinct tree ids. The
+        // `?? string.Empty` mirrors the grouping's own key normalisation, so
+        // a null TreeId resolves the same named options entry it always did.
+        var maxParallel = 1;
+        var boundaryTree = firstTree ?? string.Empty;
+        {
+            var headOptions = options.Get(boundaryTree).ApplyMaxParallelRuns;
+            if (headOptions > maxParallel)
+            {
+                maxParallel = headOptions;
+            }
+        }
+        for (var k = 1; k < entries.Count; k++)
+        {
+            // WalRecord is a wide readonly struct: bind once rather than
+            // indexing through IReadOnlyList<T> twice per entry.
+            var candidateTree = entries[k].TreeId ?? string.Empty;
+            if (string.Equals(candidateTree, boundaryTree, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            boundaryTree = candidateTree;
+            var configured = options.Get(candidateTree).ApplyMaxParallelRuns;
+            if (configured > maxParallel)
+            {
+                maxParallel = configured;
+            }
+        }
+
+        if (maxParallel <= 1)
+        {
+            return null;
+        }
+
+        // Multi-tree batch that really does want parallel apply: materialise
+        // the contiguous (tree, origin) run segments grouped by tree,
+        // preserving WAL order within each tree.
         var groups = new Dictionary<string, List<(int Start, int End)>>(StringComparer.Ordinal);
         var order = new List<string>();
         var i = 0;
@@ -437,20 +505,13 @@ internal sealed partial class ReplicationApplier
             i = j;
         }
 
-        // Resolve the effective degree of parallelism: the max
-        // configured ApplyMaxParallelRuns across the participating
-        // trees, clamped to the number of tree groups. A single group
-        // (or no tree opting in) means parallel apply is moot.
-        var maxParallel = 1;
-        foreach (var treeId in order)
-        {
-            var configured = options.Get(treeId).ApplyMaxParallelRuns;
-            if (configured > maxParallel)
-            {
-                maxParallel = configured;
-            }
-        }
-        if (maxParallel <= 1 || order.Count <= 1)
+        // The effective degree of parallelism was resolved above, before
+        // anything was allocated; clamp it to the number of tree groups now
+        // that the grouping is known. `order.Count <= 1` is unreachable here
+        // (a multi-tree batch always yields at least two groups) but is kept
+        // as a cheap structural guard so the plan can never claim more
+        // parallelism than it has independent groups to spend it on.
+        if (order.Count <= 1)
         {
             return null;
         }
@@ -467,7 +528,7 @@ internal sealed partial class ReplicationApplier
     /// concurrency the parallel apply path uses (configured maximum
     /// clamped to the tree-group count).
     /// </summary>
-    private readonly record struct ParallelApplyPlan(
+    internal readonly record struct ParallelApplyPlan(
         Dictionary<string, List<(int Start, int End)>> Groups,
         List<string> TreeOrder,
         int EffectiveDegreeOfParallelism);
@@ -1359,9 +1420,12 @@ internal sealed partial class ReplicationApplier
         var treeId = first.TreeId;
         var origin = first.OriginClusterId ?? string.Empty;
 
-        var outcome = decision == ReplicationTenantIsolationDecision.RejectOutOfRegion
-            ? LatticeReplicationMetrics.OutcomeRejectedTenantOffline
-            : LatticeReplicationMetrics.OutcomeRejectedForeignTenant;
+        var outcome = decision switch
+        {
+            ReplicationTenantIsolationDecision.RejectOutOfRegion => LatticeReplicationMetrics.OutcomeRejectedTenantOffline,
+            ReplicationTenantIsolationDecision.RejectSuspendedTenant => LatticeReplicationMetrics.OutcomeRejectedSuspendedTenant,
+            _ => LatticeReplicationMetrics.OutcomeRejectedForeignTenant,
+        };
 
         _logger.LogWarning(
             "Rejected inbound replication run of {Count} entries for tree '{Tree}' from origin '{Origin}': "

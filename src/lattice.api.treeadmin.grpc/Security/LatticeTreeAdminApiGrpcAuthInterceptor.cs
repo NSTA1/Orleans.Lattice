@@ -138,6 +138,36 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
         }
 
         var (operation, targetId) = DescribeCall(context.Method, request);
+        await AuthorizeTargetAsync(context, operation, targetId).ConfigureAwait(false);
+
+        // A request may name a SECOND caller-supplied tree the operation writes to
+        // or redirects at, which the primary target id does not cover: the
+        // destination of a snapshot capture, and the physical tree an alias
+        // resolves to. Authorizing only the primary would let a caller authorized
+        // for one tree snapshot over - or silently re-point its own logical name
+        // at - a tree it holds no grant for, so every tree the call can reach is
+        // put to the authorizer under the same operation. Null when the request
+        // names no second tree, or names the same one twice, so the overwhelmingly
+        // common single-tree call still costs exactly one authorizer round-trip.
+        var secondaryTargetId = DescribeSecondaryTarget(request, targetId);
+        if (secondaryTargetId is not null)
+        {
+            await AuthorizeTargetAsync(context, operation, secondaryTargetId).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Puts one target tree to the configured authorizer for the given operation
+    /// and throws <see cref="StatusCode.PermissionDenied"/> when it is refused.
+    /// Every tree an inbound call can reach is authorized through this one seam, so
+    /// a request carrying more than one caller-supplied tree id is adjudicated once
+    /// per tree rather than once per call.
+    /// </summary>
+    private async Task AuthorizeTargetAsync(
+        ServerCallContext context,
+        LatticeTreeAdminApiOperation operation,
+        string? targetId)
+    {
         var authorizationContext = new LatticeTreeAdminApiAuthorizationContext(context, operation, targetId);
 
         bool authorized;
@@ -225,6 +255,42 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
         };
 
         return (operation, targetId);
+    }
+
+    /// <summary>
+    /// Decodes the <em>second</em> caller-supplied tree id a request carries, when
+    /// it names one: the destination of a snapshot capture
+    /// (<see cref="TreeAdminSnapshotRequest.DestinationTreeId"/>) and the physical
+    /// tree a logical alias resolves to
+    /// (<see cref="TreeAdminSetAliasRequest.PhysicalTreeId"/>). Both are trees the
+    /// operation reaches but which <see cref="DescribeCall{TRequest}"/>'s single
+    /// <c>TargetId</c> never shows the authorizer, so without this the grant on the
+    /// primary tree alone would carry the call into a second, unvetted one.
+    /// </summary>
+    /// <returns>
+    /// The second tree id to authorize, or <see langword="null"/> when the request
+    /// names no second tree, when that id is absent or blank, or when it is the
+    /// same tree as <paramref name="primaryTargetId"/> and so has already been
+    /// adjudicated.
+    /// </returns>
+    /// <remarks>Exposed as <c>internal</c> so the mapping can be asserted directly
+    /// in unit tests without standing up a gRPC server.</remarks>
+    internal static string? DescribeSecondaryTarget<TRequest>(TRequest request, string? primaryTargetId)
+    {
+        var secondary = request switch
+        {
+            TreeAdminSnapshotRequest snap => snap.DestinationTreeId,
+            TreeAdminSetAliasRequest alias => alias.PhysicalTreeId,
+            _ => null,
+        };
+
+        if (string.IsNullOrWhiteSpace(secondary)
+            || string.Equals(secondary, primaryTargetId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return secondary;
     }
 
     private static bool IsLatticeTreeAdminApiMethod(string fullMethodName)

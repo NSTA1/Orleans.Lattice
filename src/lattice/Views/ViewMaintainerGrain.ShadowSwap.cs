@@ -106,6 +106,22 @@ internal sealed partial class ViewMaintainerGrain
         }
     }
 
+    /// <summary>
+    /// Computes the absolute tick at which the swapped-out generation becomes
+    /// eligible for reclamation, saturating at <c>DateTime.MaxValue.Ticks</c> so an
+    /// extreme <see cref="LatticeViewOptions.OldGenerationReclaimGrace"/> cannot
+    /// overflow the tick sum and wrap to a past instant - which would make the
+    /// swapped-out generation eligible immediately and reclaim a tree that may
+    /// still be serving live readers.
+    /// </summary>
+    internal static long SaturatingReclaimEligibleAtTicks(long nowTicks, TimeSpan grace)
+    {
+        var graceTicks = grace.Ticks;
+        return graceTicks > DateTime.MaxValue.Ticks - nowTicks
+            ? DateTime.MaxValue.Ticks
+            : nowTicks + graceTicks;
+    }
+
     /// <inheritdoc />
     public Task<string> GetActiveTreeIdAsync(CancellationToken cancellationToken = default)
     {
@@ -516,7 +532,7 @@ internal sealed partial class ViewMaintainerGrain
         state.State.ProjectionVersion = registration.ProjectionVersion;
         state.State.HasPendingReclaim = true;
         state.State.PendingReclaimGeneration = oldGeneration;
-        state.State.ReclaimEligibleAtTicks = DateTime.UtcNow.Ticks + ReclaimGrace.Ticks;
+        state.State.ReclaimEligibleAtTicks = SaturatingReclaimEligibleAtTicks(DateTime.UtcNow.Ticks, ReclaimGrace);
 
         // Single durable commit: readers resolving the active generation flip from
         // the old fully-built tree to the new fully-built tree with no empty window.

@@ -355,41 +355,12 @@ internal sealed class LeafCursorReporter(
         // SeedManyAsync per shard concurrently spreads the write load that
         // would otherwise be O(partitions) serialized writes through one hot
         // grain.
-        Dictionary<string, List<MaterialiserPinReport>>? byShard = null;
-        for (var i = 0; i < reports.Count; i++)
-        {
-            var report = reports[i];
-            ArgumentException.ThrowIfNullOrWhiteSpace(report.ConsumerId);
-            var key = WalMaterialiserPinRouting.ShardKey(treeName, report.ConsumerId, shardCount);
-            byShard ??= new Dictionary<string, List<MaterialiserPinReport>>(StringComparer.Ordinal);
-            if (!byShard.TryGetValue(key, out var bucket))
-            {
-                bucket = new List<MaterialiserPinReport>();
-                byShard[key] = bucket;
-            }
-
-            bucket.Add(report);
-
-            // Pre-seed the debounce state so a subsequent
-            // NoteDurableMaterialiserFrontier treats this consumer as already
-            // written through at this frontier rather than issuing a redundant
-            // durable write of the same value.
-            var debounceKey = (treeName, report.ConsumerId);
-            if (_durableDebounce.TryGetValue(debounceKey, out var current))
-            {
-                if (report.Frontier > current.LastWritten || report.CheckpointOffset > current.LastWrittenOffset)
-                {
-                    _durableDebounce[debounceKey] = (
-                        report.Frontier > current.LastWritten ? report.Frontier : current.LastWritten,
-                        Math.Max(report.CheckpointOffset, current.LastWrittenOffset),
-                        Environment.TickCount64);
-                }
-            }
-            else
-            {
-                _durableDebounce[debounceKey] = (report.Frontier, report.CheckpointOffset, Environment.TickCount64);
-            }
-        }
+        //
+        // The bucketing walk lives in a synchronous helper rather than inline
+        // here for two reasons: CollectionsMarshal ref locals are illegal in an
+        // async method, and keeping the walk's locals out of the generated state
+        // machine narrows every await this method suspends on.
+        var byShard = BucketPinReportsByShard(treeName, reports, shardCount);
 
         if (byShard is null)
         {
@@ -427,6 +398,75 @@ internal sealed class LeafCursorReporter(
                     treeName);
             }
         }
+    }
+
+    /// <summary>
+    /// Buckets <paramref name="reports"/> by routed pin-shard key and pre-seeds
+    /// the per-<c>(tree, consumer)</c> debounce state, returning
+    /// <see langword="null"/> when there is nothing to write. Synchronous by
+    /// design: the caller is <c>async</c>, where <c>CollectionsMarshal</c> ref
+    /// locals are illegal and every local the walk needs would otherwise be
+    /// hoisted into the generated state machine.
+    /// </summary>
+    /// <remarks>
+    /// Each bucket is presized from a genuine numerator and a genuine divisor -
+    /// the report count over the number of shards those reports can route to -
+    /// so the per-bucket list never walks the 4/8/16 doubling chain. The divisor
+    /// is clamped by the report count because a batch narrower than the shard
+    /// count cannot occupy every shard, and sizing each bucket by the whole
+    /// batch would multiply the over-allocation by the fan-out width.
+    /// </remarks>
+    private Dictionary<string, List<MaterialiserPinReport>>? BucketPinReportsByShard(
+        string treeName,
+        IReadOnlyList<MaterialiserPinReport> reports,
+        int shardCount)
+    {
+        if (reports.Count == 0)
+        {
+            return null;
+        }
+
+        var bucketCapacity = ShardFanout.BucketCapacity(
+            reports.Count,
+            Math.Min(Math.Max(1, shardCount), reports.Count));
+
+        Dictionary<string, List<MaterialiserPinReport>>? byShard = null;
+        for (var i = 0; i < reports.Count; i++)
+        {
+            var report = reports[i];
+            ArgumentException.ThrowIfNullOrWhiteSpace(report.ConsumerId);
+            var key = WalMaterialiserPinRouting.ShardKey(treeName, report.ConsumerId, shardCount);
+            byShard ??= new Dictionary<string, List<MaterialiserPinReport>>(StringComparer.Ordinal);
+            if (!byShard.TryGetValue(key, out var bucket))
+            {
+                bucket = new List<MaterialiserPinReport>(bucketCapacity);
+                byShard[key] = bucket;
+            }
+
+            bucket.Add(report);
+
+            // Pre-seed the debounce state so a subsequent
+            // NoteDurableMaterialiserFrontier treats this consumer as already
+            // written through at this frontier rather than issuing a redundant
+            // durable write of the same value.
+            var debounceKey = (treeName, report.ConsumerId);
+            if (_durableDebounce.TryGetValue(debounceKey, out var current))
+            {
+                if (report.Frontier > current.LastWritten || report.CheckpointOffset > current.LastWrittenOffset)
+                {
+                    _durableDebounce[debounceKey] = (
+                        report.Frontier > current.LastWritten ? report.Frontier : current.LastWritten,
+                        Math.Max(report.CheckpointOffset, current.LastWrittenOffset),
+                        Environment.TickCount64);
+                }
+            }
+            else
+            {
+                _durableDebounce[debounceKey] = (report.Frontier, report.CheckpointOffset, Environment.TickCount64);
+            }
+        }
+
+        return byShard;
     }
 
     /// <summary>
@@ -579,18 +619,35 @@ internal sealed class LeafCursorReporter(
     /// persists to. Returns a single legacy-slot group when
     /// <paramref name="bucketCount"/> is one.
     /// </summary>
-    private static Dictionary<string, List<MaterialiserPinReport>> GroupByBucketSlot(
+    /// <remarks>
+    /// Each bucket is presized from a real numerator and a real divisor - the
+    /// report count over the bucket count those reports can occupy - so the
+    /// per-bucket list never walks the 4/8/16 doubling chain. The divisor is
+    /// clamped by the report count because a batch narrower than the layout
+    /// width cannot occupy every bucket, and sizing every bucket for the whole
+    /// batch would multiply the over-allocation by the layout width.
+    /// </remarks>
+    internal static Dictionary<string, List<MaterialiserPinReport>> GroupByBucketSlot(
         IReadOnlyList<MaterialiserPinReport> reports,
         int bucketCount)
     {
         var grouped = new Dictionary<string, List<MaterialiserPinReport>>(StringComparer.Ordinal);
+        if (reports.Count == 0)
+        {
+            return grouped;
+        }
+
+        var bucketCapacity = ShardFanout.BucketCapacity(
+            reports.Count,
+            Math.Min(Math.Max(1, bucketCount), reports.Count));
+
         for (var i = 0; i < reports.Count; i++)
         {
             var report = reports[i];
             var slot = WalMaterialiserPinRouting.BucketStateName(report.ConsumerId, bucketCount);
             if (!grouped.TryGetValue(slot, out var list))
             {
-                list = new List<MaterialiserPinReport>();
+                list = new List<MaterialiserPinReport>(bucketCapacity);
                 grouped[slot] = list;
             }
 

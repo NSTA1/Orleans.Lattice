@@ -530,6 +530,10 @@ public class ChangeFeedTests
 
         var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
 
+        // Pin the yielded set first: without it, a feed that yielded nothing
+        // would satisfy the "every entry carries the resolved mode" claim
+        // vacuously, and the re-stamp seam would go untested.
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "k1", "k2" }));
         Assert.That(entries.Select(e => e.Mode), Is.All.EqualTo(LatticeMergeMode.OrSet));
         resolver.Received().Resolve(Tree);
     }

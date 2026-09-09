@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tenancy.Tests;
 /// carrying the tenant id on a breach.
 /// </summary>
 [TestFixture]
-public sealed class LatticeTenantAdmissionControllerTests
+public sealed partial class LatticeTenantAdmissionControllerTests
 {
     private const string Tree = "orders";
     private static readonly TenantId Acme = TenantId.Parse("acme");

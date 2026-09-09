@@ -63,7 +63,6 @@ public sealed class LatticeBackupCaptureMergeModeTests
         await DeployAsync(declaredMode: LatticeMergeMode.OrSet);
         var descriptors = await CaptureDescriptorsAsync(SeedCrdtAsync);
 
-        Assert.That(descriptors, Is.Not.Empty);
         Assert.That(
             descriptors.Select(d => d.MergeMode),
             Is.All.EqualTo(BackupKeyMergeMode.Crdt));
@@ -132,6 +131,14 @@ public sealed class LatticeBackupCaptureMergeModeTests
 
         var result = await capture.CaptureAsync(
             new LatticeBackupCaptureRequest("mode-labelled", BackupScopeSelector.WholeTree(Tree)));
+
+        // Every caller asserts a per-key label with Is.All or a by-key lookup,
+        // both of which say nothing about an empty descriptor set. Guarding once
+        // here covers all of them, and any case added later.
+        Assert.That(
+            result.Manifest.KeyDescriptors,
+            Is.Not.Empty,
+            "a capture over a seeded tree must describe its keys, or the label assertions are vacuous");
 
         return result.Manifest.KeyDescriptors;
     }

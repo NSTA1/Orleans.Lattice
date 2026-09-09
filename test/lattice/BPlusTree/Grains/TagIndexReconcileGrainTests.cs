@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// silo. The end-to-end digest-gated sweep is covered by the integration suite.
 /// </summary>
 [TestFixture]
-public class TagIndexReconcileGrainTests
+public partial class TagIndexReconcileGrainTests
 {
     private const string IndexName = "test-index";
 
