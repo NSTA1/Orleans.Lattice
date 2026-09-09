@@ -270,4 +270,21 @@ Three properties are worth knowing when reading a scrape:
 
 ## Graceful shutdown
 
-On `SIGTERM` (a `docker stop` or `restart`) the host flips readiness to not-ready first, then drains: the silo deactivates and the WAL commit-log flushes buffered records before exit, within a generous shutdown budget, so an in-flight write is durable after restart.
+On `SIGTERM` (a `docker stop` or `restart`) the host flips readiness to not-ready first, then drains: the silo deactivates and the WAL commit-log flushes buffered records before exit, so an in-flight write is durable after restart.
+
+**The budget for that drain is 90 seconds, and it belongs to the host, not to Docker.** The host sets `HostOptions.ShutdownTimeout` to 90s (`RepoContextHostBuilder.ShutdownBudget`), and Docker's own `stop_grace_period` defaults to **10 seconds**. A budget the container will not grant is dead configuration: the two are enforced independently, the smaller one wins, and the process is `SIGKILL`ed at 10s with the drain still in flight. That was issue #2389, and this compose file's `stop_grace_period: 120s` is what makes the 90s reachable. It has to exceed the host budget rather than merely exceed some measured drain time, because a larger index moves the drain but not the bound; `RepoContextComposeShutdownBudgetTests` asserts that relationship so the two values cannot drift apart unnoticed.
+
+If you run this image under your own orchestration, you must grant the same budget there. Kubernetes has the identical trap under a different name: `terminationGracePeriodSeconds` defaults to 30s, which is also less than 90.
+
+The drain is observable rather than inferred, so the budget can be derived instead of bisected. The host logs one line when a drain starts and one when it completes:
+
+```text
+RepoContext drain started: ... The host shutdown budget is 90s; ...
+RepoContext drain complete in 33.9s (host shutdown budget 90s). ...
+```
+
+Read the second line's duration to learn what your corpus actually needs. Its **absence** is the signal that matters: `ApplicationStopped` fires only after every hosted service has stopped, so a log that ends with the start line and no completion line means the container was killed mid-drain and the grace period is too small. That is worth having because the exit code cannot tell you: a killed container reports `137`, but the next `docker start` overwrites it, so by the time anyone looks the evidence is gone.
+
+Measured drains for scale, and they are worth reading carefully. The same 400-file rig drained in **33.9s** before its vector trees had landed and in **67.2s** once they had - so drain time scales with resident state, and the second figure is already three quarters of the 90s the host allows. This is why the value to clear is the host budget rather than an observed drain: a `stop_grace_period` tuned to the first measurement would have looked carefully chosen and would have begun killing teardowns as the index grew, reintroducing the defect silently.
+
+It also means the host budget itself is a finite resource, not merely a formality. If a drain ever exceeds 90s the **host** abandons it, and no `stop_grace_period` can rescue that - `ShutdownBudget` would have to rise, and this compose value with it. A drain-complete line reporting a duration close to 90s is the signal to do so.

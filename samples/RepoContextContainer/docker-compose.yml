@@ -60,6 +60,16 @@ services:
       EMBED_PROVIDER: cpu
     expose:
       - "9000"
+    # The embedder holds NO durable state: its weights are baked into an image
+    # layer and the base file mounts it no volume, so there is nothing to flush
+    # and Docker's 10s default would in fact be adequate here. It is set
+    # explicitly anyway, and deliberately short, so that the value is a decision
+    # on the record rather than an omission. The repocontext service below was
+    # left to the same default for years while its documentation promised a
+    # "generous shutdown budget" (issue #2389); the cost of that was not the
+    # default itself but that nothing distinguished "10s is enough here" from
+    # "nobody considered it". A reader of this file can now tell the two apart.
+    stop_grace_period: 30s
     # Survive a daemon/host restart like the repocontext service does. Without
     # this the embedder's default `no` policy leaves it stopped after a Docker
     # daemon restart while repocontext (unless-stopped) comes back on its own,
@@ -184,6 +194,40 @@ services:
       # (the repo root's parent), NOT the repo root itself.
       - ${REPO_PATH:-../../..}:/workspace:ro
     restart: unless-stopped
+    # How long Docker waits between SIGTERM and SIGKILL. This MUST exceed the
+    # host's own shutdown budget (RepoContextHostBuilder.ShutdownBudget, 90s) or
+    # that budget is dead configuration: the host asks for 90s to deactivate the
+    # silo and flush the WAL commit-log, and Docker's default grants 10s, so
+    # every `docker compose stop` / `restart` / `down` is a crash teardown and
+    # the graceful deactivation path never completes. That was issue #2389, and
+    # it was invisible because a SIGKILLed container reports only an exit code
+    # that the next start overwrites.
+    #
+    # 120s = the 90s the host is entitled to, plus 30s of headroom for process
+    # exit after the last hosted service stops. Measured, not guessed - and the
+    # measurements are the reason the bound to clear is the HOST budget rather
+    # than any one corpus's drain time. A rig holding a 400-file synthetic index
+    # spent 67.2s in Orleans' GrainDeactivation stage alone, and the same rig
+    # earlier drained the same corpus in 33.9s before its vector trees had
+    # landed. Drain time scales with resident state; the 90s ceiling does not.
+    #
+    # Note what that pair implies, because it is the trap this value has to
+    # survive: a `stop_grace_period` tuned to an observed drain would have been
+    # set to something like 45s after the first measurement and would then have
+    # started killing teardowns as the index grew, reintroducing #2389 silently
+    # and with a number that looked carefully chosen. Clearing the host budget is
+    # what makes the value stable as the corpus grows.
+    #
+    # Do not lower this below the host budget. If you raise ShutdownBudget, raise
+    # this too: RepoContextComposeShutdownBudgetTests asserts the relationship, so
+    # the two cannot drift apart unnoticed.
+    #
+    # The drain is observable rather than inferred. The host logs
+    # "RepoContext drain complete in <n>s" once every hosted service has stopped,
+    # so `docker logs` after a stop tells you the measured requirement directly;
+    # if that line is ABSENT, the container was killed mid-drain and this value is
+    # too small.
+    stop_grace_period: 120s
     # Cap container log growth: the periodic self-index reconcile (every
     # LATTICE_RECONCILE_INTERVAL_SECONDS) logs continuously, so the default
     # unbounded json-file driver would grow without limit. Rotate at

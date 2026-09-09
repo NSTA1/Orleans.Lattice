@@ -308,5 +308,25 @@ curl -fsS http://localhost:8080/metrics | head -n 20
   missing or not writable by its non-root UID.
 - On `SIGTERM` (a `docker stop` / `restart`) the host flips readiness to not-ready
   first, then drains: the silo deactivates and the WAL commit-log flushes buffered
-  records before exit, within a generous shutdown budget, so an in-flight write is
-  durable after restart.
+  records before exit, so an in-flight write is durable after restart.
+- **That drain's budget is 90 seconds and it belongs to the host, not to Docker.**
+  The host sets `HostOptions.ShutdownTimeout` to 90s
+  (`RepoContextHostBuilder.ShutdownBudget`); Docker's `stop_grace_period` defaults
+  to **10 seconds**. The two are enforced independently and the smaller wins, so
+  without an explicit `stop_grace_period` the process is `SIGKILL`ed at 10s with
+  the drain still running and the 90s is dead configuration (issue #2389). The
+  `stop_grace_period: 120s` in `docker-compose.yml` is what makes it reachable.
+  If you run this image under your own orchestration you must grant the same
+  budget there - Kubernetes has the identical trap under a different name, since
+  `terminationGracePeriodSeconds` defaults to 30s.
+- The drain reports its own duration, so the budget can be derived rather than
+  bisected. `docker logs` carries `RepoContext drain complete in <n>s` once every
+  hosted service has stopped. The **absence** of that line is the useful signal:
+  it means the container was killed mid-drain. The exit code will not tell you,
+  because a killed container reports `137` and the next `docker start` overwrites
+  it. Drain time scales with resident state: the same 400-file rig drained in
+  33.9s before its vector trees had landed and 67.2s once they had, which is
+  already three quarters of the 90s budget. If a drain ever exceeds 90s the
+  *host* abandons it and no `stop_grace_period` can rescue that, so a
+  drain-complete line reporting a duration near 90s means `ShutdownBudget` needs
+  raising, not just this compose value.
