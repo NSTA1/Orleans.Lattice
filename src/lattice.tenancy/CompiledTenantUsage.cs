@@ -81,7 +81,16 @@ internal sealed class CompiledTenantUsage
         ArgumentNullException.ThrowIfNull(usage);
         ArgumentNullException.ThrowIfNull(localClusterId);
 
-        var usageById = new Dictionary<string, TenantUsageRecord>(StringComparer.Ordinal);
+        // Both accumulators are folded from an enumeration whose element count is
+        // an exact upper bound on the map's final size (at most one entry per
+        // source record). The production caller - TenantUsageIndexMaintainer -
+        // materialises both scans into List<T> before compiling, so the count is
+        // already in hand and the whole grow/rehash chain is avoidable. Probe for
+        // it through ICollection<T> rather than widening the signature, so a
+        // lazily-enumerated caller still works and simply gets no hint.
+        var usageById = usage is ICollection<TenantUsageRecord> usageCollection
+            ? new Dictionary<string, TenantUsageRecord>(usageCollection.Count, StringComparer.Ordinal)
+            : new Dictionary<string, TenantUsageRecord>(StringComparer.Ordinal);
         foreach (var record in usage)
         {
             if (record is not null && record.Id.Value is { } id)
@@ -90,7 +99,9 @@ internal sealed class CompiledTenantUsage
             }
         }
 
-        var tenants = new Dictionary<string, TenantUsageView>(StringComparer.Ordinal);
+        var tenants = registry is ICollection<TenantRecord> registryCollection
+            ? new Dictionary<string, TenantUsageView>(registryCollection.Count, StringComparer.Ordinal)
+            : new Dictionary<string, TenantUsageView>(StringComparer.Ordinal);
         foreach (var record in registry)
         {
             if (record is null || record.Id.Value is not { } id)

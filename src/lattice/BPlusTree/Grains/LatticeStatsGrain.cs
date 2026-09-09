@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -80,7 +81,21 @@ internal sealed class LatticeStatsGrain(
         var shardReports = await Task.WhenAll(tasks);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var sortedShards = shardReports.OrderBy(s => s.ShardIndex).ToImmutableArray();
+        // ShardMap.GetPhysicalShardIndices() returns ascending, de-duplicated
+        // physical indices (both of its branches emit sorted output), and the
+        // dispatch above preserves that order positionally, so the reports come
+        // back already ordered by ShardIndex. The old
+        // `OrderBy(...).ToImmutableArray()` therefore paid a full LINQ ordering
+        // pipeline - the OrderedEnumerable, a buffered copy of the source, the
+        // projected key array and the sort map - plus a second copy into the
+        // immutable array, to produce the order it already had. Verify the order
+        // with a single scan, sort in place only on the (non-production) path
+        // where a hand-built or wire-deserialised map broke it, and hand the
+        // array itself to the immutable wrapper: shardReports is the freshly
+        // allocated Task.WhenAll result and is never observed elsewhere, so the
+        // no-copy wrap cannot expose a mutable alias.
+        SortByShardIndexIfNeeded(shardReports);
+        var sortedShards = ImmutableCollectionsMarshal.AsImmutableArray(shardReports);
 
         long totalLive = 0;
         long totalTombstones = 0;
@@ -98,10 +113,35 @@ internal sealed class LatticeStatsGrain(
             TotalLiveKeys = totalLive,
             TotalTombstones = totalTombstones,
             Shards = sortedShards,
-            RecentSplits = _recentSplits.ToImmutableArray(),
+            RecentSplits = ImmutableCollectionsMarshal.AsImmutableArray(_recentSplits.ToArray()),
             SampledAt = DateTimeOffset.UtcNow,
             Deep = deep,
         };
+    }
+
+    /// <summary>
+    /// Orders <paramref name="reports"/> ascending by
+    /// <see cref="ShardDiagnosticReport.ShardIndex"/>, in place and without
+    /// allocating, skipping the sort entirely when the array is already ordered -
+    /// which every production dispatch is, because the physical shard indices it
+    /// fans out over are themselves ascending. Physical indices are distinct, so
+    /// the unstable in-place sort on the fallback path is order-equivalent to the
+    /// stable LINQ ordering it replaces.
+    /// </summary>
+    /// <remarks>
+    /// Internal rather than private so the microbenchmark host can drive the
+    /// real shipped ordering rather than a copied shell.
+    /// </remarks>
+    internal static void SortByShardIndexIfNeeded(ShardDiagnosticReport[] reports)
+    {
+        for (var i = 1; i < reports.Length; i++)
+        {
+            if (reports[i - 1].ShardIndex > reports[i].ShardIndex)
+            {
+                Array.Sort(reports, static (a, b) => a.ShardIndex.CompareTo(b.ShardIndex));
+                return;
+            }
+        }
     }
 
     private async Task<ShardDiagnosticReport> GetShardDiagnosticsAsync(

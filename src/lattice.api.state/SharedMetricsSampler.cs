@@ -239,7 +239,12 @@ internal sealed class SharedMetricsSampler(
             ? await SampleViewLagAsync(request.IncludeSystemTrees, cancellationToken).ConfigureAwait(false)
             : null;
 
-        var result = new Dictionary<string, TreeMetrics>(StringComparer.Ordinal);
+        // treeIds is already ordinally de-duplicated (DistinctOrdinal) or a
+        // catalog enumeration of distinct ids, and the loop stores at most one
+        // entry per id, so treeIds.Count is an exact upper bound on the final
+        // size. Hinting it removes the whole grow/rehash chain this map
+        // otherwise pays on every tick of the shared sampling loop.
+        var result = new Dictionary<string, TreeMetrics>(treeIds.Count, StringComparer.Ordinal);
         foreach (var treeId in treeIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
