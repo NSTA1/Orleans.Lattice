@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice</PackageId>
-    <Version>9.6.1</Version>
+    <Version>9.6.2</Version>
     <Description>Distributed B+ tree implementation (with CRDT primitives) for Microsoft Orleans.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
