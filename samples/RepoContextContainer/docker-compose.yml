@@ -126,6 +126,27 @@ services:
       # Verify what actually bound: the silo logs the resolved ceiling once at
       # startup, alongside the configured option and Environment.ProcessorCount,
       # so a value that was ignored is visible rather than merely assumed.
+      # MEMORY. This box needs FAR more than a default Docker VM allocation, and
+      # under-provisioning it fails in a way that does not look like memory
+      # (issue #2364). Measured on a ~8000-file index: steady-state working set
+      # settled at about 10.2 GiB, so budget at least 12 GiB for the host
+      # container. A single-variable run - same image, same volume, same corpus,
+      # only the limit differing - produced 756 OutOfMemoryException and 528
+      # failed grain activations at 4 GiB, and zero of each at 12 GiB.
+      #
+      # No memory limit is declared here on purpose, for the same reason as the
+      # CPU ceiling above: the right number is a property of your corpus, not of
+      # this file. Measure yours rather than copying 12.
+      #
+      # The failure mode is why this is worth stating. A cgroup limit becomes the
+      # .NET GC heap HARD limit, so the process is not OOM-killed: there is no
+      # restart, no exit code and no resource event. Instead the allocation for a
+      # leaf-snapshot deserialisation fails, the snapshot read fails, and the leaf
+      # activates COLD and replays its whole WAL window - which raises pressure
+      # further. What an operator sees is a STORAGE error, so the box looks slow
+      # and flaky rather than short of memory. Watch
+      # orleans.lattice.leaf.snapshot.load_failures with reason=resource_exhausted
+      # to name it directly.
       # The read-only workspace root. Repositories are registered at runtime by
       # the client through the repocontext_add_repo tool, and every added path
       # must resolve under this root - a path escaping it (via `..` or a symlink)
