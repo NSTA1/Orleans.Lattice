@@ -18,7 +18,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// <summary>
 /// Assembles the RepoContext MCP container host: a single ASP.NET Core web
 /// application whose <b>only application listener is the MCP endpoint</b> (plus
-/// HTTP health probes, and in the azure profile the scaling scrape). It composes
+/// HTTP health probes, the Prometheus scrape endpoint, and in the azure profile
+/// the scaling scrape). It composes
 /// the already-shipped seams - the core silo, the file/Azure WAL, the MCP binding
 /// with the repository-context tool module, the Onyx embedding provider, and the
 /// membership/auth stack - behind an environment-selected durability profile with
@@ -37,6 +38,20 @@ public static class RepoContextHostBuilder
 
     /// <summary>The readiness probe path (silo joined, replay done, stores reachable, MCP serving).</summary>
     public const string ReadinessPath = "/health/ready";
+
+    /// <summary>
+    /// The Prometheus scrape path. Serves every instrument published on a
+    /// Lattice-owned meter in the process, in the standard text exposition format.
+    /// </summary>
+    /// <remarks>
+    /// The image is distroless, so there is no shell to read a counter from inside
+    /// the container; without this endpoint every instrument the host publishes is
+    /// unreadable in the one deployment that needs it, which is what issue #2363
+    /// records. The path is unauthenticated for the same reason the health probes
+    /// are: it is reachable only on the container's own listener, and it carries
+    /// aggregate counters rather than repository content.
+    /// </remarks>
+    public const string MetricsPath = "/metrics";
 
     /// <summary>The health-check tag identifying the liveness probe.</summary>
     public const string LivenessTag = "live";
@@ -90,6 +105,15 @@ public static class RepoContextHostBuilder
 
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton<RepoContextReadinessState>();
+
+        // Constructed here rather than resolved lazily on the first scrape: the
+        // listener starts accumulating from this point, so an instrument that
+        // records during startup (index replay, the ANN sweep) is already counted
+        // when the first scrape arrives. A lazily-created collector would silently
+        // report those as zero, which reads as a measured negative rather than as
+        // the absence of measurement it actually is.
+        var metricsCollector = new RepoContextMetricsCollector();
+        builder.Services.AddSingleton(metricsCollector);
 
         var isAzure = config.Profile == DurabilityProfile.Azure;
 
@@ -260,6 +284,13 @@ public static class RepoContextHostBuilder
         {
             Predicate = registration => registration.Tags.Contains(ReadinessTag),
         });
+
+        app.MapGet(MetricsPath, (RepoContextMetricsCollector collector) =>
+            Results.Text(collector.Render(), RepoContextPrometheusExposition.ContentType));
+
+        // Dispose is idempotent, so registering it here is safe whether or not the
+        // service provider also disposes the instance it did not create.
+        app.Lifetime.ApplicationStopped.Register(metricsCollector.Dispose);
 
         if (isAzure)
         {

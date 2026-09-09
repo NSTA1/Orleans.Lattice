@@ -1,6 +1,6 @@
 # Container quickstart
 
-The module ships as a single, restart-durable container image - "codebase memory in a box". The container's only application listener is the MCP endpoint (plus HTTP health probes); no gRPC facade and no Explorer UI are exposed. All durable state lives on a host mount, so context survives a restart, a recreate, and an image upgrade.
+The module ships as a single, restart-durable container image - "codebase memory in a box". The container's only application listener is the MCP endpoint (plus HTTP health probes and a Prometheus `/metrics` scrape endpoint); no gRPC facade and no Explorer UI are exposed. All durable state lives on a host mount, so context survives a restart, a recreate, and an image upgrade.
 
 The runnable sample is [`samples/RepoContextContainer`](../../samples/RepoContextContainer/README.md); this page summarises how it is wired.
 
@@ -11,7 +11,7 @@ flowchart LR
     agent["AI coding agent<br/>(MCP client)"]
 
     subgraph container["repocontext container"]
-        mcp["MCP listener :8080<br/>+ /health/live, /health/ready"]
+        mcp["MCP listener :8080<br/>+ /health/live, /health/ready<br/>+ /metrics"]
         silo["Orleans single silo<br/>Lattice CRDT B+ trees<br/>(structural, symbol, content, memory, vector)"]
         mcp --> silo
     end
@@ -60,7 +60,7 @@ The host is configured entirely by environment variables. The common ones:
 |---|---|---|
 | `LATTICE_DURABILITY` | `local` | The durability profile (`local`, `postgres`, `azure`). |
 | `LATTICE_DATA_ROOT` | `/data` | Root for all durable local state; must be a writable host mount. |
-| `LATTICE_MCP_PORT` | `8080` | The MCP listener port (the only application listener). |
+| `LATTICE_MCP_PORT` | `8080` | The MCP listener port. The health probes and the `/metrics` scrape endpoint are served on it too; it is the container's only application listener. |
 | `LATTICE_WORKSPACE_ROOT` | `/workspace` | The read-only root that runtime-registered repositories must resolve under; a path escaping it is refused. |
 | `LATTICE_EMBEDDING_ENDPOINT` | `http://localhost:9000` | The separate embedding companion's base address. The embedding provider is always bound, so this repoints it at the companion rather than switching semantic search on; semantic search degrades to keyword ranking whenever that address cannot be reached. Must be an absolute URI or startup fails. |
 | `LATTICE_WAL_DIR` / `LATTICE_SQLITE_PATH` | under the data root | Override the WAL directory or SQLite file path individually. |
@@ -250,6 +250,18 @@ The runtime image is distroless and shell-less, so probing is HTTP-only - there 
 
 - `GET /health/live` - process and silo host alive (liveness).
 - `GET /health/ready` - silo joined, activation-time WAL replay done, durable stores reachable, MCP serving (readiness). Not-ready during startup replay and during drain.
+
+## Metrics scraping
+
+`GET /metrics` serves a Prometheus text exposition (`text/plain; version=0.0.4`) on the same listener as MCP and the health probes, so a scraper needs no second port and no sidecar. Like the probes it is unauthenticated and always on: the listener is expected to sit on a private network, exactly as the sample compose file wires it.
+
+The endpoint exposes every instrument published on a meter whose name starts with `orleans.lattice` (case-insensitive), which covers the core `orleans.lattice` meter and every per-package meter, `Orleans.Lattice.Api.Mcp.RepoContext` included. Instruments are selected by meter *name*, never by meter instance, so an instrument is exposed regardless of which type created it.
+
+Three properties are worth knowing when reading a scrape:
+
+- An instrument that has never recorded a measurement still announces itself with `# HELP` and `# TYPE` lines and no samples, so "the instrument is absent" and "the instrument has not fired yet" are distinguishable from the payload alone.
+- A `Histogram<T>` renders as a Prometheus `summary` carrying `_sum` and `_count`. The listener reports raw measurements and does not surface bucket boundaries, so emitting a `histogram` family would mean inventing buckets.
+- The endpoint self-reports its own limits. `lattice_metrics_series` gauges the live series count and `lattice_metrics_dropped_measurements_total` counts measurements dropped once the series ceiling is reached, so a truncated scrape says so rather than reading as a quiet zero.
 
 ## Graceful shutdown
 
