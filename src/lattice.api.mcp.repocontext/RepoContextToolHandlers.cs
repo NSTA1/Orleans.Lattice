@@ -92,8 +92,9 @@ internal static class RepoContextToolHandlers
     /// that look binary (a NUL byte in their leading bytes) are dropped so compiled
     /// artefacts, images, and other blobs are not ingested.</param>
     /// <returns>The progress snapshot at acceptance, with the job running.</returns>
-    /// <exception cref="McpException">A required argument is missing, the repository
-    /// root resolves outside the workspace, or it does not exist (caller errors).</exception>
+    /// <exception cref="McpException">A required argument is missing, the workspace
+    /// boundary is not configured, the repository root resolves outside the
+    /// workspace, or it does not exist (caller errors).</exception>
     public static Task<RepoIndexProgress> BootstrapAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("Absolute path to the repository working tree the server should walk and ingest.")]
@@ -818,30 +819,10 @@ internal static class RepoContextToolHandlers
                 "A repository id could not be derived from the path; supply the 'repoId' parameter explicitly.");
         }
 
-        // Fail closed: repocontext_add_repo takes its path from the wire, and its
-        // whole contract is that the path resolves under the mounted workspace
-        // root. A guard with no configured root admits every path, so honouring
-        // the call would turn a caller-supplied string into an arbitrary local
-        // filesystem read whose contents are then served straight back by the
-        // retrieval tools. The inert guard is the deliberate opt-out for the
-        // single-repository bootstrap surface, where the path is host
-        // configuration rather than caller input - it is not a shape this tool
-        // can safely run under, so refuse rather than index. The registration
-        // extension also withholds the tool entirely in this case; this check is
-        // what covers a host that registered its own non-enforcing guard. It runs
-        // after argument validation so a malformed call still reports the
-        // parameter problem, and before any ingest work so nothing is read.
-        var addRepoServices = context.Services
-            ?? throw new InvalidOperationException(
-                "The MCP request has no service provider; the onboarding tool cannot resolve its collaborators.");
-        if (!addRepoServices.GetRequiredService<RepoContextWorkspaceGuard>().IsEnforcing)
-        {
-            throw new McpException(
-                "The repository-context workspace boundary is not configured, so 'repocontext_add_repo' is "
-                + "refused. The host must supply a workspace root (AddRepoContextTools(workspaceRoot: ...)) "
-                + "before repositories can be added at runtime.");
-        }
-
+        // The workspace-boundary refusal lives in StartIndexAsync, the one seam
+        // both onboarding tools funnel through, so add_repo and bootstrap cannot
+        // diverge on what they will read. The registration extension additionally
+        // withholds this tool entirely when no root is configured.
         return StartIndexAsync(context, path, resolvedId, includeGlobs, excludeGlobs, respectGitignore, excludeBinary);
     }
 
@@ -995,6 +976,30 @@ internal static class RepoContextToolHandlers
                 "The MCP request has no service provider; the onboarding tool cannot resolve its collaborators.");
 
         var guard = services.GetRequiredService<RepoContextWorkspaceGuard>();
+
+        // Fail closed, at the one seam every onboarding path funnels through.
+        // Both wire-facing onboarding tools - repocontext_add_repo and
+        // repocontext_bootstrap - take their path straight from an MCP tool
+        // parameter, and a guard with no configured root admits every path
+        // (Resolve short-circuits to Path.GetFullPath). Honouring either call
+        // under an inert guard would turn a caller-supplied string into an
+        // arbitrary local filesystem read whose contents the retrieval tools
+        // then serve straight back, so a data-plane write grant would escalate
+        // to disclosure of anything the silo process can read. Bootstrap's path
+        // was historically described as host configuration; it is not, it is
+        // caller input exactly like add_repo's, so the two are refused
+        // identically here rather than one of them being trusted. The
+        // registration extension additionally withholds both tools when no root
+        // is configured; this check is what covers a host that registered its
+        // own non-enforcing guard. It runs before any ingest work, so nothing is
+        // read, and before the store is resolved.
+        if (!guard.IsEnforcing)
+        {
+            throw new McpException(
+                "The repository-context workspace boundary is not configured, so repository onboarding is "
+                + "refused. The host must supply a workspace root (AddRepoContextTools(workspaceRoot: ...)) "
+                + "before a repository can be indexed from a caller-supplied path.");
+        }
 
         // Mount-versus-git mutual exclusion, enforced at the one seam that registers
         // a mounted path. A repository whose truth is declared to live in a git

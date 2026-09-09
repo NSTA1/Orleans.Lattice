@@ -144,7 +144,15 @@ internal sealed class GitRemoteSource(
         }
         catch (RepoContextGitSourceException ex)
         {
-            return Fail(request.RepoId, "the git fetch failed: " + ex.Message);
+            // Redacted like the general arm below. This arm's message is
+            // constructed in-process today and so carries no credential by
+            // construction, but that is a property of the current call sites and
+            // not of the type: redacting here keeps the guarantee a property of
+            // the seam, so a future throw site that interpolates a remote URL
+            // cannot leak the token through the one arm that skipped it.
+            return Fail(
+                request.RepoId,
+                "the git fetch failed: " + RepoContextSecretRedactor.Redact(ex.Message, credential));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

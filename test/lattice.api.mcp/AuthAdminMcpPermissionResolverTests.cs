@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans.Lattice.Api.Auth;
@@ -18,6 +19,11 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 public sealed class AuthAdminMcpPermissionResolverTests
 {
     private static AuthAdminMcpPermissionResolver CreateResolver(ILatticeAuthAdmin? admin)
+        => CreateResolver(admin, NullLogger<AuthAdminMcpPermissionResolver>.Instance);
+
+    private static AuthAdminMcpPermissionResolver CreateResolver(
+        ILatticeAuthAdmin? admin,
+        ILogger<AuthAdminMcpPermissionResolver> logger)
     {
         var services = new ServiceCollection();
         if (admin is not null)
@@ -25,9 +31,7 @@ public sealed class AuthAdminMcpPermissionResolverTests
             services.AddSingleton(admin);
         }
 
-        return new AuthAdminMcpPermissionResolver(
-            services.BuildServiceProvider(),
-            NullLogger<AuthAdminMcpPermissionResolver>.Instance);
+        return new AuthAdminMcpPermissionResolver(services.BuildServiceProvider(), logger);
     }
 
     private static LatticeAuthorizationRule Rule(LatticeOperation operations, LatticeEffect effect)
@@ -272,6 +276,90 @@ public sealed class AuthAdminMcpPermissionResolverTests
         await resolver.ResolveAsync(new LatticeCredential("the-token"), CancellationToken.None);
 
         await admin.Received(1).EffectivePermissionsAsync("the-token", Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Security regression. The lookup key is deliberately unchanged - a host may
+    /// have provisioned rules against whatever its bridge puts in the credential,
+    /// so narrowing it would silently revoke access - but the value that gets
+    /// <b>written out</b> must not be the caller's bearer secret. Both failure
+    /// arms log the subject, and when no principal id was resolved that subject
+    /// was the token itself, so an ordinary backend blip rested a live credential
+    /// in the server's logs for as long as they are retained.
+    /// </summary>
+    [Test]
+    public async Task A_failure_log_never_carries_the_raw_token_as_the_subject()
+    {
+        var admin = Substitute.For<ILatticeAuthAdmin>();
+        admin.EffectivePermissionsAsync(Arg.Any<string>(), Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>())
+            .Returns<Task<AuthEffectivePermissions>>(_ => throw new InvalidOperationException("boom"));
+        var logger = new CapturingLogger();
+        var resolver = CreateResolver(admin, logger);
+
+        await resolver.ResolveAsync(new LatticeCredential("super-secret-token"), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(logger.Messages, Is.Not.Empty, "the fail-closed arm must still say why it failed");
+            Assert.That(
+                logger.Messages.Any(m => m.Contains("super-secret-token", StringComparison.Ordinal)),
+                Is.False,
+                "a bearer token must never be written to the log");
+            Assert.That(
+                logger.Messages.Any(m => m.Contains("token:", StringComparison.Ordinal)),
+                Is.True,
+                "the fingerprint still identifies the caller in the log");
+        });
+    }
+
+    [Test]
+    public async Task A_transient_failure_log_never_carries_the_raw_token_as_the_subject()
+    {
+        var admin = Substitute.For<ILatticeAuthAdmin>();
+        admin.EffectivePermissionsAsync(Arg.Any<string>(), Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>())
+            .Returns<Task<AuthEffectivePermissions>>(
+                _ => throw new RpcException(new Status(StatusCode.Unavailable, "backend stalled")));
+        var logger = new CapturingLogger();
+        var resolver = CreateResolver(admin, logger);
+
+        try
+        {
+            await resolver.ResolveAsync(new LatticeCredential("super-secret-token"), CancellationToken.None);
+        }
+        catch (LatticeApiMcpDiscoveryUnavailableException)
+        {
+            // Expected: the retryable arm is asserted elsewhere; what matters here
+            // is what it wrote on the way out.
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(logger.Messages, Is.Not.Empty);
+            Assert.That(
+                logger.Messages.Any(m => m.Contains("super-secret-token", StringComparison.Ordinal)),
+                Is.False,
+                "a bearer token must never be written to the log");
+        });
+    }
+
+    /// <summary>Captures formatted log messages so a test can assert on what was written.</summary>
+    private sealed class CapturingLogger : ILogger<AuthAdminMcpPermissionResolver>
+    {
+        private readonly List<string> _messages = [];
+
+        public IReadOnlyList<string> Messages => _messages;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => _messages.Add(formatter(state, exception));
     }
 
     [Test]

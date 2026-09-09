@@ -251,14 +251,36 @@ public sealed class RepoContextToolHandlerDispatchTests
     [Test]
     public async Task BootstrapAsync_rejects_a_root_that_does_not_exist()
     {
+        // An enforcing guard: the boundary check now precedes the directory check,
+        // so an inert guard would short-circuit before reaching what this pins.
         var workspace = NewWorkspace();
         var missing = Path.Combine(workspace, "nope");
-        var context = await ContextWith(s => s.AddSingleton(new RepoContextWorkspaceGuard([])));
+        var context = await ContextWith(s => s.AddSingleton(new RepoContextWorkspaceGuard([workspace])));
 
         Assert.That(
             () => RepoContextToolHandlers.BootstrapAsync(context, missing, "acme"),
             Throws.InstanceOf<McpException>()
                 .With.Message.Contains("does not exist or is not a directory"));
+    }
+
+    /// <summary>
+    /// The handler-side half of the arbitrary-local-read regression: even if a
+    /// host contributes <c>repocontext_bootstrap</c> itself, or registers its own
+    /// non-enforcing guard after passing a workspace root, the handler refuses
+    /// rather than indexing a wire-supplied absolute path. Advertisement gating
+    /// alone is not a security boundary.
+    /// </summary>
+    [Test]
+    public async Task BootstrapAsync_refuses_when_the_workspace_boundary_is_not_configured()
+    {
+        var outside = NewWorkspace();
+        var context = await ContextWith(s => s.AddSingleton(new RepoContextWorkspaceGuard([])));
+
+        Assert.That(
+            () => RepoContextToolHandlers.BootstrapAsync(context, outside, "acme"),
+            Throws.InstanceOf<McpException>()
+                .With.Message.Contains("workspace boundary is not configured"),
+            "an inert guard admits every absolute path, so onboarding must fail closed");
     }
 
     [Test]
@@ -280,11 +302,13 @@ public sealed class RepoContextToolHandlerDispatchTests
     {
         // A path the platform cannot even normalise (an embedded NUL) reaches
         // the guard as an ArgumentException, which must be translated rather
-        // than escaping as a framework exception.
-        var context = await ContextWith(s => s.AddSingleton(new RepoContextWorkspaceGuard([])));
+        // than escaping as a framework exception. The guard must be enforcing or
+        // the boundary refusal short-circuits before normalisation is attempted.
+        var workspace = NewWorkspace();
+        var context = await ContextWith(s => s.AddSingleton(new RepoContextWorkspaceGuard([workspace])));
 
         Assert.That(
-            () => RepoContextToolHandlers.BootstrapAsync(context, "/workspace/a\0b", "acme"),
+            () => RepoContextToolHandlers.BootstrapAsync(context, workspace + "/a\0b", "acme"),
             Throws.InstanceOf<McpException>());
     }
 

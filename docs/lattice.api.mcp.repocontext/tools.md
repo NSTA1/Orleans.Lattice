@@ -2,6 +2,8 @@
 
 The module contributes the `repocontext_*` MCP tools in two host-selected shapes. In the default **single-repository** mode it offers the read-only tools, offered to any caller whose data read-or-write permission unlocks the repository-context group, plus the mutating tools, contributed only when the host calls `AddRepoContextTools(enableWrites: true)`. In **workspace** mode - what the bundled container runs - the read-only `repocontext_list_repos` is added and the mutating `repocontext_bootstrap` is replaced by `repocontext_add_repo`, `repocontext_remove_repo`, and `repocontext_reset_index`, so the client manages many repositories under one mounted root and can repair a wedged code index without destroying the memory attached to that repository. Every tool, in either mode, clears the same fail-closed authorization gate at both advertisement and invocation.
 
+In either mode the **onboarding** tool - `repocontext_bootstrap` in single-repository mode, `repocontext_add_repo` in workspace mode - takes the working tree to walk from the wire, so it additionally requires a configured workspace root. Pass `workspaceRoot` to `AddRepoContextTools`, or register an enforcing `RepoContextWorkspaceGuard` before it; without one the tool is not contributed and refuses at invocation, because an unbounded guard would let any caller with a write grant have the server index an arbitrary directory on the host.
+
 ## Read-only tools
 
 Always contributed to a caller whose effective permissions include a data-plane operation that unlocks the repository-context group, regardless of the `enableWrites` flag.

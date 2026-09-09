@@ -74,12 +74,20 @@ internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionR
             return LatticeApiMcpAccessSet.None;
         }
 
+        // Two distinct values, deliberately. `subjectId` is the lookup key handed
+        // to the auth admin and keeps its historical shape exactly, so no host's
+        // resolution behaviour changes. `logSubjectId` is what gets written out:
+        // when the credential carries no principal id the lookup key IS the
+        // caller's bearer token, and logging that would rest a live secret in the
+        // server's logs for as long as they are retained. Log the one-way
+        // fingerprint instead - it still correlates a caller across lines.
         var subjectId = ResolveSubjectId(credential);
         if (string.IsNullOrEmpty(subjectId))
         {
             return LatticeApiMcpAccessSet.None;
         }
 
+        var logSubjectId = LatticeApiMcpSubjectId.Resolve(credential);
         AuthEffectivePermissions permissions;
         try
         {
@@ -105,7 +113,7 @@ internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionR
                 ex,
                 "Resolving MCP facade-group access for subject '{SubjectId}' hit a transient backend fault; "
                 + "surfacing a retryable discovery error rather than a falsely narrow tool set.",
-                subjectId);
+                logSubjectId);
             throw new LatticeApiMcpDiscoveryUnavailableException(
                 "MCP tool discovery could not resolve the caller's effective permissions because the "
                 + "authorization backend was transiently unavailable. Retry the session.",
@@ -116,13 +124,22 @@ internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionR
             _logger.LogWarning(
                 ex,
                 "Resolving MCP facade-group access for subject '{SubjectId}' failed; failing closed.",
-                subjectId);
+                logSubjectId);
             return LatticeApiMcpAccessSet.None;
         }
 
         return MapGroups(permissions);
     }
 
+    /// <summary>
+    /// The value the auth-admin lookup is keyed on. Unchanged deliberately: a host
+    /// may have provisioned rules against whatever its bridge puts in the
+    /// credential, so narrowing this would silently revoke access. It is a lookup
+    /// key only and is never logged or returned - see
+    /// <see cref="LatticeApiMcpSubjectId"/> for the reported form.
+    /// </summary>
+    /// <param name="credential">The resolved caller credential.</param>
+    /// <returns>The lookup key, or <see langword="null"/> when the credential carries neither field.</returns>
     private static string? ResolveSubjectId(LatticeCredential credential)
         => !string.IsNullOrEmpty(credential.PrincipalId) ? credential.PrincipalId
             : !string.IsNullOrEmpty(credential.Token) ? credential.Token
