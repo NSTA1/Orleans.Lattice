@@ -1,0 +1,59 @@
+# Per work-item duration estimates, in minutes, used ONLY to bin-pack the test
+# matrix. Nothing about correctness depends on these numbers: a wrong estimate
+# makes a leg longer or shorter than its neighbours, it never changes which
+# tests run. Treat the file as a scheduling hint, not a specification.
+#
+# Format:  <package> <TAB> <shard> <TAB> <tier> <TAB> <minutes>
+# A shard of "-" means the package runs unsharded, and an unsharded package
+# runs every tier in ONE invocation, so its tier here is "all". Only a sharded
+# package is split into deterministic | coyote | chaos rows, because only there
+# does the split buy concurrency rather than extra process starts.
+#
+# These are test times only. plan-test-matrix.py adds a fixed per-invocation
+# overhead on top, so do not try to bake process start into the numbers here.
+#
+# Only non-trivial items are listed. Anything absent falls back to the defaults
+# in plan-test-matrix.py, which are deliberately small: the long tail of this
+# repository really is near-instant (37 of 46 packages run in about 0.1 min
+# each), so defaulting them low is right and the packages that matter are all
+# named below.
+#
+# PROVENANCE. The package rows are MEASURED, read off the per-package group
+# timestamps in the CI log of the 40-minute run on the branch
+# perf/aggregation-materialise-and-tag-index-trims, where the dependency
+# closure selected all 46 packages. The `lattice` shard rows are ESTIMATES:
+# the measured totals for that package (9.1 deterministic, 0.2 coyote, 8.6
+# chaos) split across the shards by fixture count and by whether the fixtures
+# spin up an Orleans TestCluster. They are guesses and are expected to be
+# wrong; replace them with the per-shard figures the first matrix run reports.
+
+# -- lattice, sharded (ESTIMATES, see above; tier totals are measured) --------
+lattice	bplustree	deterministic	4.5
+lattice	bplustree-grains	deterministic	2.0
+lattice	crdt-views-wal	deterministic	1.0
+lattice	rest	deterministic	0.9
+lattice	primitives	deterministic	0.5
+lattice	bplustree-state	deterministic	0.2
+lattice	bplustree	chaos	3.6
+lattice	bplustree-chaos	chaos	2.6
+lattice	bplustree-chaos-predicate	chaos	2.4
+lattice	bplustree	coyote	0.2
+
+# -- other packages, unsharded (MEASURED, tiers summed) ----------------------
+lattice.replication	-	all	2.6
+lattice.api.mcp.repocontext	-	all	2.5
+lattice.api.state	-	all	1.8
+lattice.backup	-	all	1.7
+lattice.storage.azuretable	-	all	1.0
+lattice.api.backup	-	all	0.8
+lattice.api.state.grpc	-	all	0.7
+lattice.auth	-	all	0.6
+lattice.tenancy	-	all	0.4
+lattice.api.backup.grpc	-	all	0.3
+lattice.explorer	-	all	0.3
+lattice.grainindex	-	all	0.3
+lattice.vector	-	all	0.3
+lattice.api.data	-	all	0.2
+lattice.membership.oidc	-	all	0.2
+lattice.replication.grpc	-	all	0.2
+lattice.schema	-	all	0.2

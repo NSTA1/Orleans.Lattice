@@ -330,7 +330,7 @@ jobs:
       - name: Test durable active-active release gate
         run: dotnet test test/lattice.integration/Orleans.Lattice.Integration.Tests.csproj --no-build --configuration Release --filter "TestCategory=AzureStorageEmulator&TestCategory!=Chaos" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
 
-      - name: Test (chaos first - isolate flaky-prone surface)
+      - name: Test (chaos)
         if: steps.parse.outputs.TEST_PROJECT != ''
         run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory=Chaos&TestCategory!=AzureStorageEmulator" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
 

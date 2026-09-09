@@ -1,0 +1,285 @@
+name: CI (matrix prototype)
+
+# PROTOTYPE. This workflow exists to measure a change to how ci.yml schedules
+# its tests, without touching ci.yml or interfering with any other run. It is
+# deliberately inert unless you ask for it:
+#
+#   * `workflow_dispatch` runs it on demand against any ref.
+#   * On a pull request it runs ONLY when the PR carries the
+#     `ci-matrix-prototype` label. Every job is gated on that, so an unlabelled
+#     pull request skips instantly and costs nothing.
+#
+# It publishes no check name that `main` requires, and its concurrency group is
+# its own, so cancelling or re-running it cannot disturb `build-and-test`.
+#
+# WHAT IT CHANGES. ci.yml runs every selected package's tests serially inside
+# one job on one two-core runner: deterministic, then Coyote, then chaos. When
+# the dependency closure selects all 46 packages that is about 36 minutes of
+# test time, of which roughly half is `test/lattice` alone and about 4 minutes
+# is the other 37 packages combined. The problem is not the breadth of the
+# selection, it is that none of it overlaps.
+#
+# Here the same selection is planned into balanced legs that run on separate
+# runners, and `test/lattice` is additionally split into shards so it stops
+# being the floor. The chaos tier then costs no wall-clock at all: it runs
+# beside the deterministic tier rather than queueing behind it.
+#
+# The parallelism is deliberately ACROSS RUNNERS and never two `dotnet test`
+# processes on one runner. These are Orleans TestCluster fixtures with real
+# timing assumptions, and a standard runner has two cores; co-scheduling suites
+# on one machine would contend for CPU and manufacture the flakiness this
+# repository no longer has. `[NonParallelizable]` would not protect against
+# that, because it only governs ordering within a single process.
+
+on:
+  workflow_dispatch:
+    inputs:
+      simulate:
+        description: 'Which change to plan for'
+        type: choice
+        default: core
+        options:
+          - diff
+          - core
+          - all
+      base_ref:
+        description: 'Base ref for simulate=diff (default: origin/main)'
+        type: string
+        default: ''
+      max_legs:
+        description: 'Maximum number of parallel legs'
+        type: string
+        default: '10'
+  pull_request:
+    branches: [main, '*/epic/**', 'release/**']
+    # `labeled` is load-bearing: the jobs are gated on the label, so without it
+    # applying the label to an open pull request would not start a run.
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-matrix-prototype-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    # The label gate. Without it this workflow would fan out on every pull
+    # request in the repository and compete with `build-and-test` for runners.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || contains(github.event.pull_request.labels.*.name, 'ci-matrix-prototype')
+    outputs:
+      legs: ${{ steps.plan.outputs.legs }}
+      leg_count: ${{ steps.plan.outputs.leg_count }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Load-bearing, exactly as in ci.yml: the selector diffs against the
+          # MERGE BASE using the three-dot form, which needs the common
+          # ancestry of both commits present locally. A shallow clone makes
+          # that diff fail outright.
+          fetch-depth: 0
+
+      - name: Resolve the change set
+        id: changes
+        env:
+          SIMULATE: ${{ github.event.inputs.simulate || 'diff' }}
+          BASE_REF: ${{ github.event.inputs.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          case "$SIMULATE" in
+            core)
+              # Seed the core library so the ProjectReference closure fans out
+              # to every dependent package. This is the worst case the
+              # prototype exists to measure, reproducible without needing a
+              # real pull request.
+              echo 'src/lattice/Primitives/GCounter.cs' > /tmp/changed-files.txt
+              ;;
+            all)
+              # A root file seeds no package, which makes the selector fall
+              # back to selecting all of them.
+              echo 'Orleans.Lattice.slnx' > /tmp/changed-files.txt
+              ;;
+            *)
+              if [ -z "${BASE_SHA:-}" ]; then
+                base="${BASE_REF:-origin/main}"
+                git fetch --no-tags --quiet origin main || true
+                BASE_SHA="$(git rev-parse "$base")"
+                HEAD_SHA="$(git rev-parse HEAD)"
+              fi
+              # THREE-dot: diff against the merge base, so this reports what
+              # THIS branch changed and not the reverse of everything merged
+              # into the base since it was cut. See ci.yml for the full
+              # argument, and CiChangeDetectionDiffFormTests for the guard.
+              git diff --name-only "$BASE_SHA...$HEAD_SHA" > /tmp/changed-files.txt
+              ;;
+          esac
+
+          echo "Changed files considered:"
+          cat /tmp/changed-files.txt
+
+      - name: Select packages
+        run: |
+          set -euo pipefail
+          .github/workflows/select-test-packages.sh \
+            --changed-file /tmp/changed-files.txt \
+            --report-file /tmp/selection.md \
+            > /tmp/selected-packages.txt
+
+          cat /tmp/selection.md >> "$GITHUB_STEP_SUMMARY"
+
+          # The packages the diff touched DIRECTLY, as distinct from the ones
+          # pulled in by the dependency closure. A failure in the first is this
+          # pull request's doing; a failure in the second may be, or may have
+          # been red on the base already. The aggregate report marks the two
+          # differently, which is most of the attribution story on a fan-out.
+          sed -n 's/^Seeded by changed paths:.*(`\([^`]*\)`).*/\1/p' /tmp/selection.md \
+            | tr ' ' '\n' | sed '/^$/d' > /tmp/seeded-packages.txt || true
+
+          echo "Selected $(wc -l < /tmp/selected-packages.txt) package(s), $(wc -l < /tmp/seeded-packages.txt) seeded."
+
+      - name: Plan the matrix
+        id: plan
+        env:
+          MAX_LEGS: ${{ github.event.inputs.max_legs || '10' }}
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/plan-test-matrix.py \
+            --packages /tmp/selected-packages.txt \
+            --seeded /tmp/seeded-packages.txt \
+            --shards .github/workflows/test-shards.json \
+            --durations .github/workflows/test-durations.tsv \
+            --max-legs "$MAX_LEGS" \
+            --output-matrix /tmp/matrix.json \
+            --report-file "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "legs<<MATRIX_EOF"
+            cat /tmp/matrix.json
+            echo ""
+            echo "MATRIX_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "leg_count=$(python3 -c 'import json,sys;print(len(json.load(open("/tmp/matrix.json"))))')" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: ${{ matrix.leg.name }}
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      # Never fail-fast. A cancelled sibling leg is an unreported leg, and an
+      # unreported leg is indistinguishable from a passing one in the summary.
+      # On a fan-out the whole point is to learn everything that broke in one
+      # cycle rather than one failure at a time.
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        leg: ${{ fromJson(needs.plan.outputs.legs) }}
+
+    # No Azurite service, deliberately. The `build-and-test` job in ci.yml has
+    # none, so its emulator-backed fixtures report Inconclusive. Standing one up
+    # here would make different tests execute and turn a scheduling comparison
+    # into a comparison of two different test sets.
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Every checkout in a workflow that diffs against the merge base must
+          # be full-depth, even the ones that do not diff. The guard checks the
+          # file, not the job, and the cost here is small next to the build.
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore
+
+      # One whole-solution build per leg. Measured at about 1.2 minutes on a
+      # warm NuGet cache, which is cheaper and far simpler than building each
+      # leg's own project set, and much cheaper than uploading and downloading
+      # a multi-hundred-megabyte Release output as an artifact. If the measured
+      # per-leg overhead turns out to dominate, this is the first thing to
+      # revisit.
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Run leg
+        env:
+          LEG: ${{ toJson(matrix.leg) }}
+          LEG_ID: ${{ matrix.leg.id }}
+          JOB_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # ci.yml widens this on a loaded runner because the digest-settle
+          # oracles poll a coalesced projection publish that can take longer
+          # than the 20s default under parallel load. Legs are less loaded than
+          # the serial job was, but the same budget is kept so a difference in
+          # results cannot be attributed to a difference in timeouts.
+          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
+        run: |
+          set -euo pipefail
+          printf '%s' "$LEG" > /tmp/leg.json
+          python3 .github/workflows/run-test-leg.py \
+            --leg /tmp/leg.json \
+            --results-dir leg-results \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload leg results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: leg-results-${{ matrix.leg.id }}
+          path: leg-results/
+          retention-days: 7
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-output-${{ matrix.leg.id }}
+          path: |
+            **/*.trx
+            **/*.dmp
+            **/Sequence_*.xml
+          retention-days: 7
+          if-no-files-found: ignore
+
+  report:
+    name: Matrix result
+    needs: [plan, test]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download leg results
+        uses: actions/download-artifact@v6
+        with:
+          pattern: leg-results-*
+          path: leg-results
+          merge-multiple: true
+
+      - name: Aggregate
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/summarise-test-legs.py \
+            --results-dir leg-results \
+            --expect-legs "${{ needs.plan.outputs.leg_count }}" \
+            --summary-file "$GITHUB_STEP_SUMMARY"

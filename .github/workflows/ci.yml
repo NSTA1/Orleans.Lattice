@@ -1139,15 +1139,15 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Test changed packages (chaos last - isolate flaky-prone surface)
+      - name: Test changed packages (chaos)
         if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
         # See the deterministic step above for why the digest-settle
         # convergence budget is widened on a loaded CI runner via
         # LATTICE_DIGEST_SETTLE_TIMEOUT_MS. The chaos digest suite leans on
         # the same settle helper under even heavier fault-injection load.
         # Runs last (normal -> coyote -> chaos) so the fast deterministic and
-        # Coyote tiers report first and the flaky-prone fault-injection surface
-        # is isolated at the end.
+        # Coyote tiers report first and a fault-injection failure is attributed
+        # to this tier rather than buried among the per-package suites.
         env:
           LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
         run: |

@@ -1,0 +1,80 @@
+{
+  "_comment": [
+    "Shard definitions for test projects too large to run as a single unit.",
+    "",
+    "A package listed here has its test suite split into shards; a package that",
+    "is not listed runs as one unit. Shards are crossed with the tier filters",
+    "(deterministic / coyote / chaos) by plan-test-matrix.py, so a shard is a",
+    "slice of a project's tests and a tier is a slice of a shard.",
+    "",
+    "ORDERED FIRST-MATCH-WINS. Shards are evaluated top to bottom and a test",
+    "belongs to the FIRST shard whose include prefixes match it. The generated",
+    "filter for shard i is therefore OR(its own includes) AND NOT(includes of",
+    "every earlier shard). This is what makes the list a PARTITION rather than",
+    "an allow-list: every test lands in exactly one shard, so a suite cannot",
+    "silently lose coverage to a gap between two patterns, and two shards",
+    "cannot both claim the same test and run it twice.",
+    "",
+    "The ordering is load-bearing. 'BPlusTree.ChaosPredicate' must precede",
+    "'BPlusTree.Chaos', which must precede 'BPlusTree.', because each is a",
+    "prefix of the one before it. Put a broad prefix above a narrow one and the",
+    "narrow shard silently runs nothing - which is why the leg summary reports",
+    "the executed test count per shard and the aggregate report flags any shard",
+    "that ran zero tests in every tier.",
+    "",
+    "The final shard must set \"complement\": true. It matches everything no",
+    "earlier shard claimed, so adding a new test namespace can never fall",
+    "outside the partition and go untested.",
+    "",
+    "Prefixes are relative to namespaceRoot and are matched against the VSTest",
+    "FullyQualifiedName, which is Namespace.Class.Method. A trailing dot pins",
+    "the match to a namespace segment ('Grains.'); no trailing dot lets it",
+    "match a class-name prefix ('ChaosPredicate'), which is how the chaos",
+    "fixtures that all share one namespace are split."
+  ],
+  "lattice": {
+    "namespaceRoot": "Orleans.Lattice.Tests",
+    "shards": [
+      {
+        "shard": "bplustree-chaos-predicate",
+        "include": ["BPlusTree.ChaosPredicate"],
+        "note": "7 predicate fault-injection fixtures."
+      },
+      {
+        "shard": "bplustree-chaos",
+        "include": ["BPlusTree.Chaos"],
+        "note": "The remaining Chaos*IntegrationTests fixtures."
+      },
+      {
+        "shard": "bplustree-grains",
+        "include": ["BPlusTree.Grains."],
+        "note": "Per-grain unit tests. Largest by file count, cheap per test."
+      },
+      {
+        "shard": "bplustree-state",
+        "include": ["BPlusTree.State."],
+        "note": "Persistent state POCO tests."
+      },
+      {
+        "shard": "bplustree",
+        "include": ["BPlusTree."],
+        "note": "Topology, restart, durability and Coyote fixtures in the BPlusTree root."
+      },
+      {
+        "shard": "primitives",
+        "include": ["Primitives."],
+        "note": "CRDT and low-level primitive unit tests."
+      },
+      {
+        "shard": "crdt-views-wal",
+        "include": ["Crdt.", "Views.", "Wal.", "Predicates."],
+        "note": "Smaller cross-cutting areas grouped into one shard."
+      },
+      {
+        "shard": "rest",
+        "complement": true,
+        "note": "Root-namespace fixtures plus PublicApiContract, Hygiene, Fakes, Docs, Testing."
+      }
+    ]
+  }
+}
