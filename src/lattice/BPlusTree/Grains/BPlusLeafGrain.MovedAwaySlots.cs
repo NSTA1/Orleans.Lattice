@@ -133,6 +133,16 @@ internal sealed partial class BPlusLeafGrain
     /// <c>false</c> immediately on every leaf that has never had a slot
     /// migrate away, so unrelated leaves pay only one branch per read.
     /// </para>
+    /// <para>
+    /// This gate is keyed by the key's HASH, not by the leaf's declared
+    /// range, so it seals a slot wherever that slot's keys happen to fall -
+    /// including inside a range the leaf acquires later. That is what makes a
+    /// sealed leaf unsafe to WIDEN, not merely unsafe to delete, and it is
+    /// why empty-leaf reclaim asks
+    /// <c>BPlusLeafGrain.HasWidenBlockingState</c> of a fold's predecessor
+    /// before letting it absorb the victim's range (issue #2143). Anything
+    /// else that grows a sealed leaf's span owes the same question.
+    /// </para>
     /// </summary>
     private bool IsKeyMovedAway(string key)
     {
