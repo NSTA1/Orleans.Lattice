@@ -419,6 +419,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<byte[]?> GetAsync(string key)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         await PrepareForOperationAsync();
         ThrowIfMovedAwayForReadKey(key);
         RecordRead();
@@ -427,6 +428,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<VersionedValue> GetWithVersionAsync(string key)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         await PrepareForOperationAsync();
         ThrowIfMovedAwayForReadKey(key);
         RecordRead();
@@ -436,6 +438,7 @@ internal sealed partial class ShardRootGrain(
     /// <inheritdoc />
     public async Task<LwwEntry?> GetRawEntryAsync(string key)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         await PrepareForOperationAsync();
         ThrowIfMovedAwayForReadKey(key);
         RecordRead();
@@ -458,6 +461,7 @@ internal sealed partial class ShardRootGrain(
     /// <inheritdoc />
     public async Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         await PrepareForOperationAsync();
         ThrowIfMovedAwayForReadAnyKey(keys);
         RecordRead();
@@ -628,6 +632,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<bool> ExistsAsync(string key)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         await PrepareForOperationAsync();
         ThrowIfMovedAwayForReadKey(key);
         RecordRead();
@@ -636,6 +641,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         await PrepareForOperationAsync();
         ThrowIfMovedAwayForReadAnyKey(keys);
         RecordRead();
@@ -1833,6 +1839,7 @@ internal sealed partial class ShardRootGrain(
     /// <inheritdoc />
     public Task<ShardCountPage> CountBoundedAsync(string? startInclusive, string? endExclusive)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var scan = BeginScanPage(nameof(CountBoundedAsync));
         return GuardScanPageAsync(scan, CountBoundedCoreAsync(startInclusive, endExclusive, scan));
     }
@@ -2013,6 +2020,7 @@ internal sealed partial class ShardRootGrain(
     /// <inheritdoc />
     public Task<ShardAnyPage> AnyBoundedAsync(string? resumeFromInclusive)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var scan = BeginScanPage(nameof(AnyBoundedAsync));
         return GuardScanPageAsync(scan, AnyBoundedCoreAsync(resumeFromInclusive, scan));
     }
@@ -2098,6 +2106,7 @@ internal sealed partial class ShardRootGrain(
     /// <inheritdoc />
     public Task<ShardCountWithMovedAwayPage> CountWithMovedAwayBoundedAsync(string? resumeFromInclusive)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var scan = BeginScanPage(nameof(CountWithMovedAwayBoundedAsync));
         return GuardScanPageAsync(scan, CountWithMovedAwayBoundedCoreAsync(resumeFromInclusive, scan));
     }
@@ -2199,6 +2208,7 @@ internal sealed partial class ShardRootGrain(
     public Task<ShardCountPage> CountForSlotsBoundedAsync(
         int[] sortedSlots, int virtualShardCount, string? startInclusive, string? endExclusive)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var scan = BeginScanPage(nameof(CountForSlotsBoundedAsync));
         return GuardScanPageAsync(
             scan,
@@ -2816,6 +2826,7 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var scan = BeginScanPage(nameof(GetSortedKeysBatchAsync));
         return GuardScanPageAsync(
             scan,
@@ -2962,6 +2973,7 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var scan = BeginScanPage(nameof(GetSortedKeysBatchReverseAsync));
         return GuardScanPageAsync(
             scan,
@@ -3098,6 +3110,7 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var scan = BeginScanPage(nameof(GetSortedEntriesBatchAsync));
         return GuardScanPageAsync(
             scan,
@@ -3232,6 +3245,7 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var scan = BeginScanPage(nameof(GetSortedEntriesBatchReverseAsync));
         return GuardScanPageAsync(
             scan,
@@ -3365,6 +3379,7 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var scan = BeginScanPage(nameof(GetSortedKeysBatchForSlotsAsync));
         return GuardScanPageAsync(
             scan,
@@ -3480,6 +3495,7 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var scan = BeginScanPage(nameof(GetSortedEntriesBatchForSlotsAsync));
         return GuardScanPageAsync(
             scan,
@@ -3584,6 +3600,8 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<GrainId?> GetLeftmostLeafIdAsync()
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
+
         // Resolve the leftmost leaf by node TYPE rather than trusting the
         // persisted RootIsLeaf flag: a baked-inconsistent flag left true over an
         // internal root (issue 899) would otherwise return the internal root id
@@ -3598,6 +3616,8 @@ internal sealed partial class ShardRootGrain(
     /// <inheritdoc />
     public async Task<GrainId?> GetLeafIdForKeyAsync(string? resumeFromInclusive)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
+
         // Same node-TYPE guard as GetLeftmostLeafIdAsync: ResolveWalkStartLeafAsync
         // re-descends when a baked-inconsistent RootIsLeaf flag resolves an
         // internal node (issue 899), so the caller always receives a real leaf id.

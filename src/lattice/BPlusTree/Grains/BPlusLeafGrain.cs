@@ -369,6 +369,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<byte[]?> GetAsync(string key)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         // Moved-away seal: a slot recorded on this leaf as having
         // migrated to a sibling shard is invisible to every read
         // path, including the LeafCacheGrain pending-key delegation
@@ -478,6 +479,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<VersionedValue> GetWithVersionAsync(string key)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         // Moved-away seal. See GetAsync for the rationale.
         if (IsKeyMovedAway(key))
         {
@@ -519,6 +521,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<bool> ExistsAsync(string key)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         // Moved-away seal. See GetAsync for the rationale.
         if (IsKeyMovedAway(key))
         {
@@ -637,6 +640,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var predicate = LatticePredicateContext.Current;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
@@ -738,6 +742,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<LwwEntry?> GetRawEntryAsync(string key)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         if (Cache.TryGetRow(key, out var lww))
             return Task.FromResult<LwwEntry?>(new LwwEntry(key, lww, Cache.GetMergeMode(key)));
         return Task.FromResult<LwwEntry?>(null);
@@ -746,6 +751,7 @@ internal sealed partial class BPlusLeafGrain(
     /// <inheritdoc />
     public Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
     {
+        EnsureInternalOrigin(LatticeOperation.Read);
         // Pure in-memory dictionary lookup loop; no I/O, no allocation
         // beyond the result list itself. The Orleans grain-call boundary
         // wraps this in a single async state machine even though the
@@ -1793,6 +1799,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<int> CountAsync(string? startInclusive, string? endExclusive)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
 
@@ -1868,6 +1875,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<LeafStats> GetStatsAsync()
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
 
@@ -2518,6 +2526,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         // NOTE: Replication paths intentionally propagate expired entries.
         // Readers filter them via LwwValue.IsExpired; shipping them to peers
         // preserves CRDT convergence so LWW can resolve by timestamp on
@@ -2578,6 +2587,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<StateDelta> GetDeltaSinceForSlotsAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         ArgumentNullException.ThrowIfNull(sinceVersion);
         ArgumentNullException.ThrowIfNull(sortedMovedSlots);
 
@@ -2765,6 +2775,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
@@ -2858,6 +2869,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
@@ -2940,6 +2952,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<Dictionary<string, byte[]>> GetLiveEntriesAsync()
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         // Presize to the cached row count (the first loop's upper bound), mirroring
@@ -2977,6 +2990,7 @@ internal sealed partial class BPlusLeafGrain(
     /// <inheritdoc />
     public async Task<List<LwwEntry>> GetLiveRawEntriesAsync()
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var result = new List<LwwEntry>(Cache.Count);
