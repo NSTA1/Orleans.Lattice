@@ -89,11 +89,13 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     /// <para>
     /// <b>Why a bound at all.</b> Refusing to converge means the coordinator stays
     /// alive, and staying alive on the phase cadence would be a retry every two
-    /// seconds - a busy failure. The gate container this line is diagnosed against
-    /// already runs at 340% CPU and 94.6% of its memory limit, so a spin is not a
-    /// harmless inefficiency there. Backing off keeps the coordinator loud and
-    /// alive without being expensive, which is what lets a grant that seeds late
-    /// still be picked up without a restart.
+    /// seconds - a busy failure that never ends, because a denial is not a
+    /// condition retrying can clear. A permanently refused host would spin at that
+    /// rate indefinitely while banking nothing, and the container the approximate
+    /// plane runs in is shared with the whole index pipeline, so that cost is
+    /// charged to work that could otherwise proceed. Backing off keeps the
+    /// coordinator loud and alive without being expensive, which is what lets a
+    /// grant that seeds late still be picked up without a restart.
     /// </para>
     /// </summary>
     internal const int MaxDenialSkipTicks = 149;
