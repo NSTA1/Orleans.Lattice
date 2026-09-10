@@ -218,6 +218,45 @@ internal sealed class RepoContextIndexingOptions
     public int PassesPerCoverageDigestAudit => PassesPerInterval(CoverageDigestAuditInterval);
 
     /// <summary>
+    /// <see cref="EmbeddingGapScanInterval"/> as the reconcile actually enforces it:
+    /// <see cref="PassesPerEmbeddingGapScan"/> passes at <see cref="MaximumReconcileSpacing"/>.
+    /// </summary>
+    /// <remarks>
+    /// This is the value worth reporting to an operator, and it is not the configured one.
+    /// The deadline is counted in passes, rounded <b>up</b> and clamped to at least one, so
+    /// a configured interval that is not a whole multiple of the reconcile spacing is
+    /// silently lengthened, and one below the spacing is silently raised to a single pass.
+    /// A report that echoed the configured value would confirm a setting that did not take
+    /// - worse than saying nothing, because it is confidently wrong.
+    /// </remarks>
+    public TimeSpan EffectiveEmbeddingGapScanInterval
+        => EnforcedCadence(PassesPerEmbeddingGapScan, EmbeddingGapScanInterval);
+
+    /// <summary>
+    /// <see cref="CoverageDigestAuditInterval"/> as the reconcile actually enforces it:
+    /// <see cref="PassesPerCoverageDigestAudit"/> passes at
+    /// <see cref="MaximumReconcileSpacing"/>. Rounded exactly as
+    /// <see cref="EffectiveEmbeddingGapScanInterval"/> is, and reported for the same reason.
+    /// </summary>
+    public TimeSpan EffectiveCoverageDigestAuditInterval
+        => EnforcedCadence(PassesPerCoverageDigestAudit, CoverageDigestAuditInterval);
+
+    /// <summary>
+    /// The wall-clock cadence a pass-counted deadline resolves to.
+    /// </summary>
+    /// <param name="passes">The pass count the deadline is enforced in.</param>
+    /// <param name="configured">
+    /// The configured interval, returned unchanged when the spacing is non-positive: there
+    /// is then no pass rhythm to round to, so claiming any other figure would invent one.
+    /// </param>
+    /// <returns>The enforced cadence.</returns>
+    private TimeSpan EnforcedCadence(int passes, TimeSpan configured)
+    {
+        var spacing = MaximumReconcileSpacing;
+        return spacing <= TimeSpan.Zero ? configured : passes * spacing;
+    }
+
+    /// <summary>
     /// Whether the directory-modification-time prune cache can ever be acted on under
     /// this configuration - that is, whether <see cref="PassesPerFullWalk"/> is at least
     /// two, so at least one reconcile in every cycle prunes. When it is one, every
