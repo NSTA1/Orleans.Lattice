@@ -148,9 +148,22 @@ internal sealed partial class RefinementDetectorMappingTests
     /// is pinned rather than assumed. The left-hand side keeps its upper-case
     /// requirement, multi-segment forms stay excluded, and text outside
     /// backticks is untouched.
+    /// <para>
+    /// The TLA+ cases matter most. Bare backticked identifiers are
+    /// deliberately ungated across this whole area precisely because a spec
+    /// variable, a spec string value and an enum member quoted without its
+    /// type are not distinguishable from a code symbol without a judgement
+    /// call. Widening the right-hand side must not smuggle any of them in
+    /// through the back door, so they are asserted here rather than reasoned
+    /// about.
+    /// </para>
     /// </summary>
     [TestCase("`InFlight`", TestName = "Extracts_no_detector_from_a_bare_identifier")]
     [TestCase("`phase[t]`", TestName = "Extracts_no_detector_from_a_spec_variable")]
+    [TestCase("`vote[t][k]`", TestName = "Extracts_no_detector_from_a_subscripted_spec_variable")]
+    [TestCase("`prepared`", TestName = "Extracts_no_detector_from_a_spec_string_value")]
+    [TestCase("`PrepareTx(t)`", TestName = "Extracts_no_detector_from_a_spec_action_name")]
+    [TestCase("`decision[t] = \"commit\"`", TestName = "Extracts_no_detector_from_a_spec_assignment")]
     [TestCase("`_recentlyTerminal`", TestName = "Extracts_no_detector_from_a_bare_field")]
     [TestCase("`alreadyTerminal.foo`", TestName = "Extracts_no_detector_from_a_lower_case_left_hand_side")]
     [TestCase("`Orleans.Lattice.Tests`", TestName = "Extracts_no_detector_from_a_multi_segment_form")]
