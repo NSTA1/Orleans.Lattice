@@ -7,6 +7,14 @@
 # (without `-v`). See README.md for the start -> bootstrap -> recall -> restart
 # -> verify walkthrough.
 #
+# `docker compose down -v` destroys /data, and that volume holds the authored
+# agent memory as well as the rebuildable index. The /memory-archive bind mount
+# on the repocontext service exists for exactly that gesture: it is not a
+# declared volume, so `-v` does not remove it, and the host restores from it
+# into an empty store at startup. It is bounded by the export interval and is
+# not a backup - `repocontext_reset_index` remains the lossless way to rebuild
+# an index. See the comments on that service (issue #2601).
+#
 # Build context is the repository root for the host image (it ProjectReferences
 # the just-built src/ bits); the embedder builds from its own app directory. Run
 # from this directory.
@@ -110,6 +118,49 @@ services:
       # All durable local state lives here (a named volume): the file WAL
       # directory and the SQLite database file.
       LATTICE_DATA_ROOT: /data
+      # Where the durable AGENT MEMORY archive is written (issue #2601).
+      #
+      # Read what this does and does not protect before relying on it.
+      #
+      # WHAT IS AT RISK. Two kinds of state share the /data volume above. The
+      # code index (structural, content, symbol, xref, session, and the vector
+      # planes) is DERIVED: destroy it and re-running repocontext_add_repo
+      # rebuilds it in minutes. Agent memory - every repocontext_remember note,
+      # decision, gotcha, and glossary entry - is AUTHORED, is the store of
+      # record, and is rebuildable from nothing. `docker compose down -v`
+      # destroys both, and the asymmetry is the whole defect: the gesture is
+      # documented as the ordinary way to reset an index, and it silently takes
+      # the irreplaceable half with it. It has already happened once, to epic
+      # #2368's own memory.
+      #
+      # WHY NOT SIMPLY A SECOND VOLUME. Because it cannot be done and would not
+      # help. It cannot be done: a Lattice tree's durable state spans a WAL root
+      # that is one directory for the whole PROVIDER, and a grain store that is
+      # one SQLite file for every tree - neither is per-tree addressable, so
+      # there is no memory-only path to mount elsewhere. And it would not help:
+      # `down -v` removes every named volume the project declares, so a second
+      # declared volume dies in the same gesture as the first.
+      #
+      # WHAT THIS DOES INSTEAD. A BIND MOUNT (below) is not a project volume, so
+      # `down -v` does not touch it. The host periodically exports memory there
+      # and restores it into an empty store at startup, so a `down -v` followed
+      # by `up` comes back with memory intact.
+      #
+      # WHAT IT DOES NOT DO. It is not a backup, and it does not make `down -v`
+      # safe. Everything written since the last export is lost, so the exposure
+      # is bounded by the interval below plus whatever a non-graceful stop
+      # discards. `repocontext_reset_index` remains the correct, lossless way to
+      # rebuild an index: it drops the derived planes and preserves memory
+      # outright, with no window at all. Reach for `down -v` only when you mean
+      # to destroy the container's state, and expect to lose memory written
+      # since the last export.
+      LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR: /memory-archive
+      # How often memory is exported. This is the size of the window you lose to
+      # an ungraceful stop, so lower it if a session's notes are expensive to
+      # recreate. A graceful stop exports once more on the way down, which closes
+      # most of the window for `down` / `down -v` / `stop` specifically; a SIGKILL
+      # or a host crash gets no such chance.
+      LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS: "300"
       LATTICE_MCP_PORT: "8080"
       # WAL materialiser pin buckets: how many persisted slots the retention-floor
       # pin state is split across, so an advancing floor rewrites a fraction of the
@@ -276,7 +327,28 @@ services:
       - "${REPOCONTEXT_PORT:-8080}:8080"
     volumes:
       # Durable state survives restart / recreation / image upgrade.
+      #
+      # It does NOT survive `docker compose down -v`, and that includes the agent
+      # memory that lives in here alongside the rebuildable index - see the
+      # LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR comment above for why the two
+      # cannot be split across volumes, and what is done instead.
       - repocontext-data:/data
+      # The agent-memory archive (issue #2601). A BIND MOUNT, deliberately, and
+      # the distinction is the entire protection: `docker compose down -v`
+      # removes the named volumes a project DECLARES, and a bind mount is not
+      # one of them, so this directory outlives the gesture that destroys /data
+      # above. Declaring a second named volume would not have worked - `-v`
+      # takes every declared volume, not the first one.
+      #
+      # It auto-creates on the host at `up`, so there is no `docker volume
+      # create` step to forget. Point it somewhere durable with
+      # REPOCONTEXT_MEMORY_ARCHIVE_PATH; the default sits next to this compose
+      # file.
+      #
+      # Do NOT point it inside the /data volume or at a path that resolves under
+      # it. The host detects that and says so at startup, because an archive
+      # there dies with the thing it is meant to survive.
+      - ${REPOCONTEXT_MEMORY_ARCHIVE_PATH:-./memory-archive}:/memory-archive
       # The workspace the box can see, mounted READ-ONLY so the box can never
       # mutate the code it ingests. Mount a broad PARENT directory here and let
       # the client register individual repositories under it with
@@ -363,4 +435,13 @@ services:
 
 volumes:
   # Durable Lattice state (WAL + SQLite): the heart of "codebase memory in a box".
+  #
+  # Both the rebuildable code index AND the irreplaceable agent memory live in
+  # here, and no configuration separates them (issue #2601): a tree's durable
+  # state spans a WAL root that is one directory per PROVIDER and a grain store
+  # that is one SQLite file for every tree, so there is no per-tree path to
+  # mount elsewhere. A second named volume would not have helped either -
+  # `docker compose down -v` removes every volume declared in this section, so
+  # both would die together. The protection is the /memory-archive BIND MOUNT on
+  # the service above, which is not a declared volume and so is not removed.
   repocontext-data:

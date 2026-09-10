@@ -23,6 +23,14 @@ internal static class RepoContextSnapshotFormat
     /// <summary>The 8-byte ASCII stream marker: <c>OLRCSNP1</c>.</summary>
     internal static ReadOnlySpan<byte> Magic => "OLRCSNP1"u8;
 
+    /// <summary>
+    /// The byte length of the stream header: the 8-byte <see cref="Magic"/> marker
+    /// followed by the little-endian format version. A snapshot file of exactly this
+    /// length is a well-formed export that carried no records, which is a different
+    /// thing from a truncated or foreign file.
+    /// </summary>
+    internal const int HeaderLength = 8 + sizeof(int);
+
     /// <summary>The format version this build writes.</summary>
     internal const int CurrentVersion = 1;
 

@@ -178,11 +178,15 @@ public static class RepoContextEffectiveConfiguration
         };
 
         // The repository-context package's own settings. Every one is a cadence, a count,
-        // an enum, or a staging path - none is credential-bearing, so each is classified
-        // deliberately rather than by inheriting the classification of its neighbours. The
-        // per-repository git settings, which DO include tokens, are NOT added: they are a
-        // prefix family that is never described individually, so they stay unclassified
-        // and therefore withheld.
+        // an enum, or a path to a directory this host writes to - none is
+        // credential-bearing, so each is classified deliberately rather than by inheriting
+        // the classification of its neighbours. That includes the memory-archive keys
+        // (issue #2601): three are a cadence, a budget and an enum, and the fourth is the
+        // archive directory, which an operator must be able to see in full because a value
+        // pointing inside the data volume protects nothing. The per-repository git
+        // settings, which DO include tokens, are NOT added: they are a prefix family that
+        // is never described individually, so they stay unclassified and therefore
+        // withheld.
         foreach (var key in RepoContextEnvironmentVariables.All)
         {
             keys.Add(key);
