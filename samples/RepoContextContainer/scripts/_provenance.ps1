@@ -102,6 +102,57 @@ function Test-ProvenancePathsEqual {
 
 <#
 .SYNOPSIS
+	Parses a Compose duration ("120s", "2m", "1m30s") to whole seconds.
+
+.DESCRIPTION
+	Returns $null when the value is absent or is not a duration the Compose
+	specification would accept, so a caller can distinguish "not a duration" from
+	"zero seconds". A bare number is seconds, matching Compose.
+
+	This exists because COMPOSE NORMALISES DURATIONS AND A LITERAL COMPARISON
+	THEREFORE PRODUCES FALSE ACCUSATIONS. A file declaring `120s` resolves to
+	`2m0s`, so a check comparing text reports the setting as wrong - or absent -
+	on a stack that is correctly configured. That failure mode is worse than the
+	one this whole script exists to catch: it accuses a good deployment of
+	precisely the defect that invalidated two gate runs, and the obvious remedy
+	for the accusation is to change a deployment that was already right.
+
+	Semantics deliberately match ConvertFrom-RigComposeDuration in
+	benchmark/coldstart-rig/scripts/_rig-helpers.ps1. The two guards are
+	different instruments (see the header of Assert-ContainerProvenance.ps1), but
+	agreeing on what a duration MEANS is not a coupling, and disagreeing would
+	mean one of them refusing a stack the other accepts for no reason an operator
+	could act on.
+#>
+function ConvertFrom-ProvenanceDuration {
+	[CmdletBinding()]
+	param([AllowNull()] $Value)
+
+	$text = "$Value".Trim()
+	if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+
+	if ($text -match '^\d+$') { return [int] $text }
+
+	$matched = [regex]::Matches($text, '(?<n>\d+)(?<u>h|m|s)')
+	if ($matched.Count -eq 0) { return $null }
+	# Reject trailing junk: the units must account for the whole string, or a
+	# typo like "120sec onds" would silently parse as 120.
+	if ((($matched | ForEach-Object { $_.Value }) -join '') -ne $text) { return $null }
+
+	$total = 0
+	foreach ($m in $matched) {
+		$n = [int] $m.Groups['n'].Value
+		switch ($m.Groups['u'].Value) {
+			'h' { $total += $n * 3600 }
+			'm' { $total += $n * 60 }
+			's' { $total += $n }
+		}
+	}
+	return $total
+}
+
+<#
+.SYNOPSIS
 	Check 1 of 4. The container was composed from the checkout the operator means.
 
 .DESCRIPTION
@@ -112,9 +163,28 @@ function Test-ProvenancePathsEqual {
 	channel that actually holds it: the labels Compose stamps onto the container.
 
 	Refuses when the project working directory is absent or disagrees with the
-	expected checkout, and when any resolved config file lies outside that
-	working directory - an override file pulled in from elsewhere is exactly how
-	the merged document stops matching the tracked one.
+	expected checkout, when any resolved config file lies outside that working
+	directory, when a named file is not on disk, and when the NUMBER of resolved
+	files is not the number expected.
+
+	THE COUNT ASSERTION IS THE LOAD-BEARING PART, and it is why this check reads
+	the label rather than walking the repository. The sample stack's real
+	deployment is TWO files: the tracked `docker-compose.yml`, which carries a
+	`build:` stanza and no `image:`, and a `docker-compose.override.yml` that is
+	UNTRACKED AND GITIGNORED (see .gitignore, where it is ignored deliberately
+	because it is machine-local). That override is load-bearing: it supplies the
+	`image:` pin the tracked file does not have, the memory limit, the CPU caps,
+	and the scan-cadence variables every prior measurement on a given box was
+	taken against.
+
+	So a check that enumerated tracked files would not merely be incomplete, it
+	would be WRONG IN THE DANGEROUS DIRECTION. Relaunching from a worktree that
+	lacks the override silently drops the memory limit and the image pin while
+	the tree looks perfectly correct, and a tracked-file check would pass that
+	stack. The count is what fails on a file git has never heard of.
+
+	Note the corollary: fixing a provenance defect by changing the launch
+	directory is itself a provenance change, and it is not self-verifying.
 #>
 function Get-ComposeProvenanceViolation {
 	[CmdletBinding()]
@@ -123,6 +193,8 @@ function Get-ComposeProvenanceViolation {
 		[AllowNull()] [AllowEmptyString()] [string] $WorkingDirectory,
 		[AllowNull()] [string[]] $ConfigFiles,
 		[Parameter(Mandatory)] [string] $ExpectedCheckout,
+		[int] $ExpectedConfigFileCount = 0,
+		[AllowNull()] [string[]] $MissingConfigFiles,
 		[bool] $CaseSensitive
 	)
 
@@ -158,6 +230,23 @@ function Get-ComposeProvenanceViolation {
 		if (-not $isUnder) {
 			$violations.Add("compose config file '$configFile' lies outside the project working directory '$WorkingDirectory'; a file merged in from elsewhere is not the tracked configuration")
 		}
+	}
+
+	# A file the label names but the disk does not have means the container was
+	# composed from a document that can no longer be reproduced, which is not a
+	# lesser problem than a wrong one.
+	foreach ($missing in @($MissingConfigFiles)) {
+		if ([string]::IsNullOrWhiteSpace($missing)) { continue }
+		$violations.Add("compose config file '$missing' is named by the container but is not present on disk; the running configuration cannot be reproduced from this checkout")
+	}
+
+	# Deliberately compares the COUNT, not the tracked set. The stack's real
+	# deployment includes a gitignored override supplying the image pin, the
+	# memory limit and the CPU caps, so a stack launched from a directory that
+	# lacks it resolves fewer files while every remaining path still looks right.
+	if ($ExpectedConfigFileCount -gt 0 -and $ConfigFiles.Count -ne $ExpectedConfigFileCount) {
+		$named = ($ConfigFiles -join ', ')
+		$violations.Add("the container resolved $($ConfigFiles.Count) compose file(s) but $ExpectedConfigFileCount were expected ($named); a missing override drops settings such as the image pin and the memory limit while leaving every remaining file correct")
 	}
 
 	return ,$violations.ToArray()
@@ -322,9 +411,22 @@ function Get-EnvironmentProvenanceViolation {
 		}
 
 		$observed = "$($actual[$name])"
-		if ($observed -cne $expected) {
-			$violations.Add("$name is '$observed' in the container's environment but the intended checkout declares '$expected'; the running process is configured differently from the source being verified")
+		if ($observed -ceq $expected) { continue }
+
+		# Literal inequality is not disagreement when both sides are durations:
+		# Compose normalises `120s` to `2m0s`, so a text comparison accuses a
+		# correctly configured stack of the exact defect this script exists to
+		# find. Fall back to the literal comparison only when the values are not
+		# both durations, so a genuine mismatch is still refused.
+		$expectedSeconds = ConvertFrom-ProvenanceDuration -Value $expected
+		$observedSeconds = ConvertFrom-ProvenanceDuration -Value $observed
+		if ($null -ne $expectedSeconds -and $null -ne $observedSeconds) {
+			if ($expectedSeconds -eq $observedSeconds) { continue }
+			$violations.Add("$name is '$observed' ($observedSeconds s) in the container's environment but the intended checkout declares '$expected' ($expectedSeconds s); the running process is configured differently from the source being verified")
+			continue
 		}
+
+		$violations.Add("$name is '$observed' in the container's environment but the intended checkout declares '$expected'; the running process is configured differently from the source being verified")
 	}
 
 	return ,$violations.ToArray()
@@ -348,6 +450,7 @@ function Get-ContainerProvenanceReport {
 		[Parameter(Mandatory)] [hashtable] $Readings,
 		[Parameter(Mandatory)] [string] $ExpectedCheckout,
 		[Parameter(Mandatory)] [hashtable] $ExpectedSettings,
+		[int] $ExpectedConfigFileCount = 0,
 		[bool] $CaseSensitive
 	)
 
@@ -357,6 +460,8 @@ function Get-ContainerProvenanceReport {
 				-WorkingDirectory $Readings['ComposeWorkingDirectory'] `
 				-ConfigFiles $Readings['ComposeConfigFiles'] `
 				-ExpectedCheckout $ExpectedCheckout `
+				-ExpectedConfigFileCount $ExpectedConfigFileCount `
+				-MissingConfigFiles $Readings['MissingConfigFiles'] `
 				-CaseSensitive $CaseSensitive))
 
 	$violations.AddRange([string[]] (Get-GitProvenanceViolation `

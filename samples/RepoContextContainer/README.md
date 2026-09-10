@@ -497,9 +497,10 @@ agree, printing every value it read either way:
 
 1. **Compose provenance.** The container's own
    `com.docker.compose.project.working_dir` label resolves to the checkout you
-   are standing in, and every file in `com.docker.compose.project.config_files`
-   lies under it. An override file merged in from elsewhere is how a resolved
-   document stops matching the tracked one.
+   are standing in, every file in `com.docker.compose.project.config_files` lies
+   under it and exists on disk, and **the number of those files is the number you
+   expected** (default 2, see below). An override file merged in from elsewhere
+   is how a resolved document stops matching the tracked one.
 2. **Git provenance.** That directory is a git worktree and its HEAD is the
    commit you expect, reported as a value you read rather than an inference you
    make. The expectation is sourced from *your* checkout, never from the one the
@@ -516,7 +517,36 @@ agree, printing every value it read either way:
    process. This is the non-redundant one. Checks 1 to 3 can all pass while an
    override file, an edit, or a stale container leaves the value unset, and it is
    the direct executable form of the warning above that the variable declares the
-   grant rather than being it.
+   grant rather than being it. Durations are compared **parsed, never
+   literally**: Compose normalises `120s` to `2m0s`, so a text comparison would
+   accuse a correctly configured stack of exactly this defect, and the obvious
+   remedy for that accusation is to change a deployment that was already right.
+
+### The count assertion, and why it is not a walk of tracked files
+
+The stack's real deployment is **two** compose files: the tracked
+`docker-compose.yml`, which carries a `build:` stanza and no `image:`, and a
+`docker-compose.override.yml` that is **untracked and gitignored on purpose**
+because it is machine-local. That override is load-bearing. It supplies the
+image pin the tracked file does not have, the memory limit, the CPU caps, and
+the scan-cadence variables every prior measurement on a given box was taken
+against.
+
+So the obvious remedy for a compose-provenance failure - relaunch from the
+checkout you meant - **silently drops the override**, leaving no image pin, no
+memory limit and a different scan cadence, while the tree looks perfectly
+correct and every path the container reports still resolves under the right
+directory. Only the count dissents, which is why check 1 asserts it and why the
+check reads the container's label rather than walking the repository: **it has to
+be able to fail on a file git has never heard of.**
+
+The general form is worth stating, because it is not specific to compose:
+*fixing a provenance defect by changing the launch directory is itself a
+provenance change, and it is not self-verifying.*
+
+Pass `-ExpectedConfigFileCount 1` if you genuinely mean to run without an
+override. Making that an explicit act is the point - dropping the override
+should be something you said, not something that happened.
 
 **What a green run does not establish.** That the image was built from the
 expected commit (check 3 as defaulted detects a stale container, not a

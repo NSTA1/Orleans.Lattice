@@ -172,6 +172,69 @@ $refused = Get-ComposeProvenanceViolation `
 _Assert -Name 'REFUSES a config file merged in from outside the project directory' `
 	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('override'))
 
+# --- the untracked-override hazard, both directions ------------------------
+# The real stack is base + a gitignored override supplying the image pin, the
+# memory limit and the CPU caps. Every fixture below therefore uses a file git
+# has never heard of: a check that could only reason about tracked files would
+# be green throughout, which is the property that makes this class need its own
+# instrument.
+$base = Join-Path $candidateCheckout 'docker-compose.yml'
+$override = Join-Path $candidateCheckout 'docker-compose.override.yml'
+
+$accepted = Get-ComposeProvenanceViolation `
+	-WorkingDirectory $candidateCheckout -ConfigFiles @($base, $override) `
+	-ExpectedCheckout $candidateCheckout -ExpectedConfigFileCount 2 `
+	-MissingConfigFiles @() -CaseSensitive $false
+_Assert -Name 'ACCEPTS the documented two-file stack including the untracked override' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+# The hazard the PM was one command away from creating: relaunching from a
+# worktree that lacks the gitignored override. The working directory is right,
+# the one file resolved is right, and the tree agrees with itself perfectly.
+# Only the count dissents.
+$refused = Get-ComposeProvenanceViolation `
+	-WorkingDirectory $candidateCheckout -ConfigFiles @($base) `
+	-ExpectedCheckout $candidateCheckout -ExpectedConfigFileCount 2 `
+	-MissingConfigFiles @() -CaseSensitive $false
+_Assert -Name 'REFUSES a stack that silently dropped its untracked override' `
+	-Condition ($refused.Count -eq 1) -Detail ($refused -join '; ')
+_Assert -Name 'and names BOTH counts so the operator knows what is missing' `
+	-Condition ($refused.Count -ge 1 -and $refused[0].Contains('1 compose file') -and $refused[0].Contains('2 were expected')) `
+	-Detail ($refused -join '; ')
+
+$refused = Get-ComposeProvenanceViolation `
+	-WorkingDirectory $candidateCheckout -ConfigFiles @($base, $override, (Join-Path $candidateCheckout 'docker-compose.extra.yml')) `
+	-ExpectedCheckout $candidateCheckout -ExpectedConfigFileCount 2 `
+	-MissingConfigFiles @() -CaseSensitive $false
+_Assert -Name 'REFUSES an UNEXPECTED EXTRA file as well as a missing one' `
+	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('3 compose file')) `
+	-Detail ($refused -join '; ')
+
+$refused = Get-ComposeProvenanceViolation `
+	-WorkingDirectory $candidateCheckout -ConfigFiles @($base, $override) `
+	-ExpectedCheckout $candidateCheckout -ExpectedConfigFileCount 2 `
+	-MissingConfigFiles @($override) -CaseSensitive $false
+_Assert -Name 'REFUSES a named config file that is no longer on disk' `
+	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('not present on disk')) `
+	-Detail ($refused -join '; ')
+
+# The paired negative for the count assertion itself. Left unpinned the check
+# must not invent an expectation, or an operator who genuinely runs one file
+# would be refused for it - and a check that refuses correct stacks gets
+# switched off, taking the three checks that were working with it.
+$accepted = Get-ComposeProvenanceViolation `
+	-WorkingDirectory $candidateCheckout -ConfigFiles @($base) `
+	-ExpectedCheckout $candidateCheckout -MissingConfigFiles @() -CaseSensitive $false
+_Assert -Name 'does NOT assert a count when none was pinned' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+$accepted = Get-ComposeProvenanceViolation `
+	-WorkingDirectory $candidateCheckout -ConfigFiles @($base) `
+	-ExpectedCheckout $candidateCheckout -ExpectedConfigFileCount 1 `
+	-MissingConfigFiles @() -CaseSensitive $false
+_Assert -Name 'ACCEPTS one file when running without an override was DECLARED' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
 # ---------------------------------------------------------------------------
 _Section 'Check 2 of 4: git provenance'
 # ---------------------------------------------------------------------------
@@ -257,6 +320,52 @@ _Assert -Name 'a setting whose value contains "=" is read whole' `
 	-Condition ((Get-EnvironmentProvenanceViolation `
 			-ContainerEnvironment @('CONNECTION=Host=db;Port=5432') `
 			-ExpectedSettings @{ 'CONNECTION' = 'Host=db;Port=5432' }).Count -eq 0)
+
+# --- duration normalisation, both directions -------------------------------
+# Compose normalises durations: a file saying `120s` resolves to `2m0s`. A
+# literal comparison therefore accuses a CORRECTLY configured stack of exactly
+# the defect that invalidated two gate runs - and the obvious response to the
+# accusation is to change a deployment that was already right. That is a worse
+# failure than the blindness this script was written to fix, because it does not
+# merely fail to answer, it answers wrongly with apparent authority.
+foreach ($spelling in @('2m0s', '2m', '1m60s', '120')) {
+	_Assert -Name "ACCEPTS '$spelling' as equal to the declared 120s" `
+		-Condition ((Get-EnvironmentProvenanceViolation `
+				-ContainerEnvironment @("LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD=$spelling") `
+				-ExpectedSettings $expectedSettings).Count -eq 0)
+}
+
+# The paired negative. Parsing durations must not become "any two durations
+# agree" - a check that accepts every spelling AND every value has stopped
+# being a check while still reporting green.
+$refused = Get-EnvironmentProvenanceViolation `
+	-ContainerEnvironment @('LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD=2m1s') `
+	-ExpectedSettings $expectedSettings
+_Assert -Name 'REFUSES a duration that is genuinely different, however spelled' `
+	-Condition ($refused.Count -eq 1) -Detail ($refused -join '; ')
+_Assert -Name 'and reports both parsed values so the difference is legible' `
+	-Condition ($refused.Count -ge 1 -and $refused[0].Contains('121 s') -and $refused[0].Contains('120 s')) `
+	-Detail ($refused -join '; ')
+
+# Non-durations must keep the strict literal comparison. Silently widening
+# equality for values that merely look numeric would let a real drift pass.
+$refused = Get-EnvironmentProvenanceViolation `
+	-ContainerEnvironment @('LATTICE_REPOCONTEXT_MODE=Fast') `
+	-ExpectedSettings @{ 'LATTICE_REPOCONTEXT_MODE' = 'fast' }
+_Assert -Name 'REFUSES a case-only difference in a NON-duration setting' `
+	-Condition ($refused.Count -eq 1) -Detail ($refused -join '; ')
+
+_Assert -Name 'a duration-looking expected value against junk stays a refusal' `
+	-Condition ((Get-EnvironmentProvenanceViolation `
+			-ContainerEnvironment @('LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD=120sec onds') `
+			-ExpectedSettings $expectedSettings).Count -eq 1)
+
+_Assert -Name 'ConvertFrom-ProvenanceDuration returns null for a non-duration' `
+	-Condition ($null -eq (ConvertFrom-ProvenanceDuration -Value 'always'))
+_Assert -Name 'ConvertFrom-ProvenanceDuration distinguishes absent from zero' `
+	-Condition (($null -eq (ConvertFrom-ProvenanceDuration -Value '')) -and (0 -eq (ConvertFrom-ProvenanceDuration -Value '0s')))
+_Assert -Name 'ConvertFrom-ProvenanceDuration handles compound units' `
+	-Condition (5400 -eq (ConvertFrom-ProvenanceDuration -Value '1h30m'))
 
 # ---------------------------------------------------------------------------
 _Section 'Composite report'

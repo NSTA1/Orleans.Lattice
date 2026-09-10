@@ -121,7 +121,18 @@ param(
 	[string] $ExpectedCheckout,
 	[string] $ExpectedCommit,
 	[hashtable] $ExpectedSetting,
-	[string] $ExpectedImageId
+	[string] $ExpectedImageId,
+
+	# Defaults to 2 because the documented deployment of this sample IS two
+	# files: the tracked `docker-compose.yml`, which carries a `build:` stanza
+	# and no `image:`, and a `docker-compose.override.yml` that is untracked and
+	# gitignored on purpose, and which supplies the image pin, the memory limit,
+	# the CPU caps and the scan cadence. A stack launched from a directory that
+	# lacks the override resolves one file and every path it does resolve is
+	# still correct, so only the count catches it. Passing 1 here is a
+	# deliberate statement that you meant to run without an override, which is
+	# the point: dropping it should be an act, not an accident.
+	[int] $ExpectedConfigFileCount = 2
 )
 
 $ErrorActionPreference = 'Stop'
@@ -216,10 +227,17 @@ if ([string]::IsNullOrWhiteSpace($ExpectedImageId)) {
 
 $resolvedCommit = if ([string]::IsNullOrWhiteSpace($workingDirectory)) { '' } else { Get-HeadCommit -Directory $workingDirectory }
 
+# Existence is resolved here, in the impure half, and adjudicated in the pure
+# one. Deliberately Test-Path and not a git query: the override this stack needs
+# is gitignored, so asking git whether a config file exists would report the
+# load-bearing one as absent and the dropped one as fine.
+$missingConfigFiles = @($configFiles | Where-Object { -not (Test-Path -LiteralPath $_) })
+
 $readings = @{
 	ContainerName            = $ContainerName
 	ComposeWorkingDirectory  = $workingDirectory
 	ComposeConfigFiles       = $configFiles
+	MissingConfigFiles       = $missingConfigFiles
 	ResolvedCommit           = $resolvedCommit
 	ExpectedCommit           = $ExpectedCommit
 	RunningImageId           = $runningImageId
@@ -232,6 +250,7 @@ $report = Get-ContainerProvenanceReport `
 	-Readings $readings `
 	-ExpectedCheckout $ExpectedCheckout `
 	-ExpectedSettings $ExpectedSetting `
+	-ExpectedConfigFileCount $ExpectedConfigFileCount `
 	-CaseSensitive (-not $IsWindows)
 
 # Emit every reading unconditionally, pass or fail. A bare verdict sends the
@@ -244,6 +263,8 @@ Write-Host ("  container                 : {0}" -f $ContainerName)
 Write-Host ("  expected checkout         : {0}" -f $ExpectedCheckout)
 Write-Host ("  compose working_dir       : {0}" -f $(if ($workingDirectory) { $workingDirectory } else { '<absent>' }))
 Write-Host ("  compose config_files      : {0}" -f $(if ($configFiles.Count) { $configFiles -join ', ' } else { '<absent>' }))
+Write-Host ("  config_files count        : {0} (expected {1})" -f $configFiles.Count, $ExpectedConfigFileCount)
+Write-Host ("  config_files missing      : {0}" -f $(if ($missingConfigFiles.Count) { $missingConfigFiles -join ', ' } else { '<none>' }))
 Write-Host ("  expected commit           : {0}" -f $(if ($ExpectedCommit) { $ExpectedCommit } else { '<unresolved>' }))
 Write-Host ("  deployed checkout commit  : {0}" -f $(if ($resolvedCommit) { $resolvedCommit } else { '<unresolved>' }))
 Write-Host ("  image reference           : {0}" -f $imageReference)
