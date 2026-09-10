@@ -800,7 +800,7 @@ public class OidcCredentialAuthenticatorTests
         : OidcCredentialAuthenticator(options, configurationSource)
     {
         public ValueTask<TokenValidationParameters> ResolveAsync(LatticeCredential credential) =>
-            ResolveValidationParametersAsync(credential, CancellationToken.None);
+            ResolvePinnedValidationParametersAsync(credential, CancellationToken.None);
 
         public LatticePrincipal? Map(JsonWebToken token, ClaimsIdentity identity) => MapPrincipal(token, identity);
     }

@@ -117,10 +117,10 @@ public sealed class LatticeMembershipMetricsTests
             LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.ResolutionCacheMissesName);
 
         // First resolve is cold (one miss); the next three are warm (three hits).
-        await cache.ResolveAsync("tok", Resolver(subject), default);
-        await cache.ResolveAsync("tok", Resolver(subject), default);
-        await cache.ResolveAsync("tok", Resolver(subject), default);
-        await cache.ResolveAsync("tok", Resolver(subject), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject), default);
 
         Assert.That(misses.Sum(), Is.EqualTo(1), "only the cold resolve is a miss");
         Assert.That(hits.Sum(), Is.EqualTo(3), "each subsequent same-subject resolve is a hit");
@@ -135,9 +135,9 @@ public sealed class LatticeMembershipMetricsTests
         using var misses = new MeterCollector<long>(
             LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.ResolutionCacheMissesName);
 
-        await cache.ResolveAsync("tok", Resolver(subject), default);   // cold miss
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject), default);   // cold miss
         time.Advance(TimeSpan.FromMinutes(6));                          // entry expires
-        await cache.ResolveAsync("tok", Resolver(subject), default);   // fresh miss
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject), default);   // fresh miss
 
         Assert.That(misses.Sum(), Is.EqualTo(2), "an expired entry re-resolves and counts a second miss");
     }
@@ -149,20 +149,20 @@ public sealed class LatticeMembershipMetricsTests
         var subject = new LatticeSubject("alice");
 
         // Warm the cache (one miss recorded by the resolve).
-        await cache.ResolveAsync("tok", Resolver(subject), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject), default);
 
         using var hits = new MeterCollector<long>(
             LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.ResolutionCacheHitsName);
         using var misses = new MeterCollector<long>(
             LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.ResolutionCacheMissesName);
 
-        Assert.That(cache.TryGetCached("tok", out _), Is.True);
+        Assert.That(cache.TryGetCached(MembershipCacheKey.ForToken("tok"), out _), Is.True);
         Assert.That(hits.Sum(), Is.EqualTo(1), "a warm TryGetCached serve is a hit");
 
         // A TryGetCached miss records nothing: the miss is counted by the
         // ResolveAsync that necessarily follows it, so the warm fast path never
         // double-counts a single lookup.
-        Assert.That(cache.TryGetCached("cold", out _), Is.False);
+        Assert.That(cache.TryGetCached(MembershipCacheKey.ForToken("cold"), out _), Is.False);
         Assert.That(misses.Sum(), Is.Zero, "a TryGetCached miss is not counted on its own");
     }
 }

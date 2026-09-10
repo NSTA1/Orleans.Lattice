@@ -253,6 +253,57 @@ internal static class LatticeAccessGateEnforcement
         return decision.KeyFilter;
     }
 
+    /// <summary>
+    /// Enforces whole-tree control of <paramref name="treeId"/> for
+    /// <paramref name="operation"/> with <b>hard-deny</b> semantics: only an
+    /// unrestricted allow covering the entire tree proceeds, so a plain deny
+    /// <em>and</em> a partial-coverage (key-filtered) allow both throw.
+    /// <para>
+    /// Used where the caller is not operating on individual keys but is
+    /// acquiring authority over a whole tree at once, so no per-key narrowing
+    /// exists that the decision's filter could be applied to. Tree aliasing is
+    /// the motivating case: binding a logical id to another tree's physical
+    /// shards confers unrestricted read and write over every key that tree
+    /// holds, now and in future, so anything short of whole-tree control is
+    /// insufficient.
+    /// </para>
+    /// </summary>
+    public static async ValueTask EnforceWholeTreeControlAsync(
+        ILatticeAccessGate gate,
+        ILatticeMembershipContext? membership,
+        string treeId,
+        LatticeOperation operation,
+        CancellationToken cancellationToken)
+    {
+        if (LatticeAccessGateContext.IsGateBypassed || gate is NullLatticeAccessGate)
+        {
+            return;
+        }
+
+        var subject = await ResolveSubjectAsync(membership, cancellationToken);
+        var request = new LatticeAccessRequest(
+            treeId, operation, subject, key: null, rangeStart: null, rangeEnd: null);
+        var decision = await gate.AuthorizeAsync(in request, cancellationToken);
+
+        if (!decision.Allowed)
+        {
+            throw Denied(treeId, operation, subject, decision.Reason);
+        }
+
+        // A partial-coverage allow may never be widened into whole-tree
+        // authority. There is no key to test the filter against, and the
+        // authority being granted is unbounded, so fail closed.
+        if (decision.KeyFilter is not null)
+        {
+            throw new LatticeAuthorizationDeniedException(
+                treeId,
+                operation,
+                subject.SubjectId,
+                decision.Reason
+                    ?? "The access gate allowed only a subset of keys; whole-tree control is required.");
+        }
+    }
+
     private static ValueTask<LatticeSubject> ResolveSubjectAsync(
         ILatticeMembershipContext? membership,
         CancellationToken cancellationToken) =>

@@ -54,7 +54,12 @@ internal sealed class MembershipContext : ILatticeMembershipContext
         }
 
         var credential = LatticeCredentialContext.Current!.Value;
-        var cacheKey = credential.Token ?? string.Empty;
+
+        // The key covers the whole credential, not just its token: authenticator
+        // selection reads Scheme, and the credential contract lets an
+        // authenticator resolve from PrincipalId or Metadata. Keying on the
+        // token alone would serve one credential's subject to a different one.
+        var cacheKey = MembershipCacheKey.For(credential);
 
         // Warm fast path: avoid allocating the cache-miss resolver closure when
         // the subject is already cached and still within its freshness bound.
@@ -83,7 +88,7 @@ internal sealed class MembershipContext : ILatticeMembershipContext
         // A warm cache hit serves the subject without re-authenticating or
         // touching the directory; a miss returns false so the caller takes the
         // async, gate-bypassing resolution path.
-        var cacheKey = LatticeCredentialContext.Current!.Value.Token ?? string.Empty;
+        var cacheKey = MembershipCacheKey.For(LatticeCredentialContext.Current!.Value);
         return _cache.TryGetCached(cacheKey, out subject);
     }
 
