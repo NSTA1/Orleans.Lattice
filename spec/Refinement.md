@@ -102,6 +102,101 @@ the point of the exercise rather than a blemish on it: `LinearizedTerminals`
 `ShadowForwardOrphan(t,k)` (#2554). A row reading "None" is a stronger artefact
 than a row reading nothing at all, because only the first can be closed.
 
+## Territory owned by other open issues
+
+Two issues that are still **open** own claims made in this directory. Neither is
+in scope for the refinement note's own work - epic #2556 states both exclusions
+explicitly - and neither should be re-filed as a fresh finding by a later census
+of the Detector column.
+
+Read this before grading a row or filing a gap. A finding that lands inside one
+of the boundaries below belongs to that issue, and opening a second issue for it
+splits one fix across two changes whose authors cannot see each other. That is
+not hypothetical: the census that produced the Detector column above ran without
+this boundary written down anywhere, because the acceptance criterion that asked
+for it (#2525's third) was never discharged. #2562 discharges it here, in the
+document the census actually reads, rather than in an issue comment.
+
+This section records the boundary and nothing else. It does not fix either
+issue, and nothing here asserts that the claims they own are currently correct.
+
+### #2325 owns documentation and API overclaims in the atomicity surface
+
+#2325 is about explanations that do not match the mechanism they name. In each
+case the behaviour users depend on is present; what is wrong is the account of
+*why*, which is worse than it sounds, because a change that removed the real
+mechanism would leave the wrong account standing and looking like cover. It owns
+three findings:
+
+- **The `SnapshotPin` guarantee is attributed to the wrong mechanism.** The
+  guarantee the documentation attributes to the pin is delivered in practice by
+  an unrelated fast path. The remedy is to name the mechanism that actually
+  delivers it and pin that mechanism with a test.
+- **The advertised two-saga overlap is nominal.** The bounded instance in
+  [`README.md`](README.md) advertises two sagas overlapping on a shared key, but
+  state is per-saga private and **no property relates two sagas**, so the
+  overlap exercises nothing. The remedy is to add a property that relates two
+  sagas, or to rename the scenario. #2325 is explicit that the model can carry
+  such a property: the finding is to be worded as "unexpressed", with its price
+  stated, never as "cannot express".
+- **The Coyote model harness claims schedule exploration it does not perform.**
+  Two members of `CoyoteModelHarness` are named for interleaving and schedule
+  exploration while the measured concurrency degree is zero, and a user-facing
+  sample source header and the assurance document repeat the claim. Raising the
+  concurrency degree, as opposed to correcting the names, is #2319's rather than
+  #2325's.
+
+The test to apply: a finding that an artefact in the atomicity surface describes
+a guarantee some other mechanism delivers, or advertises an interaction or an
+exploration it does not perform, is #2325's.
+
+### #2333 owns `DecisionDurability`'s prose and its refinement seam
+
+#2333 owns the `DecisionDurability` row of the property mapping table above **by
+name**, together with the same property's prose wherever else it is stated. It
+reverses the remedy an earlier reading was converging on, so its direction
+matters as much as its scope:
+
+- **The TLA+ formula is correct as written, and must not be weakened or
+  scoped.** `DecisionDurability` in [`AtomicCommit.tla`](AtomicCommit.tla)
+  already forbids a committed decision going absent as well as going aborted,
+  because absent is not `"committed"`.
+- **Every site that states the property in prose is strictly weaker than the
+  formula.** All of them narrow it to a *flip*: the comment above the formula in
+  [`AtomicCommit.tla`](AtomicCommit.tla), the property table in
+  [`README.md`](README.md), and the `DecisionDurability` row here. The same
+  wording appears in `docs/lattice/verified-atomic-commit.md`, which is the same
+  claim and belongs to the same issue. The remedy is to say the decision never
+  flips **or is unset**, not to narrow the formula to match the prose.
+- **The seam points at a path that cannot violate the property.** The row maps
+  the property onto the repeat same-outcome registry call, where the removal and
+  the re-apply both precede a single state write, so the property holds there by
+  construction. The paths that can reach a violation - `ForgetAsync`,
+  `PruneExpired`, and the zero-retention branch - are named nowhere in the
+  mapping. Re-pointing the seam at those is #2333's. Note that the row's
+  same-outcome clause has already been qualified once since #2333 was filed, by
+  the #2299 fix wave: it now says a purged tombstone makes a late terminal record
+  afresh. That narrows the clause #2333 called false; it does not discharge the
+  issue, because the seam still names no mechanism that can unset a decision, and
+  the row still concludes that the recorded outcome is unchanged either way.
+- **Adding the model action that can unset a decision is #2320's.** #2333 relies
+  on it to exercise the property but does not own it.
+
+Two consequences for grading the Detector column:
+
+- The `DecisionDurability` row's Detector cell is graded against the row's claim
+  **as it stands**, which is the narrowed flip reading, and the two registry
+  tests it names do detect a flip. That a flip-detecting test does not detect an
+  *unset* is not a new detector gap to file: it restates #2333, and it resolves
+  when #2333 corrects the claim. Re-grade the row after #2333 lands, not before.
+- Do not correct any part of `DecisionDurability` here piecemeal. #2333's finding
+  is that the formula, the prose sites and the seam **compose** into the defect,
+  each step being locally defensible, so changing one of them alone can leave the
+  artefact more inconsistent rather than less.
+
+The test to apply: a finding that this note or the specification understates
+`DecisionDurability`, or maps it onto a path that cannot violate it, is #2333's.
+
 ## Deliberate abstraction gaps
 
 These are modelled abstractly or not at all, by design; the Coyote cores and
