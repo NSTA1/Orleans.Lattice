@@ -18,10 +18,24 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// <c>WriteStateAsync</c> call on the storage grain. No historical
 /// retention is intended; the WAL remains the long-term audit trail.
 /// </para>
+/// <para>
+/// The blob implements <see cref="ILatticeBinaryPersistedState"/>,
+/// so it is persisted through the Orleans binary serializer rather than the
+/// default JSON grain-storage serializer. On a large leaf the JSON path has
+/// to materialise the base64-encoded payload as one contiguous UTF-16
+/// string, roughly 2.7x the frame, which is the allocation that exhausts
+/// the heap when a silo replays a warm volume (issue #2481). Opting the
+/// blob in is safe because every member of its state carries an
+/// <c>[Id(n)]</c>: it already crosses a grain-call boundary on every
+/// capture, so the binary serializer is already the arbiter of what
+/// survives a round trip. The stored format is self-describing, so blobs
+/// written as JSON by an earlier build are still read correctly and no
+/// migration is required.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LeafSnapshotBlob)]
-internal sealed class LeafSnapshotBlob
+internal sealed class LeafSnapshotBlob : ILatticeBinaryPersistedState
 {
     /// <summary>
     /// WAL offset (under "SCANNED through offset N inclusive"
