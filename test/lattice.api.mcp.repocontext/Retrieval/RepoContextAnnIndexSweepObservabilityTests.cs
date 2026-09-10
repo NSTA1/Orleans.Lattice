@@ -30,6 +30,15 @@ public sealed class RepoContextAnnIndexSweepObservabilityTests
         RepoContextAnnSweepOutcome.Faulted,
     ];
 
+    private static readonly RepoContextAnnSweepFaultCause[] AllCauses =
+    [
+        RepoContextAnnSweepFaultCause.Unexpected,
+        RepoContextAnnSweepFaultCause.AuthorityUnavailable,
+        RepoContextAnnSweepFaultCause.ListingUnavailable,
+        RepoContextAnnSweepFaultCause.PlaneRejected,
+        RepoContextAnnSweepFaultCause.DependencyUnavailable,
+    ];
+
     [Test]
     public void Every_outcome_is_counted_so_a_zero_on_one_arm_is_denominated_by_a_rising_total()
     {
@@ -42,9 +51,9 @@ public sealed class RepoContextAnnIndexSweepObservabilityTests
         using var reporter = new RepoContextAnnIndexSweepReporter();
         using var listener = ListenTo(reporter, measurements);
 
-        reporter.Record(RepoContextAnnSweepOutcome.Faulted);
-        reporter.Record(RepoContextAnnSweepOutcome.Faulted);
-        reporter.Record(RepoContextAnnSweepOutcome.Faulted);
+        reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
+        reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
+        reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
 
         Assert.Multiple(() =>
         {
@@ -72,7 +81,14 @@ public sealed class RepoContextAnnIndexSweepObservabilityTests
 
         foreach (var outcome in Enum.GetValues<RepoContextAnnSweepOutcome>())
         {
-            reporter.Record(outcome);
+            if (outcome == RepoContextAnnSweepOutcome.Faulted)
+            {
+                reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
+            }
+            else
+            {
+                reporter.RecordCompleted(outcome);
+            }
         }
 
         Assert.Multiple(() =>
@@ -101,12 +117,12 @@ public sealed class RepoContextAnnIndexSweepObservabilityTests
         // fault of a run carries the exception and the repetitions go to the counter.
         using var reporter = new RepoContextAnnIndexSweepReporter();
 
-        var first = reporter.Record(RepoContextAnnSweepOutcome.Faulted);
-        var second = reporter.Record(RepoContextAnnSweepOutcome.Faulted);
+        var first = reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
+        var second = reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
         var hundredth = default(RepoContextAnnSweepReport);
         for (var i = 0; i < 98; i++)
         {
-            hundredth = reporter.Record(RepoContextAnnSweepOutcome.Faulted);
+            hundredth = reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
         }
 
         Assert.Multiple(() =>
@@ -130,10 +146,10 @@ public sealed class RepoContextAnnIndexSweepObservabilityTests
 
         for (var i = 0; i < 7; i++)
         {
-            reporter.Record(RepoContextAnnSweepOutcome.Faulted);
+            reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
         }
 
-        var recovery = reporter.Record(RepoContextAnnSweepOutcome.Armed);
+        var recovery = reporter.RecordCompleted(RepoContextAnnSweepOutcome.Armed);
 
         Assert.Multiple(() =>
         {
@@ -152,9 +168,9 @@ public sealed class RepoContextAnnIndexSweepObservabilityTests
         // one that recovered and stayed healthy.
         using var reporter = new RepoContextAnnIndexSweepReporter();
 
-        reporter.Record(RepoContextAnnSweepOutcome.Faulted);
-        reporter.Record(RepoContextAnnSweepOutcome.Armed);
-        var secondEpisode = reporter.Record(RepoContextAnnSweepOutcome.Faulted);
+        reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
+        reporter.RecordCompleted(RepoContextAnnSweepOutcome.Armed);
+        var secondEpisode = reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
 
         Assert.That(secondEpisode.Announcement, Is.EqualTo(RepoContextAnnSweepAnnouncement.FaultBegan));
     }
@@ -167,15 +183,15 @@ public sealed class RepoContextAnnIndexSweepObservabilityTests
         // success in every signal except this one.
         using var reporter = new RepoContextAnnIndexSweepReporter();
 
-        var empty = reporter.Record(RepoContextAnnSweepOutcome.Empty);
-        var armed = reporter.Record(RepoContextAnnSweepOutcome.Armed);
+        var empty = reporter.RecordCompleted(RepoContextAnnSweepOutcome.Empty);
+        var armed = reporter.RecordCompleted(RepoContextAnnSweepOutcome.Armed);
 
         Assert.Multiple(() =>
         {
             Assert.That(empty.Announcement, Is.EqualTo(RepoContextAnnSweepAnnouncement.ArmedNothing));
             Assert.That(armed.Announcement, Is.EqualTo(RepoContextAnnSweepAnnouncement.FirstArmed));
             Assert.That(
-                reporter.Record(RepoContextAnnSweepOutcome.Armed).Announcement,
+                reporter.RecordCompleted(RepoContextAnnSweepOutcome.Armed).Announcement,
                 Is.EqualTo(RepoContextAnnSweepAnnouncement.None),
                 "the first-armed line is announced once; later sweeps are counted");
         });
@@ -200,7 +216,7 @@ public sealed class RepoContextAnnIndexSweepObservabilityTests
         listener.SetMeasurementEventCallback<long>((_, _, tags, _) => tagSets.Add(tags.ToArray()));
         listener.Start();
 
-        reporter.Record(RepoContextAnnSweepOutcome.Armed);
+        reporter.RecordCompleted(RepoContextAnnSweepOutcome.Armed);
 
         Assert.Multiple(() =>
         {
@@ -272,6 +288,223 @@ public sealed class RepoContextAnnIndexSweepObservabilityTests
             Assert.That(scheduler.DescribeSchedulingState(), Is.EqualTo("on"));
             Assert.That(scheduler.CanSchedule, Is.True);
         });
+    }
+
+    [Test]
+    public void Every_fault_cause_reaches_the_meter_as_its_own_bounded_tag_value()
+    {
+        // Acceptance criterion 1 of issue #2578. The final scrape of the gate run 2
+        // container read 'armed 5, faulted 4': four faults, one number, and four
+        // causes underneath it that need four different responses. Each must be
+        // separately reachable or the reader supplies a cause, and the one a reader
+        // supplies is always the benign one.
+        var measurements = new List<(string Outcome, string? Cause)>();
+        using var reporter = new RepoContextAnnIndexSweepReporter();
+        using var listener = ListenToCauses(measurements);
+
+        foreach (var cause in Enum.GetValues<RepoContextAnnSweepFaultCause>())
+        {
+            reporter.RecordFaulted(cause);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AllCauses, Is.EquivalentTo(Enum.GetValues<RepoContextAnnSweepFaultCause>()),
+                "a new cause must be added to this fixture's expectations too");
+            Assert.That(
+                measurements.Select(m => m.Cause).Distinct(),
+                Is.EquivalentTo(new[]
+                {
+                    RepoContextAnnIndexSweepReporter.CauseUnexpectedTag,
+                    RepoContextAnnIndexSweepReporter.CauseAuthorityUnavailableTag,
+                    RepoContextAnnIndexSweepReporter.CauseListingUnavailableTag,
+                    RepoContextAnnIndexSweepReporter.CausePlaneRejectedTag,
+                    RepoContextAnnIndexSweepReporter.CauseDependencyUnavailableTag,
+                }),
+                "every cause must resolve to a distinct bounded tag value");
+            Assert.That(
+                measurements.Select(m => m.Outcome).Distinct().Single(),
+                Is.EqualTo(RepoContextAnnIndexSweepReporter.OutcomeFaultedTag),
+                "the cause dimension refines the faulted arm and must not appear under another outcome");
+        });
+    }
+
+    [Test]
+    public void A_completing_sweep_carries_no_cause_tag_at_all()
+    {
+        // The paired negative for the test above, and the one that gives it its
+        // meaning: an assertion that can only fire positively cannot tell "the
+        // dimension landed" from "the check is broken". If the cause tag leaked onto
+        // the completing arms, the test above would still pass while the armed and
+        // empty series silently doubled their cardinality.
+        var measurements = new List<(string Outcome, string? Cause)>();
+        using var reporter = new RepoContextAnnIndexSweepReporter();
+        using var listener = ListenToCauses(measurements);
+
+        reporter.RecordCompleted(RepoContextAnnSweepOutcome.Armed);
+        reporter.RecordCompleted(RepoContextAnnSweepOutcome.Empty);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(measurements, Has.Count.EqualTo(2));
+            Assert.That(
+                measurements.Where(m => m.Cause is not null),
+                Is.Empty,
+                "'armed' and 'empty' must keep exactly the cardinality they had before the cause dimension");
+            var tally = reporter.Read().FaultedByCause;
+            foreach (var cause in Enum.GetValues<RepoContextAnnSweepFaultCause>())
+            {
+                Assert.That(tally.For(cause), Is.Zero,
+                    $"no completing sweep may increment the '{cause}' arm");
+            }
+        });
+    }
+
+    [Test]
+    public void The_cause_partition_sums_to_the_faulted_arm()
+    {
+        // Totality, which is what makes a future unclassified fault path detectable
+        // rather than merely undocumented: a path that faulted without a cause would
+        // break this equality rather than quietly landing on a benign-looking arm.
+        using var reporter = new RepoContextAnnIndexSweepReporter();
+
+        reporter.RecordFaulted(RepoContextAnnSweepFaultCause.AuthorityUnavailable);
+        reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
+        reporter.RecordFaulted(RepoContextAnnSweepFaultCause.ListingUnavailable);
+        reporter.RecordFaulted(RepoContextAnnSweepFaultCause.PlaneRejected);
+        reporter.RecordFaulted(RepoContextAnnSweepFaultCause.DependencyUnavailable);
+        reporter.RecordFaulted(RepoContextAnnSweepFaultCause.Unexpected);
+
+        var snapshot = reporter.Read();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.Faulted, Is.EqualTo(6));
+            Assert.That(snapshot.FaultedByCause.Total, Is.EqualTo(snapshot.Faulted),
+                "every faulted sweep must land on exactly one cause");
+            Assert.That(snapshot.FaultedByCause.ListingUnavailable, Is.EqualTo(2));
+            Assert.That(snapshot.FaultedByCause.AuthorityUnavailable, Is.EqualTo(1));
+            Assert.That(snapshot.Armed, Is.Zero);
+            Assert.That(snapshot.Empty, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void Recording_one_cause_leaves_every_other_cause_reading_zero()
+    {
+        // The paired negative for the tally. A For(...) that ignored its argument, or
+        // an increment that fanned out across the arms, would satisfy every positive
+        // assertion above and still be useless to a reader trying to tell four faults
+        // apart.
+        foreach (var recorded in Enum.GetValues<RepoContextAnnSweepFaultCause>())
+        {
+            using var reporter = new RepoContextAnnIndexSweepReporter();
+            reporter.RecordFaulted(recorded);
+            var tally = reporter.Read().FaultedByCause;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(tally.For(recorded), Is.EqualTo(1), $"'{recorded}' must be counted");
+                foreach (var other in Enum.GetValues<RepoContextAnnSweepFaultCause>())
+                {
+                    if (other != recorded)
+                    {
+                        Assert.That(tally.For(other), Is.Zero,
+                            $"recording '{recorded}' must leave '{other}' at zero");
+                    }
+                }
+            });
+        }
+    }
+
+    [Test]
+    public void A_fault_cannot_be_counted_through_the_completing_entry_point()
+    {
+        // Acceptance criterion 2 - that no path may emit a default or empty cause -
+        // held structurally rather than by discipline. A single
+        // Record(outcome, cause = default) would let a new fault path compile while
+        // emitting the default value, and a default is exactly how the next reader is
+        // handed a benign-looking number again.
+        using var reporter = new RepoContextAnnIndexSweepReporter();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => reporter.RecordCompleted(RepoContextAnnSweepOutcome.Faulted),
+                Throws.InstanceOf<ArgumentOutOfRangeException>());
+            Assert.That(reporter.Read().Faulted, Is.Zero,
+                "a rejected recording must not be counted either");
+        });
+    }
+
+    [Test]
+    public void Describing_an_unrecognised_cause_falls_back_to_the_unexpected_tag()
+    {
+        // Fail closed on cardinality, and fail open onto the arm that pages rather
+        // than onto one with a benign explanation.
+        Assert.That(
+            RepoContextAnnIndexSweepReporter.DescribeCause((RepoContextAnnSweepFaultCause)int.MaxValue),
+            Is.EqualTo(RepoContextAnnIndexSweepReporter.CauseUnexpectedTag));
+    }
+
+    [Test]
+    public void No_recognised_cause_describes_itself_as_unexpected()
+    {
+        // The paired negative for the fallback. A DescribeCause that returned the
+        // unexpected tag for everything would satisfy the test above perfectly, and
+        // would collapse the whole vocabulary back into the single undiagnosable
+        // number this change exists to split.
+        Assert.Multiple(() =>
+        {
+            foreach (var cause in Enum.GetValues<RepoContextAnnSweepFaultCause>())
+            {
+                if (cause == RepoContextAnnSweepFaultCause.Unexpected)
+                {
+                    continue;
+                }
+
+                Assert.That(
+                    RepoContextAnnIndexSweepReporter.DescribeCause(cause),
+                    Is.Not.EqualTo(RepoContextAnnIndexSweepReporter.CauseUnexpectedTag),
+                    $"'{cause}' is a recognised cause and must not read as unclassified");
+            }
+        });
+    }
+
+    private static MeterListener ListenToCauses(List<(string Outcome, string? Cause)> sink)
+    {
+        var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == RepoContextUsageRecorder.MeterName
+                && instrument.Name == RepoContextAnnIndexSweepReporter.SweepInstrumentName)
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            var outcome = string.Empty;
+            string? cause = null;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == RepoContextAnnIndexSweepReporter.OutcomeTagKey)
+                {
+                    outcome = tag.Value?.ToString() ?? string.Empty;
+                }
+                else if (tag.Key == RepoContextAnnIndexSweepReporter.CauseTagKey)
+                {
+                    cause = tag.Value?.ToString();
+                }
+            }
+
+            lock (sink)
+            {
+                sink.Add((outcome, cause));
+            }
+        });
+        listener.Start();
+        return listener;
     }
 
     private static MeterListener ListenTo(
