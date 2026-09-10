@@ -71,6 +71,13 @@ public sealed class BackgroundCredentialScopeGuardTests
             "Its resume reminder only re-enqueues the request onto RepoIndexRunner and writes its own grain "
             + "state. The runner stamps the fixed run credential at its own drain, which is the single point "
             + "every run funnels through, so the credential is established there rather than here.",
+        ["RepoContextDrainForecastService.cs"] =
+            "Polls two process-local sources only: the drain-history file under the data root (plain file IO) "
+            + "and the Orleans activation-working-set instrument (a MeterListener reading, which issues no "
+            + "grain call). It holds no ILattice reference and opens no tree, so it has no gated read to "
+            + "authorize. Note this is precisely why it can run: its whole purpose is to report a shutdown "
+            + "risk BEFORE the stop, and a credentialed store read would make the forecast itself a source "
+            + "of the load it is trying to measure.",
     };
 
     private static readonly string[] ScanRoots =

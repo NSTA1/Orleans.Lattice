@@ -106,12 +106,16 @@ public sealed class RepoContextDrainSignal : IDisposable
     private readonly TimeSpan _shutdownBudget;
     private readonly Func<TimeSpan, CancellationToken, Task> _alarm;
     private readonly Action<int>? _reportExitCode;
+    private readonly Func<int?>? _residentActivations;
+    private readonly Action<RepoContextDrainObservation>? _recordObservation;
     private readonly Lock _gate = new();
     private CancellationTokenSource? _alarmCancellation;
     private long _startedAt;
     private bool _draining;
     private bool _completed;
     private bool _overran;
+    private bool _recordedTerminal;
+    private int? _residentAtStart;
     private TimeSpan? _elapsed;
 
     /// <summary>Initializes the drain signal.</summary>
@@ -149,19 +153,50 @@ public sealed class RepoContextDrainSignal : IDisposable
     /// explicitly there keeps the hazard out of every fixture that does not opt in.
     /// </para>
     /// </param>
+    /// <param name="residentActivations">
+    /// Samples the resident activation count, returning <see langword="null"/> when
+    /// no reading is available.
+    /// <para>
+    /// It is sampled twice per drain, and the two readings answer different
+    /// questions. The reading at <see cref="BeginDrain"/> is the size of the set the
+    /// drain has to get through, and is what makes the recorded duration divisible
+    /// into a per-activation cost that a later process can project from. The reading
+    /// taken when an overrun latches is the set still resident at that instant, which
+    /// is <b>the activations actually being torn down without banking their
+    /// checkpoints</b> - the loss the abandonment message could previously only
+    /// assert the existence of.
+    /// </para>
+    /// </param>
+    /// <param name="recordObservation">
+    /// Records the drain for the <b>next</b> process to read, once when the drain
+    /// starts and again at its terminal outcome.
+    /// <para>
+    /// Writing the start marker separately is not bookkeeping. A record that says a
+    /// drain began and never says how it ended can only have been left by a process
+    /// that was killed while draining, which is direct evidence that the container's
+    /// real grace period is smaller than the drain needed - the one fact this
+    /// component otherwise argues is unobservable from inside the container, and
+    /// which is unobservable only <i>within</i> a process rather than across a
+    /// restart.
+    /// </para>
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="logger"/> is null.</exception>
     public RepoContextDrainSignal(
         ILogger<RepoContextDrainSignal> logger,
         TimeSpan shutdownBudget,
         Func<long>? timestamp = null,
         Func<TimeSpan, CancellationToken, Task>? alarm = null,
-        Action<int>? reportExitCode = null)
+        Action<int>? reportExitCode = null,
+        Func<int?>? residentActivations = null,
+        Action<RepoContextDrainObservation>? recordObservation = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _shutdownBudget = shutdownBudget;
         _timestamp = timestamp ?? Stopwatch.GetTimestamp;
         _alarm = alarm ?? Task.Delay;
         _reportExitCode = reportExitCode;
+        _residentActivations = residentActivations;
+        _recordObservation = recordObservation;
     }
 
     /// <summary>
@@ -227,6 +262,7 @@ public sealed class RepoContextDrainSignal : IDisposable
     public void BeginDrain()
     {
         CancellationTokenSource? alarmCancellation = null;
+        var resident = SampleResident();
 
         lock (_gate)
         {
@@ -237,6 +273,7 @@ public sealed class RepoContextDrainSignal : IDisposable
 
             _draining = true;
             _startedAt = _timestamp();
+            _residentAtStart = resident;
 
             if (_shutdownBudget > TimeSpan.Zero)
             {
@@ -245,10 +282,24 @@ public sealed class RepoContextDrainSignal : IDisposable
             }
         }
 
+        // Written BEFORE the drain runs, so a process killed part-way leaves a
+        // record that says a drain began and never says how it ended. That record is
+        // the evidence a later start reads as "the real grace period was smaller
+        // than this drain needed".
+        Record(new RepoContextDrainObservation(
+            DateTimeOffset.UtcNow,
+            RepoContextDrainOutcome.Started,
+            _shutdownBudget,
+            Duration: null,
+            resident));
+
         _logger.LogInformation(
-            "RepoContext drain started: the silo will deactivate and the WAL commit-log will flush. "
-            + "The host shutdown budget is {ShutdownBudgetSeconds:F0}s; the container's stop_grace_period "
-            + "must exceed it or this drain is killed mid-flight.",
+            "RepoContext drain started with {Resident} resident activations: the silo will deactivate and the "
+            + "WAL commit-log will flush. The host shutdown budget is {ShutdownBudgetSeconds:F0}s; the "
+            + "container's stop_grace_period must exceed it or this drain is killed mid-flight.",
+            resident is { } count
+                ? count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : "an unreadable number of",
             _shutdownBudget.TotalSeconds);
 
         if (alarmCancellation is not null)
@@ -298,6 +349,10 @@ public sealed class RepoContextDrainSignal : IDisposable
     /// </summary>
     private void ReportOverrun()
     {
+        var strandedNow = SampleResident();
+        TimeSpan measured;
+        int? residentAtStart;
+
         lock (_gate)
         {
             if (_overran || !_draining)
@@ -306,23 +361,144 @@ public sealed class RepoContextDrainSignal : IDisposable
             }
 
             _overran = true;
+            measured = Stopwatch.GetElapsedTime(_startedAt, _timestamp());
+            residentAtStart = _residentAtStart;
         }
 
         ReportAbandonedExitCode();
 
+        // Recorded at the alarm rather than only at completion, because a process
+        // killed moments after this line would otherwise leave only a start marker
+        // and the next start would report the weaker killed-mid-drain finding when
+        // the stronger measured one was already available.
+        RecordTerminal(RepoContextDrainOutcome.Abandoned, measured, residentAtStart, final: false);
+
         _logger.LogError(
             "RepoContext drain ABANDONED after {ShutdownBudgetSeconds:F0}s: the host shutdown budget expired "
-            + "before the silo finished deactivating, so the host has stopped waiting and the remaining leaf "
-            + "activations are being torn down without banking their projection checkpoints. The process will "
+            + "before the silo finished deactivating, so the host has stopped waiting. {Loss} The process will "
             + "exit {ExitCode} rather than 0, so this is visible to an orchestrator and not only in this log. "
             + "The budget is derived from the container grace period the deployment declares, so the remedy is "
             + "to raise the service's stop_grace_period AND the " + RepoContextShutdownBudget.StopGracePeriodKey
-            + " that declares it, together and to the same value. Raising only the declaration buys no drain "
-            + "time and silences this line, because the container still kills the process at the real grace "
-            + "period. Understand either as buying time: drain duration tracks the resident activation set, "
-            + "which nothing here bounds.",
+            + " that declares it, together and to the same value - to at least {RequiredSeconds:F0}s, which is "
+            + "derived from this drain and grants no headroom. Raising only the declaration buys no drain time "
+            + "and silences this line, because the container still kills the process at the real grace period. "
+            + "Drain duration tracks the resident activation set, which nothing here bounds; this drain is "
+            + "recorded so the next start reports the mismatch BEFORE the next stop rather than during it.",
             _shutdownBudget.TotalSeconds,
-            RepoContextExitCode.DrainAbandoned);
+            DescribeLoss(strandedNow, residentAtStart),
+            RepoContextExitCode.DrainAbandoned,
+            RepoContextShutdownBudget.RequiredGrantFor(measured).TotalSeconds);
+    }
+
+    /// <summary>
+    /// Renders what the abandonment actually cost: how many activations were still
+    /// resident at the instant the host stopped waiting, which is the count torn down
+    /// without banking their projection checkpoints.
+    /// </summary>
+    /// <remarks>
+    /// Rendered as a clause rather than a bare number so that an unreadable count
+    /// reads as unreadable. Substituting a zero would turn a lost measurement into a
+    /// confident claim that nothing was lost, which is the more expensive of the two
+    /// mistakes by a wide margin.
+    /// </remarks>
+    private static string DescribeLoss(int? strandedNow, int? residentAtStart)
+    {
+        if (strandedNow is not { } stranded)
+        {
+            return "The activations still resident at that instant are being torn down without banking their "
+                + "projection checkpoints; the resident count could not be read, so this line cannot say how "
+                + "many.";
+        }
+
+        var count = stranded.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (residentAtStart is not { } atStart)
+        {
+            return $"{count} activations were still resident and are being torn down without banking their "
+                + "projection checkpoints.";
+        }
+
+        return $"{count} activations were still resident and are being torn down without banking their "
+            + $"projection checkpoints, out of {atStart.ToString(System.Globalization.CultureInfo.InvariantCulture)} "
+            + "resident when the drain began.";
+    }
+
+    /// <summary>
+    /// Samples the resident activation count, swallowing any fault. A probe that
+    /// throws costs a diagnostic; a probe that throws <b>on the drain path</b> would
+    /// cost the stop sequence.
+    /// </summary>
+    private int? SampleResident()
+    {
+        if (_residentActivations is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _residentActivations();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Sampling the RepoContext resident activation count failed.");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Records the drain's terminal outcome for the next process.
+    /// </summary>
+    /// <remarks>
+    /// The alarm records a non-final outcome and the completion path records a final
+    /// one, in that order, so the more accurate measurement supersedes the less
+    /// accurate: the alarm can only ever report the budget it fired at, whereas the
+    /// completion path reports what the drain actually took. Only a final record
+    /// latches, so an alarm that fires after completion cannot overwrite a completed
+    /// drain with an abandoned one.
+    /// </remarks>
+    private void RecordTerminal(
+        RepoContextDrainOutcome outcome,
+        TimeSpan measured,
+        int? residentAtStart,
+        bool final)
+    {
+        lock (_gate)
+        {
+            if (_recordedTerminal)
+            {
+                return;
+            }
+
+            _recordedTerminal = final;
+        }
+
+        Record(new RepoContextDrainObservation(
+            DateTimeOffset.UtcNow,
+            outcome,
+            _shutdownBudget,
+            measured,
+            residentAtStart));
+    }
+
+    /// <summary>
+    /// Hands an observation to the recorder, swallowing any fault for the same reason
+    /// the alarm swallows its own.
+    /// </summary>
+    private void Record(RepoContextDrainObservation observation)
+    {
+        if (_recordObservation is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _recordObservation(observation);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Recording the RepoContext drain observation failed.");
+        }
     }
 
     /// <summary>
@@ -373,6 +549,7 @@ public sealed class RepoContextDrainSignal : IDisposable
         TimeSpan measured;
         bool overran;
         bool latchedHere = false;
+        int? residentAtStart;
         CancellationTokenSource? alarmCancellation;
 
         lock (_gate)
@@ -397,6 +574,7 @@ public sealed class RepoContextDrainSignal : IDisposable
             }
 
             overran = _overran;
+            residentAtStart = _residentAtStart;
             alarmCancellation = _alarmCancellation;
             _alarmCancellation = null;
         }
@@ -411,6 +589,15 @@ public sealed class RepoContextDrainSignal : IDisposable
         {
             ReportAbandonedExitCode();
         }
+
+        // The completion path carries the fuller measurement - the alarm can only
+        // ever record the budget it fired at - so it records too, and RecordTerminal
+        // latches so the two paths cannot write contradictory records.
+        RecordTerminal(
+            overran ? RepoContextDrainOutcome.Abandoned : RepoContextDrainOutcome.Completed,
+            measured,
+            residentAtStart,
+            final: true);
 
         if (overran)
         {

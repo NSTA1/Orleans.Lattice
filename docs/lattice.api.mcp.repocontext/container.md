@@ -374,3 +374,46 @@ So the budget is derived from the quantity that genuinely bounds it. The deploym
 **The residual risk, stated plainly: the environment variable *declares* the grant, it is not the grant.** A deployment that declares 120s while granting 20s derives a 90s budget under a 20s guillotine, and by the same premise that motivates all of this - the real grace period is unobservable from inside the container - the process cannot detect it. Writing the two values adjacently in the same compose service is the mitigation, and `RepoContextComposeShutdownBudgetTests` asserts they are equal in the sample. That adjacency is **a convention, not an enforcement**. Change the two together, always.
 
 None of this bounds the resident activation set, and drain time still scales with it. If your own box reports the `Error` line, raising both values past your observed drain buys time; it does not fix the cause.
+
+### Knowing before the stop: the drain forecast
+
+Everything above is discovered **at shutdown**, which is the worst moment to learn it. The `drain ABANDONED` line and the exit `70` are honest, but by the time either is emitted the state they were warning about has already been torn down unbanked. Issue #2598 is the case in point: gate run 2 of epic #2368 drained past 102s against a 90s budget, exited `70` exactly as designed, and the first anyone knew of it was the corpse.
+
+The budget itself does **not** move, for the reason the section above gives: it is bounded by a grant the process cannot see, so raising it converts a loud failure into a silent one. What changed is that the mismatch is now visible **while the container is running**, hours before anybody types `docker stop`.
+
+Two mechanisms supply that, and they are complementary:
+
+**1. The last drain is remembered across the restart.** The host writes a `drain-history.txt` under its data root: a marker when a drain starts, replaced by the measured outcome when it finishes. A container that starts and finds a **start marker with no outcome** knows its predecessor was killed mid-drain, which is direct evidence the real grace period is smaller than the drain needed. That is the one fact the running process genuinely cannot observe about itself, and it is observable across a restart precisely because the file outlives the process.
+
+**2. Drain cost is projected from live residency.** The host samples Orleans' own activation working set, divides the last measured drain by the residency it was measured against to get a per-activation cost, and multiplies by residency now. When the projection exceeds the budget, the host says so at `Warning` on a one-minute poll rather than waiting for a stop to prove it.
+
+The forecast is reported in the startup log and re-reported whenever its verdict changes:
+
+| Verdict | Meaning | Severity |
+|---------|---------|----------|
+| `NoHistory` | No drain has been measured yet on this volume. | `Debug` |
+| `Fits` | The last drain fitted the budget with headroom. | `Information` |
+| `Thin` | The last drain consumed more than 70% of the budget. | `Warning` |
+| `Exceeded` | The last drain did not fit. The next stop will abandon. | `Error` |
+| `KilledMidDrain` | A previous process was killed with a drain in flight. | `Error` |
+
+The `Exceeded` and `KilledMidDrain` lines carry the grace period the measurement actually requires, computed by inverting the derivation, so the remedy is a value to copy rather than a number to guess. A drain measured at 102.1s reports a required grant of **137s**, which is what `LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD` and the service's `stop_grace_period` must both be raised to.
+
+Those lines also distinguish a **declared** grant from an **assumed** one, because the remedy differs. If the grace period was declared and the evidence contradicts it, the declaration is wrong and must be raised. If it was merely assumed because the variable is unset, the deployment may already grant enough and simply never said so. The same distinction is carried in the effective-configuration dump since issue #2593; before that fix a defaulted `120s` and a declared `120s` printed identically, which is how epic #2368's gate run 2 came to record a grace period nobody had actually set.
+
+Seven gauges expose the same state on `/metrics`, so this is alertable without log scraping:
+
+| Gauge | Meaning |
+|-------|---------|
+| `lattice_repocontext_shutdown_budget_seconds` | The host drain budget in force. |
+| `lattice_repocontext_stop_grace_period_declared` | `1` when the grant was declared, `0` when assumed. |
+| `lattice_repocontext_last_drain_seconds` | The last measured drain duration. |
+| `lattice_repocontext_drain_forecast` | The verdict above, as its numeric value. |
+| `lattice_repocontext_resident_activations` | Activations resident now. |
+| `lattice_repocontext_projected_drain_seconds` | Projected drain at current residency. |
+| `lattice_repocontext_required_stop_grace_period_seconds` | The grant that projection would need. |
+
+`lattice_repocontext_drain_forecast >= 3` is the alert worth having: it fires on both failing verdicts and on nothing else.
+
+**What this does not do, stated plainly so it is not over-read.** It does not make the drain fit. A projection that exceeds the budget is a warning that the next stop will abandon, not a repair of it, and the remedy is still to raise the grace period and the variable that declares it together. Every reading is best-effort: a residency count the runtime will not supply is reported as unavailable and never as zero, and a projection needs a prior measured drain, so a first-ever start forecasts `NoHistory` and offers no projection at all. The point is only that the failure now announces itself while there is still time to act on it.
+
