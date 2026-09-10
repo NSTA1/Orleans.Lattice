@@ -45,11 +45,21 @@ public class ShardRootGrainScanPageStallTests
     /// Builds a two-leaf chain where the leaf at <paramref name="parkAtLeaf"/>
     /// never completes its read, reproducing the in-flight-await shape the
     /// cooperative budget is structurally unable to interrupt.
+    /// <para>
+    /// <paramref name="sterileLeaves"/> makes the leaves that <em>do</em>
+    /// answer return no rows. Set it when the assertion is about stall
+    /// attribution rather than about the page: since issue 2585 a ceiling that
+    /// catches the walk holding rows banks them as a short page instead of
+    /// faulting, so a chain whose answering leaves yield rows no longer
+    /// produces a <see cref="ScanPageStalledException"/> at all and the
+    /// attribution under test would go unexercised.
+    /// </para>
     /// </summary>
     private static StallHarness CreateParkedChain(
         TimeSpan stallDuration,
         int parkAtLeaf = 0,
-        int leafCount = 2)
+        int leafCount = 2,
+        bool sterileLeaves = false)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", ShardKey));
@@ -69,10 +79,12 @@ public class ShardRootGrainScanPageStallTests
         {
             var index = i;
             var leaf = Substitute.For<IBPlusLeafGrain>();
-            var entries = new List<KeyValuePair<string, byte[]>>
-            {
-                new($"k{index:D4}", new byte[] { 1 }),
-            };
+            var entries = sterileLeaves
+                ? new List<KeyValuePair<string, byte[]>>()
+                : new List<KeyValuePair<string, byte[]>>
+                {
+                    new($"k{index:D4}", new byte[] { 1 }),
+                };
 
             leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
@@ -155,6 +167,12 @@ public class ShardRootGrainScanPageStallTests
     /// Builds a shard whose first leaf answers normally but whose sibling hop
     /// parks, so the ceiling fires while the walk is <em>between</em> leaf
     /// reads rather than during one.
+    /// <para>
+    /// The leaf answers with no rows. That is what keeps the stall path under
+    /// test reachable after issue 2585: a ceiling holding rows banks them as a
+    /// short page rather than faulting, so a leaf that yielded one would turn
+    /// this into a successful call.
+    /// </para>
     /// </summary>
     private static ShardRootGrain CreateParkedSibling(TimeSpan stallDuration)
     {
@@ -168,7 +186,7 @@ public class ShardRootGrainScanPageStallTests
 
         var factory = Substitute.For<IGrainFactory>();
         var leaf = Substitute.For<IBPlusLeafGrain>();
-        var entries = new List<KeyValuePair<string, byte[]>> { new("k0000", [1]) };
+        var entries = new List<KeyValuePair<string, byte[]>>();
 
         leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                 Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
@@ -376,11 +394,19 @@ public class ShardRootGrainScanPageStallTests
     /// outstanding, not merely the first in the chain. A field that always
     /// named leaf one would pass the test above while being useless on exactly
     /// the stalls that read some leaves before parking.
+    /// <para>
+    /// The answering leaf is sterile so the stall path is still the one under
+    /// test. Since issue 2585 a ceiling that catches the walk holding rows
+    /// banks them as a short page rather than faulting, so a first leaf that
+    /// yielded a row would make this call succeed and the attribution assertion
+    /// would never run.
+    /// </para>
     /// </summary>
     [Test]
     public async Task The_named_leaf_is_the_outstanding_one_not_the_first_in_the_chain()
     {
-        var harness = CreateParkedChain(TimeSpan.FromMilliseconds(250), parkAtLeaf: 1);
+        var harness = CreateParkedChain(
+            TimeSpan.FromMilliseconds(250), parkAtLeaf: 1, sterileLeaves: true);
 
         var ex = Assert.ThrowsAsync<ScanPageStalledException>(async () =>
             await harness.Grain.GetSortedEntriesBatchAsync(
@@ -429,6 +455,10 @@ public class ShardRootGrainScanPageStallTests
     /// parks on the sibling hop instead, so a read is no longer outstanding:
     /// the stall must name no leaf, because the one it last read is not what it
     /// is waiting on. Drop the ordinal comparison and this test fails.
+    /// <para>
+    /// The leaf answers with no rows, so the ceiling has nothing to bank and
+    /// still faults - see <see cref="CreateParkedSibling"/>.
+    /// </para>
     /// </summary>
     [Test]
     public void A_stall_between_leaf_reads_names_no_leaf()
