@@ -35,7 +35,14 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// whole fixture exists to close.
 /// </para>
 /// </remarks>
+// NonParallelizable: a MeterListener is process-wide, so it observes every instrument
+// published by any concurrently running fixture, not only the one under test. A sibling
+// fixture constructing the same reporter publishes the same instrument names on the same
+// meter, which both inflates a capture count and lets a foreign measurement land on an arm
+// this fixture asserts is still zero. Isolating the fixture is what makes the readings here
+// observations of the code under test rather than of whatever else happened to be running.
 [TestFixture]
+[NonParallelizable]
 public sealed class RepoContextPreMintedArmsTests
 {
     private const string SaturationGaugeName = "lattice_metrics_series";
@@ -291,13 +298,27 @@ public sealed class RepoContextPreMintedArmsTests
             _listener.Start();
         }
 
+        /// <summary>
+        /// The distinct instrument-and-description pairs seen.
+        /// </summary>
+        /// <remarks>
+        /// Deduplicated deliberately. A <see cref="MeterListener"/> replays every
+        /// instrument already live in the process when it starts, so an earlier
+        /// fixture that constructed the same reporter and left its meter undisposed
+        /// republishes the same name here. Those replays carry an identical
+        /// description, so collapsing them keeps the count a statement about how
+        /// many distinct descriptions exist - which is what the assertions read it
+        /// as - rather than about how many reporter instances happen to be alive.
+        /// Two genuinely different descriptions under one name would still widen the
+        /// set and fail loudly.
+        /// </remarks>
         public IReadOnlyList<(string Instrument, string Description)> Captured
         {
             get
             {
                 lock (_captured)
                 {
-                    return _captured.ToArray();
+                    return _captured.Distinct().ToArray();
                 }
             }
         }

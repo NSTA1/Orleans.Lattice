@@ -29,7 +29,14 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// denominator those two are the same observation.
 /// </para>
 /// </remarks>
+// NonParallelizable: a MeterListener is process-wide, so it observes every instrument
+// published by any concurrently running fixture, not only the one under test. A sibling
+// fixture constructing the same reporter publishes the same instrument names on the same
+// meter, which both inflates a capture count and lets a foreign measurement land on an arm
+// this fixture asserts is still zero. Isolating the fixture is what makes the readings here
+// observations of the code under test rather than of whatever else happened to be running.
 [TestFixture]
+[NonParallelizable]
 public sealed class RepoContextGarbageCollectionMeterTests
 {
     [Test]
