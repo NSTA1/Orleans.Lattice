@@ -52,23 +52,35 @@ Written(t) == TxWrites[t]
 (*  orphanDone[t][k]  a used-once budget so a reshard shadow-forward       *)
 (*                orphan is modelled at most once per key (keeps the state *)
 (*                space finite).                                           *)
+(*  forgotten[t]  whether the saga's post-fan-out cleanup has retired the  *)
+(*                registry row (ForgetAsync, the lazy PruneExpired purge   *)
+(*                behind it, or the zero-retention branch). This is        *)
+(*                deliberately a separate variable rather than a write     *)
+(*                back to decision[t]: retiring the row does not un-commit *)
+(*                the saga, it removes the tree's ability to answer for    *)
+(*                it. decision[t] therefore keeps the outcome, and         *)
+(*                RegistryView(t) is what a reader actually resolves - the *)
+(*                same split the Coyote model makes between its recorded   *)
+(*                outcome and a live read of the registry core.            *)
 (*  revision      monotonic registry revision (DecisionsRevision), bumped  *)
-(*                on every decision write.                                 *)
+(*                on every decision write and on the cleanup that retires  *)
+(*                one (both change the surface a reader probes).           *)
 (***************************************************************************)
-VARIABLES phase, vote, decision, terminal, pend, orphanDone, revision
+VARIABLES phase, vote, decision, terminal, pend, orphanDone, forgotten, revision
 
-vars == <<phase, vote, decision, terminal, pend, orphanDone, revision>>
+vars == <<phase, vote, decision, terminal, pend, orphanDone, forgotten, revision>>
 
 Phases == {"init", "prepared", "committing", "aborting", "done"}
 
 TypeOK ==
-    /\ phase \in [Txns -> Phases]
-    /\ vote \in [Txns -> [Keys -> {"none", "ack", "nack"}]]
-    /\ decision \in [Txns -> {"inflight", "committed", "aborted"}]
-    /\ terminal \in [Txns -> [Keys -> {"none", "commit", "abort"}]]
-    /\ pend \in [Txns -> [Keys -> {"none", "pending"}]]
-    /\ orphanDone \in [Txns -> [Keys -> BOOLEAN]]
-    /\ revision \in 0..Cardinality(Txns)
+   /\ phase \in [Txns -> Phases]
+   /\ vote \in [Txns -> [Keys -> {"none", "ack", "nack"}]]
+   /\ decision \in [Txns -> {"inflight", "committed", "aborted"}]
+   /\ terminal \in [Txns -> [Keys -> {"none", "commit", "abort"}]]
+   /\ pend \in [Txns -> [Keys -> {"none", "pending"}]]
+   /\ orphanDone \in [Txns -> [Keys -> BOOLEAN]]
+   /\ forgotten \in [Txns -> BOOLEAN]
+   /\ revision \in 0..(2 * Cardinality(Txns))
 
 (***************************************************************************)
 (* Reader visibility - the per-key gate.                                   *)
@@ -92,7 +104,16 @@ TypeOK ==
 AlreadyTerminal(t, k)  == terminal[t][k] # "none"
 ProjectedPrepared(t, k) == terminal[t][k] = "commit"
 
-SurfaceViaGate(t, k) == decision[t] = "committed" /\ ~AlreadyTerminal(t, k)
+(***************************************************************************)
+(* What a reader's GetStatusAsync actually resolves for the saga. A txid    *)
+(* absent from the registry view is InFlight (:104 below), so once the      *)
+(* cleanup has retired the row the view reverts to "inflight" even though   *)
+(* the saga's outcome (decision[t]) is unchanged. Only the gate consults    *)
+(* this; the invariants below are stated against decision[t], the outcome.  *)
+(***************************************************************************)
+RegistryView(t) == IF forgotten[t] THEN "inflight" ELSE decision[t]
+
+SurfaceViaGate(t, k) == RegistryView(t) = "committed" /\ ~AlreadyTerminal(t, k)
 
 ObservedPrepared(t, k) ==
     IF pend[t][k] = "pending"
@@ -111,6 +132,7 @@ Init ==
     /\ terminal = [t \in Txns |-> [k \in Keys |-> "none"]]
     /\ pend = [t \in Txns |-> [k \in Keys |-> "none"]]
     /\ orphanDone = [t \in Txns |-> [k \in Keys |-> FALSE]]
+    /\ forgotten = [t \in Txns |-> FALSE]
     /\ revision = 0
 
 (***************************************************************************)
@@ -130,7 +152,7 @@ PrepareTx(t) ==
     /\ pend' = [pend EXCEPT ![t] =
                   [k \in Keys |-> IF k \in Written(t) THEN "pending" ELSE pend[t][k]]]
     /\ phase' = [phase EXCEPT ![t] = "prepared"]
-    /\ UNCHANGED <<decision, terminal, orphanDone, revision>>
+    /\ UNCHANGED <<decision, terminal, orphanDone, forgotten, revision>>
 
 AllAcked(t) == \A k \in Written(t) : vote[t][k] = "ack"
 
@@ -147,7 +169,7 @@ DecideTx(t) ==
     /\ decision' = [decision EXCEPT ![t] = IF AllAcked(t) THEN "committed" ELSE "aborted"]
     /\ phase' = [phase EXCEPT ![t] = IF AllAcked(t) THEN "committing" ELSE "aborting"]
     /\ revision' = revision + 1
-    /\ UNCHANGED <<vote, terminal, pend, orphanDone>>
+    /\ UNCHANGED <<vote, terminal, pend, orphanDone, forgotten>>
 
 (***************************************************************************)
 (* BroadcastStep(t,k): one participant leaf applies the saga's terminal    *)
@@ -166,7 +188,7 @@ BroadcastStep(t, k) ==
        IN /\ terminal' = [terminal EXCEPT ![t] = nterm]
           /\ pend' = [pend EXCEPT ![t][k] = "none"]
           /\ phase' = [phase EXCEPT ![t] = IF allDone THEN "done" ELSE phase[t]]
-    /\ UNCHANGED <<vote, decision, orphanDone, revision>>
+    /\ UNCHANGED <<vote, decision, orphanDone, forgotten, revision>>
 
 (***************************************************************************)
 (* Reshard / migration interplay (abstract, the #1584 class at design      *)
@@ -185,7 +207,7 @@ ShadowForwardOrphan(t, k) ==
     /\ pend[t][k] = "none"
     /\ ~orphanDone[t][k]
     /\ pend' = [pend EXCEPT ![t][k] = "pending"]
-    /\ UNCHANGED <<phase, vote, decision, terminal, orphanDone, revision>>
+    /\ UNCHANGED <<phase, vote, decision, terminal, orphanDone, forgotten, revision>>
 
 OrphanDrain(t, k) ==
     /\ k \in Written(t)
@@ -194,7 +216,48 @@ OrphanDrain(t, k) ==
     /\ ~orphanDone[t][k]
     /\ pend' = [pend EXCEPT ![t][k] = "none"]
     /\ orphanDone' = [orphanDone EXCEPT ![t][k] = TRUE]
-    /\ UNCHANGED <<phase, vote, decision, terminal, revision>>
+    /\ UNCHANGED <<phase, vote, decision, terminal, forgotten, revision>>
+
+(***************************************************************************)
+(* ForgetDecision(t): the saga's post-fan-out cleanup retires the registry  *)
+(* row (ITxRegistryGrain.ForgetAsync, the lazy PruneExpired purge behind    *)
+(* it, and the TxDecisionRetention = 0 branch that drops the row outright). *)
+(* After it the txid resolves to "inflight" again, because a txid absent    *)
+(* from the registry view is InFlight.                                     *)
+(*                                                                         *)
+(* The enabling conditions are the whole safety argument, and they are      *)
+(* production's, not a modelling convenience: ForgetAsync's own contract    *)
+(* states that after the call the txid resolves to in-flight "by which      *)
+(* point no leaf has the txid in its pending bucket anymore, so that        *)
+(* observation is consistent with the absence of any pending mutation".     *)
+(* Every written key must therefore have applied its terminal and hold no   *)
+(* pending bucket - including an orphan a shadow-forward sweep re-installed *)
+(* after the fan-out, which is exactly what the tombstone retention window  *)
+(* exists to cover. Drop those conjuncts and DecisionDurability fails: a    *)
+(* leaf that has not drained resolves the retired txid to in-flight, the    *)
+(* gate falls its value through to the pre-saga value, and a committed      *)
+(* saga becomes invisible. That is the unset the property forbids, and it   *)
+(* is reachable without any flip, any late terminal, or any re-delivery.    *)
+(*                                                                         *)
+(* WHAT THIS ACTION IS NOT, AND WHY THAT MATTERS. It models the *ordered*   *)
+(* cleanup path only. The *unordered* one - a retention window aging out    *)
+(* and masking a decision row while a prepared bucket is still live - is a  *)
+(* different event with no ordering guarantee behind it, and it is #2320's  *)
+(* to add, deliberately not added here. Adding it is known to violate       *)
+(* MonotonicVisibility and VisibilityMatchesDecision, which is the finding  *)
+(* #2320 exists to record; this action does not, because its conjuncts make *)
+(* every observation independent of the decision before it fires. Reading   *)
+(* the guarded action as evidence that the unguarded hazard is absent would *)
+(* invert both results, so do not treat #2320 as discharged by this.        *)
+(***************************************************************************)
+ForgetDecision(t) ==
+    /\ decision[t] # "inflight"
+    /\ ~forgotten[t]
+    /\ \A k \in Written(t) : terminal[t][k] # "none"
+    /\ \A k \in Written(t) : pend[t][k] = "none"
+    /\ forgotten' = [forgotten EXCEPT ![t] = TRUE]
+    /\ revision' = revision + 1
+    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone>>
 
 (***************************************************************************)
 (* A fully quiesced terminal state has an explicit stuttering successor so *)
@@ -203,6 +266,7 @@ OrphanDrain(t, k) ==
 (***************************************************************************)
 FullyQuiesced ==
     /\ \A t \in Txns : phase[t] = "done"
+    /\ \A t \in Txns : forgotten[t]
     /\ \A t \in Txns : \A k \in Written(t) : pend[t][k] = "none" /\ orphanDone[t][k]
 
 Stutter == FullyQuiesced /\ UNCHANGED vars
@@ -213,6 +277,7 @@ Next ==
     \/ \E t \in Txns : \E k \in Keys : BroadcastStep(t, k)
     \/ \E t \in Txns : \E k \in Keys : ShadowForwardOrphan(t, k)
     \/ \E t \in Txns : \E k \in Keys : OrphanDrain(t, k)
+    \/ \E t \in Txns : ForgetDecision(t)
     \/ Stutter
 
 (***************************************************************************)
@@ -277,11 +342,23 @@ NoMixedTerminals ==
 (* the fairness assumption in Spec.                                        *)
 (***************************************************************************)
 
-\* Decision durability: once terminal, the registry decision never flips.
+\* Decision durability: once the registry records a terminal decision it never
+\* flips to the other terminal, and its row is never retired while a
+\* participant still holds an undrained prepared bucket. The first two
+\* conjuncts are the original formula, unchanged and unscoped. The third is
+\* the unset half: absent is not "committed", so a reading that only forbids
+\* a flip is strictly weaker than what durability has to mean. Retiring the
+\* row is not itself a violation - it is ordinary cleanup, and ForgetDecision
+\* performs it on every run - but retiring it early loses a decision a reader
+\* still depends on just as effectively as flipping it.
 DecisionDurability ==
     [][ \A t \in Txns :
           /\ (decision[t] = "committed" => decision'[t] = "committed")
-          /\ (decision[t] = "aborted"   => decision'[t] = "aborted") ]_vars
+          /\ (decision[t] = "aborted"   => decision'[t] = "aborted")
+          /\ (   /\ decision[t] # "inflight"
+                 /\ ~forgotten[t]
+                 /\ \E k \in Written(t) : terminal[t][k] = "none"
+              => ~forgotten'[t] ) ]_vars
 
 \* Monotonic visibility: once a key is post-saga-visible it stays visible
 \* (a committed value never reverts to pre-saga, even across a reshard).

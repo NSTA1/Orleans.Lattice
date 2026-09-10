@@ -37,7 +37,7 @@ public sealed class AtomicCommitLivenessCoyoteTests
     [Test]
     public void All_acks_with_backstop_always_commit_and_become_visible_on_every_leaf([Values(2, 3, 4)] int leafCount)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new AtomicCommitLivenessModel(
                 leafCount,
                 AtomicCommitLivenessScenario.Commit,
@@ -53,7 +53,7 @@ public sealed class AtomicCommitLivenessCoyoteTests
     [Test]
     public void One_nack_with_backstop_always_releases_every_prepared_bucket([Values(2, 3, 4)] int leafCount)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new AtomicCommitLivenessModel(
                 leafCount,
                 AtomicCommitLivenessScenario.Abort,
@@ -71,7 +71,7 @@ public sealed class AtomicCommitLivenessCoyoteTests
     [Test]
     public void Commit_without_backstop_can_stall_a_leaf_and_lose_visibility([Values(2, 3)] int leafCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicCommitLivenessModel(
                 leafCount,
                 AtomicCommitLivenessScenario.Commit,
@@ -88,7 +88,7 @@ public sealed class AtomicCommitLivenessCoyoteTests
     [Test]
     public void Abort_without_backstop_can_leave_a_prepared_bucket_unreleased([Values(2, 3)] int leafCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicCommitLivenessModel(
                 leafCount,
                 AtomicCommitLivenessScenario.Abort,

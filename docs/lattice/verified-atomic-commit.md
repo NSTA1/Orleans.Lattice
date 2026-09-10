@@ -69,20 +69,31 @@ a property proven of the core is a property of production.
 
 The cores are model-checked with [Microsoft Coyote](https://github.com/microsoft/coyote)
 (the `Microsoft.Coyote.Test` package). Each model exercises one core (or a small
-group of cooperating cores) under systematically explored interleavings of the
+group of cooperating cores) under systematically explored orderings of the
 protocol's concurrent steps - the prepare fan-out, the registry decision, the
 per-leaf terminal broadcast, duplicate terminal re-deliveries, and interleaved
 reader probes - and asserts the safety and liveness properties at every step.
 
-Concurrency in these models is **explicit cooperative interleaving**: a model
-implements `ICoyoteModel` and yields decision points via the harness, and Coyote
+Concurrency in these models is **explicit cooperative step ordering**: a model
+implements `ICoyoteModel` and advances the protocol's steps itself, and Coyote
 drives controlled nondeterminism (`runtime.RandomBoolean()`) to explore the
-schedule space. There is no `coyote rewrite` pass and real `Task`/`await` is not
-controlled; the models encode the protocol's concurrency as data so it is fully
-enumerable. The shared harness is `CoyoteModelHarness`
+resulting **choice** space. That is a choice space and not a thread schedule
+space, and the distinction is load-bearing rather than pedantic: there is no
+`coyote rewrite` pass, real `Task`/`await` is not controlled, and no model in
+this repository creates a second controlled operation - no `Task.Run`, no
+thread - so the concurrency degree Coyote observes is **zero** and there are no
+thread interleavings for it to enumerate. What it does enumerate is every
+resolution of the model's own choices, which is why the models encode the
+protocol's concurrency as data in the first place: expressed that way it is
+fully enumerable without threads. Raising the degree above zero, so that Coyote
+also explores genuine operation interleavings, is tracked as
+[#2319](https://github.com/NSTA1/Orleans.Lattice/issues/2319). The shared
+harness is `CoyoteModelHarness`
 (`test/shared/Orleans.Lattice.Testing/Coyote/`), whose
-`AssertNoInterleavingViolation` / `AssertInterleavingViolationFound` entry points
-run a model to a bounded step count over many iterations.
+`AssertNoViolationInAnyExploredRun` / `AssertViolationFoundInSomeExploredRun` entry points
+run a model to a bounded step count over many iterations. Both members are named
+for explored **runs** for exactly this reason - an earlier pair named for
+interleavings promised a search this tier does not perform.
 
 The models live under `test/lattice/BPlusTree/Coyote/`:
 
@@ -99,7 +110,7 @@ The models live under `test/lattice/BPlusTree/Coyote/`:
 A model that checks a property only has value if the property can actually fail.
 Every model therefore ships a companion **guard test** that removes exactly the
 one fix the property depends on and asserts Coyote *finds* the resulting
-violation (`AssertInterleavingViolationFound`). A model with a green fix test and
+violation (`AssertViolationFoundInSomeExploredRun`). A model with a green fix test and
 a green guard test is proven load-bearing: the property holds with the fix in
 place, and the check is not vacuously true because it catches the fix's removal.
 
@@ -145,7 +156,9 @@ Safety properties:
 
 Liveness and temporal properties:
 
-- **DecisionDurability** - once terminal, the registry decision never flips.
+- **DecisionDurability** - once terminal, the registry decision never flips to the
+  other terminal, and its row is never retired while a participant still holds an
+  undrained prepared bucket (an unset hides a committed value just as a flip does).
 - **MonotonicVisibility** - once a committed key is observed visible it stays
   visible, even across a reshard.
 - **RevisionMonotonic** - the registry revision counter never decreases.

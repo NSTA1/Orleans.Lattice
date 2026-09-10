@@ -22,7 +22,7 @@ public sealed class AtomicCommitVisibilityCoyoteTests
     [Test]
     public void Snapshot_with_revision_probe_never_certifies_a_split_view([Values(2, 3, 4)] int keyCount)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new AtomicCommitVisibilityModel(keyCount, AtomicCommitReaderMode.SharedSnapshotWithRevisionProbe));
     }
 
@@ -35,7 +35,7 @@ public sealed class AtomicCommitVisibilityCoyoteTests
     [Test]
     public void Shared_snapshot_without_revision_probe_certifies_a_torn_read([Values(2, 3)] int keyCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicCommitVisibilityModel(keyCount, AtomicCommitReaderMode.SharedSnapshotWithoutRevisionProbe));
     }
 
@@ -47,7 +47,7 @@ public sealed class AtomicCommitVisibilityCoyoteTests
     [Test]
     public void Live_per_key_read_reintroduces_the_split_view_race([Values(2, 3)] int keyCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicCommitVisibilityModel(keyCount, AtomicCommitReaderMode.LivePerKeyRead));
     }
 }

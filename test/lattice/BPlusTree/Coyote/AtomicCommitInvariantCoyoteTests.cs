@@ -25,6 +25,12 @@ public sealed class AtomicCommitInvariantCoyoteTests
     /// visibility-matches-decision, linearized terminals, no-mixed-terminals,
     /// decision durability, monotonic visibility, or revision monotonicity, for
     /// both the commit and the abort outcome across a range of fan-out widths.
+    /// <para>
+    /// The lifecycle now runs to the saga's post-fan-out cleanup, so every fixed run
+    /// reaches the state in which the decision row no longer exists. That matters
+    /// for more than coverage: it is what stops the unset half of decision
+    /// durability being an assertion no schedule can arrive at.
+    /// </para>
     /// </summary>
     [Test]
     public void Full_saga_lifecycle_upholds_every_catalogued_invariant(
@@ -32,7 +38,7 @@ public sealed class AtomicCommitInvariantCoyoteTests
         [Values(AtomicCommitInvariantScenario.Commit, AtomicCommitInvariantScenario.Abort)]
         AtomicCommitInvariantScenario scenario)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new AtomicCommitInvariantModel(leafCount, scenario, AtomicCommitInvariantGuard.None));
     }
 
@@ -48,7 +54,7 @@ public sealed class AtomicCommitInvariantCoyoteTests
         [Values(AtomicCommitInvariantScenario.Commit, AtomicCommitInvariantScenario.Abort)]
         AtomicCommitInvariantScenario scenario)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicCommitInvariantModel(leafCount, scenario, AtomicCommitInvariantGuard.SurfaceInFlightAsPrepared));
     }
 
@@ -64,7 +70,7 @@ public sealed class AtomicCommitInvariantCoyoteTests
         [Values(AtomicCommitInvariantScenario.Commit, AtomicCommitInvariantScenario.Abort)]
         AtomicCommitInvariantScenario scenario)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicCommitInvariantModel(leafCount, scenario, AtomicCommitInvariantGuard.BroadcastBeforeDecision));
     }
 
@@ -80,7 +86,7 @@ public sealed class AtomicCommitInvariantCoyoteTests
         [Values(AtomicCommitInvariantScenario.Commit, AtomicCommitInvariantScenario.Abort)]
         AtomicCommitInvariantScenario scenario)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicCommitInvariantModel(leafCount, scenario, AtomicCommitInvariantGuard.MixedBroadcast));
     }
 
@@ -97,8 +103,36 @@ public sealed class AtomicCommitInvariantCoyoteTests
         [Values(AtomicCommitInvariantScenario.Commit, AtomicCommitInvariantScenario.Abort)]
         AtomicCommitInvariantScenario scenario)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicCommitInvariantModel(leafCount, scenario, AtomicCommitInvariantGuard.FlipDecision));
+    }
+
+    /// <summary>
+    /// The guard for the <b>unset</b> half of decision durability: retiring the
+    /// decision row before every participant has drained its prepared bucket leaves
+    /// the txid resolving to in-flight again, so the undrained leaf's committed value
+    /// falls through the read gate to its pre-saga value and a committed saga becomes
+    /// invisible. Coyote must find it.
+    /// <para>
+    /// This is the guard that proves the unset assertion is non-vacuous, and it is
+    /// deliberately distinct from
+    /// <see cref="Flipping_a_recorded_decision_violates_decision_durability"/>: no
+    /// outcome is flipped and no terminal is re-delivered here. A flip-only reading
+    /// of the property - which is what the model asserted before, because the check
+    /// was reached only when the decision still resolved - passes this schedule
+    /// while the value it is supposed to protect disappears. The ordering that makes
+    /// the cleanup sound in production is stated by <c>ForgetAsync</c> itself, and
+    /// removing that ordering is the whole of this guard.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void Forgetting_the_decision_before_every_leaf_drained_violates_decision_durability(
+        [Values(2, 3)] int leafCount,
+        [Values(AtomicCommitInvariantScenario.Commit, AtomicCommitInvariantScenario.Abort)]
+        AtomicCommitInvariantScenario scenario)
+    {
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
+            new AtomicCommitInvariantModel(leafCount, scenario, AtomicCommitInvariantGuard.ForgetWhileUndrained));
     }
 
     /// <summary>
@@ -113,7 +147,7 @@ public sealed class AtomicCommitInvariantCoyoteTests
         [Values(AtomicCommitInvariantScenario.Commit, AtomicCommitInvariantScenario.Abort)]
         AtomicCommitInvariantScenario scenario)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicCommitInvariantModel(leafCount, scenario, AtomicCommitInvariantGuard.DecrementRevision));
     }
 }

@@ -83,10 +83,10 @@ committed step first (forward order) instead of the highest.
 `AtomicActionCoyoteTests` has two tests:
 
 - `Compensation_runs_in_reverse_order_exactly_once_on_any_order` runs the proven
-  core and calls `CoyoteModelHarness.AssertNoInterleavingViolation(...)` - no
+  core and calls `CoyoteModelHarness.AssertNoViolationInAnyExploredRun(...)` - no
   explored order trips an assertion.
 - `Compensating_in_forward_order_is_caught` runs the broken core and calls
-  `CoyoteModelHarness.AssertInterleavingViolationFound(...)` - Coyote *must* find an
+  `CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(...)` - Coyote *must* find an
   order whose compensation indices increase and trips the reverse-order assertion.
 
 The guard test failing to find a violation fails the build, so the passing test is

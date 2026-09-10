@@ -32,7 +32,7 @@ public sealed class WalShippingWatermarkCoyoteTests
     [Test]
     public void Watermark_never_ships_an_offset_above_a_prefix_hole([Values(2, 3, 4)] int offsetCount)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new WalShippingWatermarkModel(offsetCount, WalShippingWatermarkMode.DurableContiguousWatermark));
     }
 
@@ -46,7 +46,7 @@ public sealed class WalShippingWatermarkCoyoteTests
     [Test]
     public void Raw_tail_without_watermark_strands_an_in_flight_offset([Values(2, 3)] int offsetCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new WalShippingWatermarkModel(offsetCount, WalShippingWatermarkMode.RawNextOffsetTail));
     }
 }

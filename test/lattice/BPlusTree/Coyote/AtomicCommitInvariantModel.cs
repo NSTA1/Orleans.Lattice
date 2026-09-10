@@ -83,6 +83,29 @@ public enum AtomicCommitInvariantGuard
     /// the schedule where the revision decreases.
     /// </summary>
     DecrementRevision,
+
+    /// <summary>
+    /// The guard for the <b>unset</b> half of <b>decision durability</b>: the saga's
+    /// post-fan-out cleanup (<c>ITxRegistryGrain.ForgetAsync</c>, or the lazy
+    /// <c>PruneExpired</c> purge behind it) retires the recorded decision while a
+    /// participant still holds an undrained prepared bucket. The outcome is not
+    /// flipped and no terminal is re-delivered - the row simply stops existing, and
+    /// <c>GetStatusAsync</c> reverts to <see cref="TxStatus.InFlight"/> because a
+    /// txid absent from the registry view resolves to in-flight. The undrained leaf's
+    /// committed value then falls through the read gate to its pre-saga value, so a
+    /// commit becomes invisible. Coyote must find the schedule where the decision is
+    /// retired before its last participant has drained.
+    /// <para>
+    /// This is the guard that makes the unset assertion non-vacuous. Retiring the
+    /// decision <i>after</i> every participant has drained is the ordinary, sound
+    /// cleanup the fixed model performs on every run: the interface contract of
+    /// <c>ForgetAsync</c> states that after the call the txid resolves to in-flight
+    /// again "by which point no leaf has the txid in its pending bucket anymore, so
+    /// that observation is consistent with the absence of any pending mutation".
+    /// Ordering is the whole guarantee, which is exactly what this guard removes.
+    /// </para>
+    /// </summary>
+    ForgetWhileUndrained,
 }
 
 /// <summary>
@@ -125,7 +148,11 @@ public enum AtomicCommitInvariantGuard
 ///   </description></item>
 ///   <item><description>
 ///     <b>DecisionDurability</b> - once the registry records a terminal decision it
-///     never flips to the other terminal, across every duplicate delivery.
+///     never flips to the other terminal across any duplicate delivery, and it is
+///     never <i>unset</i> while a participant still holds an undrained prepared
+///     bucket. The unset half is the one a flip-only reading misses: retiring the
+///     row makes the txid resolve to <see cref="TxStatus.InFlight"/> again, which
+///     hides a committed value just as effectively as flipping it to aborted.
 ///   </description></item>
 ///   <item><description>
 ///     <b>MonotonicVisibility</b> - once a key is observed post-saga-visible it stays
@@ -206,6 +233,12 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
                 continue;
             }
 
+            if (TryForget(state, runtime))
+            {
+                Probe(state);
+                continue;
+            }
+
             if (runtime.RandomBoolean())
             {
                 Probe(state);
@@ -220,7 +253,13 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
         Probe(state);
     }
 
-    /// <summary>The run is done once the decision is recorded and every leaf has applied its terminal.</summary>
+    /// <summary>
+    /// The run is done once the decision is recorded, every leaf has applied its
+    /// terminal, and the saga's post-fan-out cleanup has retired the decision. The
+    /// cleanup is part of the modelled lifecycle rather than an optional extra: it
+    /// is the step that makes the unset half of decision durability reachable, and
+    /// on the fixed path it must be reachable <i>without</i> violating anything.
+    /// </summary>
     private bool IsComplete(RunState state)
     {
         if (!state.DecideDone)
@@ -236,7 +275,7 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
             }
         }
 
-        return true;
+        return state.Forgotten;
     }
 
     /// <summary>Records the tree-wide registry decision at the linearization point.</summary>
@@ -302,7 +341,7 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
         }
         else
         {
-            commitTerminal = state.Core.Resolve(state.Txid) == TxStatus.Committed;
+            commitTerminal = EffectiveDecision(state) == TxStatus.Committed;
         }
 
         if (commitTerminal)
@@ -330,6 +369,18 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
     /// </summary>
     private bool TryDuplicate(RunState state, ICoyoteRuntime runtime)
     {
+        // A duplicate terminal may only arrive while the decision row still exists.
+        // Production rules out a post-cleanup re-delivery by ordering, not by
+        // idempotence: once the row has been retired the write-once classification
+        // would see no existing decision and would resurrect one the tree had
+        // already retired (see the AtomicWriteGrain cleanup commentary). Modelling a
+        // duplicate after the forget would therefore model a path production does
+        // not have.
+        if (state.Forgotten)
+        {
+            return false;
+        }
+
         if (!state.DecideDone || state.DuplicatesUsed >= DuplicateBudget || !runtime.RandomBoolean())
         {
             return false;
@@ -370,6 +421,84 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
         return true;
     }
 
+    /// <summary>
+    /// Offers the saga's post-fan-out cleanup: retiring the tree-wide decision row
+    /// (<c>ITxRegistryGrain.ForgetAsync</c> and the lazy <c>PruneExpired</c> purge
+    /// behind it, or the zero-retention branch that drops the row outright). This is
+    /// the only modelled transition that can take a recorded terminal decision back
+    /// to <see cref="TxStatus.InFlight"/>, because a txid absent from the registry
+    /// view resolves to in-flight.
+    /// <para>
+    /// In the fix the cleanup is ordered strictly after the terminal fan-out, so it
+    /// runs only once every leaf has drained its prepared bucket; the
+    /// <see cref="AtomicCommitInvariantGuard.ForgetWhileUndrained"/> guard lifts that
+    /// ordering and lets the row be retired while a participant still depends on it.
+    /// </para>
+    /// </summary>
+    private bool TryForget(RunState state, ICoyoteRuntime runtime)
+    {
+        if (state.Forgotten || !state.DecideDone || !runtime.RandomBoolean())
+        {
+            return false;
+        }
+
+        if (_guard != AtomicCommitInvariantGuard.ForgetWhileUndrained && AnyUndrained(state))
+        {
+            return false;
+        }
+
+        Forget(state);
+        return true;
+    }
+
+    /// <summary>
+    /// Retires the decision row through the production core's own removal primitive,
+    /// leaving the txid resolving to <see cref="TxStatus.InFlight"/> again.
+    /// </summary>
+    private void Forget(RunState state)
+    {
+        state.Core.Remove(state.Txid);
+        state.Forgotten = true;
+        CheckGlobalInvariants(state);
+    }
+
+    /// <summary>
+    /// Whether any leaf still holds an undrained prepared bucket - i.e. has not yet
+    /// applied the saga's terminal, so its visibility still depends on the recorded
+    /// decision rather than on its own projected state.
+    /// </summary>
+    private bool AnyUndrained(RunState state)
+    {
+        for (var leaf = 0; leaf < _leafCount; leaf++)
+        {
+            if (state.Terminal[leaf] == TermNone)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The saga's authoritative outcome, which is <b>not</b> the same question as
+    /// "what does the registry row say right now". Retiring the row after the
+    /// fan-out does not un-commit the saga; it retires a record no participant needs
+    /// any more. The point and ordering properties are therefore resolved against
+    /// this, while <see cref="ResolveVisible"/> deliberately consults the live core -
+    /// a reader really does see the row disappear, and that difference is precisely
+    /// what makes an early forget observable.
+    /// </summary>
+    private static TxStatus EffectiveDecision(RunState state)
+    {
+        if (state.Core.TryResolve(state.Txid, out var decision) && decision != TxStatus.InFlight)
+        {
+            return decision;
+        }
+
+        return state.RecordedTerminal ?? TxStatus.InFlight;
+    }
+
     /// <summary>Advances the run when no action was chosen in a round, so exploration terminates.</summary>
     private void ForceProgress(RunState state)
     {
@@ -387,12 +516,17 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
                 return;
             }
         }
+
+        if (!state.Forgotten)
+        {
+            Forget(state);
+        }
     }
 
     /// <summary>The forced-progress broadcast: derives the kind from the recorded decision, no coin.</summary>
     private void ApplyBroadcastForced(RunState state, int leaf)
     {
-        var commitTerminal = state.Core.Resolve(state.Txid) == TxStatus.Committed;
+        var commitTerminal = EffectiveDecision(state) == TxStatus.Committed;
         if (commitTerminal)
         {
             state.Terminal[leaf] = TermCommit;
@@ -417,13 +551,13 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
         for (var leaf = 0; leaf < _leafCount; leaf++)
         {
             var post = ResolveVisible(state, leaf);
-            var committedNow = state.Core.Resolve(state.Txid) == TxStatus.Committed;
+            var committedNow = EffectiveDecision(state) == TxStatus.Committed;
 
             // StrictIsolation: a post-saga observation implies a committed decision.
             Specification.Assert(
                 !post || committedNow,
                 $"strict isolation: leaf {leaf} observed the post-saga value while the recorded " +
-                $"decision is {state.Core.Resolve(state.Txid)} (an in-flight or aborted saga surfaced as committed)");
+                $"decision is {EffectiveDecision(state)} (an in-flight or aborted saga surfaced as committed)");
 
             // VisibilityMatchesDecision: observed post-saga exactly when committed.
             Specification.Assert(
@@ -485,11 +619,18 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
             $"revision monotonic: revision fell from {state.PreviousRevision} to {state.Core.Revision}");
         state.PreviousRevision = state.Core.Revision;
 
-        // DecisionDurability: once terminal, the recorded decision never flips.
-        if (state.Core.TryResolve(state.Txid, out var decision)
-            && decision != TxStatus.InFlight)
+        // DecisionDurability: once terminal, the recorded decision never flips to the
+        // other terminal, and it is never unset while a participant still depends on
+        // it. The unset half is the one a flip-only check misses. Reading it as
+        // "TryResolve succeeded AND is terminal" - the shape this check had before -
+        // makes the whole assertion unreachable in exactly the state that discharges
+        // it, because an unset decision fails TryResolve and skips the body.
+        var stillRecorded = state.Core.TryResolve(state.Txid, out var decision)
+            && decision != TxStatus.InFlight;
+
+        if (state.RecordedTerminal is { } recorded)
         {
-            if (state.RecordedTerminal is { } recorded)
+            if (stillRecorded)
             {
                 Specification.Assert(
                     decision == recorded,
@@ -497,12 +638,25 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
             }
             else
             {
-                state.RecordedTerminal = decision;
+                // The row is gone, so the txid resolves to InFlight again. That is
+                // sound cleanup once every participant has drained, and a lost
+                // decision while one has not - the registry stops being able to
+                // answer for a saga whose visibility still depends on the answer.
+                Specification.Assert(
+                    !AnyUndrained(state),
+                    $"decision durability: the recorded {recorded} decision was unset while at least one leaf " +
+                    "still holds an undrained prepared bucket (the txid resolves to InFlight again, so that " +
+                    "leaf's committed value falls through the read gate to its pre-saga value)");
             }
+        }
+        else if (stillRecorded)
+        {
+            state.RecordedTerminal = decision;
         }
 
         var anyCommit = false;
         var anyAbort = false;
+        var effective = EffectiveDecision(state);
         for (var leaf = 0; leaf < _leafCount; leaf++)
         {
             switch (state.Terminal[leaf])
@@ -512,18 +666,18 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
 
                     // LinearizedTerminals: a commit terminal implies a committed decision.
                     Specification.Assert(
-                        state.Core.Resolve(state.Txid) == TxStatus.Committed,
+                        effective == TxStatus.Committed,
                         $"linearized terminals: leaf {leaf} applied a commit terminal while the recorded " +
-                        $"decision is {state.Core.Resolve(state.Txid)} (a terminal preceded the decision)");
+                        $"decision is {effective} (a terminal preceded the decision)");
                     break;
                 case TermAbort:
                     anyAbort = true;
 
                     // LinearizedTerminals: an abort terminal implies an aborted decision.
                     Specification.Assert(
-                        state.Core.Resolve(state.Txid) == TxStatus.Aborted,
+                        effective == TxStatus.Aborted,
                         $"linearized terminals: leaf {leaf} applied an abort terminal while the recorded " +
-                        $"decision is {state.Core.Resolve(state.Txid)} (a terminal preceded the decision)");
+                        $"decision is {effective} (a terminal preceded the decision)");
                     break;
                 default:
                     break;
@@ -571,6 +725,12 @@ public sealed class AtomicCommitInvariantModel : ICoyoteModel
         public bool Committed { get; }
 
         public bool DecideDone { get; set; }
+
+        /// <summary>
+        /// Whether the saga's post-fan-out cleanup has retired the decision row, so
+        /// the txid resolves to <see cref="TxStatus.InFlight"/> again.
+        /// </summary>
+        public bool Forgotten { get; set; }
 
         public int DuplicatesUsed { get; set; }
 

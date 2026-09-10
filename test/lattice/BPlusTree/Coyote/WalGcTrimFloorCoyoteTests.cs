@@ -32,7 +32,7 @@ public sealed class WalGcTrimFloorCoyoteTests
     [Test]
     public void Min_cursor_floor_never_trims_past_the_slowest_consumer([Values(2, 3, 4)] int consumerCount)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new WalGcTrimFloorModel(consumerCount, WalGcTrimFloorMode.MinCursorFloor));
     }
 
@@ -46,7 +46,7 @@ public sealed class WalGcTrimFloorCoyoteTests
     [Test]
     public void Max_cursor_floor_strands_a_lagging_consumer([Values(2, 3)] int consumerCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new WalGcTrimFloorModel(consumerCount, WalGcTrimFloorMode.MaxCursorFloorNoLaggard));
     }
 }
