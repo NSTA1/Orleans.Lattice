@@ -65,6 +65,19 @@ public sealed class RepoContextEffectiveConfigurationReporter(
     ILogger<RepoContextEffectiveConfigurationReporter> logger) : IHostedService
 {
     /// <summary>
+    /// The collector facts this report states, defaulting to the running process's own.
+    /// </summary>
+    /// <remarks>
+    /// Settable so that a test can exercise the hazardous combination at all. The garbage
+    /// collector reads its configuration once, at process start, so a fixture cannot put
+    /// its own process into Workstation GC on an 11 GiB ceiling - which is precisely the
+    /// combination this report exists to name, and therefore the one that must not be
+    /// covered only by inspection.
+    /// </remarks>
+    public RepoContextGarbageCollectionFacts GarbageCollection { get; init; }
+        = RepoContextGarbageCollection.ReadRuntimeFacts();
+
+    /// <summary>
     /// Emits the effective-configuration report.
     /// </summary>
     /// <param name="cancellationToken">Unused; the report is synchronous.</param>
@@ -134,6 +147,19 @@ public sealed class RepoContextEffectiveConfigurationReporter(
             // that nothing binds is the exact silent failure of issue #2279, where a
             // compose file could name a knob, the container could carry it, and the value
             // would still never be applied.
+            logger.LogWarning("Repository-context effective configuration: {Setting}", line);
+        }
+
+        foreach (var line in RepoContextGarbageCollection.DescribeHazards(GarbageCollection, configuration))
+        {
+            // Warning rather than information, and in this report rather than left to the
+            // one the runtime already emits (issue #2596). Orleans logs
+            // "Note: Silo not running with ServerGC turned on" at startup; it did so
+            // through two failed gate runs and nobody read it, while the runtime separately
+            // attributed 172 individual stalls to collector pauses in the same file. The
+            // channel was never the problem - a true signal nobody reads is - so the
+            // statement is made where an operator asking what this deployment runs will
+            // already be looking.
             logger.LogWarning("Repository-context effective configuration: {Setting}", line);
         }
 
@@ -300,6 +326,11 @@ public sealed class RepoContextEffectiveConfigurationReporter(
                 Number(Environment.ProcessorCount),
                 RepoContextSettingProvenance.Runtime),
         };
+
+        // The collector this process actually runs under (issue #2596). Both the declared
+        // variables and the resolved facts, because they disagree under two separate
+        // mechanisms and only the resolved half says what the process does.
+        lines.AddRange(RepoContextGarbageCollection.DescribeSettings(GarbageCollection, configuration));
 
         // The repository-context package's own settings, resolved by the package rather
         // than by this host (issue #2460 half two). Recognising them in KnownKeys stops
