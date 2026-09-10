@@ -1,0 +1,17 @@
+# Pairs with CommitIntegrity. A coordinator that records commit without
+# consulting the votes commits a saga in which a participant nacked its
+# prepare, which is the "commit despite a failed precondition" defect.
+MODULE: CommitIntegrityIgnoresVotes
+TARGET: CommitIntegrity
+CLASS: Invariant
+SUMMARY: records commit without consulting the prepare votes, so a nacked saga commits
+
+--- FIND
+    /\ decision' = [decision EXCEPT ![t] = IF AllAcked(t) THEN "committed" ELSE "aborted"]
+    /\ phase' = [phase EXCEPT ![t] = IF AllAcked(t) THEN "committing" ELSE "aborting"]
+--- REPLACE
+\* MUTATION: the decision no longer depends on AllAcked(t). Every saga commits,
+\* including one whose participant reported a precondition or write failure.
+    /\ decision' = [decision EXCEPT ![t] = "committed"]
+    /\ phase' = [phase EXCEPT ![t] = "committing"]
+--- END

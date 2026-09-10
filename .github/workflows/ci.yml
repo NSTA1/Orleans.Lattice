@@ -1453,6 +1453,40 @@ jobs:
             done
           done
 
+      # The TLA+ toolchain for the `Tlc` category in test/lattice, which runs
+      # TLC over spec/ and over a mutant generated from each definition in
+      # spec/mutations/ so
+      # that every property has to demonstrate it can go red. See spec/README.md
+      # and issue #2323.
+      #
+      # Provisioned on every leg rather than only on the leg that happens to
+      # carry `lattice`. Legs are bin-packed dynamically, so which leg that is
+      # changes from run to run and is not knowable here; gating on it would be
+      # a guess that silently disarms the fixture when the packing shifts. The
+      # cost of being unconditional is a JDK already cached on the image plus a
+      # 2.3 MB download, against a fixture that fails closed under CI if the
+      # toolchain is absent.
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Fetch TLA+ tools
+        run: |
+          set -euo pipefail
+          mkdir -p tools
+          curl --fail --silent --show-error --location \
+            --retry 3 --retry-delay 5 --retry-all-errors \
+            --output tools/tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          # Pinned by digest, not merely by tag. A release asset can be replaced
+          # in place, and an unverified jar on the classpath of a verification
+          # gate is the one dependency where a silent substitution would be
+          # least visible.
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tools/tla2tools.jar" \
+            | sha256sum --check --strict
+
       - name: Run leg
         env:
           LEG: ${{ toJson(matrix.leg) }}

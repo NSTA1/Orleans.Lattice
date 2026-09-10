@@ -1,0 +1,15 @@
+# Pairs with VisibilityMatchesDecision. A leaf that treats "a terminal was
+# applied" as "the post-saga value is visible" surfaces an ABORTED saga's
+# writes, because an abort terminal is a terminal too.
+MODULE: VisibilityMatchesDecisionTerminalPresence
+TARGET: VisibilityMatchesDecision
+CLASS: Invariant
+SUMMARY: treats any applied terminal as post-saga-visible, so an aborted saga's writes surface
+
+--- FIND
+ProjectedPrepared(t, k) == terminal[t][k] = "commit"
+--- REPLACE
+\* MUTATION: the projection tests only that SOME terminal was applied, losing
+\* the distinction between a commit terminal and an abort terminal.
+ProjectedPrepared(t, k) == terminal[t][k] # "none"
+--- END

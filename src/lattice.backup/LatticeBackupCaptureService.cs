@@ -813,18 +813,43 @@ internal sealed class LatticeBackupCaptureService(
     /// Reads the current per-partition WAL head (next-to-assign offset) for every
     /// partition of <paramref name="treeId"/>. Recorded on a full capture so a
     /// later incremental resumes its forward read from exactly this frontier.
+    /// <para>
+    /// Each probe reads a <b>distinct</b> partition and mutates nothing, so the
+    /// frontier the walk produces does not depend on the order the heads come back
+    /// in - only on which partition each belongs to, which the slot index carries.
+    /// The probes therefore overlap in bounded waves rather than costing one
+    /// round-trip latency per partition.
+    /// </para>
     /// </summary>
     private async Task<IReadOnlyDictionary<int, long>> CaptureWalHeadsAsync(
         string treeId,
         CancellationToken cancellationToken)
     {
         var partitions = await optionsResolver.GetWalPartitionsAsync(treeId).ConfigureAwait(false);
-        var heads = new Dictionary<int, long>(partitions);
-        for (var partition = 0; partition < partitions; partition++)
+        var heads = new Dictionary<int, long>(Math.Max(0, partitions));
+        if (partitions <= 0)
         {
-            heads[partition] = await commitLogReader
-                .GetHeadOffsetAsync(treeId, partition, cancellationToken)
+            return heads;
+        }
+
+        // One partition has nothing to overlap: keep the direct await.
+        if (partitions == 1)
+        {
+            heads[0] = await commitLogReader
+                .GetHeadOffsetAsync(treeId, 0, cancellationToken)
                 .ConfigureAwait(false);
+            return heads;
+        }
+
+        var probed = await BoundedFanOut.RunAsync(
+            partitions,
+            BoundedFanOut.DefaultWidth,
+            partition => commitLogReader.GetHeadOffsetAsync(treeId, partition, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+
+        for (var partition = 0; partition < probed.Length; partition++)
+        {
+            heads[partition] = probed[partition];
         }
 
         return heads;

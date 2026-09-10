@@ -15,9 +15,10 @@ protocol cores.
 
 The specification is intentionally **outside** the compiled solution
 (`Orleans.Lattice.slnx`). It is not C#; it is checked by TLC, which needs a
-Java runtime and the TLA+ tools. TLC is **not** wired into the required
-per-PR build - see the "CI decision" section below. This directory contains
-only `.tla`, `.cfg`, and `.md` files; nothing here is built by `dotnet`.
+Java runtime and the TLA+ tools. TLC **is** run per PR, but through an NUnit
+fixture that shells out to it rather than by building anything here - see the
+"CI decision" section below. This directory contains only `.tla`, `.cfg`,
+`.mutation`, and `.md` files; nothing here is built by `dotnet`.
 
 ## Files
 
@@ -25,6 +26,7 @@ only `.tla`, `.cfg`, and `.md` files; nothing here is built by `dotnet`.
 |------|-----------|
 | [`AtomicCommit.tla`](AtomicCommit.tla) | The specification: state, actions, safety invariants, liveness properties. |
 | [`AtomicCommit.cfg`](AtomicCommit.cfg) | The TLC model: the bounded instance and the invariant / property list to check. |
+| [`mutations/`](mutations/) | One deliberate defect per checked property, each of which must make that property fire. See [`mutations/README.md`](mutations/README.md). |
 | [`Refinement.md`](Refinement.md) | The refinement note: each spec variable / action mapped to its protocol counterpart in the code cores. |
 | `README.md` | This file. |
 
@@ -134,13 +136,47 @@ All seven invariants and all five temporal properties held; no deadlock.
 
 ## CI decision
 
-TLC is **not** a required per-PR check. It needs a Java runtime plus the TLA+
-tools, which the .NET build image does not carry, and the specification tracks
-the protocol *design* rather than any single code change - so gating every PR
-on it would add a heavyweight toolchain for little marginal signal. Local
-invocation (above) is the supported path; the coordinator or any contributor
-runs it when the protocol design changes. This decision is recorded in
-[`.github/instructions/testing.instructions.md`](../.github/instructions/testing.instructions.md).
-A non-required scheduled workflow could run TLC nightly if the portfolio
-grows; it is deliberately left unwired here to avoid a required-check
-dependency on the TLA+ toolchain.
+TLC **is** run per PR, as an ordinary NUnit fixture
+(`test/lattice/Formal/TlcModelCheckTests.cs`) tagged `[Category("Tlc")]`. It
+therefore rides the existing test fan-out with no change to the matrix planner:
+the `deterministic` tier is the complement of `Chaos` and `Coyote`, so a new
+category lands in it automatically, and `test/lattice`'s last shard is a
+complement shard, so a new namespace is picked up without editing the shard
+config. The workflow provisions a Temurin 17 JRE and a digest-pinned
+`tla2tools.jar` before the leg runs.
+
+This reverses an earlier decision recorded here, which is worth stating plainly
+rather than quietly overwriting. That decision rested on two premises: that the
+.NET build image carries no Java runtime, and that the specification tracks the
+protocol *design* rather than any single code change, so gating a PR on it would
+buy little marginal signal. The first premise was simply wrong - the GitHub
+runner image ships several JDKs, and `actions/setup-java` selects one from the
+image cache in a couple of seconds. The second was right about what TLC *was*
+being asked to do, and is the part that changed: the fixture no longer only
+checks that the specification holds. It checks that each paired **mutant** makes
+its property fire - by name for an invariant or action property, and for the
+two liveness properties by way of a single-property configuration, because TLC
+does not name the property in a temporal violation. That is a claim about the
+specification's own diagnostic power, and unlike the design it tracks, it
+regresses silently the moment somebody weakens a property - which is exactly
+the failure the atomicity audit (epic #2299) found four times over.
+
+Each of the twelve properties is paired with a mutation, and each pairing runs
+as a two-arm experiment: the generated single-property model must be **clean**
+against the unmutated specification and **violated** against the mutant. The
+control arm is what makes a red mutant evidence rather than merely a red run,
+and it is the standing proof that the fixture is not vacuous. See
+[`mutations/README.md`](mutations/README.md).
+
+The local invocation documented above remains supported and is still the fast
+path when iterating on the protocol design.
+
+The dev loop does **not** run this category. The Tier 1 filter in
+[`.github/instructions/testing.instructions.md`](../.github/instructions/testing.instructions.md)
+excludes `Tlc` alongside `AzureStorageEmulator`, for the same reason: a
+contributor without the external toolchain should not be blocked. Absence is
+handled asymmetrically and deliberately - the fixture skips locally (a visible
+`Skipped` count, not `Assert.Inconclusive`, which NUnit counts as neither passed
+nor failed nor skipped and which has already produced a false green here) and
+**fails** when `GITHUB_ACTIONS` is set, because in CI a missing toolchain is a
+broken pipeline rather than a missing convenience.

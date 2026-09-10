@@ -1,0 +1,24 @@
+# Pairs with DecisionDurability. A recorded terminal decision that can be
+# rewritten is the "registry decision is not durable" defect: readers that
+# already resolved against the commit see it withdrawn.
+MODULE: DecisionDurabilityDecisionFlip
+TARGET: DecisionDurability
+CLASS: Action
+SUMMARY: rewrites a recorded committed decision to aborted, so a terminal decision is not durable
+
+--- FIND
+Next ==
+    \/ \E t \in Txns : PrepareTx(t)
+--- REPLACE
+\* MUTATION: a recorded decision can be overwritten after the fact. Left
+\* deliberately unfair (it is not added to TxProgress), so it perturbs only the
+\* safety property under test and cannot affect the liveness properties.
+DecisionFlip(t) ==
+    /\ decision[t] = "committed"
+    /\ decision' = [decision EXCEPT ![t] = "aborted"]
+    /\ UNCHANGED <<phase, vote, terminal, pend, orphanDone, revision>>
+
+Next ==
+    \/ \E t \in Txns : DecisionFlip(t)
+    \/ \E t \in Txns : PrepareTx(t)
+--- END

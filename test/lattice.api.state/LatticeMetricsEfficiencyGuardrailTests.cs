@@ -134,10 +134,16 @@ public class LatticeMetricsEfficiencyGuardrailTests
         try
         {
             // Let the sampler and readers warm up so writes are timed against a
-            // genuinely loaded silo.
-            await MetricsObservationClusterFixture.WaitUntilAsync(
-                () => _fixture.Sampler.TotalSampleCount > 2,
-                TimeSpan.FromSeconds(5));
+            // genuinely loaded silo. Asserted, not merely awaited: a silent
+            // fall-through here would time the writes against an idle silo, and
+            // the budget below would then pass without ever exercising the
+            // contention this guardrail exists to measure.
+            Assert.That(
+                await MetricsObservationClusterFixture.WaitUntilAsync(
+                    () => _fixture.Sampler.TotalSampleCount > 2,
+                    TimeSpan.FromSeconds(5)),
+                Is.True,
+                "the sampler must be provably running before the writes are timed");
 
             var stopwatch = Stopwatch.StartNew();
             for (var i = 0; i < WriteBatch; i++)

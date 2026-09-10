@@ -1,0 +1,21 @@
+# Pairs with EveryCommittedKeyReadable. A leaf that applies the commit terminal
+# but leaves its materialised projection on the pre-saga value never makes the
+# committed write readable, even though the saga terminates normally.
+#
+# Note this is deliberately NOT the "drop fairness" mutation: that would stall
+# the saga and so would fire Termination too, which proves nothing about THIS
+# property. Here every saga still terminates and the leads-to still fails,
+# which is the distinction the two liveness properties are meant to draw.
+MODULE: EveryCommittedKeyReadableStaleProjection
+TARGET: EveryCommittedKeyReadable
+CLASS: Temporal
+SUMMARY: leaves the leaf projection on the pre-saga value after a commit terminal, so the write is never readable
+
+--- FIND
+ProjectedPrepared(t, k) == terminal[t][k] = "commit"
+--- REPLACE
+\* MUTATION: the projection switches on an ABORT terminal rather than a commit
+\* one, so a committed key is never materialised at its post-saga value however
+\* long a reader waits.
+ProjectedPrepared(t, k) == terminal[t][k] = "abort"
+--- END

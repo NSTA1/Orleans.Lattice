@@ -1,0 +1,26 @@
+# Pairs with RevisionMonotonic. The rollback deliberately stays INSIDE the
+# declared 0..Cardinality(Txns) domain, so TypeOK still holds and the only
+# property that can catch it is the monotonicity one. A mutation that also
+# broke TypeOK would fire for the wrong reason and prove nothing about
+# RevisionMonotonic.
+MODULE: RevisionMonotonicRollback
+TARGET: RevisionMonotonic
+CLASS: Action
+SUMMARY: decrements the registry revision within its declared domain, so it is no longer monotonic
+
+--- FIND
+Next ==
+    \/ \E t \in Txns : PrepareTx(t)
+--- REPLACE
+\* MUTATION: the revision counter can go backwards, as it would if a stale
+\* registry write were replayed over a newer one. Unfair, so it perturbs only
+\* the safety property under test.
+RevisionRollback ==
+    /\ revision > 0
+    /\ revision' = revision - 1
+    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone>>
+
+Next ==
+    \/ RevisionRollback
+    \/ \E t \in Txns : PrepareTx(t)
+--- END

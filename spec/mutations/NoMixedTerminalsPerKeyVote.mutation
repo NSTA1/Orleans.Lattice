@@ -1,0 +1,16 @@
+# Pairs with NoMixedTerminals. Deriving each leaf's terminal from that leaf's
+# own vote instead of from the saga-wide decision is the classic per-participant
+# outcome bug: a partially acked saga commits on the leaves that acked and
+# aborts on the ones that did not.
+MODULE: NoMixedTerminalsPerKeyVote
+TARGET: NoMixedTerminals
+CLASS: Invariant
+SUMMARY: derives each leaf's terminal from its own vote, so one saga both commits and aborts
+
+--- FIND
+    /\ LET kind == IF phase[t] = "committing" THEN "commit" ELSE "abort"
+--- REPLACE
+\* MUTATION: the terminal kind is per-participant rather than saga-wide, taken
+\* from that participant's own prepare vote.
+    /\ LET kind == IF vote[t][k] = "ack" THEN "commit" ELSE "abort"
+--- END

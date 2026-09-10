@@ -33,7 +33,7 @@ siloBuilder.AddAzureTableWalStorage(o =>
 |---|---|---|---|
 | `LatticeAzureTableServiceCollectionExtensions` | static class | Registers the Azure Table WAL provider and default Zstandard compressor fallback. | `AddAzureTableWalStorage`, `DefaultCompressionLevel` |
 | `AzureTableWalStorageOptions` | sealed class | Configures authentication, table name, Azure SDK client options, retry knobs, commit pipeline behaviour, saturation handling, and stored-payload compression. | See [Configuration](configuration.md). |
-| `AzureTableWalStorageProvider` | sealed partial class | Durable Azure Table implementation of `IWalStorageProvider`. | Implements the public WAL provider contract and `IAsyncDisposable`; exposes `MaxEntriesPerBatch`. |
+| `AzureTableWalStorageProvider` | sealed partial class | Durable Azure Table implementation of `IWalStorageProvider`. | Implements the public WAL provider contract and `IAsyncDisposable`; exposes `MaxEntriesPerBatch` and `FlushPhaseTwoAsync`. |
 
 `AddAzureTableWalStorage` layers on the core `AddWalStorage` seam. It displaces the in-memory default installed by `AddLattice`, regardless of registration order. If multiple WAL provider registrations are made, the last provider factory wins.
 
@@ -54,6 +54,7 @@ The helper also registers a default `ZstdLatticeCompressor` fallback at `Default
 | Retained bytes | Reports retained payload size for capacity and trimming decisions. |
 | Trim | Removes retained entries below a trim watermark without moving the committed tail backward. |
 | Reconcile | Repairs interrupted append state before normal operation relies on the stored tail. |
+| Flush | Drains the commit completions outstanding at the moment of the call, across every shard the instance has appended to, so already-appended batches become readable. Rethrows a failed completion instead of swallowing it, and leaves it observable to the next append. A no-op when commit completions are synchronous. |
 | Disposal | Releases provider-owned resources and observes pending background work according to configured fault handling. |
 
 See [Architecture](architecture.md) for the storage and commit model, and [Core WAL](../lattice/wal.md) for how the core library uses the provider.

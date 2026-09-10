@@ -134,15 +134,21 @@ public class OrSetDeltaTests
     }
 
     [Test]
-    public void Equality_uses_reference_equality_on_independently_allocated_collections()
+    public void Equality_is_value_based_on_independently_allocated_collections()
     {
-        // Documents the IReadOnlyList<> reference-equality caveat at the
-        // delta level: two deltas built from independent arrays of equal
-        // dots are NOT equal under record-struct equality.
+        // Two deltas built from independent arrays of equal dots now compare
+        // equal: Adds and Removes are compared element-by-element using the
+        // value equality of OrSetDeltaDot, not by collection reference. This
+        // completes the byte[]-value-equality work at the delta level so a
+        // delta and its post-serialization self compare equal.
         var dot = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r", Counter = 1 };
         var a = new OrSetDelta { Adds = new[] { dot }, Removes = Array.Empty<OrSetDeltaDot>() };
         var b = new OrSetDelta { Adds = new[] { dot }, Removes = Array.Empty<OrSetDeltaDot>() };
-        Assert.That(a, Is.Not.EqualTo(b));
+        Assert.Multiple(() =>
+        {
+            Assert.That(a, Is.EqualTo(b));
+            Assert.That(a.GetHashCode(), Is.EqualTo(b.GetHashCode()));
+        });
     }
 
     [Test]

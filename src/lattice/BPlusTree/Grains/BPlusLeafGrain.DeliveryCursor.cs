@@ -142,6 +142,7 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetDeltaSinceCursorAsync"/>
     public Task<StateDelta> GetDeltaSinceCursorAsync(LeafDeliveryCursor sinceCursor)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         EnsureDeliveryEpochInitialized();
         var current = new LeafDeliveryCursor
         {
