@@ -236,9 +236,37 @@ internal static class LatticeAccessGateEnforcement
         string? rangeEnd,
         CancellationToken cancellationToken)
     {
+        var (filter, _) = await ResolveRangeReadCoverageAsync(
+            gate, membership, treeId, rangeStart, rangeEnd, cancellationToken);
+        return filter;
+    }
+
+    /// <summary>
+    /// Resolves the read-path key-filter for a <see cref="LatticeOperation.RangeRead"/>
+    /// exactly as <see cref="ResolveRangeReadFilterAsync"/> does, and additionally
+    /// reports <em>why</em> the returned filter is what it is.
+    /// <para>
+    /// The gate's decision is three-way - admit the whole range, narrow it, or
+    /// deny it - but a <c>Func&lt;string, bool&gt;?</c> is two-way, so a plain
+    /// deny and a partial allow both surface as "some non-null predicate" and are
+    /// indistinguishable downstream. The distinguishing information exists here,
+    /// at the point of decision, and was previously discarded one line later.
+    /// This overload returns it instead so the scan surface can report coverage
+    /// to a caller that would otherwise read an empty result as an empty store.
+    /// </para>
+    /// </summary>
+    public static async ValueTask<(Func<string, bool>? Filter, LatticeRangeReadGateCoverage Coverage)>
+        ResolveRangeReadCoverageAsync(
+            ILatticeAccessGate gate,
+            ILatticeMembershipContext? membership,
+            string treeId,
+            string? rangeStart,
+            string? rangeEnd,
+            CancellationToken cancellationToken)
+    {
         if (LatticeAccessGateContext.IsGateBypassed || gate is NullLatticeAccessGate)
         {
-            return null;
+            return (null, LatticeRangeReadGateCoverage.Unrestricted);
         }
 
         var subject = await ResolveSubjectAsync(membership, cancellationToken);
@@ -247,10 +275,12 @@ internal static class LatticeAccessGateEnforcement
         var decision = await gate.AuthorizeAsync(in request, cancellationToken);
         if (!decision.Allowed)
         {
-            return static _ => false;
+            return (static _ => false, LatticeRangeReadGateCoverage.Denied);
         }
 
-        return decision.KeyFilter;
+        return decision.KeyFilter is null
+            ? (null, LatticeRangeReadGateCoverage.Unrestricted)
+            : (decision.KeyFilter, LatticeRangeReadGateCoverage.Filtered);
     }
 
     private static ValueTask<LatticeSubject> ResolveSubjectAsync(
