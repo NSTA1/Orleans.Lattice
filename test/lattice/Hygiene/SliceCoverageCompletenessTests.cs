@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 using NUnit.Framework;
 using Orleans.Lattice.Testing.Hygiene;
 
-namespace Orleans.Lattice.Tests;
+namespace Orleans.Lattice.Tests.Hygiene;
 
 /// <summary>
 /// Guards the repository ownership registry (<see cref="CoreHygieneScope.AllPackageSliceRoots"/>)

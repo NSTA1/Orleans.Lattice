@@ -92,6 +92,25 @@ To widen the instance, edit `TxWrites`, `Txns`, and `Keys` in
 `AtomicCommit.cfg`. The state space stays small (a few thousand states) for
 2-3 sagas over 3-4 keys; larger instances grow quickly.
 
+## Claims in this directory that open issues own
+
+Two open issues own claims made in this directory, and both are out of scope for
+the refinement note's own work.
+
+- **#2325** owns three documentation and API overclaims in the atomicity
+  surface, one of which is the two-saga overlap advertised just above: the two
+  sagas do overlap on `k2`, but no property relates them, so the overlap
+  exercises nothing.
+- **#2333** owns the `DecisionDurability` property's prose and its refinement
+  seam, including the "never flips" wording in the property table above. That
+  wording is strictly weaker than the formula it describes, which also forbids
+  the decision being unset.
+
+The boundary is recorded in full under
+[territory owned by other open issues](Refinement.md#territory-owned-by-other-open-issues)
+in the refinement note, which is where a census of that note's Detector column
+meets it. Read it before filing either finding as new.
+
 ## How to run TLC
 
 You need a Java runtime (JDK/JRE 11+) and `tla2tools.jar` from the

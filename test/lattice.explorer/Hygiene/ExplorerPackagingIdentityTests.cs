@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
 using Orleans.Lattice.Testing.Hygiene;
 
-namespace Orleans.Lattice.Explorer.Tests;
+namespace Orleans.Lattice.Explorer.Tests.Hygiene;
 
 /// <summary>
 /// The Explorer's packaging-identity gate: what every project under

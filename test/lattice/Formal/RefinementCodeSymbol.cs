@@ -39,12 +39,14 @@ internal sealed record RefinementCodeSymbol
 /// <c>spec/Refinement.md</c>.
 /// <para>
 /// WHAT IS EXTRACTED, AND WHY IT IS NARROW. Only backticked, dotted
-/// <c>Type.Member</c> forms whose both halves begin with an upper-case letter
-/// (or an underscore on the right-hand side) are taken. That rule is chosen to
+/// <c>Type.Member</c> forms are taken, and in the production columns both
+/// halves must begin with an upper-case letter (or an underscore on the
+/// right-hand side). That rule is chosen to
 /// be conservative in one specific direction: it must not manufacture
 /// references that were never claims about code, because a staleness gate that
 /// cries wolf is suppressed within a week and is then worse than no gate at
-/// all.
+/// all. The <c>Detector</c> column relaxes the right-hand side, for the
+/// reasons given on <c>DetectorReference</c> below.
 /// </para>
 /// <para>
 /// The tables are full of backticked text that looks like an identifier but is
@@ -66,7 +68,8 @@ internal sealed record RefinementCodeSymbol
 /// resolving them here would fail every one of them and break the gate. They
 /// are a different kind of claim and get their own resolver
 /// (<see cref="RefinementDetectorResolver"/>), so this extractor skips that
-/// column outright. The skip is keyed on the header text rather than on a
+/// column outright and <see cref="ExtractDetectors"/> reads it alone, under a
+/// pattern of its own. The skip is keyed on the header text rather than on a
 /// column index, so inserting a column ahead of it cannot silently
 /// re-include it.
 /// </para>
@@ -88,8 +91,44 @@ internal static class RefinementCodeSymbols
 
     private static readonly Regex BacktickedSpan = new("`([^`]+)`", RegexOptions.Compiled);
 
+    /// <summary>
+    /// The production-column pattern. Both halves must begin upper-case (or an
+    /// underscore on the right-hand side), which is what keeps the note's
+    /// backticked file paths (<c>AtomicCommit.tla</c>,
+    /// <c>spec/mutations/README.md</c>) from being read as claims about code.
+    /// </summary>
     private static readonly Regex DottedReference = new(
         @"(?<![A-Za-z0-9_.])([A-Z][A-Za-z0-9_]*)\.([A-Z_][A-Za-z0-9_]*)(?![A-Za-z0-9_.])",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// The Detector-column pattern, identical except that the right-hand side
+    /// may begin lower-case (issue #2561).
+    /// <para>
+    /// WHY THIS COLUMN GETS ITS OWN PATTERN. The upper-case requirement above
+    /// exists to stop the production extractor manufacturing references out of
+    /// the note's prose and file paths. The Detector column does not have that
+    /// ambiguity: its cells are known to cite <c>Fixture.TestMethod</c> names
+    /// and nothing else. Meanwhile this repository's test methods are
+    /// conventionally lower_snake_case after the first word, so a rename to a
+    /// name that begins lower-case is an ordinary, expected shape - and under
+    /// the shared pattern such a name extracted to NOTHING and was therefore
+    /// never resolved. That is the exact "a rename leaves the note behind"
+    /// rot this gate exists to catch, passing on letter case alone.
+    /// </para>
+    /// <para>
+    /// The two patterns fail in opposite directions, which is why they are
+    /// tuned differently rather than unified. A false positive in the
+    /// production columns is a gate crying wolf about correct prose, which
+    /// gets the gate suppressed. A false positive here is a name that does not
+    /// resolve, which is loud, points at one cell, and is one edit to fix. The
+    /// cost is honest and worth stating: a backticked dotted file name written
+    /// into a Detector cell now extracts and goes red. That is the safe
+    /// direction, and no such cell exists.
+    /// </para>
+    /// </summary>
+    private static readonly Regex DetectorReference = new(
+        @"(?<![A-Za-z0-9_.])([A-Z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_.])",
         RegexOptions.Compiled);
 
     /// <summary>
@@ -119,6 +158,7 @@ internal static class RefinementCodeSymbols
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var symbols = new List<RefinementCodeSymbol>();
+        var pattern = detectorColumnOnly ? DetectorReference : DottedReference;
 
         foreach (var table in tables)
         {
@@ -145,7 +185,7 @@ internal static class RefinementCodeSymbols
 
                     foreach (Match span in BacktickedSpan.Matches(cell))
                     {
-                        foreach (Match reference in DottedReference.Matches(span.Groups[1].Value))
+                        foreach (Match reference in pattern.Matches(span.Groups[1].Value))
                         {
                             var symbol = new RefinementCodeSymbol
                             {
