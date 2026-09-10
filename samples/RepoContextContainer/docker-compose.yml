@@ -135,6 +135,12 @@ services:
     # daemon restart while repocontext (unless-stopped) comes back on its own,
     # degrading search to keyword mode until the embedder is started by hand.
     restart: unless-stopped
+    # OPT-IN CPU PINNING. Unset by default, and unset it renders to NOTHING -
+    # Compose omits the key entirely rather than emitting an empty one, so a
+    # stack that does not set this variable resolves a byte-identical document
+    # to one built before the knob existed. See the repocontext service below
+    # for what it does, when to use it, and when NOT to (issue #2623).
+    cpuset: "${EMBEDDER_CPUSET:-}"
     # Cap container log growth: the default json-file driver is otherwise
     # unbounded. Rotate at 20 MiB x 5 files (100 MiB ceiling per container).
     logging:
@@ -517,6 +523,65 @@ services:
     # if that line is ABSENT, the container was killed mid-drain and this value is
     # too small.
     stop_grace_period: 120s
+    # OPT-IN CPU PINNING - UNSET BY DEFAULT, AND DELIBERATELY SO (issue #2623).
+    #
+    # DO NOT SWITCH THIS ON IN THE MIDDLE OF A MEASUREMENT. Epic #2368 adopted a
+    # precondition that no service configuration may change between a gate run's
+    # T0 and its final scrape, after a mid-run service recreation voided gate
+    # run 3 for every criterion that spanned it. A change of this kind lands
+    # BEFORE a run's T0 and ALONE, or not at all. This knob exists unset so that
+    # enabling it is an ACT, on the record, at a moment somebody chose.
+    #
+    # WHAT IT FIXES. A container given a fractional CPU quota (`cpus: 4.0`, in
+    # docker-compose.tuning.yml) and no cpuset is ENTITLED to 4 CPUs but VISIBLE
+    # on all of them - 16 on the host this was measured on. CFS bandwidth
+    # control vends that quota to per-CPU run queues in 5 ms slices, and a
+    # thread waking on a run queue draws a whole slice whether it then runs for
+    # 5 ms or 5 us; the unused remainder is returned only lazily. Threads
+    # scattered across many run queues therefore exhaust the quota by
+    # RESERVATION rather than by execution, and the kernel throttles the cgroup
+    # while its actual utilisation is a small fraction of its entitlement. The
+    # effect scales with the number of run queues threads can land on, which is
+    # the VISIBLE CPU count, not the quota. Sizing the cpuset to the grant makes
+    # those two numbers equal.
+    #
+    # MEASURED, not inferred. Throwaway alpine containers, identical synthetic
+    # load, identical `--cpus=4`, varying ONLY `--cpuset-cpus`:
+    #
+    #              periods  throttled   ratio   quota used
+    #   cpuset 0-15    907         49    5.4%         ~17%
+    #   cpuset 0-3     953          0    0.0%         ~26%
+    #
+    # The load confound is INVERTED there, which is what makes it decisive: the
+    # arm offering MORE work throttled ZERO, and the arm offering LESS throttled
+    # at 17% of its quota. Utilisation cannot produce that ordering; scatter
+    # can. A heavier first experiment reached 47.7% against 0.0% on the same
+    # single variable.
+    #
+    # WHAT IT BUYS, WITHOUT OVERCLAIM. Latency jitter and scheduling
+    # determinism. It licenses NO throughput claim: the measurement is synthetic
+    # load on alpine, and the transfer to this silo and to the ONNX embedder is
+    # an inference. And do NOT read a throttle ratio as a measure of thread-pool
+    # oversubscription - it answers a different question and has a high floor
+    # (an idle container measured ~31% on this host). See the runbook section
+    # "CPU scatter under a fractional quota".
+    #
+    # HOW TO DERIVE A VALUE. One range per service, sized to the CEILING of that
+    # service's `cpus` grant, and the ranges must NOT overlap each other or you
+    # trade throttling for contention. On the 16-CPU host the tuning overlay was
+    # measured on, that is REPOCONTEXT_CPUSET=0-5 (6 cores for `cpus: 6.0`) and
+    # EMBEDDER_CPUSET=6-9 (4 cores for `cpus: 4.0`), leaving 10-15 for the host.
+    # These are NOT portable: Docker refuses to start a container whose cpuset
+    # names a CPU the host does not have, so a copied value fails loudly on a
+    # smaller machine. Set them in `.env` beside REPO_PATH; see .env.example.
+    #
+    # NOT CHANGED BY THIS KNOB: DOTNET_PROCESSOR_COUNT in
+    # docker-compose.tuning.yml is a number above the effective grant and is the
+    # same SHAPE, but it sizes the WAL replay concurrency gate rather than a
+    # thread pool, and moving it is a separate change with a separate blast
+    # radius that must be measured on its own. See "The pool-sizing class" in
+    # the runbook.
+    cpuset: "${REPOCONTEXT_CPUSET:-}"
     # Cap container log growth: the periodic self-index reconcile (every
     # LATTICE_RECONCILE_INTERVAL_SECONDS) logs continuously, so the default
     # unbounded json-file driver would grow without limit. Rotate at

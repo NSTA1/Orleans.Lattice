@@ -408,6 +408,125 @@ When adding a container limit, or a setting that sizes anything per core, check 
 figure the runtime actually reads. `Assert-ContainerProvenance.ps1` and the effective
 configuration report (#2593, #2600) exist so the answer is read rather than assumed.
 
+One caution on the throttling figures quoted in instance 3, because they have already
+been misread once: they measure **CPU scatter**, not pool size against grant, and they
+cannot corroborate a pool-sizing fix. See
+[CPU scatter under a fractional quota](#cpu-scatter-under-a-fractional-quota) for what
+that statistic does measure and for the retraction.
+
+## CPU scatter under a fractional quota
+
+This is a **different defect from the pool-sizing class above**, and the two are easy
+to conflate because they share a cause upstream (a fractional grant on a wide host)
+and a symptom downstream (throttling). Keeping them apart matters, because a
+statistic that measures this one was once quoted as evidence about that one.
+
+**The mechanism.** A container given a fractional CPU quota and no `cpuset` is
+*entitled* to 4 CPUs but *visible* on all 16. CFS bandwidth control vends quota to
+**per-CPU run queues in 5 ms slices** (`kernel.sched_cfs_bandwidth_slice_us`), and a
+thread waking on a run queue draws a whole slice whether it then runs for 5 ms or
+5 us; the unused remainder is returned only lazily. Threads scattered across many run
+queues therefore exhaust the quota by **reservation** rather than by execution, and
+the cgroup is throttled while its actual utilisation is a small fraction of its
+entitlement. The effect scales with the number of run queues threads can land on,
+which is the **visible CPU count**, not the quota.
+
+Note what this is not. The pool-sizing class is about a runtime *creating too many
+threads*. This is about *where the threads it creates are allowed to run*, and it
+happens at any thread count.
+
+**The measurement** (#2623). Throwaway `alpine` containers, identical synthetic load,
+identical `--cpus=4` quota, varying **only** `--cpuset-cpus`. Counters read from the
+host cgroup `cpu.stat`.
+
+| cpuset | periods | throttled | ratio | mean CPU | quota used |
+| --- | --- | --- | --- | --- | --- |
+| `0-15` | 907 | 49 | 5.4% | ~68% | ~17% |
+| `0-3` | 953 | **0** | **0.0%** | ~104% | ~26% |
+
+The load confound is **inverted** in that run, which is what makes it decisive: the
+arm offering *more* work throttled **zero**, and the arm offering *less* throttled at
+17% of its quota. Utilisation cannot produce that ordering; scatter can. A heavier
+first experiment reached 47.7% against 0.0% on the same single variable, and both
+pinned arms recorded zero throttled periods and zero throttled microseconds.
+
+### Two things this statistic must not be used for
+
+Both are retractions of readings previously made in epic #2368, recorded here so they
+are not made again.
+
+1. **It is not a measure of thread-pool oversubscription.** The throttling ratio was
+   once quoted (99.3% before, 30.9% after) as evidence that the ONNX intra-op fix in
+   [the pool-sizing class](#the-pool-sizing-class) had taken effect. That reading is
+   **withdrawn.** The statistic tracks how many CPUs the container can see. A
+   container doing no work at all measures approximately 31% on this host, so the
+   residual is a **floor, not a remainder**, and must never be read as "some
+   oversubscription persists". Establish pool sizing **structurally** - from `/proc`,
+   from configuration, or from source - never from this counter.
+2. **`cpu.stat` is not untrustworthy under Docker Desktop.** An earlier suspicion that
+   it might be is also **withdrawn**: it responds cleanly, deterministically and
+   monotonically to CPU scatter across both experiments. Figures read from it are real
+   data.
+
+A third reading worth stating positively: throttling at very low CPU utilisation is
+**expected** here rather than anomalous, and on its own is not evidence of a defect.
+
+### Enabling it
+
+Pinning is **opt-in and unset by default**, through two variables the base compose
+file declares as `${REPOCONTEXT_CPUSET:-}` and `${EMBEDDER_CPUSET:-}`. Unset, Compose
+omits the `cpuset` key from the resolved document **entirely** rather than emitting an
+empty one, so a stack that ignores them resolves byte-for-byte what it resolved before
+the knob existed. Set them in `.env` beside `REPO_PATH`; see
+[.env.example](../../samples/RepoContextContainer/.env.example).
+
+```bash
+# In samples/RepoContextContainer/.env
+REPOCONTEXT_CPUSET=0-5
+EMBEDDER_CPUSET=6-9
+```
+
+Derive the values rather than copying them:
+
+1. **One range per service, sized to the ceiling of that service's `cpus` grant.**
+   `cpus: 6.0` wants six CPUs, `cpus: 4.0` wants four.
+2. **The ranges must not overlap**, or you have traded throttling for contention,
+   which is a worse deal than the one you started with. The two services are busy
+   simultaneously by construction, since the reconcile pass is what feeds the embedder.
+3. **Leave headroom** for the host and for any service with no grant.
+   `azurite-backup-sink` declares no `cpus`, so it has no quota to be throttled
+   against and is deliberately left unpinned.
+
+The values above are for the 16-CPU host the tuning overlay was measured on and are
+**not portable**. Docker refuses to start a container whose `cpuset` names a CPU the
+host does not have, so a copied value fails loudly at `up` on a smaller machine rather
+than silently - that is the good case. The bad case is a host where the ranges are
+valid but no longer disjoint from what else runs there.
+
+### When not to enable it
+
+**Not between a measurement run's T0 and its final scrape.** Epic #2368 adopted a
+precondition that no service configuration may change inside that window, after a
+mid-run service recreation voided gate run 3 for every criterion that spanned it. A
+change of this kind lands **before** a run's T0 and **alone**, or not at all. The knob
+ships unset precisely so that enabling it is an act on the record at a moment somebody
+chose, rather than a default that arrives with a `git pull`.
+
+What it buys, stated without overclaim: **latency jitter and scheduling determinism**.
+It licenses **no throughput claim**. The measurement is synthetic load on `alpine`
+containers, and its transfer to the ONNX embedder and to the repocontext silo is an
+inference rather than a measurement.
+
+### What is deliberately not changed
+
+`DOTNET_PROCESSOR_COUNT: "16"` on the `repocontext` service is a number above the
+effective grant and belongs to the same family, but it is **not** touched by this knob
+and is not a thread pool: it holds the WAL replay concurrency gate at the value every
+prior field measurement on this box was taken against, which is instance 1 of
+[the pool-sizing class](#the-pool-sizing-class). Aligning it is a separate change with
+a separate blast radius, and it must be measured on its own rather than ridden in on
+this one.
+
 ## How an undersized memory cap presents
 
 Worth keeping because the symptom points at the wrong subsystem.
@@ -541,16 +660,23 @@ standing caveat.
 
 ## How this runbook is kept honest
 
-`LocalDeploymentRunbookComposeParityTests` (in
-`test/lattice.api.mcp.repocontext/Docs/`) resolves `docker-compose.yml` and
-`docker-compose.tuning.yml` with `docker compose config` and asserts, in both
-directions, that the settings table above enumerates exactly what that document
-declares. A setting added to either compose file without a table row fails the test,
-and a table row naming a setting the merge does not actually produce fails it too.
+`LocalDeploymentRunbookHygieneTests` (in `test/lattice/Hygiene/`) resolves
+`docker-compose.yml` and `docker-compose.tuning.yml` with `docker compose config` and
+asserts, in both directions, that the settings table above enumerates exactly what
+that document declares. A setting added to either compose file without a table row
+fails the test, and a table row naming a setting the merge does not actually produce
+fails it too.
 
 It evaluates the **resolved** document rather than the raw files on purpose: compose
 merge and interpolation decide what a setting resolves to, so a raw-file comparison
 can be green about a value the merge discards.
+
+The same fixture holds the **opt-in** guarantee for CPU pinning: it asserts that with
+`REPOCONTEXT_CPUSET` and `EMBEDDER_CPUSET` unset the resolved document declares no
+`cpuset` on any service, and, textually, that every `cpuset` a tracked compose file
+declares is variable-driven with an **empty** default. The second half is what stops a
+literal range being hard-coded later, which would make pinning a default rather than a
+choice - and would perturb exactly the measurement window this knob is kept unset for.
 
 **What a green run of that test establishes: that two tracked files agree with each
 other. Nothing else.** It does not establish that any container is running, that a
