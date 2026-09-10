@@ -2017,9 +2017,13 @@ internal sealed partial class LatticeGrain(
 
         if (await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
         {
+            // Stream provider, stream handle, operation id and metric tags are
+            // identical for every entry in the batch, so they are resolved once
+            // here rather than re-resolved per entry inside PublishEventAsync.
+            var batch = LatticeEventPublisher.CreateBatch(services, Options, TreeId, logger);
             foreach (var entry in deltas)
             {
-                await PublishEventAsync(LatticeTreeEventKind.Set, entry.Key);
+                await batch.PublishAsync(LatticeTreeEventKind.Set, entry.Key);
             }
         }
     }
@@ -2194,9 +2198,12 @@ internal sealed partial class LatticeGrain(
             {
                 if (entries.Count > 0 && await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
                 {
+                    // See ApplyCrdtDeltaManyAsync: batch-invariant publication
+                    // state is resolved once rather than once per entry.
+                    var batch = LatticeEventPublisher.CreateBatch(services, Options, TreeId, logger);
                     foreach (var entry in entries)
                     {
-                        await PublishEventAsync(LatticeTreeEventKind.Set, entry.Key);
+                        await batch.PublishAsync(LatticeTreeEventKind.Set, entry.Key);
                     }
                 }
             }
@@ -2354,9 +2361,12 @@ internal sealed partial class LatticeGrain(
         // publication but scoped to the guarded-in subset.
         if (written.Count > 0 && await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
         {
+            // See ApplyCrdtDeltaManyAsync: batch-invariant publication state is
+            // resolved once rather than once per written key.
+            var batch = LatticeEventPublisher.CreateBatch(services, Options, TreeId, logger);
             for (int i = 0; i < written.Count; i++)
             {
-                await PublishEventAsync(LatticeTreeEventKind.Set, written[i]);
+                await batch.PublishAsync(LatticeTreeEventKind.Set, written[i]);
             }
         }
 
