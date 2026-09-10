@@ -153,7 +153,7 @@ function ConvertFrom-ProvenanceDuration {
 
 <#
 .SYNOPSIS
-	Check 1 of 4. The container was composed from the checkout the operator means.
+	Check 1 of 5. The container was composed from the checkout the operator means.
 
 .DESCRIPTION
 	`docker compose up` reads its OWN working directory's compose files, whatever
@@ -254,7 +254,7 @@ function Get-ComposeProvenanceViolation {
 
 <#
 .SYNOPSIS
-	Check 2 of 4. That checkout is at the commit the operator means.
+	Check 2 of 5. That checkout is at the commit the operator means.
 
 .DESCRIPTION
 	Reported as a value the operator reads rather than an inference they must
@@ -314,7 +314,7 @@ function Get-GitProvenanceViolation {
 
 <#
 .SYNOPSIS
-	Check 3 of 4. The container is running the image its tag currently names.
+	Check 3 of 5. The container is running the image its tag currently names.
 
 .DESCRIPTION
 	Catches the stale container: an image rebuilt from a newer commit moves the
@@ -358,7 +358,7 @@ function Get-ImageProvenanceViolation {
 
 <#
 .SYNOPSIS
-	Check 4 of 4, and the only one that reads the channel the answer lives in.
+	Check 4 of 5, and the only one that reads the channel the answer lives in.
 
 .DESCRIPTION
 	Checks 1 to 3 can ALL pass while the setting under test never reached the

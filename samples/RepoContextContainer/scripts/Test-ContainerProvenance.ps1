@@ -111,11 +111,31 @@ $worktreeArchiveSource = '/run/desktop/mnt/host/c/dev/copilot-worktrees/lattice/
 $worktreeArchiveToplevel = 'C:\dev\copilot-worktrees\lattice\bucket4-merge'
 $durableArchiveSource = 'C:\dev\repocontext-memory-archive'
 
+# Join a leaf onto one of the FIXTURE paths above.
+#
+# `Join-Path` resolves a drive qualifier through the PSDrive provider, so
+# `Join-Path 'C:\dev\x' 'y'` is a terminating error on Linux ("Cannot find
+# drive. A drive with the name 'C' does not exist."), which stops this suite
+# dead five assertions in. The fixtures are deliberately Windows-shaped - they
+# are the readings `docker inspect` actually returned during the epic #2368 gate
+# runs, and rewriting them to POSIX shapes would destroy the evidence the suite
+# exists to encode - so they are joined textually instead, with the separator
+# the base path already implies. Nothing here touches the filesystem.
+function Join-FixturePath {
+	param(
+		[Parameter(Mandatory)][string] $Base,
+		[Parameter(Mandatory)][string] $Leaf
+	)
+
+	$separator = if ($Base.Contains('\')) { '\' } else { '/' }
+	return ($Base.TrimEnd('\', '/') + $separator + $Leaf)
+}
+
 function New-AgreeingReadings {
 	return @{
 		ContainerName             = 'repocontext'
 		ComposeWorkingDirectory   = $candidateCheckout
-		ComposeConfigFiles        = @((Join-Path $candidateCheckout 'docker-compose.yml'))
+		ComposeConfigFiles        = @((Join-FixturePath $candidateCheckout 'docker-compose.yml'))
 		ResolvedCommit            = $candidateCommit
 		ExpectedCommit            = $candidateCommit
 		RunningImageId            = 'sha256:11112222333344445555666677778888999900001111222233334444555566667'
@@ -157,12 +177,12 @@ _Assert -Name 'an empty path is never equal to anything, including another empty
 	-Condition (-not (Test-ProvenancePathsEqual -Left '' -Right '' -CaseSensitive $false))
 
 # ---------------------------------------------------------------------------
-_Section 'Check 1 of 4: compose provenance'
+_Section 'Check 1 of 5: compose provenance'
 # ---------------------------------------------------------------------------
 
 $accepted = Get-ComposeProvenanceViolation `
 	-WorkingDirectory $candidateCheckout `
-	-ConfigFiles @((Join-Path $candidateCheckout 'docker-compose.yml')) `
+	-ConfigFiles @((Join-FixturePath $candidateCheckout 'docker-compose.yml')) `
 	-ExpectedCheckout $candidateCheckout -CaseSensitive $false
 _Assert -Name 'ACCEPTS a container composed from the expected checkout' `
 	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
@@ -171,7 +191,7 @@ _Assert -Name 'ACCEPTS a container composed from the expected checkout' `
 # the container had been composed from the main checkout.
 $refused = Get-ComposeProvenanceViolation `
 	-WorkingDirectory $mainCheckout `
-	-ConfigFiles @((Join-Path $mainCheckout 'docker-compose.yml')) `
+	-ConfigFiles @((Join-FixturePath $mainCheckout 'docker-compose.yml')) `
 	-ExpectedCheckout $candidateCheckout -CaseSensitive $false
 _Assert -Name 'REFUSES the gate run 1/2 shape (composed from a different checkout)' `
 	-Condition ($refused.Count -eq 1)
@@ -194,7 +214,7 @@ _Assert -Name 'REFUSES a container carrying no compose config_files label' `
 # plausible.
 $refused = Get-ComposeProvenanceViolation `
 	-WorkingDirectory $candidateCheckout `
-	-ConfigFiles @((Join-Path $candidateCheckout 'docker-compose.yml'), 'C:\tmp\docker-compose.override.yml') `
+	-ConfigFiles @((Join-FixturePath $candidateCheckout 'docker-compose.yml'), 'C:\tmp\docker-compose.override.yml') `
 	-ExpectedCheckout $candidateCheckout -CaseSensitive $false
 _Assert -Name 'REFUSES a config file merged in from outside the project directory' `
 	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('override'))
@@ -205,8 +225,8 @@ _Assert -Name 'REFUSES a config file merged in from outside the project director
 # has never heard of: a check that could only reason about tracked files would
 # be green throughout, which is the property that makes this class need its own
 # instrument.
-$base = Join-Path $candidateCheckout 'docker-compose.yml'
-$override = Join-Path $candidateCheckout 'docker-compose.override.yml'
+$base = Join-FixturePath $candidateCheckout 'docker-compose.yml'
+$override = Join-FixturePath $candidateCheckout 'docker-compose.override.yml'
 
 $accepted = Get-ComposeProvenanceViolation `
 	-WorkingDirectory $candidateCheckout -ConfigFiles @($base, $override) `
@@ -230,7 +250,7 @@ _Assert -Name 'and names BOTH counts so the operator knows what is missing' `
 	-Detail ($refused -join '; ')
 
 $refused = Get-ComposeProvenanceViolation `
-	-WorkingDirectory $candidateCheckout -ConfigFiles @($base, $override, (Join-Path $candidateCheckout 'docker-compose.extra.yml')) `
+	-WorkingDirectory $candidateCheckout -ConfigFiles @($base, $override, (Join-FixturePath $candidateCheckout 'docker-compose.extra.yml')) `
 	-ExpectedCheckout $candidateCheckout -ExpectedConfigFileCount 2 `
 	-MissingConfigFiles @() -CaseSensitive $false
 _Assert -Name 'REFUSES an UNEXPECTED EXTRA file as well as a missing one' `
@@ -263,7 +283,7 @@ _Assert -Name 'ACCEPTS one file when running without an override was DECLARED' `
 	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
 
 # ---------------------------------------------------------------------------
-_Section 'Check 2 of 4: git provenance'
+_Section 'Check 2 of 5: git provenance'
 # ---------------------------------------------------------------------------
 
 _Assert -Name 'ACCEPTS a checkout sitting on the expected commit' `
@@ -290,7 +310,7 @@ _Assert -Name 'REFUSES a commit prefix shorter than seven characters' `
 	-Condition ((Get-GitProvenanceViolation -ResolvedCommit $candidateCommit -ExpectedCommit '9fcaa').Count -eq 1)
 
 # ---------------------------------------------------------------------------
-_Section 'Check 3 of 4: image provenance'
+_Section 'Check 3 of 5: image provenance'
 # ---------------------------------------------------------------------------
 
 _Assert -Name 'ACCEPTS a container running the image its reference resolves to' `
@@ -309,7 +329,7 @@ _Assert -Name 'REFUSES a container reporting no image id' `
 	-Condition ((Get-ImageProvenanceViolation -RunningImageId '' -ExpectedImageId 'sha256:bbbb' -ImageReference 'repocontext:local').Count -eq 1)
 
 # ---------------------------------------------------------------------------
-_Section 'Check 4 of 4: environment provenance'
+_Section 'Check 4 of 5: environment provenance'
 # ---------------------------------------------------------------------------
 
 _Assert -Name 'ACCEPTS a setting present in the container with the expected value' `
@@ -500,7 +520,7 @@ _Assert -Name 'and returns every reading it was given, so the operator reads the
 # the main commit, and missing the setting that was merged on the candidate.
 $gateRun2 = New-AgreeingReadings
 $gateRun2.ComposeWorkingDirectory = $mainCheckout
-$gateRun2.ComposeConfigFiles = @((Join-Path $mainCheckout 'docker-compose.yml'))
+$gateRun2.ComposeConfigFiles = @((Join-FixturePath $mainCheckout 'docker-compose.yml'))
 $gateRun2.ResolvedCommit = $mainCommit
 $gateRun2.ContainerEnvironment = @('PATH=/usr/bin')
 

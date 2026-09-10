@@ -86,23 +86,32 @@ public sealed class RepoContextContainerProvenanceScriptTests
         // tally are two independent readings of the same run. Both are asserted, because
         // a suite that crashed before printing would otherwise be indistinguishable from
         // one that passed silently.
-        Assert.That(
-            process.ExitCode,
-            Is.Zero,
-            $"the provenance suite reported {process.ExitCode} failing assertion(s)."
-                + Environment.NewLine
-                + stdout
-                + stderr);
-
         var tally = stdout
             .Split('\n')
             .Select(l => l.Trim())
             .LastOrDefault(l => l.StartsWith("Total ", StringComparison.Ordinal));
 
+        // The tally is asserted BEFORE the exit code, and the exit-code message is
+        // conditioned on it, because a terminating PowerShell error also exits 1. Read
+        // naively, that exit code says "one assertion failed" - a precise, plausible,
+        // entirely wrong reading of a run that never reached its first check. This
+        // fixture is here to refuse artefacts that cannot signal their own
+        // unreliability, so it must not emit one itself.
         Assert.That(
             tally,
             Is.Not.Null,
-            "the provenance suite printed no tally, so it did not reach the end of its run."
+            "the provenance suite printed no tally, so it did not reach the end of its run. "
+                + "Its exit code is NOT a failure count in this state - suspect a terminating "
+                + "error, which on a cross-platform run most often means a path cmdlet that "
+                + "resolves a Windows drive qualifier."
+                + Environment.NewLine
+                + stdout
+                + stderr);
+
+        Assert.That(
+            process.ExitCode,
+            Is.Zero,
+            $"the provenance suite reported {process.ExitCode} failing assertion(s)."
                 + Environment.NewLine
                 + stdout
                 + stderr);
