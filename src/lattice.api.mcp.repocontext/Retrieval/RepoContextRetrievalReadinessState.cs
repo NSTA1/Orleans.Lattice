@@ -94,6 +94,7 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     private int _phase = BuildingRaw;
     private long _faultSinceTicks = NoFault;
     private long _readyElapsedTicks = NotReady;
+    private int _arming = (int)RepoContextRetrievalArming.Unknown;
 
     /// <summary>Creates the readiness state, starting the time-to-ready clock.</summary>
     /// <param name="timeProvider">The clock driving the fault hold-down and the time-to-ready measurement. Must not be <see langword="null"/>.</param>
@@ -161,6 +162,23 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     public bool IsReady => Phase != RepoContextRetrievalReadinessPhase.Building;
 
     /// <summary>
+    /// Whether the approximate plane is <b>armed</b> - answering from a trained
+    /// partitioning - as last demonstrated by a query the plane answered for
+    /// itself. <see cref="RepoContextRetrievalArming.Unknown"/> until one has.
+    /// <para>
+    /// <b>Deliberately not part of <see cref="IsReady"/> or
+    /// <see cref="Phase"/>.</b> An unarmed plane serves complete recall by
+    /// exhaustive scan, so it is genuinely ready; a corpus below the training
+    /// threshold can never partition and would never become ready if arming
+    /// gated the verdict. This reports a second, independent fact beside the
+    /// verdict rather than changing it. Do not "simplify" the two into one:
+    /// they answer different questions and have different correct answers on the
+    /// same host.
+    /// </para>
+    /// </summary>
+    public RepoContextRetrievalArming Arming => (RepoContextRetrievalArming)Volatile.Read(ref _arming);
+
+    /// <summary>
     /// The elapsed time from this state's construction to the moment the host first
     /// reported ready, or <see langword="null"/> while it has never been ready. This is
     /// the same figure published on the <c>repocontext.retrieval.ready_seconds</c>
@@ -201,6 +219,37 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
         {
             MarkUnavailable(retrievalPath);
         }
+    }
+
+    /// <summary>
+    /// Folds an observation of which path inside the approximate plane answered a
+    /// query into <see cref="Arming"/>. Call it only where the plane answered for
+    /// itself, so the value reports demonstrated behaviour rather than a
+    /// prediction from configuration.
+    /// <para>
+    /// <b>Last observation wins, and evidence is never erased.</b> Arming is a
+    /// statement about the plane's current partitioning, not a latch: a rebuild
+    /// can legitimately return an armed plane to
+    /// <see cref="RepoContextRetrievalArming.Unarmed"/>, and latching would make
+    /// this property assert a partitioning that no longer exists - the defect
+    /// this signal was added to remove. In the other direction
+    /// <see cref="RepoContextRetrievalArming.Unknown"/> is ignored, because it
+    /// carries no observation and must never overwrite one that does.
+    /// </para>
+    /// <para>
+    /// This changes neither <see cref="Phase"/> nor <see cref="IsReady"/> by
+    /// design; see <see cref="Arming"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="arming">The observed arming state. <see cref="RepoContextRetrievalArming.Unknown"/> is ignored.</param>
+    public void ObserveArming(RepoContextRetrievalArming arming)
+    {
+        if (arming == RepoContextRetrievalArming.Unknown)
+        {
+            return;
+        }
+
+        Volatile.Write(ref _arming, (int)arming);
     }
 
     /// <summary>

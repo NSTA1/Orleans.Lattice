@@ -89,8 +89,30 @@ public sealed class RepoContextRetrievalReadinessHealthCheck(RepoContextRetrieva
 
     // Cached results: the probe runs on every orchestrator poll, so the steady-state
     // path allocates neither a result nor a Task.
-    private static readonly Task<HealthCheckResult> Serving = Task.FromResult(
-        HealthCheckResult.Healthy("Vector plane is serving semantic retrieval."));
+    //
+    // Serving is reported in three forms rather than one. All three are Healthy and
+    // the verdict is identical: an unarmed plane answers by exhaustive scan with
+    // complete recall, so it is genuinely ready, and a corpus below the training
+    // threshold can never partition and must never be failed for it. What differs is
+    // what the line SAYS, because "the vector plane is serving" was true of an armed
+    // and an unarmed plane alike, which made the distinction issue #2441 exists to
+    // expose invisible on the one surface an operator actually reads. Do not collapse
+    // these back into one message, and do not turn the unarmed arm Unhealthy.
+    private static readonly Task<HealthCheckResult> ServingArmed = Task.FromResult(
+        HealthCheckResult.Healthy(
+            "Vector plane is serving semantic retrieval from its trained partitioning (arming: armed)."));
+
+    private static readonly Task<HealthCheckResult> ServingUnarmed = Task.FromResult(
+        HealthCheckResult.Healthy(
+            "Vector plane is serving semantic retrieval by exhaustive scan of the vectors it holds, not from a "
+            + "trained partitioning (arming: unarmed). Recall is complete and this is healthy; it means the "
+            + "approximate index has not armed, because its corpus is below the training threshold or training "
+            + "has not run."));
+
+    private static readonly Task<HealthCheckResult> ServingArmingUnknown = Task.FromResult(
+        HealthCheckResult.Healthy(
+            "Vector plane is serving semantic retrieval; which path inside the plane answered has not been "
+            + "observed yet (arming: unknown). This is not the same as observing an unarmed plane."));
 
     private static readonly Task<HealthCheckResult> KeywordOnly = Task.FromResult(
         HealthCheckResult.Healthy(
@@ -123,7 +145,12 @@ public sealed class RepoContextRetrievalReadinessHealthCheck(RepoContextRetrieva
         CancellationToken cancellationToken = default)
         => _state.Phase switch
         {
-            RepoContextRetrievalReadinessPhase.Serving => Serving,
+            RepoContextRetrievalReadinessPhase.Serving => _state.Arming switch
+            {
+                RepoContextRetrievalArming.Armed => ServingArmed,
+                RepoContextRetrievalArming.Unarmed => ServingUnarmed,
+                _ => ServingArmingUnknown,
+            },
             RepoContextRetrievalReadinessPhase.KeywordOnly => KeywordOnly,
             RepoContextRetrievalReadinessPhase.NothingRegistered => NothingRegistered,
             _ => Building,

@@ -231,7 +231,8 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                     sp.GetRequiredService<RepoContextExactScanBudget>(),
                     sp.GetRequiredService<RepoContextExactScanBreaker>(),
                     sp.GetRequiredService<RepoContextRetrievalGuardReporter>(),
-                    sp.GetRequiredService<ILogger<AnnRepoContextSemanticIndex>>());
+                    sp.GetRequiredService<ILogger<AnnRepoContextSemanticIndex>>(),
+                    sp.GetRequiredService<RepoContextRetrievalReadinessState>());
         });
 
         // The shared vector-plane readiness signal. It is fed at the single seam every
