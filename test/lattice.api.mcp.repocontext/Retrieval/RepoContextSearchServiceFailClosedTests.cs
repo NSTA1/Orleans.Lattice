@@ -56,7 +56,7 @@ public sealed class RepoContextSearchServiceFailClosedTests
             Substitute.For<IRepoContextSemanticIndex>(),
             store,
             TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance,
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(),
             embeddingProvider: null);
 
         var result = await service.SearchAsync("acme", "widget", 10, CancellationToken.None);
@@ -115,7 +115,7 @@ public sealed class RepoContextSearchServiceFailClosedTests
             Substitute.For<IRepoContextSemanticIndex>(),
             store,
             TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance,
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(),
             embeddingProvider: null);
 
         var result = await service.SearchAsync("acme", "widget", 10, CancellationToken.None);

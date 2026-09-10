@@ -56,7 +56,7 @@ public sealed class RepoContextRetrievalWarmupReadinessPhaseTests
             Substitute.For<IRepoContextSemanticIndex>(),
             store,
             TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance,
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(),
             AvailableEmbedder(),
             readiness);
 

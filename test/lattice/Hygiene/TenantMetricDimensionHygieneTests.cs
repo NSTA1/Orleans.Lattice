@@ -182,6 +182,17 @@ public sealed class TenantMetricDimensionHygieneTests
         // point of the instrument is that its state tag is the dimension that carries
         // the signal.
         "_annSearches",
+        // repocontext.retrieval.duration and repocontext.retrieval.stage.duration -
+        // end-to-end and per-stage retrieval latency, tagged by tool, stage, and the
+        // retrieval path that answered (issue #2624). Latency here is a property of the
+        // HOST PROCESS, not of any tenant: one embedder, one vector plane, and one
+        // store of record serve every caller, so the cost of an embed hop or an index
+        // scan is identical whoever asked for it. A tenant tag would partition a series
+        // that cannot vary by tenant while destroying the one comparison the instrument
+        // exists to support - which stage of which path is slow - because the tool,
+        // stage, and path dimensions are what carry the signal.
+        "_duration",
+        "_stageDuration",
         "_callsCounter",
         // repocontext.bootstrap.pass_arm_faults - indexing-pass arm faults, tagged by
         // arm and fault kind. An indexing pass is a single HOST-PROCESS background loop
