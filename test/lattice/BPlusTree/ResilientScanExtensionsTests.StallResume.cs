@@ -233,7 +233,11 @@ public partial class ResilientScanExtensionsTests
             {
             }
         });
-        Assert.That(calls, Is.EqualTo(1 + LatticeExtensions.DefaultScanStallResumeAttempts));
+        Assert.That(
+            calls,
+            Is.EqualTo(1 + LatticeExtensions.DefaultScanStallResumeCeiling),
+            "this source progresses one key per stall, so it is bounded by the total " +
+            "ceiling rather than by the consecutive-futile budget (issue 2539)");
     }
 
     [Test]
@@ -243,13 +247,18 @@ public partial class ResilientScanExtensionsTests
         // costs a whole ceiling, so it draws on its own much smaller budget and
         // a caller that raises maxAttempts for a long walk does not silently
         // raise its tolerance for stalls with it.
+        //
+        // The source here deliberately makes NO progress. Since issue 2539 a
+        // progressing walk is bounded by DefaultScanStallResumeCeiling instead,
+        // and that bound is the same whatever maxAttempts is - so a progressing
+        // source would terminate at the same count either way and the test would
+        // no longer discriminate the min() clamp it exists to pin.
         var lattice = Substitute.For<ILattice>();
         var calls = 0;
-        var next = 'a';
         StubKeys(lattice, _ =>
         {
             calls++;
-            return StalledKeys(new[] { next++.ToString() }, stallAfter: 1);
+            return StalledKeys(Array.Empty<string>(), stallAfter: 0);
         });
 
         Assert.ThrowsAsync<ScanPageStalledException>(async () =>
@@ -331,7 +340,7 @@ public partial class ResilientScanExtensionsTests
     // ── observability ──────────────────────────────────────────
 
     [Test]
-    public void ScanKeysAsync_records_each_stall_decision_with_its_outcome()
+    public void ScanKeysAsync_records_a_progressing_walk_terminating_as_ceiling_exhausted()
     {
         var outcomes = new List<string>();
         using var listener = MeterListening.StartForInstrument(
@@ -362,8 +371,24 @@ public partial class ResilientScanExtensionsTests
 
         Assert.That(
             outcomes.Count(o => o == "resumed"),
-            Is.EqualTo(LatticeExtensions.DefaultScanStallResumeAttempts));
-        Assert.That(outcomes, Has.Exactly(1).EqualTo("budget-exhausted"));
+            Is.EqualTo(LatticeExtensions.DefaultScanStallResumeCeiling),
+            "this source progresses one key per stall, so every resume is replenished " +
+            "and the walk is bounded by the total ceiling instead (issue 2539)");
+        Assert.That(
+            outcomes,
+            Has.Exactly(1).EqualTo("ceiling-exhausted"),
+            "this walk banked a key between every stall, so it was stopped by the lifetime "
+            + "ceiling, not by the consecutive budget. The two terminations rethrow the same "
+            + "exception and are indistinguishable to a caller, so the outcome tag is the only "
+            + "thing that separates 'the source is not yielding' from 'our own ceiling is too "
+            + "small' - and they call for opposite remedies. Read this against its sibling "
+            + "ScanKeysAsync_records_a_repeated_origin_stall_as_budget_exhausted, which drives "
+            + "the other arm: together they are what stops the two collapsing back onto one tag.");
+        Assert.That(
+            outcomes,
+            Has.None.EqualTo("budget-exhausted"),
+            "budget-exhausted keeps its pre-2539 meaning so a field series spanning the change "
+            + "stays comparable; a progressing walk must never be recorded under it");
     }
 
     [Test]

@@ -148,7 +148,11 @@ public partial class ResilientViewScanExtensionsTests
             {
             }
         });
-        Assert.That(calls, Is.EqualTo(1 + LatticeExtensions.DefaultScanStallResumeAttempts));
+        Assert.That(
+            calls,
+            Is.EqualTo(1 + LatticeExtensions.DefaultScanStallResumeCeiling),
+            "this source progresses one key per stall, so it is bounded by the total " +
+            "ceiling rather than by the consecutive-futile budget (issue 2539)");
     }
 
     [Test]

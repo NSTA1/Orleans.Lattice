@@ -84,6 +84,7 @@ public static class LatticeViewExtensions
         // budget and their own backoff, gated by that budget alone.
         var stallBudget = LatticeExtensions.ComputeScanStallResumeBudget(budget);
         var stallAttempt = 0;
+        var stallTotal = 0;
         var stallDelayMs = 0;
 
         while (true)
@@ -118,16 +119,21 @@ public static class LatticeViewExtensions
                         // reasoning, including why an unchanged continuation
                         // position neither refuses the resume nor lengthens its
                         // backoff.
-                        if (stallAttempt < stallBudget)
+                        if (stallAttempt < stallBudget && stallTotal < LatticeExtensions.DefaultScanStallResumeCeiling)
                         {
                             stallAttempt++;
-                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
+                            stallTotal++;
+                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallTotal);
                             LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeResumed);
                             shouldReopen = true;
                             break;
                         }
 
-                        LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeBudgetExhausted);
+                        LatticeExtensions.RecordScanStallOutcome(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? LatticeExtensions.StallOutcomeCeilingExhausted
+                                : LatticeExtensions.StallOutcomeBudgetExhausted);
                         throw;
                     }
 
@@ -137,6 +143,12 @@ public static class LatticeViewExtensions
                         break;
                     }
 
+                    // Progress replenishes the consecutive stall budget only;
+                    // stallTotal stays monotonic because it feeds both the
+                    // ceiling and the backoff, and `attempt` is deliberately not
+                    // reset and is not an unfixed instance of this defect (issue
+                    // 2539). See LatticeExtensions.ScanKeysAsyncCore's yield site.
+                    stallAttempt = 0;
                     lastKey = enumerator.Current;
                     yield return enumerator.Current;
                 }
@@ -210,6 +222,7 @@ public static class LatticeViewExtensions
         // budget and their own backoff, gated by that budget alone.
         var stallBudget = LatticeExtensions.ComputeScanStallResumeBudget(budget);
         var stallAttempt = 0;
+        var stallTotal = 0;
         var stallDelayMs = 0;
 
         while (true)
@@ -244,16 +257,21 @@ public static class LatticeViewExtensions
                         // reasoning, including why an unchanged continuation
                         // position neither refuses the resume nor lengthens its
                         // backoff.
-                        if (stallAttempt < stallBudget)
+                        if (stallAttempt < stallBudget && stallTotal < LatticeExtensions.DefaultScanStallResumeCeiling)
                         {
                             stallAttempt++;
-                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
+                            stallTotal++;
+                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallTotal);
                             LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeResumed);
                             shouldReopen = true;
                             break;
                         }
 
-                        LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeBudgetExhausted);
+                        LatticeExtensions.RecordScanStallOutcome(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? LatticeExtensions.StallOutcomeCeilingExhausted
+                                : LatticeExtensions.StallOutcomeBudgetExhausted);
                         throw;
                     }
 
@@ -263,6 +281,12 @@ public static class LatticeViewExtensions
                         break;
                     }
 
+                    // Progress replenishes the consecutive stall budget only;
+                    // stallTotal stays monotonic because it feeds both the
+                    // ceiling and the backoff, and `attempt` is deliberately not
+                    // reset and is not an unfixed instance of this defect (issue
+                    // 2539). See LatticeExtensions.ScanKeysAsyncCore's yield site.
+                    stallAttempt = 0;
                     lastKey = enumerator.Current.Key;
                     yield return enumerator.Current;
                 }
