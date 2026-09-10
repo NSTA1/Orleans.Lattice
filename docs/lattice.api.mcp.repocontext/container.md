@@ -313,6 +313,84 @@ Pruning is applied only to this background reconcile. An explicit `repocontext_a
 
 Everything in this section describes the mounted-workspace strategy. A git-sourced repository never walks a directory and never prunes by modification time: its loop is the fetch-and-diff cycle in [Index source strategies](#index-source-strategies), where the change set - deletes included - comes from the commit itself.
 
+## Agent-memory backup and recovery
+
+Agent memory is the one tree in this container that **cannot be rebuilt from anything**. The structural, symbol, content, and vector trees are all derived from the workspace: delete them and a re-onboard reproduces them exactly. The `repo-context-memory` tree holds what agents decided, learned, and agreed - captured through `repocontext_remember` across many sessions - and there is no source to re-derive it from. Its loss is permanent.
+
+It has been lost. A routine `docker compose down -v`, intended only to clear the code index before a benchmark run, removed the `repocontext-data` volume and with it several hundred durable memory entries written across many sessions. Nothing was recoverable, because nothing had been copied anywhere. That is what this section exists to prevent, and it is why the arrangement below is shaped the way it is rather than the obvious way.
+
+### What is captured, and where it goes
+
+The host captures **only** the `repo-context-memory` tree, scoped by name. The schedule is per-scope and deliberately never global: a global schedule would also capture the code-index trees, which are orders of magnitude larger and are rebuildable from the workspace, so the sink would fill with the one thing that does not need protecting while retention aged out the one thing that does.
+
+Backups go to a **dedicated Azurite blob service on its own storage**, separate from the primary cluster volume. The sample compose file declares it as `azurite-backup-sink`. Backup is **off unless an external sink is configured**: with no `LATTICE_BACKUP_BLOB_CONNECTION_STRING` the module registers nothing at all. This is not a convenience default. The library's in-cluster sink stores backup payload inside the very store being captured, so enabling backup against it would produce captures that succeed, report success, and are destroyed by the same gesture that destroys the source. The host also checks the property rather than inferring it from configuration: if the sink it actually resolved reports itself non-durable, it says so at `Error` level and in the health line, because a container that is backing itself up into itself is not protected and should not read as though it is.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LATTICE_BACKUP_BLOB_CONNECTION_STRING` | unset | The external blob sink. **Unset means no backup at all.** Never printed in the effective-configuration dump, because it carries an account key. |
+| `LATTICE_BACKUP_ENABLED` | unset | Set to `false` to disable backup while leaving the connection string in place. |
+| `LATTICE_BACKUP_CONTAINER` | `orleans-lattice-backup` | The blob container backups are written to. |
+| `LATTICE_BACKUP_FULL_HOURS` | `24` | Hours between full captures. |
+| `LATTICE_BACKUP_INCREMENTAL_MINUTES` | `60` | Minutes between incremental captures. |
+| `LATTICE_BACKUP_RETENTION_KEEP_LAST` | `60` | Keep at least this many backups. |
+| `LATTICE_BACKUP_RETENTION_MAX_AGE_DAYS` | `14` | Keep backups no older than this. |
+| `LATTICE_BACKUP_RESTORE_BACKUP_ID` | unset | Restore this backup id once at startup, then stop. See [Restoring](#restoring-agent-memory). |
+
+An unparseable interval is refused at startup rather than silently defaulted: a container backing up on a cadence nobody asked for, while its configuration says otherwise, is the failure this whole section is about.
+
+The cadence is an **initial full capture, then hourly incrementals**. That order is a correctness requirement rather than a preference: manifest validation rejects an incremental whose base backup id is empty, so a full capture must exist before any incremental can be taken. The host retries the initial full with backoff until it succeeds and only then starts the incremental loop.
+
+### What survives, and what does not
+
+`docker compose down -v` removes **every named volume declared in the project's top-level `volumes:` block**. A backup sink stored in such a volume is therefore destroyed by the exact gesture it exists to survive - which is strictly worse than having no backup, because an absent backup is visible and a false one is not.
+
+So the sink's storage is a **host bind mount**, which is not a project-managed volume and is not enumerated by `down -v`. An `external: true` volume would also survive, and was rejected for a different reason: compose refuses to start until an operator runs `docker volume create` by hand, and a backup with a manual pre-step is precisely the backup that will not exist on the machine that needs it.
+
+State the coverage exactly, because a broader claim than the implementation supports is how false protection gets established:
+
+**Survives:** `docker compose down -v`; `down`; `stop`; `restart`; `rm`; an image rebuild or upgrade; `docker volume prune`; `docker system prune`; and deleting the `repocontext-data` volume by hand.
+
+**Does not survive:** deleting the bind-mount directory on the host; `git clean -xdf` if the directory sits inside the repository; loss of the host's disk; loss of the host. **This is a same-host copy, not an off-site backup.** It defends against the destruction of the cluster, which is what actually happened, and not against the destruction of the machine. If the memory matters beyond that, copy the sink directory somewhere else on a schedule you own.
+
+`RepoContextBackupSinkVolumeTests` asserts the survival property structurally against the compose file - that the sink's `/data` source is a host path, and that it appears in no entry of the top-level `volumes:` block - so it is checked rather than described.
+
+That fixture is a statement about the file. To make the same statement about docker, run [`samples/RepoContextContainer/scripts/Test-BackupSinkDurability.ps1`](../../samples/RepoContextContainer/scripts/Test-BackupSinkDurability.ps1). It starts the sink alone under an isolated compose project and an isolated host directory, waits until Azurite has written its own on-disk state (so the thing being destroyed is real service state and not a file the script planted), runs `docker compose down -v`, and then checks two things: that every project-managed volume was in fact removed, and that no sink content was. Asserting the first is what stops the run passing vacuously on a `-v` that quietly did nothing. It starts one Azurite container and neither the MCP server nor the embedder, and refuses to run at all while containers from another project are up, since CPU contention from a probe can corrupt a measurement in progress.
+
+### Is it actually backed up?
+
+The health signal is a **positive statement about what was captured**, not a success boolean, and it names the tree:
+
+```text
+RepoContext memory backup captured tree 'repo-context-memory': last full 'b-...' at 2026-09-10T19:02:25Z
+describing 412 entries; last incremental 'b-...' at ... describing 7 entries; 25 capture(s) total.
+```
+
+A success flag cannot distinguish a job that captured the memory tree from one that succeeded over an empty or wrongly-scoped selection, and this container's history is of criteria that passed through absence. So every way the statement can be true and worthless is called out explicitly in the same line:
+
+- `WARNING: the captured scope '...' is NOT the configured scope '...'` - the capture ran against the wrong tree. A large entry count makes this the most convincing-looking form of the failure.
+- `WARNING: the last full capture described ZERO entries, so it protects nothing` - the capture succeeded over an empty selection.
+- `N incremental capture(s) were silently promoted to full captures` - the capture service degrades an incremental into a full when the base chain is unusable (a different capturing cluster, or WAL retention trimmed past the base). A deployment where every incremental has quietly fallen back is running, but is not doing what its configuration says.
+- `WARNING: the resolved sink '...' is NOT durable` - backups are being written inside the store they protect.
+- Before the first capture, the line says `captured NOTHING yet` rather than reporting enabled-and-healthy, and reports what the **sink** already holds. Those are different numbers: an unread sink and a readably-empty sink are distinguished, because after a loss the sink inventory is the only thing that can say whether anything is recoverable at all.
+
+The backup instruments publish on the `orleans.lattice.backup` meter, which `/metrics` already exposes by prefix, so capture counts, durations, and the incremental-fallback reason are scrapeable with no extra wiring.
+
+### Restoring agent memory
+
+Restore is **operator-driven and explicit**. There is no "restore the latest" and no automatic restore-on-empty: this container restores the backup id you name, and nothing else.
+
+1. **Find the backup id.** The container logs the sink inventory at startup - how many backups of the memory tree the sink holds and the newest one's id - so the ordinary case needs nothing but the log. Otherwise point Azure Storage Explorer or `azcopy` at the published sink port (`11000` by default) and list the container.
+2. **Set `LATTICE_BACKUP_RESTORE_BACKUP_ID`** to that id and restart the container.
+3. **Unset it** and restart again once the restore has been confirmed in the log. Leaving it set is harmless (the restore is idempotent and merges by HLC) but it makes every subsequent start do redundant work.
+
+A failed restore does **not** take the container down. It is logged at `Error` level and startup continues, because a container that refuses to start is a container an operator cannot use to investigate why the restore failed.
+
+The restore goes through the **cold** path (`ILatticeBackupColdRestoreService`), and that is load-bearing rather than incidental. The backup catalog dogfoods the reserved `sys-backup-catalog` Lattice tree, which means it lives **inside the store being protected**. The ordinary restore service resolves a manifest from that catalog, so after a real loss it cannot find the backup - failing in precisely the disaster backups exist for. The cold path resolves the manifest and walks its base chain **from the sink alone**, bootstraps the reserved trees if they are absent, verifies the artifacts, and re-projects the catalog afterwards. It is idempotent and strictly more capable, since it also works when the catalog survived. `RepoContextMemoryBackupRecoveryTests` asserts both halves: that memory written through the MCP tools comes back intact after the entire cluster is destroyed, and that the catalog is gone in the replacement cluster while the sink still holds the manifest.
+
+### Backup is not volume separation
+
+Separating the memory tree's storage from the rebuildable index storage is a **different** protection, tracked separately, and neither substitutes for the other. Separation stops the routine gesture from reaching memory in the first place; backup is what you have when prevention fails, or when the loss arrives by a route prevention does not cover. Run both.
+
 ## Health probing
 
 The runtime image is distroless and shell-less, so probing is HTTP-only - there is no shell-exec healthcheck:

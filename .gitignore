@@ -438,3 +438,12 @@ samples/RepoContextContainer/docker-compose.override.yml
 # a pinned upstream release and a checksum verified at fetch time, so tracking
 # it would add weight to every clone to no benefit. See spec/README.md.
 tools/tla2tools.jar
+
+# The agent-memory backup sink's storage (issue #2602). A host bind mount, not
+# a compose-managed volume, so that "docker compose down -v" - the gesture that
+# destroyed several hundred durable memory entries on 2026-09-10 - cannot reach
+# it. The directory is created by docker on first "up" and holds Azurite blob
+# data: machine-local, potentially large, and never something to commit. Its
+# path is overridable with REPOCONTEXT_BACKUP_PATH, so this pattern covers the
+# default location only, which is the one that lands inside the repository.
+samples/RepoContextContainer/backup-sink/
