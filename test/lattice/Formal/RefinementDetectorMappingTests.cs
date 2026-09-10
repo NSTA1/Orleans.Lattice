@@ -8,10 +8,11 @@ namespace Orleans.Lattice.Tests.Formal;
 /// WHAT THIS PROVES, AND WHAT IT DOES NOT. It proves the column cannot rot into
 /// prose: every behaviour-asserting row declares a verdict, every test a row
 /// names still exists, and every row admitting a gap cites an issue. It does
-/// NOT prove a named test is a *good* detector - only the census recorded in
-/// the note can claim that, and only a human re-running it can revise the
-/// claim. Saying so plainly matters, because a gate whose reach is overstated
-/// is the exact defect the parent audit (#2299) keeps finding.
+/// NOT prove a named test is a *good* detector - only a human reading each
+/// test against the row it answers can claim that, and only a human re-doing
+/// that reading can revise the claim. Saying so plainly matters, because a
+/// gate whose reach is overstated is the exact defect the parent audit (#2299)
+/// keeps finding.
 /// </para>
 /// <para>
 /// WHY THE DETECTOR RESOLVER IS SEPARATE FROM THE SYMBOL RESOLVER. The other
@@ -23,7 +24,7 @@ namespace Orleans.Lattice.Tests.Formal;
 /// </para>
 /// </summary>
 [TestFixture]
-internal sealed class RefinementDetectorMappingTests
+internal sealed partial class RefinementDetectorMappingTests
 {
     /// <summary>
     /// Rows that assert no production behaviour, and so are outside the
@@ -40,16 +41,7 @@ internal sealed class RefinementDetectorMappingTests
 
     private static (RefinementRow Row, string Detector) DetectorOf(RefinementTable table, RefinementRow row)
     {
-        var column = -1;
-        for (var i = 0; i < table.Headers.Count; i++)
-        {
-            if (string.Equals(table.Headers[i], RefinementCodeSymbols.DetectorHeader, StringComparison.OrdinalIgnoreCase))
-            {
-                column = i;
-                break;
-            }
-        }
-
+        var column = RefinementDetectorRule.DetectorColumnOf(table);
         var cell = column >= 0 && column < row.Cells.Count ? row.Cells[column] : string.Empty;
         return (row, cell);
     }
@@ -135,18 +127,55 @@ internal sealed class RefinementDetectorMappingTests
     }
 
     [Test]
-    public void At_least_one_row_reports_a_gap()
+    public void Every_behaviour_asserting_row_names_a_resolvable_test()
     {
-        // The census found 10 detected, 2 partial, 1 undetected. If this ever
-        // reports zero gaps, either the gaps were genuinely closed - in which
-        // case update the prose and this test together - or, far more likely,
-        // the column was flattened into uniform reassurance. #2527 exists
-        // because the second failure mode is the one that actually happens.
-        var gaps = BehaviourRows()
-            .Count(r => r.Detector.Contains("None", StringComparison.Ordinal)
-                     || r.Detector.Contains("Partial", StringComparison.Ordinal));
+        // THE SUCCESSOR TO At_least_one_row_reports_a_gap (#2557). The floor
+        // asserted only that the Detector column was not uniformly reassuring:
+        // at least one row admitted a gap. That is the weakest useful claim
+        // about the column, and it had a termination problem by construction -
+        // it goes red on the day the last gap closes, which is success, so the
+        // pressure at that moment is to delete it and lose the protection
+        // entirely.
+        //
+        // This replaces it with the claim the floor was standing in for: every
+        // row that asserts a production behaviour is backed by a test that
+        // still exists. That is strictly stronger. The floor could be satisfied
+        // by a single honest row while twelve others rotted into prose; this
+        // cannot. It also does not care how many gaps are open, so it neither
+        // rots as they close nor has to be deleted when they do.
+        //
+        // Anti-vacuity is asserted on the denominator, never on the failure
+        // list, because "no failures" is what a passing gate and a gate that
+        // read nothing both look like. The count is compared against the
+        // independently derived behaviour-asserting row set rather than against
+        // a literal, so it cannot drift as rows are added.
+        var tables = BehaviourTables();
+        var resolver = RefinementDetectorResolver.ForRepository();
 
-        Assert.That(gaps, Is.GreaterThan(0));
+        var examined = RefinementDetectorRule.BehaviourRowsExamined(tables, NonBehaviouralRows);
+
+        var failures = RefinementDetectorRule.BehaviourRowsWithoutAResolvableTest(
+            tables,
+            NonBehaviouralRows,
+            d => resolver.TestExists(d.TypeName, d.MemberName));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                examined,
+                Is.EqualTo(BehaviourRows().Count()),
+                "The rule examined a different number of rows than the note has "
+                + "behaviour-asserting rows, so it is not reading the corpus this fixture "
+                + "thinks it is.");
+
+            Assert.That(
+                examined,
+                Is.GreaterThan(0),
+                "The rule examined no rows at all. Either the tables moved or every row was "
+                + "classified non-behavioural, and in both cases the gate below proves nothing.");
+
+            Assert.That(failures, Is.Empty, string.Join(Environment.NewLine + Environment.NewLine, failures));
+        });
     }
 
     [Test]

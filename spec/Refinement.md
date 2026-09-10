@@ -39,7 +39,7 @@ production seam it will be extracted from is named instead.
 
 | Spec action | Protocol step | Code counterpart | Detector |
 |-------------|---------------|------------------|----------|
-| `PrepareTx(t)` | Prepare fan-out | `AtomicWriteGrain.PrepareAsync` + `ExecutePhaseAsync`: stage every write into per-leaf pending buckets (hidden), collecting per-key ack / nack. | Partial: `BPlusLeafGrainTests.GetAsync_with_in_flight_pending_uses_pre_saga_visibility` pins the leaf-level hiding of a staged bucket, but nothing asserts that the saga actually routes prepared writes into those buckets. Gap filed as #2553. |
+| `PrepareTx(t)` | Prepare fan-out | `AtomicWriteGrain.PrepareAsync` + `ExecutePhaseAsync`: stage every write into per-leaf pending buckets (hidden), collecting per-key ack / nack. | Yes: `AtomicWriteGrainTests.ExecuteAsync_routes_execute_phase_writes_through_the_prepared_path` pins the saga side - the execute phase dispatches its batch under an active prepared scope carrying the saga's persisted transaction id, which is exactly what routes the write into a per-leaf pending bucket instead of the visible projection - and `BPlusLeafGrainTests.GetAsync_with_in_flight_pending_uses_pre_saga_visibility` pins the leaf-level hiding of the resulting bucket. |
 | `DecideTx(t)` | Record the single terminal decision | `AtomicWriteGrain.RecordTerminalDecisionAsync` -> `ITxRegistryGrain.MarkCommittedAsync` / `MarkAbortedAsync`. Commit iff every participant acked; this write is issued **before** the broadcast - the linearization point. | Yes: `CompensationContinuousReaderTests.Compensation_broadcasts_TxAbort_to_every_touched_shard`. |
 | `BroadcastStep(t,k)` | Per-leaf terminal fan-out (one leaf at a time) | `AtomicWriteGrain.BroadcastTerminalsAsync` -> per-shard / per-leaf `AppendTxTerminalAsync`. Modelling it one leaf per step is what lets TLC explore the post-decision window in which some leaves have flipped and others have not. | Yes: `CompensationContinuousReaderTests.Successful_saga_broadcasts_TxCommit_to_every_touched_shard` and `ShardRootGrainTxTerminalTests.AppendTxTerminalAsync_fans_out_terminal_to_every_leaf`. |
 | `ShadowForwardOrphan(t,k)` | Reshard shadow-forward of a stale prepared write | A prepared write reaching a destination leaf that has already applied the saga's terminal, re-installing a pending bucket. Two production paths do this: the hot-path shadow-forward on an active split (`ShardRootGrain.Split`, prepared branch) and the retroactive sweep `TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync`, which replays the source's prepared mutations onto the destination. `ShardRootGrain.TxTerminal` is the terminal fan-out that races them, not a forwarder. | Partial: `TreeShardSplitGrainTests.RetroactiveSweep_replays_prepare_when_saga_in_flight` covers the retroactive sweep. The hot-path shadow-forward branch on an active split is unasserted, so only one of the two production paths this row names is detected. Gap filed as #2554. |
@@ -52,7 +52,7 @@ production seam it will be extracted from is named instead.
 |---------------|----------------------------------|----------|
 | `AllOrNothing` / `VisibilityMatchesDecision` | The all-or-nothing visibility that `TxDecisionView` delivers by resolving every key of a fan-out against one registry snapshot. This is the invariant the reshard split-view bug (#1584) turned on. | Yes: `AtomicVisibilityChaosTests.Continuous_reader_observes_zero_or_all_keys_for_every_poll`. Chaos tier, so it runs in CI and not in the local dev loop. |
 | `StrictIsolation` | `AtomicVisibilityGate.ResolveKey` never returning `SurfacePrepared` unless `status = Committed` - the strict-isolation default that an in-flight or aborted saga stays invisible. | Yes: `AtomicVisibilityGateTests.InFlight_always_falls_through`, `AtomicVisibilityGateTests.Aborted_always_falls_through` and `AtomicVisibilityGateTests.Indeterminate_always_hides_key`. |
-| `LinearizedTerminals` | The decision-before-broadcast ordering in `RunSagaAsync`: `RecordTerminalDecisionAsync` precedes `BroadcastTerminalsAsync`, so no leaf surfaces a committed value before the tree-wide decision exists. | None. Nothing pins the decision write ahead of the broadcast, so swapping the two calls at any of the three ordering sites in `AtomicWriteGrain` would leave the suite green. Gap filed as #2551. |
+| `LinearizedTerminals` | The decision-before-broadcast ordering in `RunSagaAsync`: `RecordTerminalDecisionAsync` precedes `BroadcastTerminalsAsync`, so no leaf surfaces a committed value before the tree-wide decision exists. | Yes: `AtomicWriteGrainTests.RunSagaAsync_commit_records_the_decision_before_broadcasting_terminals`, `AtomicWriteGrainTests.RunSagaAsync_abort_records_the_decision_before_broadcasting_terminals` and `AtomicWriteGrainTests.FinalizeAsync_records_the_decision_before_broadcasting_terminals` - one per ordering site, so a reversal at any of the three is independently falsifiable. |
 | `NoMixedTerminals` | A saga records exactly one `TxStatus`, so its per-leaf terminals are uniformly commit or uniformly abort. | Yes: `AtomicWriteGrainTests.Aborting_saga_broadcasts_its_single_recorded_abort_verdict_to_every_touched_shard` and `AtomicWriteGrainTests.Committing_saga_broadcasts_its_single_recorded_commit_verdict_to_every_touched_shard`, which pin the recorded decision and the whole terminal fan-out together, over a batch routed to three distinct shards. One correction to the census while closing this: it recorded the uniform-abort outcome as unasserted, which was too strong - `CompensationContinuousReaderTests.Compensation_broadcasts_TxAbort_to_every_touched_shard` already pinned it, and a perturbation that hands one shard the opposite verdict reds that test too. What was genuinely undetected was the antecedent this row names, that the verdict every terminal carries is the single `TxStatus` the saga recorded: flipping `RecordTerminalDecisionAsync` to record the opposite outcome leaves every fan-out-only test green, because none of them wires the registry. |
 | `DecisionDurability` | `TxStatus` transitions are terminal: `MarkCommittedAsync` / `MarkAbortedAsync` never flip a recorded decision, and treat a repeat of the same outcome as an idempotent no-op for as long as the decision is still recorded - including while it is merely tombstoned, since classification runs before the tombstone is cleared. Once a tombstone has been physically purged the registry has no row to recognise, so a late same-outcome terminal records afresh rather than being absorbed; the recorded outcome is unchanged either way, which is what the spec property asserts. | Yes: `TxRegistryGrainTests.MarkCommittedAsync_throws_when_previously_aborted` and `TxRegistryGrainTests.MarkAbortedAsync_throws_when_previously_committed`. |
 | `MonotonicVisibility` | A committed value never reverts to pre-saga - protected in code by the terminal-stable decision plus the orphan guard (`alreadyTerminal`) that stops a late shadow-forward bucket from re-hiding an applied value. The protection is conditional on the registry still holding the saga's decision row; a prepared write that is still resident when that row is physically purged reverts, which the spec does not express (see the decision-record retention window under [abstraction gaps](#deliberate-abstraction-gaps)). | Yes: `AtomicVisibilityGateTests.Committed_but_already_terminal_orphan_falls_through`. |
@@ -96,11 +96,135 @@ an issue. It does not, and cannot, prove that a named test is a *good* detector.
 That judgement was made by reading each test against the row it answers, and
 revising it means redoing that reading.
 
-The census found ten rows detected, three partial or undetected. The gaps are
-the point of the exercise rather than a blemish on it: `LinearizedTerminals`
-(#2551), `NoMixedTerminals` (#2552), `PrepareTx(t)` (#2553) and
-`ShadowForwardOrphan(t,k)` (#2554). A row reading "None" is a stronger artefact
-than a row reading nothing at all, because only the first can be closed.
+No census result is recorded here, deliberately. The census is *derived from*
+the table rather than *asserted about* it, so a reader re-derives it instead of
+trusting a figure that no gate evaluates. The method: take every
+behaviour-asserting row, which is every row of the action and property tables
+except `Stutter` (it asserts no production behaviour, so the Detector column's
+question does not apply to it); read the verdict token each row's `Detector`
+cell opens with, one of `Yes`, `Partial` or `None`; and tally those tokens. The
+rows reporting `Partial` or `None` are the open gaps, and each cites the issue
+that closes it, so the gap list is whatever those cells say today rather than
+whatever this paragraph said when it was written.
+
+A hand-maintained tally in this note would be a drift generator, because the
+tallies move every time a gap closes and nothing would re-derive them. That is
+not hypothetical: an earlier revision of this paragraph stated counts the
+Detector column did not support, and the same wrong counts were restated in the
+gate's own comment (#2560). `RefinementDetectorMappingTests` checks the parts
+that can be checked mechanically - the behaviour-asserting denominator, that
+every row declares a verdict, that every admitted gap cites an issue, and that
+every behaviour-asserting row names a test that still resolves - and
+`The_note_records_no_hand_maintained_census_count` keeps a tally from being
+written back into this prose.
+
+The census was performed; this paragraph declines to repeat its result, which
+is not the same as the result never existing. It is recorded in the body of
+epic #2556, pinned to the commit it was derived from, in a document that does
+not change as the column does. That is the whole argument in one line: the
+tally taken at that commit was already falsified twice over within a day of
+being written, as gap issues landed, and it will be falsified again by the ones
+still open. A reader who wants today's figure derives it by the method above,
+which cannot be stale.
+
+The gaps are the point of the exercise rather than a blemish on it. A row
+reading "None" is a stronger artefact than a row reading nothing at all,
+because only the first can be closed.
+
+## Territory owned by other open issues
+
+Two issues that are still **open** own claims made in this directory. Neither is
+in scope for the refinement note's own work - epic #2556 states both exclusions
+explicitly - and neither should be re-filed as a fresh finding by a later census
+of the Detector column.
+
+Read this before grading a row or filing a gap. A finding that lands inside one
+of the boundaries below belongs to that issue, and opening a second issue for it
+splits one fix across two changes whose authors cannot see each other. That is
+not hypothetical: the census that produced the Detector column above ran without
+this boundary written down anywhere, because the acceptance criterion that asked
+for it (#2525's third) was never discharged. #2562 discharges it here, in the
+document the census actually reads, rather than in an issue comment.
+
+This section records the boundary and nothing else. It does not fix either
+issue, and nothing here asserts that the claims they own are currently correct.
+
+### #2325 owns documentation and API overclaims in the atomicity surface
+
+#2325 is about explanations that do not match the mechanism they name. In each
+case the behaviour users depend on is present; what is wrong is the account of
+*why*, which is worse than it sounds, because a change that removed the real
+mechanism would leave the wrong account standing and looking like cover. It owns
+three findings:
+
+- **The `SnapshotPin` guarantee is attributed to the wrong mechanism.** The
+  guarantee the documentation attributes to the pin is delivered in practice by
+  an unrelated fast path. The remedy is to name the mechanism that actually
+  delivers it and pin that mechanism with a test.
+- **The advertised two-saga overlap is nominal.** The bounded instance in
+  [`README.md`](README.md) advertises two sagas overlapping on a shared key, but
+  state is per-saga private and **no property relates two sagas**, so the
+  overlap exercises nothing. The remedy is to add a property that relates two
+  sagas, or to rename the scenario. #2325 is explicit that the model can carry
+  such a property: the finding is to be worded as "unexpressed", with its price
+  stated, never as "cannot express".
+- **The Coyote model harness claims schedule exploration it does not perform.**
+  Two members of `CoyoteModelHarness` are named for interleaving and schedule
+  exploration while the measured concurrency degree is zero, and a user-facing
+  sample source header and the assurance document repeat the claim. Raising the
+  concurrency degree, as opposed to correcting the names, is #2319's rather than
+  #2325's.
+
+The test to apply: a finding that an artefact in the atomicity surface describes
+a guarantee some other mechanism delivers, or advertises an interaction or an
+exploration it does not perform, is #2325's.
+
+### #2333 owns `DecisionDurability`'s prose and its refinement seam
+
+#2333 owns the `DecisionDurability` row of the property mapping table above **by
+name**, together with the same property's prose wherever else it is stated. It
+reverses the remedy an earlier reading was converging on, so its direction
+matters as much as its scope:
+
+- **The TLA+ formula is correct as written, and must not be weakened or
+  scoped.** `DecisionDurability` in [`AtomicCommit.tla`](AtomicCommit.tla)
+  already forbids a committed decision going absent as well as going aborted,
+  because absent is not `"committed"`.
+- **Every site that states the property in prose is strictly weaker than the
+  formula.** All of them narrow it to a *flip*: the comment above the formula in
+  [`AtomicCommit.tla`](AtomicCommit.tla), the property table in
+  [`README.md`](README.md), and the `DecisionDurability` row here. The same
+  wording appears in `docs/lattice/verified-atomic-commit.md`, which is the same
+  claim and belongs to the same issue. The remedy is to say the decision never
+  flips **or is unset**, not to narrow the formula to match the prose.
+- **The seam points at a path that cannot violate the property.** The row maps
+  the property onto the repeat same-outcome registry call, where the removal and
+  the re-apply both precede a single state write, so the property holds there by
+  construction. The paths that can reach a violation - `ForgetAsync`,
+  `PruneExpired`, and the zero-retention branch - are named nowhere in the
+  mapping. Re-pointing the seam at those is #2333's. Note that the row's
+  same-outcome clause has already been qualified once since #2333 was filed, by
+  the #2299 fix wave: it now says a purged tombstone makes a late terminal record
+  afresh. That narrows the clause #2333 called false; it does not discharge the
+  issue, because the seam still names no mechanism that can unset a decision, and
+  the row still concludes that the recorded outcome is unchanged either way.
+- **Adding the model action that can unset a decision is #2320's.** #2333 relies
+  on it to exercise the property but does not own it.
+
+Two consequences for grading the Detector column:
+
+- The `DecisionDurability` row's Detector cell is graded against the row's claim
+  **as it stands**, which is the narrowed flip reading, and the two registry
+  tests it names do detect a flip. That a flip-detecting test does not detect an
+  *unset* is not a new detector gap to file: it restates #2333, and it resolves
+  when #2333 corrects the claim. Re-grade the row after #2333 lands, not before.
+- Do not correct any part of `DecisionDurability` here piecemeal. #2333's finding
+  is that the formula, the prose sites and the seam **compose** into the defect,
+  each step being locally defensible, so changing one of them alone can leave the
+  artefact more inconsistent rather than less.
+
+The test to apply: a finding that this note or the specification understates
+`DecisionDurability`, or maps it onto a path that cannot violate it, is #2333's.
 
 ## Deliberate abstraction gaps
 
