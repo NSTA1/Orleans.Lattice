@@ -731,11 +731,23 @@ worker that parks correctly on its first attempt has done its job.
 
 ### The lease is shorter than the work - renew before, never after
 
-**The cluster clamps a claim lease to a maximum of 300 seconds, and defaults to
-30 seconds when `leaseSeconds` is omitted.** A build-and-test cycle on a
-non-trivial repository exceeds both. The consequence is not hypothetical and was
-observed on the first live run of this protocol: two independent workers each
-had a claim lapse mid-build, while actively working the item.
+**The cluster applies a short default lease when `leaseSeconds` is omitted -
+commonly 30 seconds - and clamps every request to a host-configured ceiling.**
+Do not assume either figure: read the `leaseSeconds` and `leaseExpiresAtUtc` your
+grant actually returns, because a request above the ceiling is clamped silently
+and a deadline diaried from the length you *asked* for is already late. A
+build-and-test cycle on a non-trivial repository exceeds a 30-second lease many
+times over. The consequence is not hypothetical and was observed on the first
+live run of this protocol: two independent workers each had a claim lapse
+mid-build, while actively working the item.
+
+**The short default is deliberate, and `claim` and `renew_claim` apply it
+identically.** There is no divergence between the two surfaces - this was
+measured on a live deployment, both arms with `leaseSeconds` genuinely omitted,
+and both granted the same length. The rationale for keeping the default short is
+that a caller which did not name a lease length is exactly the caller that should
+not be granted a long one. A host that needs longer claims raises the *ceiling*
+an explicit request may reach, not the default.
 
 Both recovered correctly - `repocontext_claim_status` showed no other holder and
 no queue, and the re-claim returned a fencing token incremented by exactly one -
@@ -752,8 +764,16 @@ was mid-build on. Nothing prevented that. Only the timing did.
 
 Rules, in force for every worker:
 
-- **Always pass `leaseSeconds` explicitly.** The 30-second default is shorter
-  than almost any real operation and will lapse under a single test run.
+- **Always pass `leaseSeconds` explicitly - on `renew_claim` as well as on
+  `claim`.** The short default is shorter than almost any real operation and will
+  lapse under a single test run. On a renew the omission is worse than on a
+  claim: a renew that omits `leaseSeconds` resolves to that same short default
+  and therefore **shortens a claim you are currently holding for longer**. It
+  still reports `granted: true`; the loss surfaces only on the *next* renew, as
+  `granted: false, reason: "superseded"`, at a call site that did nothing wrong.
+  A renew that shortens its lease is flagged by `leaseShortened` in the result -
+  and note that a `null` there means the prior lease could not be read, so it is
+  "unknown", never "nothing shrank".
 - **Renew immediately BEFORE any long operation, never after it.** Treat a
   build, a test run, or anything expected to exceed roughly two minutes as
   requiring a renewal first. Renewing afterwards is renewing during the window
@@ -765,13 +785,14 @@ Rules, in force for every worker:
   continuing would produce two divergent attempts at one unit of work.
 - **Never write anything under a token you know to be stale.**
 
-Fixes worth making to the surface itself, in preference order: raise the clamp
-above a realistic build time, or make it per-phase, since a research item and a
-build item have very different natural durations; auto-renew on a timer for the
-lifetime of a long child process rather than asking a worker to predict its
-duration; and distinguish "lease expired while work was in progress" from "never
-claimed" in the ready set, so a lapse degrades to a warning rather than to
-availability.
+Fixes worth making to the surface itself, in preference order: raise the
+host-configured ceiling above a realistic build time (many hosts already do -
+check what your grants actually return before assuming otherwise), or make it
+per-phase, since a research item and a build item have very different natural
+durations; auto-renew on a timer for the lifetime of a long child process rather
+than asking a worker to predict its duration; and distinguish "lease expired
+while work was in progress" from "never claimed" in the ready set, so a lapse
+degrades to a warning rather than to availability.
 
 This was surfaced only because a worker volunteered an unflattering detail it
 had already recovered from. A protocol that discourages that reporting would

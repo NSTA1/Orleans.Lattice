@@ -453,7 +453,7 @@ internal static class RepoContextToolHandlers
         string key,
         [Description("The claiming agent's identity, recorded on the record so a later reader can see who holds the claim. Prefer a stable session or agent id.")]
         string owner,
-        [Description("The lease length to request in seconds. Omit to use the cluster's configured default; the lock clamps any request to the configured maximum, and the granted length is reported back in 'leaseSeconds'.")]
+        [Description("The lease length to request in seconds. Always pass this explicitly for work that outlives a few seconds: omitting it defers to the cluster's configured default lease, which is deliberately short (30 seconds unless the host overrides it), on the reasoning that a caller which named no length is not one that should be granted a long one. The lock clamps any request to the configured maximum, so the granted length may be shorter than the one requested; act on the returned 'leaseSeconds' and 'leaseExpiresAtUtc', never on the value you asked for.")]
         long? leaseSeconds = null,
         [Description("How long to wait in the lock's first-in-first-out queue for the claim, in seconds. Omit to fail immediately when the record is already claimed, which is what a work-stealing agent wants.")]
         long? maxWaitSeconds = null,
@@ -489,7 +489,7 @@ internal static class RepoContextToolHandlers
         string key,
         [Description("The fencing token returned by the repocontext_claim call that took this claim.")]
         long fencingToken,
-        [Description("The lease length to request in seconds. Omit to use the cluster's configured default; the lock clamps any request to the configured maximum.")]
+        [Description("The lease length to request in seconds. Always pass this explicitly. Omitting it defers to the same deliberately short cluster default as a claim (30 seconds unless the host overrides it), so a renew that omits it SHORTENS a claim currently held for longer - and still reports 'granted: true', with the loss surfacing only on the next renew as 'superseded'. A renew that shortens its lease is flagged in 'leaseShortened'. The lock clamps any request to the configured maximum; act on the returned 'leaseSeconds' and 'leaseExpiresAtUtc', never on the value you asked for.")]
         long? leaseSeconds = null,
         CancellationToken cancellationToken = default)
     {
