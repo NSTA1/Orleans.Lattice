@@ -31,16 +31,6 @@ public class OidcCredentialAuthenticator : JwtCredentialAuthenticator
     private readonly string[]? _configuredAlgorithms;
     private readonly IssuerValidator _issuerValidator;
 
-    /// <summary>
-    /// A cached deny-all algorithm validator. It is installed when neither the
-    /// configuration nor the discovery document names a signature algorithm, so
-    /// the authenticator fails closed instead of inheriting the base's permissive
-    /// "empty allow-list means accept anything" behaviour (CWE-347). Cached in a
-    /// static field so installing it costs no allocation per authentication.
-    /// </summary>
-    private static readonly AlgorithmValidator DenyAllAlgorithms =
-        static (algorithm, key, token, parameters) => false;
-
     /// <summary>The empty pin, reused so the discovery-derived cache never allocates for a provider that advertises no algorithms.</summary>
     private static readonly string[] NoAlgorithms = Array.Empty<string>();
 
@@ -193,14 +183,12 @@ public class OidcCredentialAuthenticator : JwtCredentialAuthenticator
             // ValidAlgorithms leaves open.
             parameters.ValidAlgorithms = pinned;
         }
-        else
-        {
-            // Fail closed. An empty ValidAlgorithms is treated as "no restriction"
-            // by the token validator, so an empty pin must be expressed as an
-            // explicit deny-all validator instead.
-            parameters.AlgorithmValidator = DenyAllAlgorithms;
-        }
 
+        // When neither the configuration nor the discovery document names an
+        // algorithm, this returns with no allow-list and the base's pin seam fails
+        // it closed, because BuildBaseOptions sets RequireAlgorithmPin. Installing
+        // a deny-all validator here as well would be a second copy of the same
+        // guard, which is how it previously drifted between providers.
         return parameters;
     }
 
@@ -386,6 +374,12 @@ public class OidcCredentialAuthenticator : JwtCredentialAuthenticator
             SchemeHint = options.SchemeHint,
             ValidateLifetime = options.ValidateLifetime,
             ClockSkew = options.ClockSkew,
+
+            // This provider always resolves its algorithms - from configuration or
+            // from the discovery document - so it can state that a validation with
+            // no allow-list must be refused rather than run unrestricted. The base
+            // pin seam is the single place that enforces it.
+            RequireAlgorithmPin = true,
         };
 
         foreach (var audience in options.Audiences)

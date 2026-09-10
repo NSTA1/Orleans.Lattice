@@ -44,8 +44,8 @@ public class MembershipResolutionCacheTests
         var calls = 0;
         var subject = new LatticeSubject("alice");
 
-        var first = await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
-        var second = await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
+        var first = await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
+        var second = await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
 
         Assert.That(first, Is.EqualTo(subject));
         Assert.That(second, Is.EqualTo(subject));
@@ -59,9 +59,9 @@ public class MembershipResolutionCacheTests
         var calls = 0;
         var subject = new LatticeSubject("alice");
 
-        await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
         time.Advance(TimeSpan.FromMinutes(6));
-        await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
 
         Assert.That(calls, Is.EqualTo(2));
     }
@@ -76,9 +76,9 @@ public class MembershipResolutionCacheTests
 
         // Cache TTL is 30 min but the token expires in 2 min: the entry must be
         // bounded by the token expiry, not the TTL.
-        await cache.ResolveAsync("tok", Resolver(subject, tokenExpiry, () => calls++), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, tokenExpiry, () => calls++), default);
         time.Advance(TimeSpan.FromMinutes(3));
-        await cache.ResolveAsync("tok", Resolver(subject, tokenExpiry, () => calls++), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, tokenExpiry, () => calls++), default);
 
         Assert.That(calls, Is.EqualTo(2), "an entry must not outlive the token's exp even within the cache TTL");
     }
@@ -90,8 +90,8 @@ public class MembershipResolutionCacheTests
         var calls = 0;
         var subject = new LatticeSubject("alice");
 
-        await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
-        await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
 
         Assert.That(calls, Is.EqualTo(2));
         Assert.That(cache.Count, Is.Zero);
@@ -104,9 +104,9 @@ public class MembershipResolutionCacheTests
         var calls = 0;
         var subject = new LatticeSubject("alice");
 
-        await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
         await cache.OnMutationAsync(new LatticeMutation { TreeId = MembershipConstants.EdgesTree }, default);
-        await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
 
         Assert.That(calls, Is.EqualTo(2), "a sys-membership-* mutation must invalidate the cache");
         Assert.That(cache.Count, Is.EqualTo(1));
@@ -119,9 +119,9 @@ public class MembershipResolutionCacheTests
         var calls = 0;
         var subject = new LatticeSubject("alice");
 
-        await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
         await cache.OnMutationAsync(new LatticeMutation { TreeId = "orders" }, default);
-        await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
+        await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
 
         Assert.That(calls, Is.EqualTo(1), "a mutation on a non-membership tree must not flush the cache");
     }
@@ -142,7 +142,7 @@ public class MembershipResolutionCacheTests
         var (cache, _) = CreateCache();
         var subject = new LatticeSubject("alice");
 
-        _ = await cache.ResolveAsync("tok", Resolver(subject, null, () => { }), default);
+        _ = await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => { }), default);
         Assert.That(cache.Count, Is.EqualTo(1));
 
         cache.Clear();
@@ -157,9 +157,9 @@ public class MembershipResolutionCacheTests
         var calls = 0;
 
         var first = await cache.ResolveAsync(
-            "bogus", Resolver(LatticeSubject.Anonymous, null, () => calls++), default);
+            MembershipCacheKey.ForToken("bogus"), Resolver(LatticeSubject.Anonymous, null, () => calls++), default);
         var second = await cache.ResolveAsync(
-            "bogus", Resolver(LatticeSubject.Anonymous, null, () => calls++), default);
+            MembershipCacheKey.ForToken("bogus"), Resolver(LatticeSubject.Anonymous, null, () => calls++), default);
 
         Assert.That(first.IsAnonymous, Is.True);
         Assert.That(second.IsAnonymous, Is.True);
@@ -177,7 +177,7 @@ public class MembershipResolutionCacheTests
         for (var i = 0; i < 10_000; i++)
         {
             _ = await cache.ResolveAsync(
-                $"forged-{i}", Resolver(LatticeSubject.Anonymous, null, () => { }), default);
+                MembershipCacheKey.ForToken($"forged-{i}"), Resolver(LatticeSubject.Anonymous, null, () => { }), default);
         }
 
         Assert.That(cache.Count, Is.Zero);
@@ -193,7 +193,7 @@ public class MembershipResolutionCacheTests
         for (var i = 0; i < MembershipResolutionCache.MaxCachedSubjects + 500; i++)
         {
             _ = await cache.ResolveAsync(
-                $"tok-{i}", Resolver(new LatticeSubject($"user-{i}"), null, () => { }), default);
+                MembershipCacheKey.ForToken($"tok-{i}"), Resolver(new LatticeSubject($"user-{i}"), null, () => { }), default);
         }
 
         Assert.That(cache.Count, Is.LessThanOrEqualTo(MembershipResolutionCache.MaxCachedSubjects));
@@ -207,11 +207,11 @@ public class MembershipResolutionCacheTests
         for (var i = 0; i < MembershipResolutionCache.MaxCachedSubjects + 500; i++)
         {
             _ = await cache.ResolveAsync(
-                $"tok-{i}", Resolver(new LatticeSubject($"user-{i}"), null, () => { }), default);
+                MembershipCacheKey.ForToken($"tok-{i}"), Resolver(new LatticeSubject($"user-{i}"), null, () => { }), default);
         }
 
         var expected = new LatticeSubject("late-arrival");
-        var actual = await cache.ResolveAsync("late-tok", Resolver(expected, null, () => { }), default);
+        var actual = await cache.ResolveAsync(MembershipCacheKey.ForToken("late-tok"), Resolver(expected, null, () => { }), default);
 
         Assert.That(
             actual,
@@ -227,7 +227,7 @@ public class MembershipResolutionCacheTests
         for (var i = 0; i < MembershipResolutionCache.MaxCachedSubjects; i++)
         {
             _ = await cache.ResolveAsync(
-                $"tok-{i}", Resolver(new LatticeSubject($"user-{i}"), null, () => { }), default);
+                MembershipCacheKey.ForToken($"tok-{i}"), Resolver(new LatticeSubject($"user-{i}"), null, () => { }), default);
         }
 
         Assert.That(cache.Count, Is.EqualTo(MembershipResolutionCache.MaxCachedSubjects));
@@ -238,8 +238,8 @@ public class MembershipResolutionCacheTests
         var subject = new LatticeSubject("fresh");
         var calls = 0;
 
-        _ = await cache.ResolveAsync("fresh-tok", Resolver(subject, null, () => calls++), default);
-        var warm = await cache.ResolveAsync("fresh-tok", Resolver(subject, null, () => calls++), default);
+        _ = await cache.ResolveAsync(MembershipCacheKey.ForToken("fresh-tok"), Resolver(subject, null, () => calls++), default);
+        var warm = await cache.ResolveAsync(MembershipCacheKey.ForToken("fresh-tok"), Resolver(subject, null, () => calls++), default);
 
         Assert.That(cache.Count, Is.EqualTo(1), "the expired entries must have been reclaimed");
         Assert.That(warm, Is.EqualTo(subject));

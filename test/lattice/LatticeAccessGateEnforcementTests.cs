@@ -58,6 +58,95 @@ public class LatticeAccessGateEnforcementTests
         }
     }
 
+    // ---- EnforceWholeTreeControlAsync ------------------------------------
+
+    [Test]
+    public void EnforceWholeTreeControlAsync_nullGate_doesNotThrowOrConsult()
+    {
+        var enforce = LatticeAccessGateEnforcement.EnforceWholeTreeControlAsync(
+            new NullLatticeAccessGate(), membership: null, Tree, LatticeOperation.Admin, default);
+
+        Assert.That(enforce.IsCompletedSuccessfully, Is.True,
+            "the null gate short-circuits before the first await, so no subject is resolved");
+    }
+
+    [Test]
+    public void EnforceWholeTreeControlAsync_systemOrigin_doesNotConsultTheGate()
+    {
+        var gate = Denying();
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            var enforce = LatticeAccessGateEnforcement.EnforceWholeTreeControlAsync(
+                gate, membership: null, Tree, LatticeOperation.Admin, default);
+            Assert.That(enforce.IsCompletedSuccessfully, Is.True);
+        }
+
+        Assert.That(gate.CallCount, Is.Zero,
+            "an infrastructure turn is exempt and must never reach a denying gate");
+    }
+
+    [Test]
+    public async Task EnforceWholeTreeControlAsync_unrestrictedAllow_proceeds()
+    {
+        var gate = Allowing();
+
+        await LatticeAccessGateEnforcement.EnforceWholeTreeControlAsync(
+            gate, membership: null, Tree, LatticeOperation.Admin, default);
+
+        Assert.That(gate.CallCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void EnforceWholeTreeControlAsync_deny_throws()
+    {
+        var ex = Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(async () =>
+            await LatticeAccessGateEnforcement.EnforceWholeTreeControlAsync(
+                Denying(), membership: null, Tree, LatticeOperation.Admin, default));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.TreeId, Is.EqualTo(Tree));
+            Assert.That(ex.Operation, Is.EqualTo(LatticeOperation.Admin));
+        });
+    }
+
+    [Test]
+    public void EnforceWholeTreeControlAsync_filteredAllow_throws()
+    {
+        // The motivating case for the method: there is no key to test the
+        // filter against, and the authority being acquired is unbounded, so a
+        // partial-coverage allow may never be widened into whole-tree control.
+        var ex = Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(async () =>
+            await LatticeAccessGateEnforcement.EnforceWholeTreeControlAsync(
+                Filtering(static _ => true), membership: null, Tree, LatticeOperation.Admin, default));
+
+        Assert.That(ex!.TreeId, Is.EqualTo(Tree));
+    }
+
+    [Test]
+    public async Task EnforceWholeTreeControlAsync_requestCarriesNoKeyOrRange()
+    {
+        LatticeAccessRequest? seen = null;
+        var gate = new FakeGate(r =>
+        {
+            seen = r;
+            return LatticeAccessDecision.Allow();
+        });
+
+        await LatticeAccessGateEnforcement.EnforceWholeTreeControlAsync(
+            gate, membership: null, Tree, LatticeOperation.Admin, default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(seen!.Value.TreeId, Is.EqualTo(Tree));
+            Assert.That(seen!.Value.Operation, Is.EqualTo(LatticeOperation.Admin));
+            Assert.That(seen!.Value.Key, Is.Null, "the request covers the whole tree, not one key");
+            Assert.That(seen!.Value.RangeStart, Is.Null);
+            Assert.That(seen!.Value.RangeEnd, Is.Null);
+        });
+    }
+
     // ---- EnforcePointAsync ----------------------------------------------
 
     [Test]
