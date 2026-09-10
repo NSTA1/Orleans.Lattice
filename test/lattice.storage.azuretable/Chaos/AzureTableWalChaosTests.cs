@@ -43,6 +43,18 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests.Chaos;
 /// missing-entry failure on the post-window read.
 /// </para>
 /// <para>
+/// <b>Post-window visibility barrier.</b> The workload runs on the
+/// shipping default <c>PipelinePhaseTwoCommits = true</c>, under which
+/// an append returns before its own phase-2 manifest commit lands. The
+/// test therefore drains the outstanding commits with
+/// <see cref="AzureTableWalStorageProvider.FlushPhaseTwoAsync"/> before
+/// reading; without that barrier the trailing batch on a shard is
+/// durable but not yet visible, and the density assertion fails
+/// intermittently by exactly one batch (issue #2509). The barrier is an
+/// event, not a delay, so the invariants stay deterministic while the
+/// pipelined path keeps its chaos coverage.
+/// </para>
+/// <para>
 /// Gated under the <c>AzureStorageEmulator</c> category and falls through
 /// to <see cref="Assert.Inconclusive(string)"/> when Azurite is not
 /// reachable, matching every other test under
@@ -170,6 +182,22 @@ public class AzureTableWalChaosTests
 
         Assert.That(failures, Is.Empty,
             "Per-shard writer exceptions: " + string.Join("\n  ", failures));
+
+        // Visibility barrier. With the shipping default
+        // (PipelinePhaseTwoCommits = true) an AppendBatchAsync returns
+        // once its phase 0+1 rows are durable and the *previous*
+        // batch's phase-2 commit has landed, so the trailing batch on
+        // each shard is durable but has no manifest row yet - and the
+        // manifest is exactly what ReadAsync scans and what TAIL
+        // advertises. Asserting straight off Task.WhenAll therefore
+        // asserted read-after-write that the default does not promise,
+        // and failed about one run in twenty with a shortfall of
+        // precisely one batch (issue #2509). Draining the outstanding
+        // phase-2 commits is an event, not a delay: it keeps the chaos
+        // workload on the shipping default rather than trading the
+        // pipelined path's coverage away, and it introduces no sleep
+        // or poll.
+        await _sut.FlushPhaseTwoAsync(CancellationToken.None);
 
         var expectedPerShard = BatchesPerShard * EntriesPerBatch;
 

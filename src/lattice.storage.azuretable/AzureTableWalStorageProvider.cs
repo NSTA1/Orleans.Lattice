@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO.Hashing;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using Azure;
 using Azure.Data.Tables;
@@ -1059,13 +1060,14 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// awaits whichever phase-2 task the caller is supposed to block
     /// on per the configured durability mode.
     /// <para>
-    /// <b>Default mode (<see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
+    /// <b>Synchronous mode (<see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
     /// is <see langword="false"/>).</b> Awaits the new batch's own
-    /// phase-2 task. Post-append <see cref="GetHighestOffsetAsync"/>
-    /// observes the new <c>TAIL</c>.
+    /// phase-2 task, so a post-append <see cref="ReadAsync"/> and
+    /// <see cref="GetHighestOffsetAsync"/> observe the new batch.
     /// </para>
     /// <para>
-    /// <b>Pipelined mode (option <see langword="true"/>).</b>
+    /// <b>Pipelined mode (option <see langword="true"/>, the
+    /// default).</b>
     /// Atomically swaps the new batch's phase-2 task into the
     /// per-shard slot and awaits whatever the slot held before.
     /// That previous task is the previous append's phase-2 commit
@@ -1075,7 +1077,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// <see cref="AppendBatchAsync"/> on the same shard (the worker's
     /// sticky-failure semantics still hold because <c>WalShardGrain</c>
     /// resyncs <c>_nextOffset</c> on observed failure exactly as in
-    /// the default mode). To guarantee surfacing even on a quiescent
+    /// the synchronous mode). To guarantee surfacing even on a quiescent
     /// shard - the "last batch's phase-2 fault with no successor"
     /// gap - the slot occupant is also wired to
     /// <see cref="AzureTableWalStorageOptions.PipelinedPhaseTwoFaultHandler"/>
@@ -1249,6 +1251,115 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             }
         }
     }
+
+    /// <summary>
+    /// Awaits every phase-2 commit that is still in flight at the
+    /// moment of the call, so that batches already accepted by
+    /// <see cref="AppendBatchAsync"/> become observable to
+    /// <see cref="ReadAsync"/>, <see cref="ReadEncodedAsync"/>, and
+    /// <see cref="GetHighestOffsetAsync"/>. Read-your-writes on
+    /// demand, without disposing the provider.
+    /// <para>
+    /// <b>Why this exists.</b> With
+    /// <see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
+    /// enabled (the default), <see cref="AppendBatchAsync"/> returns
+    /// once the batch's phase 0+1 rows are durable and the
+    /// <i>previous</i> batch's phase-2 commit has landed, so the
+    /// returning batch's own manifest row and <c>TAIL</c> upsert may
+    /// still be in flight. Manifest rows are what
+    /// <see cref="ReadAsync"/> scans and what <c>TAIL</c> advertises,
+    /// so the trailing batch on a shard is durable but not yet
+    /// <i>visible</i> until its phase-2 commit lands. Callers that
+    /// need a visibility barrier - a controlled hand-off, an
+    /// operator-driven consistency probe, or a test asserting
+    /// read-after-write - call this instead of guessing a delay or
+    /// polling for the expected count.
+    /// </para>
+    /// <para>
+    /// <b>Scope.</b> The drain covers the phase-2 tasks outstanding
+    /// when the call snapshots the per-shard slots, across every
+    /// shard this provider instance has appended to. Appends issued
+    /// concurrently with (or after) the call are not waited on: the
+    /// barrier is "everything appended before this call", which is
+    /// the only barrier a single-writer-per-shard producer can
+    /// meaningfully ask for.
+    /// </para>
+    /// <para>
+    /// <b>Faults.</b> A faulted phase-2 commit is rethrown here
+    /// rather than swallowed (which is what
+    /// <see cref="DisposeAsync"/> does, being the terminal stage).
+    /// The awaited tasks are deliberately left in their slots, so
+    /// the existing sticky-failure contract is untouched: the next
+    /// <see cref="AppendBatchAsync"/> on the shard still observes
+    /// the same fault. When several shards faulted, the faults are
+    /// aggregated so none is lost.
+    /// </para>
+    /// <para>
+    /// When <see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
+    /// is disabled, every append has already awaited its own phase-2
+    /// commit, so no slot is ever occupied and this is a no-op.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">
+    /// Cancels only the caller's wait, never the underlying phase-2
+    /// commits - those are owned by the per-shard worker and remain
+    /// observable to the next append and to
+    /// <see cref="DisposeAsync"/>.
+    /// </param>
+    /// <exception cref="ObjectDisposedException">The provider has been disposed.</exception>
+    public async Task FlushPhaseTwoAsync(CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+
+        var pending = _pipelinedPhaseTwoTasks.Values.ToArray();
+        if (pending.Length == 0)
+        {
+            return;
+        }
+
+        List<Exception>? faults = null;
+        foreach (var task in pending)
+        {
+            try
+            {
+                if (cancellationToken.CanBeCanceled)
+                {
+                    await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await task.ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The caller's wait was cancelled, not the commit.
+                // Surface cancellation directly; the remaining tasks
+                // stay in their slots and are still observed by the
+                // next append or by DisposeAsync.
+                throw;
+            }
+            catch (Exception ex)
+            {
+                (faults ??= []).Add(ex);
+            }
+        }
+
+        if (faults is null)
+        {
+            return;
+        }
+
+        if (faults.Count == 1)
+        {
+            ExceptionDispatchInfo.Capture(faults[0]).Throw();
+        }
+
+        throw new AggregateException(
+            "One or more pipelined phase-2 commits faulted while flushing the Azure Table WAL provider.",
+            faults);
+    }
+
     /// <summary>
     /// Writes one trim-candidate manifest row. The write is made idempotent
     /// via <see cref="TableUpdateMode.Replace"/> on the upsert so a
@@ -1564,6 +1675,49 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Returns the greater of the shard's persisted <c>TAIL</c> row
+    /// and the contiguous run of phase-1-durable batches the live
+    /// phase-2 worker has accepted above it, so an offset returned by
+    /// a completed <see cref="AppendBatchAsync"/> is never reported
+    /// back as though it did not exist.
+    /// <para>
+    /// Under
+    /// <see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
+    /// (on by default) an append returns once its own phase 1 has
+    /// committed and only the <i>predecessor's</i> phase 2 has
+    /// landed, so <c>TAIL</c> alone lags by one batch per shard. The
+    /// entries are nonetheless durable - phase 1 wrote their rows and
+    /// the per-batch HEAD row atomically - and activation-time
+    /// reconciliation rolls exactly such contiguous batches forward,
+    /// so folding in the worker's accepted ranges reports what
+    /// recovery would keep rather than what the manifest happens to
+    /// have caught up with.
+    /// </para>
+    /// <para>
+    /// The walk starts at the persisted <c>TAIL</c> and stops at the
+    /// first hole, so a batch whose lower neighbour is still in phase
+    /// 1 is never reported - matching reconciliation, which rolls an
+    /// orphan above a gap back rather than forward.
+    /// </para>
+    /// <para>
+    /// The fold degrades to the persisted value alone whenever this
+    /// provider instance has no live worker for the shard - a fresh
+    /// activation, another silo, or
+    /// <c>PipelinePhaseTwoCommits = false</c> - and <c>TAIL</c> keeps
+    /// its exact former meaning everywhere else, including on the
+    /// <see cref="ReconcileAsync"/> path, which continues to read the
+    /// persisted row and only the persisted row.
+    /// </para>
+    /// <para>
+    /// <see cref="ReadAsync"/> and <see cref="ReadEncodedAsync"/> are
+    /// unaffected: they stream entry rows through the manifest's
+    /// <c>M</c> rows and still observe a not-yet-committed batch only
+    /// after its phase 2 lands. Use
+    /// <see cref="FlushPhaseTwoAsync"/> when a caller needs
+    /// read-your-writes from those.
+    /// </para>
+    /// </remarks>
     public async Task<long> GetHighestOffsetAsync(
         string treeId,
         int shardIndex,
@@ -1575,6 +1729,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
 
+        long persistedTail;
         try
         {
             // Point-read the per-shard TAIL row. The phase-2 worker
@@ -1586,12 +1741,22 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 manifestPartitionKey,
                 TailRowKey,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
-            return response.Value.Offset;
+            persistedTail = response.Value.Offset;
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
-            return -1L;
+            persistedTail = -1L;
         }
+
+        // Fold in the live worker's accepted ranges. The worker
+        // dictionary is keyed by the same manifest partition key, so
+        // this is one lookup and no extra round-trip. The worker
+        // walks upward from the persisted value and returns it
+        // unchanged when nothing contiguously extends it, so the
+        // answer can never be dragged below TAIL.
+        return _phaseTwoWorkers.TryGetValue(manifestPartitionKey, out var worker)
+            ? worker.ContiguousAcceptedEndOffsetInclusive(persistedTail)
+            : persistedTail;
     }
 
     /// <inheritdoc />

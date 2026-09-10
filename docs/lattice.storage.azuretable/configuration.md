@@ -162,6 +162,8 @@ siloBuilder.AddAzureTableWalStorage(o =>
 
 When `true`, the provider can return from an append after the durable entry write and after observing the previous pending completion for the same shard. Commit completion still runs in strict offset order, and failures remain sticky to a later append or the configured fault handler. Set to `false` when you want every append to wait for its own completion before returning.
 
+Because the read path is derived from commit metadata, this option introduces a bounded read visibility lag: the trailing batch on a shard is durable when the append returns but is not readable until its completion lands, so a read can omit it. The reported highest offset does not lag - `GetHighestOffsetAsync` folds the already-durable batches the shard's completion worker has accepted over the stored tail, so it never reports an offset lower than one a completed append returned. Callers that need read-after-write should await the provider's phase-two flush barrier rather than sleeping or polling; see [Architecture](architecture.md#read-visibility-lag-under-pipelining). Set the option to `false` if you would rather pay the latency on every append than take a barrier where you need one.
+
 ### `EliminateCandidateRowOnHotPath`
 
 When `true`, the provider removes an extra recovery-marker write from the normal append path. Recovery still detects interrupted batches using stored batch metadata and the committed shard tail. Upgrade from `false` to `true` is safe because both recovery shapes are recognized. Before moving from `true` back to `false`, drain pending appends and let reconciliation complete on a `true` deployment.

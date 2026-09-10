@@ -26,7 +26,10 @@ dotnet test --filter "TestCategory!=Chaos"
 | Total entries | 240 |
 | Writers | One writer per shard, all shards active concurrently |
 | Validation | Full readback, duplicate detection, gap detection, monotone offset assertion, highest-offset assertion |
+| Visibility barrier | Drains outstanding commit completions after the write window and before readback, so the invariants are asserted against a quiesced shard rather than against a batch still in flight |
 | Skip behaviour | Calls `Assert.Inconclusive` when the default Azurite development endpoint is not reachable |
+
+The workload runs on the shipping commit-pipeline defaults, under which an append can return before its own commit completion lands. The suite therefore drains the outstanding completions through the provider's flush barrier before reading back, so it keeps covering the pipelined path without asserting read-after-write that the default does not promise. See [Architecture](architecture.md#read-visibility-lag-under-pipelining).
 
 The suite intentionally uses the public provider surface rather than a fake backend. It does not require the full replication pipeline; the goal is to isolate the Azure Table WAL storage contract: append-batch atomicity, monotone offset assignment, ordered readback, and correct tail reporting.
 

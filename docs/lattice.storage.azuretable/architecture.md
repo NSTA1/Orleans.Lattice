@@ -55,7 +55,17 @@ A normal append has three behavioural stages:
 2. **Write entries.** Entry payload rows are written in a single Azure Table transaction for that batch.
 3. **Complete in offset order.** Commit metadata and the shard tail are updated in strict ascending offset order. Under load, multiple completions can be coalesced into one transaction, bounded by Azure Table transaction limits.
 
-`PipelinePhaseTwoCommits = true` lets a caller return after durable entry write and observation of the previous pending completion for the shard. It does not change ordering, recovery, or all-or-nothing visibility; it only changes which append observes a completion fault. `PipelinedPhaseTwoFaultHandler` exists so an idle shard can still report a completion fault for observability.
+`PipelinePhaseTwoCommits = true` lets a caller return after durable entry write and observation of the previous pending completion for the shard. It does not change ordering, recovery, or all-or-nothing durability; it changes which append observes a completion fault, and it introduces a bounded read visibility lag. `PipelinedPhaseTwoFaultHandler` exists so an idle shard can still report a completion fault for observability.
+
+### Read visibility lag under pipelining
+
+The read path is derived from the commit metadata written in stage 3, so a batch becomes readable when its completion lands rather than when its append returns. Under `PipelinePhaseTwoCommits = true` the trailing batch on a shard is therefore durable but not yet readable for a short interval, and a read can omit it.
+
+The reported highest offset does **not** share that lag. `GetHighestOffsetAsync` folds the contiguous run of already-durable batches the shard's live completion worker has accepted over the stored tail, so an offset returned by a completed append is never reported back as though it did not exist. The fold walks upward from the stored tail and stops at the first gap, which is exactly the run reconciliation would roll forward, so it can never claim a batch whose lower neighbour is still in flight. It degrades to the stored tail alone when this provider instance has no live worker for the shard - a fresh activation, another silo, or `PipelinePhaseTwoCommits = false` - and the stored tail keeps its former meaning everywhere else, including on the reconciliation path.
+
+Nothing is lost. The entries are durable before the append returns, and reconciliation rolls the batch forward if the process restarts first. WAL consumers poll, and the core WAL grain tracks its next offset in memory rather than re-reading the tail, so the read lag is invisible on the canonical replication path.
+
+A caller that genuinely needs read-after-write - a controlled hand-off, an operator consistency probe, or a test - awaits the provider's phase-two flush barrier, which drains the completions outstanding at the moment of the call and then rethrows any that failed. Prefer that barrier over sleeping or polling for an expected count.
 
 `PhaseTwoCoalescingWindow` controls how long completion waits for more pending work before sending the coalesced transaction. `PhaseTwoCommitTimeout` bounds a wedged completion transaction so later work is not blocked indefinitely.
 
@@ -71,7 +81,7 @@ When `EliminateCandidateRowOnHotPath` is enabled, reconciliation recognizes both
 
 ## Read, trim, and capacity behaviour
 
-Reads enumerate committed batch metadata in offset order, then stream entry rows lazily from each overlapping batch. `GetHighestOffsetAsync` reads the stored tail. `GetLowestOffsetAsync` finds the first retained batch after trim.
+Reads enumerate committed batch metadata in offset order, then stream entry rows lazily from each overlapping batch. `GetHighestOffsetAsync` reads the stored tail and folds over it the contiguous run of already-durable batches the shard's live completion worker has accepted, so it never lags behind a completed append. `GetLowestOffsetAsync` finds the first retained batch after trim.
 
 Trim deletes old retained entry rows in bounded Azure Table transactions and removes matching commit metadata in order. A crash during trim can leave a stale retained prefix, but not a gap in the live tail; a later trim can resume cleanup.
 
