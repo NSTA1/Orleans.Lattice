@@ -230,42 +230,60 @@ public sealed partial class DurableVectorIndex
         var exhausted = true;
 
         var entries = _source.EnumerateAsync(_cursor, cancellationToken);
-        await foreach (var entry in entries.WithCancellation(cancellationToken).ConfigureAwait(false))
+        try
         {
-            var position = _index.Count;
-            var key = await _keys.GetOrAddAsync(entry.Id, cancellationToken).ConfigureAwait(false);
-            if (_index.Upsert(key, entry.Vector.Span))
+            await foreach (var entry in entries.WithCancellation(cancellationToken).ConfigureAwait(false))
             {
-                // A replacement is not an append, so the committed chunk prefix
-                // is no longer a prefix of the cell and the checkpoint has to
-                // rewrite it wholesale.
-                _ingestAppendOnly = false;
+                var position = _index.Count;
+                var key = await _keys.GetOrAddAsync(entry.Id, cancellationToken).ConfigureAwait(false);
+                if (_index.Upsert(key, entry.Vector.Span))
+                {
+                    // A replacement is not an append, so the committed chunk prefix
+                    // is no longer a prefix of the cell and the checkpoint has to
+                    // rewrite it wholesale.
+                    _ingestAppendOnly = false;
+                }
+                else if ((position + 1) % chunkSize == 0)
+                {
+                    _chunkBoundaryCursor = entry.Id;
+                }
+
+                _cursor = entry.Id;
+                if (++consumed >= budget)
+                {
+                    exhausted = false;
+                    break;
+                }
+
+                // Checked AFTER an item has been consumed, so a budget too small for
+                // even one item degrades to one item per step rather than to a step
+                // that consumes nothing and spins forever making no progress.
+                //
+                // The bound is carried by its own flag rather than by a sentinel
+                // timestamp: zero is a perfectly ordinary reading of a clock, so a
+                // "0 means disabled" sentinel silently disables the bound on any
+                // provider whose epoch the step happens to start at.
+                if (timeBounded && timeProvider.GetElapsedTime(startedAt) >= sliceBudget)
+                {
+                    exhausted = false;
+                    break;
+                }
             }
-            else if ((position + 1) % chunkSize == 0)
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The slice faulted part way through. Everything consumed before the
+            // fault is already in the in-memory cell and the cursor already names
+            // the last of it, so the ONLY thing standing between that work and
+            // durability is the checkpoint below - which the fault would otherwise
+            // skip on its way out. See BankFaultedSliceAsync.
+            exhausted = false;
+            if (consumed > 0)
             {
-                _chunkBoundaryCursor = entry.Id;
+                await BankFaultedSliceAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            _cursor = entry.Id;
-            if (++consumed >= budget)
-            {
-                exhausted = false;
-                break;
-            }
-
-            // Checked AFTER an item has been consumed, so a budget too small for
-            // even one item degrades to one item per step rather than to a step
-            // that consumes nothing and spins forever making no progress.
-            //
-            // The bound is carried by its own flag rather than by a sentinel
-            // timestamp: zero is a perfectly ordinary reading of a clock, so a
-            // "0 means disabled" sentinel silently disables the bound on any
-            // provider whose epoch the step happens to start at.
-            if (timeBounded && timeProvider.GetElapsedTime(startedAt) >= sliceBudget)
-            {
-                exhausted = false;
-                break;
-            }
+            throw;
         }
 
         await WriteIngestCheckpointAsync(exhausted, cancellationToken).ConfigureAwait(false);
@@ -276,6 +294,73 @@ public sealed partial class DurableVectorIndex
         }
 
         await WriteBuildStateAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Persists the items a faulted ingest slice had already consumed, so a slice
+    /// that dies part way through banks that work instead of discarding it.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the checkpoint writes.</param>
+    /// <remarks>
+    /// <para>
+    /// <b>The step's progress guarantee did not extend to the slice.</b>
+    /// <see cref="DurableVectorIndexOptions.IngestSliceBudget"/> documents that the
+    /// budget is checked only after an item has been consumed, so a step always
+    /// makes progress. That reasoning holds for the budget and only for the budget.
+    /// It says nothing about a slice that FAULTS, and a fault took a different exit:
+    /// it propagated out of the enumeration before the checkpoint, so the items
+    /// already consumed - up to a full batch of them - were durably discarded and
+    /// re-read on the next step, which then faulted at the same place.
+    /// </para>
+    /// <para>
+    /// That is what #2536 measured on a live deployment. A source that streams over
+    /// a remote store of record reaches it through a grain call, and a grain call
+    /// against a contended non-reentrant shard root can exceed the cluster's
+    /// response timeout while merely QUEUED, before its first statement runs. The
+    /// caller sees a bare <c>TimeoutException</c>, the slice unwinds, and the build
+    /// re-reads the same range on every tick without ever banking a byte. On the
+    /// measured container the approximate plane answered none of 13 searches and
+    /// took over four hours to reach Ready.
+    /// </para>
+    /// <para>
+    /// Banking converts that from all-or-nothing into monotone progress: each slice
+    /// keeps what it read, so a build advances through a contended range at the rate
+    /// the range can actually be read rather than not at all. It does NOT hide the
+    /// fault - the caller rethrows, so the coordinator still logs and still counts
+    /// the failure. Making a repeated failure cheap is the point; making it silent
+    /// would not be.
+    /// </para>
+    /// <para>
+    /// <b>Exhaustion is not claimed.</b> The caller clears its exhaustion flag before
+    /// calling this, and the checkpoint is written as incomplete. A fault is the one
+    /// exit that carries no evidence the corpus ended, and claiming otherwise would
+    /// train on a truncated corpus, persist it, and report Ready with no error
+    /// anywhere - the failure the flag's own comment exists to prevent.
+    /// </para>
+    /// <para>
+    /// <b>A failure to bank is swallowed.</b> The store this writes to is the same
+    /// one whose contention produced the original fault, so it is entirely plausible
+    /// that it refuses this write too. That must not replace the slice's own
+    /// exception with a second one: the first names why the slice stopped, which is
+    /// what an operator needs, whereas a failed checkpoint only means this slice
+    /// banked nothing - exactly the pre-existing behaviour, and no worse than it.
+    /// The catch is broad for the same reason it is broad on
+    /// <c>CountSourceOrUnknownAsync</c>: the failure modes of a store this type does
+    /// not own are not this type's to enumerate, and every one of them means the
+    /// same thing here.
+    /// </para>
+    /// </remarks>
+    private async Task BankFaultedSliceAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await WriteIngestCheckpointAsync(false, cancellationToken).ConfigureAwait(false);
+            await WriteBuildStateAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Deliberately swallowed; see the remarks.
+        }
     }
 
     private void Train()
