@@ -189,6 +189,61 @@ public static class RepoContextShutdownBudget
     }
 
     /// <summary>
+    /// The smallest grant whose derived budget covers <paramref name="drainDuration"/>:
+    /// the inverse of <see cref="Derive"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This exists so that "raise the grace period" can be stated as a <b>number
+    /// derived from a measured drain</b> rather than as advice. Issue #2598 records
+    /// the shape of the alternative: a 90s budget was met with a 102.1s drain, and
+    /// the only remedy on offer was to raise a grace period by an amount nobody
+    /// could name, which is how a value gets doubled and then found to be wrong in
+    /// the same direction later.
+    /// </para>
+    /// <para>
+    /// It is computed from the derivation rather than beside it, so the two cannot
+    /// drift: both rules that <see cref="Derive"/> applies are inverted here, and
+    /// the result is the grant at which the tighter of them exactly admits the
+    /// duration. The answer is a floor and not a recommendation - it grants no
+    /// headroom at all, and drain time grows with the resident activation set, so a
+    /// deployment that declares exactly this value has bought itself no room for the
+    /// next leaf.
+    /// </para>
+    /// <para>
+    /// <b>The result is rounded up to a whole second, and that is load-bearing rather
+    /// than cosmetic.</b> This figure exists to be copied into a compose file, and it
+    /// is reported through a <c>:F0</c> format that renders 136.13 as <c>136</c>. A
+    /// grant of 136s derives a budget of 102s, which does <em>not</em> cover the
+    /// 102.1s drain that produced it - so the exact real-valued answer, once printed,
+    /// becomes advice that is quietly insufficient by a fraction of a second, and the
+    /// operator who followed it precisely gets a second abandoned drain and no reason
+    /// to suspect the number. Rounding up here makes the printed value and the true
+    /// requirement the same number. Do not "simplify" this to the raw quotient.
+    /// </para>
+    /// </remarks>
+    /// <param name="drainDuration">The drain duration the grant must cover.</param>
+    /// <returns>
+    /// The smallest whole number of seconds whose derived budget is at least the
+    /// duration.
+    /// </returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="drainDuration"/> is negative.</exception>
+    public static TimeSpan RequiredGrantFor(TimeSpan drainDuration)
+    {
+        if (drainDuration < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(drainDuration),
+                drainDuration,
+                "A drain duration cannot be negative.");
+        }
+
+        var fromFraction = drainDuration.TotalSeconds / BudgetFractionOfGrant;
+        var fromReserve = drainDuration.TotalSeconds + UnwindReserve.TotalSeconds;
+        return TimeSpan.FromSeconds(Math.Ceiling(Math.Max(fromFraction, fromReserve)));
+    }
+
+    /// <summary>
     /// Resolves the declared grant and the budget derived from it, reporting whether
     /// the grant was declared or defaulted so the distinction is visible in the
     /// startup log rather than inferred.

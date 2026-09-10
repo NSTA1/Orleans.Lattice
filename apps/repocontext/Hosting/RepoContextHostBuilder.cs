@@ -138,6 +138,22 @@ public static class RepoContextHostBuilder
 
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton<RepoContextReadinessState>();
+
+        // The resident activation count, read from the gauge Orleans already
+        // publishes rather than through a grain call. Both moments it is wanted are
+        // the worst moments to make one: a periodic poll would put avoidable load on
+        // the silo, and a call at the start of a drain would compete with the very
+        // teardown it is measuring.
+        var census = new RepoContextActivationCensus();
+        builder.Services.AddSingleton(census);
+
+        // The drain record is carried across the restart on the data mount, because
+        // the measurement is taken at a point where the scrape endpoint is closing
+        // and nothing is polling it. The next process is the only consumer that
+        // reliably exists after a drain.
+        var historyPath = RepoContextDrainHistory.PathIn(config.DataRoot);
+        var lastDrain = RepoContextDrainHistory.Read(historyPath);
+
         builder.Services.AddSingleton(sp => new RepoContextDrainSignal(
             sp.GetRequiredService<ILogger<RepoContextDrainSignal>>(),
             shutdown.ShutdownBudget,
@@ -146,7 +162,22 @@ public static class RepoContextHostBuilder
             // composition root where assigning the real Environment.ExitCode is
             // correct, and every test host that drives a deliberate overrun would be
             // poisoned by a default that did it everywhere (issue #2401).
-            reportExitCode: RepoContextExitCode.SetProcessExitCode));
+            reportExitCode: RepoContextExitCode.SetProcessExitCode,
+            residentActivations: census.TrySample,
+            recordObservation: observation => RepoContextDrainHistory.TryWrite(historyPath, observation)));
+
+        // The forecast: the budget this process derived, compared with the drain the
+        // previous one measured, and then with the drain the live resident set
+        // implies. It changes no budget - it cannot, since the budget is bounded from
+        // outside by a grant this process cannot see - it removes the property that
+        // made the mismatch a surprise, which is that it was only ever observable at
+        // the moment it was too late to act on (issue #2598).
+        builder.Services.AddSingleton(sp => new RepoContextDrainForecastService(
+            sp.GetRequiredService<ILogger<RepoContextDrainForecastService>>(),
+            shutdown,
+            lastDrain,
+            census.TrySample));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<RepoContextDrainForecastService>());
 
         // Constructed here rather than resolved lazily on the first scrape: the
         // listener starts accumulating from this point, so an instrument that
@@ -364,6 +395,13 @@ public static class RepoContextHostBuilder
         // Dispose is idempotent, so registering it here is safe whether or not the
         // service provider also disposes the instance it did not create.
         app.Lifetime.ApplicationStopped.Register(metricsCollector.Dispose);
+
+        // Disposed after the drain rather than during it: the drain signal samples
+        // residency when an overrun latches, and a census torn down first would turn
+        // the count of stranded activations into "unknown" in the one line that
+        // needs it.
+        app.Lifetime.ApplicationStopped.Register(
+            app.Services.GetRequiredService<RepoContextActivationCensus>().Dispose);
 
         // The observable drain-complete signal. Registered here rather than as a
         // hosted service so its ApplicationStopped callback is not itself one of the
