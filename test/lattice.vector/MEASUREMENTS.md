@@ -302,6 +302,21 @@ Every figure below was produced twice, under default tiering and under
 `DOTNET_TieredCompilation=0` (which forces full optimisation from the first call,
 where escape analysis is most aggressive), with identical results.
 
+Every figure below also requires a **Release** build, and the asynchronous ones
+require it absolutely rather than approximately. Roslyn emits an async state
+machine as a struct under `<Optimize>` and as a class without it, so a Debug
+build heap-allocates one on every call to every async method whether or not it
+suspends. That cost is deterministic and per-iteration, so it survives the
+differential, the minimum across attempts, and the warm-up alike, and it lands as
+a clean non-zero constant that is easily misread as a per-iteration allocation in
+the code under test. Because a state machine is either heap-allocated or it is
+not, the two builds produce a bimodal split rather than a spread - `0.0` against
+`232.0` bytes per run for the warm lazy search - which then looks like a
+difference between machines rather than between build configurations. Issue #2540
+was that misreading. The fixture now asserts the precondition through
+`AllocationContract.RequireOptimizedBuild` and skips visibly rather than failing
+when it is not met, so the trap cannot be sprung again.
+
 | path | allocated |
 |---|---|
 | Search, 2,000 queries | **0 bytes** |
