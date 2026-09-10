@@ -1427,7 +1427,7 @@ public static class LatticeMetrics
     /// A ZERO observation on the <c>cold</c> arm is EXPECTED and is not by
     /// itself a fault (issue #2280). A cold replay restarts from the -1
     /// sentinel and
-    /// <see cref="Orleans.Lattice.BPlusTree.ILeafProjection.SetCheckpointOffsetAsync(long, CancellationToken)"/>
+    /// <c>ILeafProjection.SetCheckpointOffsetAsync</c>
     /// enforces strict monotonicity, so a cold activation cannot bank anything
     /// at all until its scanned-through offset passes the checkpoint it started
     /// above. Progress below that mark is not discarded, it is UNREPRESENTABLE.

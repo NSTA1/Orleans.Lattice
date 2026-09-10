@@ -298,9 +298,20 @@ internal sealed partial class ViewMaintainerGrain
             sourceKeys.Add(key);
         }
 
-        foreach (var key in sourceKeys)
+        // Bounded ordered read-ahead. The source reads are pure, independent of
+        // one another, and independent of the view writes this loop issues (the
+        // source and view trees are disjoint), so keeping RebuildFanOutWidth of
+        // them in flight cannot change what is read - only when. Results arrive
+        // strictly in sourceKeys order, so the projection sees exactly the
+        // sequence the serial form did.
+        var index = 0;
+        await foreach (var versioned in BoundedFanOut.ReadAheadAsync(
+            sourceKeys,
+            RebuildFanOutWidth,
+            k => sourceTree.GetWithVersionAsync(k, cancellationToken),
+            cancellationToken))
         {
-            var versioned = await sourceTree.GetWithVersionAsync(key, cancellationToken);
+            var key = sourceKeys[index++];
             if (versioned.Value is null)
             {
                 continue;
@@ -454,9 +465,18 @@ internal sealed partial class ViewMaintainerGrain
             sourceKeys.Add(key);
         }
 
-        foreach (var key in sourceKeys)
+        // Bounded ordered read-ahead, exactly as in InPlaceRebuildAsync: source
+        // reads are pure and disjoint from the shadow-tree writes, so overlapping
+        // RebuildFanOutWidth of them changes only when each key is read, never
+        // which value the projection sees or in what order it sees it.
+        var index = 0;
+        await foreach (var versioned in BoundedFanOut.ReadAheadAsync(
+            sourceKeys,
+            RebuildFanOutWidth,
+            k => sourceTree.GetWithVersionAsync(k, cancellationToken),
+            cancellationToken))
         {
-            var versioned = await sourceTree.GetWithVersionAsync(key, cancellationToken);
+            var key = sourceKeys[index++];
             if (versioned.Value is null)
             {
                 continue;
@@ -576,7 +596,26 @@ internal sealed partial class ViewMaintainerGrain
         await state.WriteStateAsync();
     }
 
+    /// <summary>
+    /// Maximum number of grain calls the rebuild paths keep in flight at once.
+    /// </summary>
+    /// <remarks>
+    /// Adopted unchanged from <see cref="BoundedFanOut.DefaultWidth"/>, which is
+    /// sized to the <see cref="ILattice"/> router grain's <c>maxLocalWorkers</c>;
+    /// see that type for why the window is bounded at all.
+    /// </remarks>
+    internal const int RebuildFanOutWidth = BoundedFanOut.DefaultWidth;
+
     /// <summary>Deletes every key in <paramref name="tree"/> (including reserved aggregation rows).</summary>
+    /// <remarks>
+    /// The deletes are issued in bounded overlapped waves rather than one at a
+    /// time. Every key was drained before the first delete is issued, so the
+    /// deletions are independent of one another and of the scan, and a per-key
+    /// delete is idempotent - which makes the wave's completion order immaterial
+    /// and leaves the deleted key set identical to the serial form. Clearing an
+    /// N-key generation previously cost N sequential round trips; it now costs
+    /// ceil(N / <see cref="RebuildFanOutWidth"/>) waves of them.
+    /// </remarks>
     private static async Task ClearTreeAsync(ILattice tree, CancellationToken cancellationToken)
     {
         var keys = new List<string>();
@@ -585,10 +624,10 @@ internal sealed partial class ViewMaintainerGrain
             keys.Add(key);
         }
 
-        foreach (var key in keys)
-        {
-            await tree.DeleteAsync(key, cancellationToken);
-        }
+        await BoundedFanOut.ForEachAsync(
+            keys,
+            RebuildFanOutWidth,
+            key => tree.DeleteAsync(key, cancellationToken));
     }
 
     /// <summary>

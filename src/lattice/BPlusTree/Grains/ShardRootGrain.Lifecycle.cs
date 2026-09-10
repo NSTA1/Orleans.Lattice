@@ -166,35 +166,87 @@ internal sealed partial class ShardRootGrain
 
         walk.ReportIfSlow(logger, context.GrainId);
 
-        foreach (var internalId in internalNodeIds)
-        {
-            var internalNode = grainFactory.GetGrain<IBPlusInternalGrain>(internalId);
-            await internalNode.ClearGrainStateAsync();
-        }
+        await ClearInternalNodesAsync(internalNodeIds);
 
         await state.ClearStateAsync();
     }
 
+    /// <summary>
+    /// Clears every collected internal node, in bounded overlapped waves.
+    /// </summary>
+    /// <remarks>
+    /// Unlike the leaf chain - which must stay serial because a leaf's sibling
+    /// pointer has to be read before its state is cleared - the internal-node set
+    /// is fully materialised by <see cref="CollectInternalNodeIds"/> before the
+    /// first clear is issued, so the clears are independent of one another and of
+    /// the traversal that produced them, and their completion order is
+    /// immaterial. Issued one at a time they turn a purge of an I-node tree into
+    /// I sequential round trips; issued in bounded waves they cost
+    /// ceil(I / <see cref="BoundedFanOut.DefaultWidth"/>) instead. The purge runs
+    /// against a tree that is already offline by contract, so nothing observes an
+    /// intermediate state of this sweep either way.
+    /// </remarks>
+    private Task ClearInternalNodesAsync(List<GrainId> internalNodeIds) =>
+        BoundedFanOut.ForEachAsync(
+            internalNodeIds,
+            BoundedFanOut.DefaultWidth,
+            id => grainFactory.GetGrain<IBPlusInternalGrain>(id).ClearGrainStateAsync());
+
+    /// <summary>
+    /// Collects every internal node id beneath <paramref name="rootNodeId"/>
+    /// (inclusive) so <see cref="ClearInternalNodesAsync"/> can sweep them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>One call per node, not two.</b> The walk used to ask each node
+    /// <c>AreChildrenLeavesAsync</c> and then <c>GetChildIdsAsync</c> - two
+    /// round trips to learn two fields of the same state.
+    /// <c>GetRoutingTableAsync</c> returns both in one snapshot, so a walk over
+    /// I nodes issues I calls rather than 2I.
+    /// </para>
+    /// <para>
+    /// <b>Level-parallel, not serial.</b> The old walk was a depth-first stack
+    /// that awaited each node before it knew the next one to visit, so the whole
+    /// pre-walk was strictly sequential - and it is what feeds the sweep that
+    /// already runs in bounded overlapped waves, so the sweep was fast and the
+    /// walk that finds its input was not. A level's nodes are known in full once
+    /// the level above has been read, and reading a node is a pure query, so a
+    /// level's reads are independent and overlap safely.
+    /// <see cref="BoundedFanOut.ReadAheadAsync"/> keeps them in input order and
+    /// holds only <see cref="BoundedFanOut.DefaultWidth"/> reads in flight, so a
+    /// wide level does not burst one call per node. The levels themselves stay
+    /// ordered, since a level's ids are only known from the level above.
+    /// </para>
+    /// <para>
+    /// The collected order changes from depth-first to breadth-first. The set is
+    /// identical, and its only consumer clears the nodes in a fan-out whose
+    /// completion order is already undefined, so nothing depends on the
+    /// traversal order.
+    /// </para>
+    /// </remarks>
     private async Task CollectInternalNodeIds(GrainId rootNodeId, List<GrainId> collected)
     {
-        var stack = new Stack<GrainId>();
-        stack.Push(rootNodeId);
+        var level = new List<GrainId> { rootNodeId };
 
-        while (stack.Count > 0)
+        while (level.Count > 0)
         {
-            var nodeId = stack.Pop();
-            collected.Add(nodeId);
+            collected.AddRange(level);
 
-            var node = grainFactory.GetGrain<IBPlusInternalGrain>(nodeId);
-            if (await node.AreChildrenLeavesAsync())
-                continue;
-
-            var children = await node.GetChildIdsAsync();
-            // Push in reverse order to preserve traversal order (optional).
-            for (int i = children.Count - 1; i >= 0; i--)
+            var next = new List<GrainId>();
+            await foreach (var routing in BoundedFanOut.ReadAheadAsync(
+                level,
+                BoundedFanOut.DefaultWidth,
+                id => grainFactory.GetGrain<IBPlusInternalGrain>(id).GetRoutingTableAsync()))
             {
-                stack.Push(children[i]);
+                if (routing.ChildrenAreLeaves)
+                {
+                    continue;
+                }
+
+                next.AddRange(routing.ChildIds);
             }
+
+            level = next;
         }
     }
 

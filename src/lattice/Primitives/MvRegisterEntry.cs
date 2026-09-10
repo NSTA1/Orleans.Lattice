@@ -31,4 +31,38 @@ public readonly record struct MvRegisterEntry
 
     /// <summary>The opaque value bytes stamped under this dot.</summary>
     [Id(2)] public byte[] Value { get; init; }
+
+    /// <summary>
+    /// Compares two entries by value, with <see cref="Value"/> compared by
+    /// content. The compiler-generated record-struct equality compares the
+    /// <see cref="Value"/> byte array with <see cref="EqualityComparer{T}.Default"/> -
+    /// reference equality for a <see cref="byte"/> array - so two entries built
+    /// from independently allocated but byte-identical values (including an
+    /// entry and its post-serialization self) would otherwise never compare
+    /// equal, silently breaking any dedup or round-trip check framed as
+    /// record equality over these entries.
+    /// </summary>
+    /// <param name="other">The entry to compare against.</param>
+    public bool Equals(MvRegisterEntry other) =>
+        BytesEqual(Value, other.Value)
+        && string.Equals(ReplicaId, other.ReplicaId, StringComparison.Ordinal)
+        && Counter == other.Counter;
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        hash.Add(ReplicaId, StringComparer.Ordinal);
+        hash.Add(Counter);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

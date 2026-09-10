@@ -152,6 +152,17 @@ internal sealed partial class RepoContextStore
     /// record's claim as no longer live so unfenced writes are admitted again. The
     /// fencing high-water mark is never lowered, so the released token stays refused
     /// once another claim has moved past it.
+    /// <para>
+    /// A release is honoured only for the record's current fence, presented exactly.
+    /// The stricter-than-obvious rule is load-bearing rather than tidiness: the
+    /// released mark is a monotone register that <see cref="RepoContextClaimFence"/>
+    /// can raise but never lower, and liveness is decided by comparing it against
+    /// the fence. Stamping a release for a token the record never issued - one
+    /// ahead of the fence, or any token at all against a record that was never
+    /// claimed - would raise that mark beyond every fence the record could later
+    /// reach, so every subsequent claim would read as already released and every
+    /// unfenced write would be admitted forever, with no operation able to undo it.
+    /// </para>
     /// </summary>
     /// <param name="key">The full repository-context key of the claimed memory record.</param>
     /// <param name="fencingToken">The token from the grant being released.</param>
@@ -169,7 +180,9 @@ internal sealed partial class RepoContextStore
 
         // Idempotent by contract: a release presenting a token that no longer holds
         // the lock is a silent no-op on the lock, so it is safe to issue before the
-        // record is consulted and cannot disturb a current holder.
+        // record is consulted and cannot disturb a current holder. Being a no-op is
+        // also why it is not a gate: the record checks below are what protect the
+        // released mark, and they cannot be skipped on the strength of this call.
         await padlock.ReleaseAsync(new LockToken(fencingToken)).ConfigureAwait(false);
 
         var tree = Tree(RepoContextTrees.Memory);
@@ -180,8 +193,16 @@ internal sealed partial class RepoContextStore
         }
 
         var state = RepoContextClaimFence.Read(existing);
-        if (state.FencingToken is { } fence && fencingToken < fence)
+        if (state.FencingToken is not { } fence)
         {
+            // Never claimed, so there is no grant this token could have come from.
+            return NotReleased(key, lockName, fencingToken, "unclaimed");
+        }
+
+        if (fencingToken != fence)
+        {
+            // Below the fence the claim was superseded; above it the token was never
+            // issued for this record. Neither may raise the released mark.
             return NotReleased(key, lockName, fencingToken, "stale");
         }
 
@@ -248,7 +269,9 @@ internal sealed partial class RepoContextStore
     /// <param name="existing">The stored record, or <see langword="null"/> when the write creates it.</param>
     /// <param name="fencingToken">The token the caller presented, or <see langword="null"/>.</param>
     /// <exception cref="RepoContextClaimConflictException">The write is refused by the fencing check.</exception>
-    private void EnforceFence(string key, MemoryRecord? existing, long? fencingToken)
+    /// <param name="cancellationToken">Cancels the lock lookup, when one is needed.</param>
+    private async Task EnforceFenceAsync(
+        string key, MemoryRecord? existing, long? fencingToken, CancellationToken cancellationToken)
     {
         if (existing is null)
         {
@@ -257,13 +280,34 @@ internal sealed partial class RepoContextStore
             return;
         }
 
-        var verdict = RepoContextClaimFence.Evaluate(existing, fencingToken, _replicaId);
+        var state = RepoContextClaimFence.Read(existing);
+
+        // The authoritative token is fetched only for a token ahead of the record's
+        // stamp, which is the one case the pure check cannot settle on its own (see
+        // RepoContextFenceVerdict.UnissuedToken). Every other path - unclaimed
+        // record, unfenced write, exact match, stale token - stays a pure in-memory
+        // decision with no extra grain call on the common write path.
+        long? lockCurrentToken = null;
+        if (fencingToken is { } presented
+            && state.FencingToken is { } fence
+            && presented > fence)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var status = await _grainFactory
+                .GetGrain<ILatticeLockGrain>(RepoContextClaimNames.LockName(key))
+                .GetStatusAsync()
+                .ConfigureAwait(false);
+
+            // An unheld lock issues nothing, so it can confirm nothing.
+            lockCurrentToken = status.IsHeld ? status.CurrentFencingToken : null;
+        }
+
+        var verdict = RepoContextClaimFence.Evaluate(existing, fencingToken, _replicaId, lockCurrentToken);
         if (verdict == RepoContextFenceVerdict.Accepted)
         {
             return;
         }
 
-        var state = RepoContextClaimFence.Read(existing);
         throw new RepoContextClaimConflictException(
             RepoContextClaimFence.Explain(verdict, key, state, fencingToken, _replicaId),
             key,

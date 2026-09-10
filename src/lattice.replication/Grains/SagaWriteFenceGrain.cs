@@ -273,76 +273,113 @@ internal sealed class SagaWriteFenceGrain(
     };
 
     // --- fan-out helpers (group-atomic across every tree in the set) ---
+    //
+    // Every helper below fans one call out over trees x shards (or trees x
+    // peers) and every one of those calls is independent: each targets a
+    // distinct grain, sets or clears a per-saga flag on it, and reads nothing
+    // the others write. Issued one at a time - as they were - the group-atomic
+    // step cost one sequential round trip per target, so the wall-clock of
+    // engaging a fence grew linearly with the fenced topology while the write
+    // fence itself was already blocking writers. Issued in bounded overlapped
+    // waves the same calls cost ceil(N / BoundedFanOut.DefaultWidth) round
+    // trips. The width is the router grain's maxLocalWorkers, so a wave is
+    // serviced by separate local workers rather than queued behind itself, and
+    // a wider one would only burst more outbound calls at a single Orleans
+    // response deadline. Group atomicity is unaffected: it is defined by every
+    // target having acked before the helper returns, which Task.WhenAll inside
+    // each wave preserves exactly, not by the order they were asked in.
+
+    /// <summary>
+    /// Resolves the <c>{tree}/{shard}</c> key of every shard root the fence
+    /// spans, reading the per-tree shard counts with bounded overlap rather than
+    /// one strictly sequential lookup per tree.
+    /// </summary>
+    private async Task<List<string>> ResolveFencedShardKeysAsync()
+    {
+        var trees = state.State.Trees;
+        var shardKeys = new List<string>(trees.Count);
+
+        // ReadAheadAsync yields strictly in input order, so the counts line up
+        // with their trees by position without any correlation bookkeeping.
+        var treeIndex = 0;
+        await foreach (var shardCount in BoundedFanOut.ReadAheadAsync(
+            trees,
+            BoundedFanOut.DefaultWidth,
+            tree => shardCounts.GetShardCountAsync(tree)))
+        {
+            var tree = trees[treeIndex++];
+            for (var i = 0; i < shardCount; i++)
+            {
+                shardKeys.Add($"{tree}/{i}");
+            }
+        }
+
+        return shardKeys;
+    }
+
+    /// <summary>
+    /// Builds the <c>{tree}/{peer}</c> key of every shipper the fence spans.
+    /// </summary>
+    private List<string> ResolveShipperKeys()
+    {
+        var peers = topology.CurrentPeers;
+        var trees = state.State.Trees;
+        var shipperKeys = new List<string>(trees.Count * peers.Count);
+
+        foreach (var tree in trees)
+        {
+            foreach (var peer in peers)
+            {
+                shipperKeys.Add($"{tree}/{peer}");
+            }
+        }
+
+        return shipperKeys;
+    }
 
     private async Task EngageWriteFenceAsync(string sagaId, long deadline)
     {
-        foreach (var tree in state.State.Trees)
-        {
-            var shardCount = await shardCounts.GetShardCountAsync(tree);
-            for (var i = 0; i < shardCount; i++)
-            {
-                await grainFactory.GetGrain<IShardRootGrain>($"{tree}/{i}")
-                    .EngageWriteFenceAsync(sagaId, deadline);
-            }
-        }
+        var shardKeys = await ResolveFencedShardKeysAsync();
+        await BoundedFanOut.ForEachAsync(
+            shardKeys,
+            BoundedFanOut.DefaultWidth,
+            key => grainFactory.GetGrain<IShardRootGrain>(key).EngageWriteFenceAsync(sagaId, deadline));
     }
 
     private async Task LiftWriteFenceAsync(string sagaId)
     {
-        foreach (var tree in state.State.Trees)
-        {
-            var shardCount = await shardCounts.GetShardCountAsync(tree);
-            for (var i = 0; i < shardCount; i++)
-            {
-                await grainFactory.GetGrain<IShardRootGrain>($"{tree}/{i}")
-                    .LiftWriteFenceAsync(sagaId);
-            }
-        }
+        var shardKeys = await ResolveFencedShardKeysAsync();
+        await BoundedFanOut.ForEachAsync(
+            shardKeys,
+            BoundedFanOut.DefaultWidth,
+            key => grainFactory.GetGrain<IShardRootGrain>(key).LiftWriteFenceAsync(sagaId));
     }
 
-    private async Task PauseShippingAsync(string sagaId)
-    {
-        var peers = topology.CurrentPeers;
-        foreach (var tree in state.State.Trees)
-        {
-            foreach (var peer in peers)
-            {
-                await grainFactory.GetGrain<IReplicationShipperGrain>($"{tree}/{peer}")
-                    .PauseShippingAsync(sagaId, CancellationToken.None);
-            }
-        }
-    }
+    private Task PauseShippingAsync(string sagaId) =>
+        BoundedFanOut.ForEachAsync(
+            ResolveShipperKeys(),
+            BoundedFanOut.DefaultWidth,
+            key => grainFactory.GetGrain<IReplicationShipperGrain>(key)
+                .PauseShippingAsync(sagaId, CancellationToken.None));
 
-    private async Task ResumeShippingAsync(string sagaId)
-    {
-        var peers = topology.CurrentPeers;
-        foreach (var tree in state.State.Trees)
-        {
-            foreach (var peer in peers)
-            {
-                await grainFactory.GetGrain<IReplicationShipperGrain>($"{tree}/{peer}")
-                    .ResumeShippingAsync(sagaId, CancellationToken.None);
-            }
-        }
-    }
+    private Task ResumeShippingAsync(string sagaId) =>
+        BoundedFanOut.ForEachAsync(
+            ResolveShipperKeys(),
+            BoundedFanOut.DefaultWidth,
+            key => grainFactory.GetGrain<IReplicationShipperGrain>(key)
+                .ResumeShippingAsync(sagaId, CancellationToken.None));
 
-    private async Task PauseReceiveAsync(string sagaId)
-    {
-        foreach (var tree in state.State.Trees)
-        {
-            await grainFactory.GetGrain<ITreeReceiveFenceGrain>(tree)
-                .PauseAsync(sagaId);
-        }
-    }
+    private Task PauseReceiveAsync(string sagaId) =>
+        BoundedFanOut.ForEachAsync(
+            state.State.Trees,
+            BoundedFanOut.DefaultWidth,
+            tree => grainFactory.GetGrain<ITreeReceiveFenceGrain>(tree).PauseAsync(sagaId));
 
-    private async Task ResumeReceiveAsync(string sagaId)
-    {
-        foreach (var tree in state.State.Trees)
-        {
-            await grainFactory.GetGrain<ITreeReceiveFenceGrain>(tree)
-                .ResumeAsync(sagaId);
-        }
-    }
+    private Task ResumeReceiveAsync(string sagaId) =>
+        BoundedFanOut.ForEachAsync(
+            state.State.Trees,
+            BoundedFanOut.DefaultWidth,
+            tree => grainFactory.GetGrain<ITreeReceiveFenceGrain>(tree).ResumeAsync(sagaId));
 
     private async Task ArmPollReminderAsync()
     {

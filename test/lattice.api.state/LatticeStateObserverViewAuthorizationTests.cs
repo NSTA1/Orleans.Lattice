@@ -168,7 +168,8 @@ public sealed class LatticeStateObserverViewAuthorizationTests
             {
                 ChangeObservationPollInterval = TimeSpan.FromMilliseconds(5),
             }),
-            services.BuildServiceProvider());
+            services.BuildServiceProvider(),
+            new NullTenantContextResolver());
 
         return (observer, gate);
     }

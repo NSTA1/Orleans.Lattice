@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
@@ -40,6 +42,20 @@ namespace Orleans.Lattice.BPlusTree;
 /// </summary>
 internal static class BoundedFanOut
 {
+    /// <summary>
+    /// Default width for the corpus-sized fan-out forms
+    /// (<see cref="ForEachAsync{TItem}"/> and <see cref="ReadAheadAsync{TItem, TResult}"/>).
+    /// </summary>
+    /// <remarks>
+    /// Sized to the <see cref="ILattice"/> router grain's
+    /// <c>[StatelessWorker(maxLocalWorkers: 32)]</c>: calls issued together are
+    /// serviced by separate local workers rather than queued behind one another,
+    /// but only up to that worker count, so a wider window would buy no further
+    /// overlap while bursting more outbound calls. It is the same bound the
+    /// shipped leaf-seal fan-out and tag-index row removal already use.
+    /// </remarks>
+    public const int DefaultWidth = 32;
+
     /// <summary>
     /// Runs <paramref name="body"/> for each slot in <c>[0, count)</c> with at
     /// most <paramref name="maxConcurrency"/> in flight, returning the per-slot
@@ -147,6 +163,164 @@ internal static class BoundedFanOut
             }
         }
     }
+
+    /// <summary>
+    /// Corpus-sized counterpart to
+    /// <see cref="RunAsync(int, int, Func{int, Task}, CancellationToken)"/>:
+    /// applies <paramref name="body"/> to every item in <paramref name="items"/>
+    /// in bounded overlapped waves, holding at most
+    /// <paramref name="maxConcurrency"/> tasks alive at any moment.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why a second shape.</b> <c>RunAsync</c> launches one gated task per slot
+    /// up front so it can return the results in slot order, which is exactly right
+    /// for the cluster-roll-up fan-outs it serves (trees x shards - hundreds of
+    /// slots at most). It is the wrong shape when the slot count is a function of
+    /// the stored corpus rather than of the topology: clearing an N-key view
+    /// generation would allocate an N-element task array and park N-bound gated
+    /// tasks on a semaphore. This form walks the input a wave at a time instead,
+    /// so its live task set is O(maxConcurrency) however large the input is.
+    /// </para>
+    /// <para>
+    /// <b>What callers must guarantee.</b> The items must be independent of one
+    /// another and the work order-insensitive: completion order within a wave is
+    /// not defined, and no result is returned. Each wave settles through
+    /// <see cref="Task.WhenAll(IEnumerable{Task})"/>, which observes every fault
+    /// in that wave, so an abandoned fan-out leaves no unobserved faulted task.
+    /// Like the rest of this type it never calls <c>ConfigureAwait(false)</c>, so
+    /// it is safe to call from grain code.
+    /// </para>
+    /// </remarks>
+    /// <param name="items">The items to apply <paramref name="body"/> to. An empty list is a no-op.</param>
+    /// <param name="maxConcurrency">Maximum items in flight at once. Values below 1 are clamped to 1.</param>
+    /// <param name="body">Per-item work. Must not throw synchronously; faults belong in the returned task.</param>
+    public static async Task ForEachAsync<TItem>(
+        IReadOnlyList<TItem> items,
+        int maxConcurrency,
+        Func<TItem, Task> body)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(body);
+
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        // A single item stays on the direct await, so the common shallow case
+        // pays no task-list allocation at all.
+        if (items.Count == 1)
+        {
+            await body(items[0]);
+            return;
+        }
+
+        var bound = Math.Max(1, maxConcurrency);
+        var wave = new List<Task>(Math.Min(items.Count, bound));
+        for (var i = 0; i < items.Count; i++)
+        {
+            wave.Add(body(items[i]));
+            if (wave.Count >= bound)
+            {
+                await Task.WhenAll(wave);
+                wave.Clear();
+            }
+        }
+
+        if (wave.Count > 0)
+        {
+            await Task.WhenAll(wave);
+        }
+    }
+
+    /// <summary>
+    /// Reads every item in <paramref name="items"/> through
+    /// <paramref name="read"/> with at most <paramref name="maxConcurrency"/>
+    /// reads in flight, yielding the results strictly in input order.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the shape for a loop whose <i>body</i> must stay sequential over
+    /// reads that need not - a projection rebuild that reads one source key and
+    /// then writes the view rows it derives, say. Only the reads overlap; the
+    /// consumer still sees exactly the sequence a serial loop produced, so
+    /// nothing downstream has to become order-insensitive to benefit. That is
+    /// safe precisely when the reads are pure and disjoint from whatever the loop
+    /// body writes.
+    /// </para>
+    /// <para>
+    /// <b>Ring window.</b> The read for input index <c>j</c> occupies slot
+    /// <c>j % width</c>. Only indices in <c>[consumed, consumed + width)</c> are
+    /// ever outstanding, and those map to distinct slots, so no in-flight read is
+    /// overwritten. Like <see cref="ForEachAsync"/>, the live task set is
+    /// O(maxConcurrency) regardless of input size.
+    /// </para>
+    /// <para>
+    /// <b>Abandonment.</b> If the consumer breaks out, or its body throws, the
+    /// reads still outstanding are observed on disposal, so a faulted one cannot
+    /// resurface later as an unobserved task exception.
+    /// </para>
+    /// </remarks>
+    /// <param name="items">The items to read. An empty list yields nothing.</param>
+    /// <param name="maxConcurrency">Maximum reads in flight at once. Values below 1 are clamped to 1.</param>
+    /// <param name="read">Per-item read. Must be free of side effects the consumer's body depends on.</param>
+    /// <param name="cancellationToken">Observed before each result is awaited.</param>
+    public static async IAsyncEnumerable<TResult> ReadAheadAsync<TItem, TResult>(
+        IReadOnlyList<TItem> items,
+        int maxConcurrency,
+        Func<TItem, Task<TResult>> read,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(read);
+
+        if (items.Count == 0)
+        {
+            yield break;
+        }
+
+        var window = new Task<TResult>[Math.Min(items.Count, Math.Max(1, maxConcurrency))];
+        var issued = 0;
+        var consumed = 0;
+        try
+        {
+            for (; consumed < items.Count; consumed++)
+            {
+                while (issued < items.Count && issued - consumed < window.Length)
+                {
+                    window[issued % window.Length] = read(items[issued]);
+                    issued++;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return await window[consumed % window.Length];
+            }
+        }
+        finally
+        {
+            // Everything from consumed up to issued is either the read this loop
+            // stopped on or one issued ahead of it. Starting at consumed rather
+            // than past it covers the case where cancellation threw before the
+            // await; re-observing an already-awaited slot is harmless, because a
+            // completed non-faulted task never runs the fault continuation.
+            for (var j = consumed; j < issued; j++)
+            {
+                Observe(window[j % window.Length]);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Attaches a no-op fault continuation so an abandoned read's exception is
+    /// retrieved rather than left unobserved.
+    /// </summary>
+    private static void Observe(Task task) =>
+        _ = task.ContinueWith(
+            static t => _ = t.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
     /// <summary>
     /// Fills <paramref name="tasks"/> by invoking <paramref name="body"/> once per

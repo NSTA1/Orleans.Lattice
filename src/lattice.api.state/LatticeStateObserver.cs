@@ -23,17 +23,31 @@ namespace Orleans.Lattice.Api.State;
 /// A consumer that falls behind the WAL retention window observes an explicit
 /// <see cref="LatticeStateCursorExpiredException"/> on resume rather than a
 /// silent gap.
+/// <para>
+/// The caller-supplied tree id is composed through <see cref="ITenantContextResolver"/>
+/// once, at the entry point, exactly as every verb on the sibling read facade
+/// composes its own - the change feed reads the write-ahead log directly, so if it
+/// resolved the raw wire value it would tail a different tree from the one the
+/// read verbs bind the same name to. The effective id drives the classification
+/// check, the registry lookups, the per-tree options lookup, the visibility
+/// decision and the grain dial alike; the caller's own bare name is what the
+/// emitted notifications echo back, so the composition never leaks onto the wire.
+/// </para>
 /// </remarks>
 internal sealed class LatticeStateObserver(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> options,
     IOptions<LatticeApiStateOptions> apiOptions,
-    IServiceProvider services) : ILatticeStateObserver
+    IServiceProvider services,
+    ITenantContextResolver tenantResolver) : ILatticeStateObserver
 {
     private const string TokenVersion = "1";
 
     private readonly IGrainFactory _grainFactory = grainFactory
         ?? throw new ArgumentNullException(nameof(grainFactory));
+
+    private readonly ITenantContextResolver _tenantResolver = tenantResolver
+        ?? throw new ArgumentNullException(nameof(tenantResolver));
 
     private readonly IOptionsMonitor<LatticeOptions> _options = options
         ?? throw new ArgumentNullException(nameof(options));
@@ -52,6 +66,20 @@ internal sealed class LatticeStateObserver(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
 
+        // Compose the caller-supplied, tenant-local name into the effective tree id before
+        // anything else looks at it. This is the same single composition seam every verb on
+        // the read facade passes through, and the change feed needs it for the same reason
+        // and one more: it tails the write-ahead log directly, so there is no downstream
+        // gate to compensate. Without it a confined tenant naming "orders" tailed the
+        // GLOBAL "orders" tree instead of its own "t/{tenant}/orders", the seam's
+        // fail-closed denial for an unattributable caller could never fire, and the
+        // namespace-escape refusal that is the only guard on the deliberately-readable
+        // "sys-" add-on trees was never consulted. With tenancy off the core no-op resolver
+        // returns the bare name unchanged, synchronously, so the warm path is unaffected.
+        var effectiveTreeId = await _tenantResolver
+            .ResolveEffectiveTreeIdAsync(request.TreeId, cancellationToken)
+            .ConfigureAwait(false);
+
         // Match the read facade's visibility boundary: silo-internal system
         // trees (the "_lattice_*" prefix) are hidden from every public read
         // surface - GetEntry / ScanEntries / GetTreeStructure / GetEntryHistory
@@ -61,22 +89,22 @@ internal sealed class LatticeStateObserver(
         // internal structure the rest of the surface deliberately hides.
         // Materialised-view ("view-*") trees stay observable, mirroring the
         // reads, which admit them read-only.
-        if (IsSystemTree(request.TreeId))
+        if (IsSystemTree(effectiveTreeId))
         {
             throw new KeyNotFoundException($"Tree '{request.TreeId}' was not found.");
         }
 
-        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
+        var tree = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
         if (!await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             throw new KeyNotFoundException($"Tree '{request.TreeId}' was not found.");
         }
 
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var physicalTreeId = await registry.ResolveAsync(request.TreeId).ConfigureAwait(false)
-            ?? request.TreeId;
-        var entry = await registry.GetEntryAsync(request.TreeId).ConfigureAwait(false);
-        var partitions = Math.Max(1, entry?.WalPartitions ?? _options.Get(request.TreeId).WalPartitions);
+        var physicalTreeId = await registry.ResolveAsync(effectiveTreeId).ConfigureAwait(false)
+            ?? effectiveTreeId;
+        var entry = await registry.GetEntryAsync(effectiveTreeId).ConfigureAwait(false);
+        var partitions = Math.Max(1, entry?.WalPartitions ?? _options.Get(effectiveTreeId).WalPartitions);
 
         // Auth-backed visibility. The change feed tails the write-ahead log
         // directly rather than flowing through the gated ILattice surface, so it
@@ -111,11 +139,11 @@ internal sealed class LatticeStateObserver(
         var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
         if (subject is { } resolved)
         {
-            var authorizationTreeId = request.TreeId;
-            if (LatticeViewTrees.IsViewTree(request.TreeId))
+            var authorizationTreeId = effectiveTreeId;
+            if (LatticeViewTrees.IsViewTree(effectiveTreeId))
             {
                 authorizationTreeId = await LatticeStateViewSource
-                    .ResolveAsync(services, _grainFactory, request.TreeId, cancellationToken)
+                    .ResolveAsync(services, _grainFactory, effectiveTreeId, cancellationToken)
                     .ConfigureAwait(false)
                     ?? throw new KeyNotFoundException($"Tree '{request.TreeId}' was not found.");
             }
