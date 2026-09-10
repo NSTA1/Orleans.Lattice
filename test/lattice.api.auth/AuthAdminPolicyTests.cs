@@ -214,6 +214,47 @@ public sealed partial class AuthAdminPolicyTests
     }
 
     [Test]
+    public async Task explain_cites_a_tree_rule_and_a_cluster_wide_rule_that_share_a_rule_id()
+    {
+        // Regression for the residual of issue #1339: the citation list deduplicated
+        // matched rules by rule id alone. A rule id is only unique within its own
+        // tree (rules are keyed by the composite (treeId, ruleId)), so when the same
+        // rule id existed in both the target tree and the cluster-wide "*" bucket and
+        // both governed the request, the target-tree rule was added first and the
+        // distinct cluster-wide rule was silently dropped - reintroducing the exact
+        // #1339 symptom of an omitted wildcard citation. The dedup now keys on the
+        // composite catalog key, so both governing rules are cited.
+        const string tree = "policy-shared-ruleid-explain";
+        const string ruleId = "allow-shared-across-scopes";
+        var scope = LatticeScope.Key(tree, "k");
+
+        using (AsAdmin())
+        {
+            await _fixture.Admin.PutRuleAsync(AllowUserKey(ruleId, Subject, tree, "k", LatticeOperation.Read));
+            await _fixture.Admin.PutRuleAsync(AllowUserClusterWide(ruleId, Subject, LatticeOperation.Read));
+        }
+
+        await _fixture.RebuildAsync();
+
+        AuthExplanation explanation;
+        using (AsAdmin())
+        {
+            explanation = await _fixture.Admin.ExplainAsync(Subject, LatticeOperation.Read, scope);
+        }
+
+        var citedScopes = explanation.MatchedRules
+            .Where(r => string.Equals(r.RuleId, ruleId, StringComparison.Ordinal))
+            .Select(r => r.Scope.TreeId)
+            .ToList();
+
+        Assert.That(
+            citedScopes,
+            Is.EquivalentTo(new[] { tree, LatticeScope.ClusterWideTreeId }),
+            "both the target-tree rule and the cluster-wide rule that share a rule id must be cited, "
+                + "not deduplicated down to one");
+    }
+
+    [Test]
     public async Task list_rules_for_tree_includes_governing_wildcard_rules()
     {
         // Issue #1339 Finding 6: list_rules_for_tree now surfaces the cluster-wide

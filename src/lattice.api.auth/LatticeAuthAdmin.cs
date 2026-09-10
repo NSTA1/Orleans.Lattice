@@ -579,16 +579,20 @@ internal sealed class LatticeAuthAdmin(
                 .ConfigureAwait(false);
         }
 
-        matched.Sort(static (a, b) => string.CompareOrdinal(a.RuleId, b.RuleId));
+        matched.Sort(CompareRuleCatalogOrder);
         return matched;
     }
 
     /// <summary>
     /// Appends every rule stored under <paramref name="treeId"/> that governs the
     /// explain request (operation, subject, and scope overlap) to
-    /// <paramref name="matched"/>, deduplicating by rule id and honouring the
-    /// explanation cap. Used to fold both the target tree's exact rules and the
-    /// cluster-wide "*" wildcard bucket into a single citation list.
+    /// <paramref name="matched"/>, deduplicating by the composite catalog key
+    /// (tree id plus rule id) and honouring the explanation cap. Used to fold both
+    /// the target tree's exact rules and the cluster-wide "*" wildcard bucket into
+    /// a single citation list. Keying dedup on the composite key rather than the
+    /// rule id alone keeps a target-tree rule and a cluster-wide rule that happen
+    /// to share a rule id as two distinct citations, since a rule id is only unique
+    /// within its own tree.
     /// </summary>
     private async Task CollectFromTreeAsync(
         string treeId,
@@ -624,7 +628,7 @@ internal sealed class LatticeAuthAdmin(
                 continue;
             }
 
-            if (!seen.Add(rule.RuleId))
+            if (!seen.Add(RuleCatalogKey(rule)))
             {
                 continue;
             }
