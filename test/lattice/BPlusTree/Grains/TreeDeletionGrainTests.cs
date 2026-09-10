@@ -22,12 +22,14 @@ public partial class TreeDeletionGrainTests
                      IGrainFactory grainFactory,
                      IOptionsMonitor<LatticeOptions> optionsMonitor) CreateGrain(
         LatticeOptions? options = null,
-        FakePersistentState<TreeDeletionState>? existingState = null)
+        FakePersistentState<TreeDeletionState>? existingState = null,
+        IReminderRegistry? reminderRegistry = null,
+        IReadOnlyList<TimeSpan>? registrationBackoff = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("deletion", TreeId));
         var grainFactory = Substitute.For<IGrainFactory>();
-        var reminderRegistry = Substitute.For<IReminderRegistry>();
+        reminderRegistry ??= Substitute.For<IReminderRegistry>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         options ??= new LatticeOptions
         {
@@ -66,7 +68,12 @@ public partial class TreeDeletionGrainTests
 
         var grain = new TreeDeletionGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
-            new LoggerFactory().CreateLogger<TreeDeletionGrain>(), state);
+            new LoggerFactory().CreateLogger<TreeDeletionGrain>(), state)
+        {
+            // Default to no backoff so a test that drives the retry budget does not
+            // spend the production delays; tests that do not care are unaffected.
+            RegistrationBackoff = registrationBackoff ?? [],
+        };
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
 

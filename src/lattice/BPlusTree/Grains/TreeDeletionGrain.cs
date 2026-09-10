@@ -35,6 +35,17 @@ internal sealed class TreeDeletionGrain(
 
     private IGrainTimer? _purgeTimer;
 
+    /// <summary>
+    /// The bounded inter-attempt backoff used when a reminder registration races
+    /// Orleans' asynchronous reminder-service startup. Defaults to
+    /// <see cref="ReminderServiceReadiness.DefaultRegistrationBackoff"/>; exposed as
+    /// an override only so a unit test can drive the retry budget without real
+    /// delays, exactly as <see cref="ReminderServiceReadiness"/> exposes its
+    /// backoff-injectable core for the same reason.
+    /// </summary>
+    internal IReadOnlyList<TimeSpan> RegistrationBackoff { get; init; }
+        = ReminderServiceReadiness.DefaultRegistrationBackoff;
+
     public async Task DeleteTreeAsync()
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
@@ -84,15 +95,66 @@ internal sealed class TreeDeletionGrain(
         var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
         await compaction.UnregisterReminderAsync();
 
-        // Register the purge reminder.
+        // Register the purge reminder. This is the only thing that ever wakes the
+        // grain to run the deferred purge, and the deletion above is already
+        // durable, so it cannot be dropped or deferred: unlike the best-effort
+        // first-write bootstraps, there is no later seam that re-attempts it.
+        // Orleans' reminder service initialises asynchronously after the silo
+        // reaches Active, so a delete issued inside that window sees the transient
+        // "Reminder Service is still initializing" fault. Wait it out with the same
+        // bounded retry the atomic-write saga's essential keepalive uses.
         var period = ClampPeriod(Options.SoftDeleteDuration);
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
-            reminderName: ReminderName,
-            dueTime: period,
-            period: period);
+        try
+        {
+            await ReminderServiceReadiness.RetryWhileInitializingAsync(
+                () => reminderRegistry.RegisterOrUpdateReminder(
+                    callingGrainId: context.GrainId,
+                    reminderName: ReminderName,
+                    dueTime: period,
+                    period: period),
+                RegistrationBackoff);
+        }
+        catch
+        {
+            // The deletion is durable but nothing will ever fire the purge, and the
+            // idempotency guard at the top of this method makes every retry a silent
+            // no-op - the same "persisted / in-memory divergence, idempotency-guarded"
+            // trap the WriteStateAsync revert above exists to avoid, reached one line
+            // later. Roll the deletion back (in storage as well as in memory, because
+            // it was already written) so the caller's retry genuinely re-runs, then
+            // surface the original fault.
+            await RevertPersistedDeletionAsync(isDeletedSnapshot, deletedAtUtcSnapshot);
+            throw;
+        }
 
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreeDeleted);
+    }
+
+    /// <summary>
+    /// Restores the deletion fields to <paramref name="isDeleted"/> /
+    /// <paramref name="deletedAtUtc"/> and persists the restoration, so a delete
+    /// that could not arm its purge reminder leaves no durable trace and stays
+    /// retryable. A failure to persist the revert is logged rather than thrown:
+    /// the caller is already receiving the fault that caused the revert, and
+    /// replacing it would hide the real cause.
+    /// </summary>
+    private async Task RevertPersistedDeletionAsync(bool isDeleted, DateTimeOffset? deletedAtUtc)
+    {
+        state.State.IsDeleted = isDeleted;
+        state.State.DeletedAtUtc = deletedAtUtc;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Tree {TreeId}: failed to roll back the deletion state after the purge reminder "
+                + "could not be registered. This activation is not deleted, but storage still is; "
+                + "a reactivation will need the delete to be re-issued.",
+                TreeId);
+        }
     }
 
     public Task<bool> IsDeletedAsync() => Task.FromResult(state.State.IsDeleted);
@@ -307,11 +369,17 @@ internal sealed class TreeDeletionGrain(
         state.State.ShardRetries = 0;
         await state.WriteStateAsync();
 
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
-            reminderName: KeepaliveReminderName,
-            dueTime: TimeSpan.FromMinutes(1),
-            period: TimeSpan.FromMinutes(1));
+        // Same startup-window transient as the purge reminder above. No revert is
+        // needed here: the tree-deletion reminder registered by DeleteTreeAsync is
+        // still armed and re-enters StartPurgeAsync on its next tick while
+        // _purgeTimer is null, so this registration has a natural re-attempt seam.
+        await ReminderServiceReadiness.RetryWhileInitializingAsync(
+            () => reminderRegistry.RegisterOrUpdateReminder(
+                callingGrainId: context.GrainId,
+                reminderName: KeepaliveReminderName,
+                dueTime: TimeSpan.FromMinutes(1),
+                period: TimeSpan.FromMinutes(1)),
+            RegistrationBackoff);
     }
 
     private async Task OnPurgeTimerTick(CancellationToken ct)
