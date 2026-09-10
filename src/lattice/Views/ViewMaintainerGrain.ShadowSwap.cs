@@ -240,19 +240,7 @@ internal sealed partial class ViewMaintainerGrain
         // below head is re-read and re-staged by the resumed tail rather than
         // skipped past - otherwise its committed batch would be permanently lost
         // until a later reconcile.
-        var capturedOffsets = new Dictionary<int, long>();
-        for (var partition = 0; partition < partitions; partition++)
-        {
-            var head = await commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken);
-            var floor = head - 1;
-            var stagedFloor = HeldFloorForPartition(partition);
-            if (stagedFloor != long.MaxValue && stagedFloor - 1 < floor)
-            {
-                floor = stagedFloor - 1;
-            }
-
-            capturedOffsets[partition] = floor;
-        }
+        var capturedOffsets = await CaptureResumeFloorsAsync(walTreeId, partitions, cancellationToken);
 
         // A rebuild reconverges from current committed source state, so abandon any
         // partially-staged atomic batch (its uncommitted prepares are not part of
@@ -395,19 +383,7 @@ internal sealed partial class ViewMaintainerGrain
         // tail rather than skipped past - otherwise a committed batch whose
         // terminal had not yet arrived at scan time would be permanently lost until
         // a later reconcile.
-        var capturedOffsets = new Dictionary<int, long>();
-        for (var partition = 0; partition < partitions; partition++)
-        {
-            var head = await commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken);
-            var floor = head - 1;
-            var stagedFloor = HeldFloorForPartition(partition);
-            if (stagedFloor != long.MaxValue && stagedFloor - 1 < floor)
-            {
-                floor = stagedFloor - 1;
-            }
-
-            capturedOffsets[partition] = floor;
-        }
+        var capturedOffsets = await CaptureResumeFloorsAsync(walTreeId, partitions, cancellationToken);
 
         // A rebuild reconverges the view from current committed source state, so
         // any partially-staged atomic batch is abandoned: its uncommitted prepares
@@ -697,5 +673,66 @@ internal sealed partial class ViewMaintainerGrain
         hasher.GetHashAndReset(finalHash);
 
         return new ViewDigest { Hash = finalHash, EntryCount = count };
+    }
+
+    /// <summary>
+    /// Captures the per-partition resume floor both rebuild paths pin before they
+    /// clear staging: each partition's WAL head, held back below the lowest
+    /// still-staged offset on that partition so an in-flight atomic batch is
+    /// re-read by the resumed tail rather than skipped past.
+    /// <para>
+    /// The head probes are pure reads of <b>distinct</b> partitions, so none can
+    /// observe another's effect and their completion order is immaterial; they now
+    /// overlap in bounded waves instead of costing one round-trip latency each.
+    /// The staged-floor fold stays <b>after</b> the fan-out and before the caller
+    /// clears <c>_staging</c>, so every floor is still computed against the same
+    /// fully-populated staging map the serial walk read, and the captured offsets
+    /// are identical to the ones it produced.
+    /// </para>
+    /// </summary>
+    private async Task<Dictionary<int, long>> CaptureResumeFloorsAsync(
+        string walTreeId,
+        int partitions,
+        CancellationToken cancellationToken)
+    {
+        var capturedOffsets = new Dictionary<int, long>(Math.Max(0, partitions));
+        if (partitions <= 0)
+        {
+            return capturedOffsets;
+        }
+
+        // One partition has nothing to overlap: keep the direct await.
+        if (partitions == 1)
+        {
+            capturedOffsets[0] = ResumeFloor(
+                await commitLogReader.GetHeadOffsetAsync(walTreeId, 0, cancellationToken),
+                0);
+            return capturedOffsets;
+        }
+
+        var heads = await BoundedFanOut.RunAsync(
+            partitions,
+            BoundedFanOut.DefaultWidth,
+            partition => commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken),
+            cancellationToken);
+
+        for (var partition = 0; partition < heads.Length; partition++)
+        {
+            capturedOffsets[partition] = ResumeFloor(heads[partition], partition);
+        }
+
+        return capturedOffsets;
+
+        long ResumeFloor(long head, int partition)
+        {
+            var floor = head - 1;
+            var stagedFloor = HeldFloorForPartition(partition);
+            if (stagedFloor != long.MaxValue && stagedFloor - 1 < floor)
+            {
+                floor = stagedFloor - 1;
+            }
+
+            return floor;
+        }
     }
 }
