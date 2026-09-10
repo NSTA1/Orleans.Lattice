@@ -1393,6 +1393,132 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
+  # CONTENT GATES. Unconditional by construction - no `needs:`, no `if:`.
+  #
+  # Every gate that polices TEXT rather than code is an ordinary NUnit test:
+  # the formal refinement fixtures (`test/lattice/Formal/`, which read
+  # `spec/*.md`), the hygiene fixtures (`test/<pkg>/Hygiene/`, which scan every
+  # tracked text file for em-dashes and mojibake), and the documentation
+  # snippet compilations (`test/<pkg>/Docs/`, which compile the fenced C# in
+  # `docs/`). Nothing else in this workflow enforces any of them.
+  #
+  # The `test` matrix above cannot be relied on to run them, for two reasons:
+  #
+  #   1. It does not run at all on a markdown-only diff. The paths filter
+  #      excludes `**/*.md`, so `code` is false, `leg_count` is 0, and the
+  #      whole matrix is skipped - on precisely the diff shape the em-dash gate
+  #      exists to catch. Its miss rate on its own target population was 100%.
+  #   2. Even when it does run, it selects packages seeded from the changed
+  #      code paths and expanded along reverse project references. A pull
+  #      request touching only `src/lattice.explorer/**` plus `spec/*.md`
+  #      never selects `lattice`, so the formal fixtures still do not run.
+  #
+  # Hence: no condition of any kind on this job. That is not belt-and-braces,
+  # it is the fix. A conditional job can be SKIPPED, and a skipped job is
+  # non-blocking in Actions by default - which is the very defect being closed
+  # here, reintroduced one level up. `build-and-test` accepts only `success`
+  # from this job, never `skipped`, so the two halves cannot drift apart.
+  #
+  # Cost: one restore, one solution build, one filtered test pass. Measured on
+  # a real ubuntu-latest run: 24s restore, 148s build, 97s tests, about 4m50s
+  # of job wall-clock. The build dominates, and every other test leg already
+  # pays an equivalent one. On a code change this job runs beside the matrix
+  # and adds no wall-clock to the PR; on a docs-only change it is the only test
+  # job that runs, and it deliberately does NOT drag in the deterministic or
+  # chaos matrix - roughly five minutes for a docs PR against zero before,
+  # where "zero" meant the gates never ran.
+  #
+  # Documentation snippet compilation is included here on purpose. It is the
+  # expensive family (it needs the solution built, which the other two do not),
+  # and it is true that a snippet usually breaks because the public surface it
+  # compiles against moved - a code change, already covered. But it also breaks
+  # when the snippet itself is edited, and a snippet lives in `docs/**/*.md`,
+  # which is exactly the diff shape that reached no test at all. Since the
+  # build is already paid for by the other two families, the marginal cost of
+  # including it is the test time alone, so it is included rather than left on
+  # the code path.
+  #
+  # `run-text-gates.py` refuses to report success on a vacuous run: zero tests
+  # executed, or zero tests executed for any one family, fails the job. That
+  # mirrors `HygieneDenominator.RequireExamined` one level up, where a gate
+  # that never ran cannot be caught by a control inside itself.
+  # `CiContentGateWiringTests` guards the wiring and the filter's coverage of
+  # every declared gate fixture.
+  # ---------------------------------------------------------------------------
+  content-gates:
+    name: Content gates (formal, hygiene, docs)
+    runs-on: ubuntu-latest
+
+    env:
+      # Single source of truth for what this gate selects, read back by
+      # `CiContentGateWiringTests` so a fixture cannot be added to one of the
+      # gate directories and silently fall outside the filter.
+      #
+      # `Tlc` is excluded deliberately: `TlcModelCheckTests` needs a JVM and
+      # `tla2tools.jar`, and it reads only `.tla` and `.cfg` files, which are
+      # not markdown and therefore already reach the `test` matrix.
+      #
+      # `Orleans.Lattice.Explorer.UiTests` is excluded for the same reason its
+      # tree is already carved out of the `code` and `nonSample` filters above:
+      # every test in that assembly runs behind a `[SetUpFixture]` that starts
+      # the Explorer host and launches Playwright chromium, so selecting even
+      # one of them costs a browser install. `ui-tests.yml` is their only
+      # runner. Two of its fixtures are named `*HygieneTests` and so match the
+      # `Hygiene` selector, but they police TEST CODE (fixture categories and
+      # namespaces), not prose - they cannot regress on a markdown-only diff,
+      # which is the diff shape this job exists for. `CiContentGateWiringTests`
+      # asserts that no fixture in a gate DIRECTORY is caught by this
+      # exclusion, so it cannot quietly grow into a hole.
+      CONTENT_GATE_FILTER: (FullyQualifiedName~Formal|FullyQualifiedName~Hygiene|FullyQualifiedName~Docs)&Category!=Tlc&FullyQualifiedName!~Explorer.UiTests
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The hygiene fixtures enumerate tracked files through git, and the
+          # guard tests read the workflow files. Full depth for consistency
+          # with every other checkout in this workflow.
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore
+
+      # The docs snippet fixtures compile against the real public surface, so
+      # they need the solution built. The other two families do not, but the
+      # build is a single shared cost.
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Run content gates
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/run-text-gates.py \
+            --solution Orleans.Lattice.slnx \
+            --filter "$CONTENT_GATE_FILTER" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload content gate results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: content-gate-results
+          path: |
+            **/text-gates.trx
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # THE REQUIRED CHECK.
   #
   # `build-and-test` is the required status check on `main`, with `strict`
@@ -1406,7 +1532,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-and-test:
     name: build-and-test
-    needs: [plan, extras, test]
+    needs: [plan, extras, test, content-gates]
     if: always()
     runs-on: ubuntu-latest
 
@@ -1447,16 +1573,26 @@ jobs:
       # FAILED or CANCELLED one never is. Reading the results explicitly rather
       # than relying on job ordering means a new upstream job cannot be added
       # later and silently escape the gate.
+      #
+      # `content-gates` is the ONE exception, and the exception is the point.
+      # It is the only job that always has something to say, because the gates
+      # it runs read text rather than code and every pull request contains
+      # text. Accepting `skipped` from it would recreate the exact defect it
+      # closes: a required check reporting green because the job that would
+      # have failed never ran. Actions treats a skipped dependency as
+      # non-blocking by default, so this has to be spelled out rather than
+      # assumed. It is inspected separately below, and only `success` passes.
       - name: Verdict
         env:
           PLAN: ${{ needs.plan.result }}
           EXTRAS: ${{ needs.extras.result }}
           TEST: ${{ needs.test.result }}
+          CONTENT_GATES: ${{ needs['content-gates'].result }}
           LEG_COUNT: ${{ needs.plan.outputs.leg_count }}
         run: |
           set -euo pipefail
 
-          echo "plan=$PLAN extras=$EXTRAS test=$TEST legs=$LEG_COUNT"
+          echo "plan=$PLAN extras=$EXTRAS test=$TEST content-gates=$CONTENT_GATES legs=$LEG_COUNT"
 
           ok=true
           for pair in "plan:$PLAN" "extras:$EXTRAS" "test:$TEST"; do
@@ -1467,6 +1603,17 @@ jobs:
               *) echo "::error::Upstream job '${name}' reported '${result}'."; ok=false ;;
             esac
           done
+
+          # Success only. `skipped` is named explicitly so the failure says what
+          # actually went wrong rather than reporting an unexpected state.
+          case "$CONTENT_GATES" in
+            success) ;;
+            skipped)
+              echo "::error::Upstream job 'content-gates' was SKIPPED. It must run on every pull request: it is the only thing that enforces the formal, hygiene, and docs-snippet gates, and a skipped dependency does not block a required check. Remove whatever condition was added to it."
+              ok=false
+              ;;
+            *) echo "::error::Upstream job 'content-gates' reported '${CONTENT_GATES}'."; ok=false ;;
+          esac
 
           if [ "$ok" != "true" ]; then
             exit 1
@@ -1480,9 +1627,10 @@ jobs:
               echo "### Test selection: 0 packages"
               echo ""
               echo "No test legs ran for this change (docs-only, samples-only,"
-              echo "or a release version bump). A green \`build-and-test\` here"
-              echo "means the gates that did run passed, not that any package's"
-              echo "tests were executed."
+              echo "or a release version bump). The \`content-gates\` job still"
+              echo "ran the formal, hygiene, and docs-snippet fixtures, so this"
+              echo "green means those gates passed - not that any package's own"
+              echo "test suite was executed."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 

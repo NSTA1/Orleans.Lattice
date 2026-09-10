@@ -607,13 +607,7 @@ Most fast text- and structure-hygiene gates carry `Hygiene` in their type name, 
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Hygiene"
 ```
 
-Three things that filter does **not** cover, so do not treat it as "all gates":
-
-- `SliceCoverageCompletenessTests` is **not** matched - its name has no `Hygiene`, even though it lives under `test/lattice/Hygiene/`. It is the guard that asserts every slice is scanned exactly once, so it is precisely the test that fails when you add or move a per-package hygiene fixture. Filtering on `~Hygiene` alone gives a **false green** in exactly that situation. Whenever you add a `Hygiene/` fixture to a package, you must also add that package's `src/` and `test/` roots to `CoreHygieneScope.AllPackageSliceRoots`, and verify with:
-
-  ```powershell
-  dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~SliceCoverage"
-  ```
+Two things that filter does **not** cover, so do not treat it as "all gates":
 
 - `DocsSnippetCompilationTests` is **not** matched - its name has no `Hygiene` and it is `[Category("Docs")]`. It is also far heavier (it Roslyn-compiles every `csharp verify` snippet under `docs/`). Run it when you have touched docs, either by name or by category:
 
@@ -622,6 +616,26 @@ Three things that filter does **not** cover, so do not treat it as "all gates":
   ```
 
 - The em-dash, mojibake, deletion-mandate, and integration-category gates now live as abstract bases in the shared `Orleans.Lattice.Testing` library and run in **every** test project via a thin concrete subclass under each project's `Hygiene/` folder. Each subclass scans only that project's own slice (`src/<package>` + `test/<package>`); the core project additionally owns the repo-level files no package owns (`docs/`, `.github/`, `benchmark/`, `samples/`, `tools/`, and root files). The single-project command above therefore only checks the core slice plus repo-level files; the other packages' slices are exercised by running each touched package's own test project before the PR (or that package's own `~Hygiene` filter), and by CI's full cross-solution run.
+
+`SliceCoverageCompletenessTests` *is* matched, but only because its namespace was
+deliberately moved to `Orleans.Lattice.Tests.Hygiene` - its type name still has no
+`Hygiene` in it. It is the guard that asserts every slice is scanned exactly once,
+so it is precisely the test that fails when you add or move a per-package hygiene
+fixture, and a filter that missed it would give a **false green** in exactly that
+situation. Whenever you add a `Hygiene/` fixture to a package, you must also add
+that package's `src/` and `test/` roots to `CoreHygieneScope.AllPackageSliceRoots`,
+and verify with:
+
+```powershell
+dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~SliceCoverage"
+```
+
+That namespace convention is now load-bearing rather than cosmetic, and
+`CiContentGateWiringTests` enforces it: **a `[TestFixture]` under a
+`test/<pkg>/Hygiene/`, `test/<pkg>/Formal/`, or `test/<pkg>/Docs/` directory must
+sit in a namespace naming its family**, because that is how CI's content-gate job
+selects it. A fixture that falls outside the filter is still built and never run,
+which is silent - so the guard fails the build instead.
 
 The shared bases are discovered through their per-project subclasses, so each gate's `[TestFixture]` lives under the consuming project's `Hygiene/` folder; the table below lists what each enforces.
 
@@ -635,4 +649,30 @@ The shared bases are discovered through their per-project subclasses, so each ga
 | `DocsSnippetCompilationTests` (`[Category("Docs")]`) | Every C# snippet under `docs/` uses the ` ```csharp verify ` fence and compiles against the real `Orleans.Lattice` surface. | Make snippets self-contained (declare referenced variables inline) or use the harness's ambient identifiers (`grainFactory`, `client`, `siloBuilder`, `tree`, `lattice`, `cancellationToken`, the `User` / `Order` records). Convert genuinely non-compiling illustrations to prose or a non-`csharp` fence. See the documentation skill. |
 | `PerformanceReportMarkerHygieneTests` | The mechanically-managed marker blocks (`perf-table:layer1`, `perf-table:layer2`) in `docs/lattice/performance-single-silo.md` keep their contract. | Do not hand-edit between the markers; `benchmark/performance-report.ps1` rewrites them on every run. Repo-level gate; runs only in the core project. |
 
-Additional code-shape gates run in the same suite (for example `AuditHygieneRegressionTests` requires every grain to use `ILogger<TSelf>` rather than a non-generic `ILogger`). They live under `test/lattice/` and are caught by the same `FullyQualifiedName~Hygiene` filter - with the exception of `SliceCoverageCompletenessTests`, which must be filtered by its own name (see above).
+Additional code-shape gates run in the same suite (for example `AuditHygieneRegressionTests` requires every grain to use `ILogger<TSelf>` rather than a non-generic `ILogger`). They live under `test/lattice/` and are caught by the same `FullyQualifiedName~Hygiene` filter.
+
+### How these gates reach CI
+
+Every gate above is an ordinary NUnit test, and none of them has a step of its own
+in `ci.yml`. That used to mean they were only enforced when the per-package test
+matrix ran - and the matrix does not run on a markdown-only pull request, because
+the paths filter excludes `**/*.md`. A documentation-only change therefore skipped
+every one of them while `build-and-test` still reported success. The em-dash gate
+exists to catch prose pasted from a word processor, which lands in markdown, so it
+was disabled on precisely the diff shape it was written for.
+
+They now run in a dedicated `content-gates` job that carries **no `if:` and no
+`needs:`**, so it executes on every pull request and cannot be skipped. It builds
+the solution once and runs
+
+```text
+(FullyQualifiedName~Formal|FullyQualifiedName~Hygiene|FullyQualifiedName~Docs)&Category!=Tlc
+```
+
+across `Orleans.Lattice.slnx`. `build-and-test` requires `success` from that job
+and rejects `skipped` by name, because Actions treats a skipped dependency as
+non-blocking - which is the same defect one level up. Two guards keep it honest:
+`run-text-gates.py` fails the job if the run executed no tests, or no tests for
+any one of the three families, and `CiContentGateWiringTests` fails the build if
+the job acquires a condition, drops out of the required check's `needs:`, starts
+accepting `skipped`, or stops selecting a fixture that exists in a gate directory.
