@@ -105,6 +105,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     private readonly RepoContextExactScanBudget _exactScanBudget;
     private readonly RepoContextExactScanBreaker _exactScanBreaker;
     private readonly RepoContextRetrievalGuardReporter _guards;
+    private readonly RepoContextRetrievalReadinessState? _readiness;
     private readonly ILogger<AnnRepoContextSemanticIndex> _logger;
 
     /// <summary>Creates the approximate-first semantic index.</summary>
@@ -114,6 +115,13 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     /// <param name="exactScanBreaker">The record of gathers that have already proved they cannot finish. Must not be <see langword="null"/>.</param>
     /// <param name="guards">The counters that make both guards' operating state readable from an information-level container. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger the fallback report is written to. Must not be <see langword="null"/>.</param>
+    /// <param name="readiness">
+    /// The shared readiness state told which path inside the plane answered, so
+    /// <see cref="RepoContextRetrievalReadinessState.Arming"/> reports a
+    /// demonstrated fact rather than a prediction. Optional: a host that binds no
+    /// readiness state simply loses the arming report, and nothing on the query
+    /// path depends on it.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public AnnRepoContextSemanticIndex(
         IRepoContextAnnIndex plane,
@@ -121,7 +129,8 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         RepoContextExactScanBudget exactScanBudget,
         RepoContextExactScanBreaker exactScanBreaker,
         RepoContextRetrievalGuardReporter guards,
-        ILogger<AnnRepoContextSemanticIndex> logger)
+        ILogger<AnnRepoContextSemanticIndex> logger,
+        RepoContextRetrievalReadinessState? readiness = null)
     {
         ArgumentNullException.ThrowIfNull(plane);
         ArgumentNullException.ThrowIfNull(exact);
@@ -135,6 +144,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         _exactScanBreaker = exactScanBreaker;
         _guards = guards;
         _logger = logger;
+        _readiness = readiness;
     }
 
     /// <inheritdoc />
@@ -195,6 +205,13 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         var outcome = await _plane
             .SearchAsync(repoId, query, querySpace, k, cancellationToken)
             .ConfigureAwait(false);
+
+        // Reported to readiness only for the two states in which the plane answered
+        // for itself. Bootstrapping means it did not answer at all, which is evidence
+        // about the fallback ladder and none whatever about whether a partitioning
+        // exists, so ArmingOf maps it to Unknown and ObserveArming ignores it rather
+        // than letting a query the plane could not serve erase a real observation.
+        _readiness?.ObserveArming(ArmingOf(outcome.State));
 
         // Recorded for every outcome, Bootstrapping included, so the instrument
         // partitions the whole query population rather than only its serving half.
@@ -563,6 +580,23 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             $"open for {_exactScanBreaker.OpenFor(repoId)} across {stalls} stall(s), next half-open probe in "
             + $"{_exactScanBreaker.ProbeDueIn(repoId)}");
     }
+
+    /// <summary>
+    /// Maps a serving state onto the arming fact readiness reports. Only the two
+    /// states in which the plane answered for itself carry an observation:
+    /// <see cref="RepoContextAnnServingState.Bootstrapping"/> means the plane did
+    /// not answer, which says nothing about whether it holds a partitioning, so it
+    /// maps to <see cref="RepoContextRetrievalArming.Unknown"/> and is ignored by
+    /// <see cref="RepoContextRetrievalReadinessState.ObserveArming"/>.
+    /// </summary>
+    /// <param name="state">The state that answered.</param>
+    /// <returns>The arming observation, which may be <see cref="RepoContextRetrievalArming.Unknown"/>.</returns>
+    internal static RepoContextRetrievalArming ArmingOf(RepoContextAnnServingState state) => state switch
+    {
+        RepoContextAnnServingState.Approximate => RepoContextRetrievalArming.Armed,
+        RepoContextAnnServingState.Exhaustive => RepoContextRetrievalArming.Unarmed,
+        _ => RepoContextRetrievalArming.Unknown,
+    };
 
     /// <summary>
     /// What a serving state means in the operator's terms. Kept beside the state

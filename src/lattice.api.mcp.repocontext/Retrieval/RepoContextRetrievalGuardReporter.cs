@@ -159,6 +159,22 @@ internal readonly record struct RepoContextRetrievalGuardSnapshot(
 /// <see cref="RepoContextRetrievalReadinessState"/> covers that case, because it
 /// converges without waiting for a query.
 /// </para>
+/// <para>
+/// <b>What that delegation did and did not cover, and why it now covers both.</b>
+/// Readiness converges without traffic because the warmup drives a real query, so
+/// the sentence above was true of the question readiness was built to answer -
+/// semantic against keyword. It was <i>not</i> true of this instrument's question,
+/// because readiness held no armed-against-unarmed notion at all: a reader who
+/// followed the delegation arrived at a surface that reported the same
+/// <c>Serving</c> for both, and there was no incorrect statement anywhere to catch
+/// it, only a signal that had never been given the condition to report (issue
+/// #2441). <see cref="RepoContextRetrievalReadinessState.Arming"/> supplies that
+/// condition, fed from the same <see cref="RepoContextAnnServingState"/> this
+/// instrument partitions, so the delegation now holds for both questions. If a
+/// future change removes arming from readiness, this paragraph and the sentence
+/// above must go with it rather than being left pointing at a surface that cannot
+/// answer.
+/// </para>
 /// </summary>
 internal sealed class RepoContextRetrievalGuardReporter : IDisposable
 {
