@@ -217,39 +217,84 @@ internal sealed class RepoContextAnnIndexSweepService(
         // decision 'no-repo-tag-on-pass-arm-faults' and issue #2453.
         var unarmed = new List<string>();
         Exception? faulted = null;
+        var faultCause = RepoContextAnnSweepFaultCause.Unexpected;
+
+        // Each stage below is guarded on its own rather than all three under one
+        // catch, because a fault's cause is knowable only from the stage that was
+        // executing when it was raised - the exception does not carry it, and by the
+        // time one reaches a shared handler the stage is gone. Resolving the cause at
+        // the site is the whole point of issue #2578: inferring it afterwards would
+        // put a guess on the instrument, which relocates this defect family rather
+        // than removing it.
+
+        // Stamp the run authority's fixed identity onto the whole sweep, so both
+        // the listing scan below and the arming calls it drives carry a subject
+        // the access gate can authorize.
+        //
+        // Without this the sweep is anonymous, because a BackgroundService loop
+        // is not a request and carries no ambient credential. On a host running a
+        // default-deny gate that does NOT surface as an error: a denied range
+        // read is enforced by ResolveRangeReadFilterAsync as a reject-all key
+        // filter (`static _ => false`), not an exception - so the scan returns an
+        // EMPTY list, cleanly, and the sweep reports "nothing to arm" on every
+        // pass forever while every credentialed caller in the same process sees
+        // the full set. The index is then never built and every semantic query
+        // falls back to an exact brute-force scan.
+        //
+        // That silent shape is also why the 'authority-unavailable' cause below
+        // matters out of proportion to how often it fires: when this stage throws
+        // it is at least loud, and the failure worth fearing is the neighbouring
+        // one that does not.
+        //
+        // This is the same remedy RepoIndexRunner, RepoContextSelfIndexGrain, and
+        // RepoContextGitSourceArmingService already apply for exactly this
+        // reason; the sweep was the one background arming component that omitted
+        // it. A host that registers no authority resolves null and the sweep's
+        // ambient credential is left untouched, so an in-process host with no
+        // access gate is unaffected. See issue #2406.
+        IDisposable? resolvedScope;
         try
         {
-            // Stamp the run authority's fixed identity onto the whole sweep, so both
-            // the listing scan below and the arming calls it drives carry a subject
-            // the access gate can authorize.
-            //
-            // Without this the sweep is anonymous, because a BackgroundService loop
-            // is not a request and carries no ambient credential. On a host running a
-            // default-deny gate that does NOT surface as an error: a denied range
-            // read is enforced by ResolveRangeReadFilterAsync as a reject-all key
-            // filter (`static _ => false`), not an exception - so the scan returns an
-            // EMPTY list, cleanly, and the sweep reports "nothing to arm" on every
-            // pass forever while every credentialed caller in the same process sees
-            // the full set. The index is then never built and every semantic query
-            // falls back to an exact brute-force scan.
-            //
-            // This is the same remedy RepoIndexRunner, RepoContextSelfIndexGrain, and
-            // RepoContextGitSourceArmingService already apply for exactly this
-            // reason; the sweep was the one background arming component that omitted
-            // it. A host that registers no authority resolves null and the sweep's
-            // ambient credential is left untouched, so an in-process host with no
-            // access gate is unaffected. See issue #2406.
             var credential = runAuthority.Resolve();
-            using var credentialScope = credential is null
-                ? null
-                : LatticeCredentialContext.With(credential);
+            resolvedScope = credential is null ? null : LatticeCredentialContext.With(credential);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return Fault(
+                RepoContextAnnSweepFaultCause.AuthorityUnavailable, armed, observed, deferred, unarmed, ex);
+        }
 
-            // Only the ids are needed to arm a coordinator, so this deliberately
-            // avoids ListReposAsync: a full summary reads a root marker per repository
-            // and can schedule an out-of-band membership walk, none of which a sweep
-            // uses.
-            var repoIds = await store.ListRepoIdsAsync(stoppingToken).ConfigureAwait(false);
-            observed = repoIds.Count;
+        using var credentialScope = resolvedScope;
+
+        // Only the ids are needed to arm a coordinator, so this deliberately
+        // avoids ListReposAsync: a full summary reads a root marker per repository
+        // and can schedule an out-of-band membership walk, none of which a sweep
+        // uses.
+        IReadOnlyList<string> repoIds;
+        try
+        {
+            repoIds = await store.ListRepoIdsAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            // Nothing was attempted, so the observed count of zero this reports
+            // corroborates the fault rather than contradicting it. A grain call from
+            // a hosted service's start can race ahead of the silo becoming
+            // dispatch-ready, and that race lands here.
+            return Fault(RepoContextAnnSweepFaultCause.ListingUnavailable, armed, observed, deferred, unarmed, ex);
+        }
+
+        observed = repoIds.Count;
+        try
+        {
             foreach (var repoId in repoIds)
             {
                 stoppingToken.ThrowIfCancellationRequested();
@@ -333,7 +378,17 @@ internal sealed class RepoContextAnnIndexSweepService(
                     // fault and not the sweep's. Record it, name the repository the
                     // counter cannot name, and keep going so a single bad
                     // repository cannot hide every repository behind it.
-                    faulted ??= ex;
+                    //
+                    // The cause is classified from the first fault only, matching the
+                    // exception the sweep goes on to report. A later repository
+                    // failing differently would otherwise leave the cause tag and the
+                    // logged exception describing different faults.
+                    if (faulted is null)
+                    {
+                        faulted = ex;
+                        faultCause = ClassifyArmingFault(ex);
+                    }
+
                     logger.LogWarning(
                         ex,
                         "Repo {RepoId}: arming the approximate-index build coordinator failed. The sweep is "
@@ -349,40 +404,127 @@ internal sealed class RepoContextAnnIndexSweepService(
         }
         catch (Exception ex)
         {
-            Announce(RepoContextAnnSweepOutcome.Faulted, armed, observed, deferred, unarmed, ex);
-            return RepoContextAnnSweepOutcome.Faulted;
+            // Only a cancellation raised while the host is NOT stopping can reach
+            // here: the per-repository handlers above absorb everything else. That is
+            // an orderly stop happening at a disorderly time, so it is a bug rather
+            // than a known condition, and it is tagged as the value that pages.
+            return Fault(RepoContextAnnSweepFaultCause.Unexpected, armed, observed, deferred, unarmed, ex);
         }
 
         if (faulted is not null)
         {
-            Announce(RepoContextAnnSweepOutcome.Faulted, armed, observed, deferred, unarmed, faulted);
-            return RepoContextAnnSweepOutcome.Faulted;
+            return Fault(faultCause, armed, observed, deferred, unarmed, faulted);
         }
 
         var outcome = armed > 0 ? RepoContextAnnSweepOutcome.Armed : RepoContextAnnSweepOutcome.Empty;
-        Announce(outcome, armed, observed, deferred, unarmed, exception: null);
+        Announce(outcome, cause: null, armed, observed, deferred, unarmed, exception: null);
         return outcome;
+    }
+
+    /// <summary>
+    /// Which cause a failed arming call belongs to.
+    /// </summary>
+    /// <param name="exception">The fault the arming call raised.</param>
+    /// <returns>The cause to record.</returns>
+    /// <remarks>
+    /// <para>
+    /// A timeout is deliberately absent from every arm, because a timeout never
+    /// reaches this method: the per-repository handler above treats it as a deferral
+    /// and the sweep does not fault at all. Folding it in here would re-create the
+    /// false-failure signal issue #2252 records, where a coordinator measured
+    /// mid-ingest with every checkpoint cursor advancing was counted as a fault twice
+    /// a minute for doing exactly the work it was armed to do.
+    /// </para>
+    /// <para>
+    /// Silo churn is matched by type name rather than by type, because one of the two
+    /// runtime exception types is internal to Orleans. This is the same match
+    /// <see cref="LatticeApiMcpDiscoveryFaultClassifier"/> and <c>ShardActivationRetry</c>
+    /// already use for the same reason.
+    /// </para>
+    /// </remarks>
+    private static RepoContextAnnSweepFaultCause ClassifyArmingFault(Exception exception)
+    {
+        for (var e = exception; e is not null; e = e.InnerException)
+        {
+            // An embedding-space mismatch derives from InvalidOperationException, so
+            // it must be tested before the argument-shaped arm would swallow it into
+            // the same bucket by a different route.
+            if (e is EmbeddingSpaceMismatchException or ArgumentException or NotSupportedException)
+            {
+                return RepoContextAnnSweepFaultCause.PlaneRejected;
+            }
+
+            if (e is System.IO.IOException or TimeoutException)
+            {
+                return RepoContextAnnSweepFaultCause.DependencyUnavailable;
+            }
+
+            var typeName = e.GetType().Name;
+            if (typeName.Contains("SiloUnavailableException", StringComparison.Ordinal)
+                || typeName.Contains("OrleansMessageRejectionException", StringComparison.Ordinal))
+            {
+                return RepoContextAnnSweepFaultCause.DependencyUnavailable;
+            }
+        }
+
+        return RepoContextAnnSweepFaultCause.Unexpected;
+    }
+
+    /// <summary>
+    /// Announces a faulted sweep under the cause its site resolved, and reports the
+    /// faulted outcome.
+    /// </summary>
+    /// <param name="cause">Why the sweep faulted, resolved at the fault site.</param>
+    /// <param name="armed">Coordinators armed before the fault.</param>
+    /// <param name="observed">Repository ids observed in the listing.</param>
+    /// <param name="deferred">Coordinators that deferred the arming call.</param>
+    /// <param name="unarmed">The repositories left unarmed.</param>
+    /// <param name="exception">The fault.</param>
+    /// <returns>Always <see cref="RepoContextAnnSweepOutcome.Faulted"/>.</returns>
+    private RepoContextAnnSweepOutcome Fault(
+        RepoContextAnnSweepFaultCause cause,
+        int armed,
+        int observed,
+        int deferred,
+        IReadOnlyList<string> unarmed,
+        Exception exception)
+    {
+        Announce(RepoContextAnnSweepOutcome.Faulted, cause, armed, observed, deferred, unarmed, exception);
+        return RepoContextAnnSweepOutcome.Faulted;
     }
 
     /// <summary>Records one outcome and writes the log line its transition warrants.</summary>
     private void Announce(
         RepoContextAnnSweepOutcome outcome,
+        RepoContextAnnSweepFaultCause? cause,
         int armed,
         int observed,
         int deferred,
         IReadOnlyList<string> unarmed,
         Exception? exception)
     {
-        var report = _reporter.Record(outcome);
+        // The two recording entry points are separate so that a fault cannot be
+        // counted without a cause. There is no overload that would let a new fault
+        // path compile while emitting a default value, which is acceptance criterion
+        // 2 of issue #2578 held structurally rather than by discipline.
+        var report = cause is { } faultCause
+            ? _reporter.RecordFaulted(faultCause)
+            : _reporter.RecordCompleted(outcome);
         switch (report.Announcement)
         {
             case RepoContextAnnSweepAnnouncement.FaultBegan:
                 logger.LogWarning(
                     exception,
-                    "Repository-context approximate-index sweep failed to arm the build coordinators; retrying "
-                    + "with backoff up to {MaxRetryDelay}. Until a sweep gets through, no build is scheduled and "
-                    + "semantic search cannot leave its bootstrapping fallback. Repeats of this fault are counted "
-                    + "onto '{Instrument}' with outcome '{Outcome}' rather than logged per attempt.",
+                    "Repository-context approximate-index sweep failed to arm the build coordinators, cause "
+                    + "'{Cause}'; retrying with backoff up to {MaxRetryDelay}. Until a sweep gets through, no "
+                    + "build is scheduled and semantic search cannot leave its bootstrapping fallback. Repeats of "
+                    + "this fault are counted onto '{Instrument}' with outcome '{Outcome}' and that same cause, "
+                    + "rather than logged per attempt. The cause says what to do about the fault; whether it will "
+                    + "persist is read from the series instead, where the faulted arm staying flat while 'armed' "
+                    + "advances is a startup transient and the faulted arm advancing while 'armed' stays flat is "
+                    + "not.",
+                    RepoContextAnnIndexSweepReporter.DescribeCause(
+                        cause ?? RepoContextAnnSweepFaultCause.Unexpected),
                     MaxRetryDelay,
                     RepoContextAnnIndexSweepReporter.SweepInstrumentName,
                     RepoContextAnnIndexSweepReporter.OutcomeFaultedTag);
