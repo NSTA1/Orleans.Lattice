@@ -8,10 +8,11 @@ namespace Orleans.Lattice.Tests.Formal;
 /// WHAT THIS PROVES, AND WHAT IT DOES NOT. It proves the column cannot rot into
 /// prose: every behaviour-asserting row declares a verdict, every test a row
 /// names still exists, and every row admitting a gap cites an issue. It does
-/// NOT prove a named test is a *good* detector - only the census recorded in
-/// the note can claim that, and only a human re-running it can revise the
-/// claim. Saying so plainly matters, because a gate whose reach is overstated
-/// is the exact defect the parent audit (#2299) keeps finding.
+/// NOT prove a named test is a *good* detector - only a human reading each
+/// test against the row it answers can claim that, and only a human re-doing
+/// that reading can revise the claim. Saying so plainly matters, because a
+/// gate whose reach is overstated is the exact defect the parent audit (#2299)
+/// keeps finding.
 /// </para>
 /// <para>
 /// WHY THE DETECTOR RESOLVER IS SEPARATE FROM THE SYMBOL RESOLVER. The other
@@ -23,7 +24,7 @@ namespace Orleans.Lattice.Tests.Formal;
 /// </para>
 /// </summary>
 [TestFixture]
-internal sealed class RefinementDetectorMappingTests
+internal sealed partial class RefinementDetectorMappingTests
 {
     /// <summary>
     /// Rows that assert no production behaviour, and so are outside the
@@ -137,11 +138,19 @@ internal sealed class RefinementDetectorMappingTests
     [Test]
     public void At_least_one_row_reports_a_gap()
     {
-        // The census found 10 detected, 2 partial, 1 undetected. If this ever
-        // reports zero gaps, either the gaps were genuinely closed - in which
-        // case update the prose and this test together - or, far more likely,
-        // the column was flattened into uniform reassurance. #2527 exists
-        // because the second failure mode is the one that actually happens.
+        // A floor, not a census: it asserts only that the Detector column is
+        // not uniformly reassuring. No tally is recorded in this comment, on
+        // purpose. The tallies move every time one of the gap issues lands, so
+        // a figure written here rots exactly as the note's own census
+        // paragraph did - that comment and that paragraph were both wrong, and
+        // no gate evaluated either (#2560). Re-derive from the Detector column
+        // instead; the method is stated in the note's "The Detector column"
+        // section. If this ever reports zero gaps, either the gaps were
+        // genuinely closed - in which case #2557 replaces this floor with the
+        // stronger assertion that every behaviour-asserting row cites a
+        // resolvable test - or, far more likely, the column was flattened into
+        // uniform reassurance. #2527 exists because the second failure mode is
+        // the one that actually happens.
         var gaps = BehaviourRows()
             .Count(r => r.Detector.Contains("None", StringComparison.Ordinal)
                      || r.Detector.Contains("Partial", StringComparison.Ordinal));
