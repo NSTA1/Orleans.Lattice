@@ -154,10 +154,12 @@ runner image ships several JDKs, and `actions/setup-java` selects one from the
 image cache in a couple of seconds. The second was right about what TLC *was*
 being asked to do, and is the part that changed: the fixture no longer only
 checks that the specification holds. It checks that each paired **mutant** makes
-its property fire, by name. That is a claim about the specification's own
-diagnostic power, and unlike the design it tracks, it regresses silently the
-moment somebody weakens a property - which is exactly the failure the atomicity
-audit (epic #2299) found four times over.
+its property fire - by name for an invariant or action property, and for the
+two liveness properties by way of a single-property configuration, because TLC
+does not name the property in a temporal violation. That is a claim about the
+specification's own diagnostic power, and unlike the design it tracks, it
+regresses silently the moment somebody weakens a property - which is exactly
+the failure the atomicity audit (epic #2299) found four times over.
 
 Each of the twelve properties is paired with a mutation, and each pairing runs
 as a two-arm experiment: the generated single-property model must be **clean**

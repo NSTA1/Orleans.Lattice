@@ -96,9 +96,11 @@ Spec == Init /\ [][Next]_vars
 --- END
 ```
 
-`MODULE` must be a valid TLA+ module name and match the filename, because TLA+
-requires it. `CLASS` is `Invariant`, `Action` or `Temporal`, and selects which
-violation banner the harness expects.
+`MODULE` must be a valid TLA+ module name. The harness writes the generated
+mutant to `<MODULE>.tla`, so the filename follows from it rather than the other
+way round; keeping the two the same is a convention for readability, not a
+constraint TLA+ imposes. `CLASS` is `Invariant`, `Action` or `Temporal`,
+and selects which violation banner the harness expects.
 
 ## `TypeOK` rides along in every cfg
 
@@ -165,6 +167,43 @@ Two pairs are chosen specifically to avoid that ambiguity where it would matter.
 every saga terminating normally, rather than taking the easy route of dropping
 fairness, which would fire `Termination` as well and so prove nothing about the
 property it is paired with.
+
+### Nine mutations perturb the protocol; three add an action it does not have
+
+This distinction matters, and reading past it would reproduce in miniature the
+overclaim this whole directory exists to prevent.
+
+Nine mutations change something the protocol actually does: a guard, a gate
+definition, a projection, or the fairness assumption. For those, the pairing
+shows the property constrains the modelled protocol - weaken the protocol and
+the property notices.
+
+Three do not. `TypeOkRevisionRunaway`, `DecisionDurabilityDecisionFlip` and
+`RevisionMonotonicRollback` splice a brand-new action into `Next`
+(`RevisionRunaway`, `DecisionFlip`, `RevisionRollback`) that models no step of
+the protocol. They do this because the properties they target are
+**unfalsifiable by any behaviour of the base module**: `decision` and `revision`
+are each written by exactly one action, `DecideTx`, under a guard of
+`phase[t] = "prepared"` that the same action immediately leaves, and no action
+ever re-enters `"prepared"`. So each is assigned at most once per saga, and
+`DecisionDurability`, `RevisionMonotonic` and `TypeOK`'s revision conjunct
+cannot fail however the base is scheduled.
+
+For those three the two-arm experiment therefore establishes something weaker
+than it does for the other nine. It establishes that the property is
+**well-formed**: that it is not a tautology, that it says what its name says,
+and that TLC would report it if the state it forbids became reachable. It does
+**not** establish that the property currently constrains the protocol, because
+nothing in the protocol can violate it.
+
+That is not a defect in the mutations, and it is not a reason to "fix" them by
+hunting for a protocol-level perturbation instead - there is none, which is
+precisely the point. It is a limit on what may be concluded, and issue #2323's
+second supporting control names it directly: such a result is a classifier,
+never evidence of reachability. A future revision that lets a saga re-enter
+`"prepared"` - a retry, a re-prepare, a recovery path - would make these three
+properties load-bearing, and the mutations are the standing check that they
+would be ready to fire on the day it does.
 
 ## Running one by hand
 

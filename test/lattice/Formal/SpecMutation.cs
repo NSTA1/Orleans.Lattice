@@ -244,6 +244,10 @@ public sealed record SpecMutation
         return count;
     }
 
+    /// <summary>
+    /// The mutation's name, which is what NUnit renders as the test-case label
+    /// for each entry in the pairing test's source.
+    /// </summary>
     public override string ToString() => Name;
 }
 
@@ -374,18 +378,50 @@ public static class SpecMutationCatalogue
             ? value
             : throw new InvalidOperationException($"{name}.mutation is missing required metadata '{key}:'.");
 
+    /// <summary>The name of the TLC config block holding state predicates.</summary>
+    public const string InvariantsBlock = "INVARIANTS";
+
+    /// <summary>The name of the TLC config block holding temporal formulas.</summary>
+    public const string PropertiesBlock = "PROPERTIES";
+
     /// <summary>
     /// Reads the property names the base model actually checks, so the
     /// completeness gate is driven by the model rather than by a list somebody
     /// has to remember to update. Adding a property to
     /// <c>spec/AtomicCommit.cfg</c> without pairing it therefore fails.
+    /// <para>
+    /// Flattens both blocks. Use
+    /// <see cref="ReadCheckedPropertiesByBlock"/> when the distinction matters,
+    /// which it does for any check on WHERE a property is declared.
+    /// </para>
     /// </summary>
-    public static IReadOnlyList<string> ReadCheckedProperties(string baseConfig)
+    public static IReadOnlyList<string> ReadCheckedProperties(string baseConfig) =>
+        ReadCheckedPropertiesByBlock(baseConfig).SelectMany(kv => kv.Value).ToArray();
+
+    /// <summary>
+    /// Reads the checked property names partitioned by the config block that
+    /// declares them.
+    /// <para>
+    /// The partition is load-bearing rather than cosmetic. TLC evaluates an
+    /// entry in the INVARIANTS block as a state predicate, so a temporal
+    /// formula placed there is checked per state instead of over behaviours and
+    /// the run still succeeds - a green that is weaker than, and different
+    /// from, the one the property's name promises. Nothing in TLC objects, so
+    /// the only way to keep liveness properties under PROPERTIES is to assert
+    /// it, which is what issue #2323's supporting controls ask for.
+    /// </para>
+    /// <para>
+    /// Both keys are always present, mapping to an empty list when the block is
+    /// absent, so callers need no null or missing-key handling.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyDictionary<string, IReadOnlyList<string>> ReadCheckedPropertiesByBlock(string baseConfig)
     {
         ArgumentNullException.ThrowIfNull(baseConfig);
 
-        var names = new List<string>();
-        var capturing = false;
+        var invariants = new List<string>();
+        var properties = new List<string>();
+        List<string>? current = null;
 
         foreach (var raw in baseConfig.ReplaceLineEndings("\n").Split('\n'))
         {
@@ -395,32 +431,41 @@ public static class SpecMutationCatalogue
                 continue;
             }
 
-            if (line.StartsWith("INVARIANTS", StringComparison.Ordinal)
-                || line.StartsWith("PROPERTIES", StringComparison.Ordinal))
+            if (line.StartsWith(InvariantsBlock, StringComparison.Ordinal))
             {
-                capturing = true;
+                current = invariants;
+                continue;
+            }
+
+            if (line.StartsWith(PropertiesBlock, StringComparison.Ordinal))
+            {
+                current = properties;
                 continue;
             }
 
             if (line.StartsWith("SPECIFICATION", StringComparison.Ordinal)
                 || line.StartsWith("CONSTANTS", StringComparison.Ordinal))
             {
-                capturing = false;
+                current = null;
                 continue;
             }
 
             // A CONSTANTS assignment line ('t1 = t1') keeps capturing off; only
             // bare identifiers inside an INVARIANTS / PROPERTIES block count.
-            if (capturing && Regex.IsMatch(line, "^[A-Za-z][A-Za-z0-9_]*$"))
+            if (current is not null && Regex.IsMatch(line, "^[A-Za-z][A-Za-z0-9_]*$"))
             {
-                names.Add(line);
+                current.Add(line);
             }
-            else if (capturing)
+            else
             {
-                capturing = false;
+                current = null;
             }
         }
 
-        return names;
+        return new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            [InvariantsBlock] = invariants,
+            [PropertiesBlock] = properties,
+        };
     }
 }

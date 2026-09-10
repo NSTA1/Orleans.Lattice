@@ -207,63 +207,10 @@ public sealed class TlcModelCheckTests
     }
 
     /// <summary>
-    /// Completeness, driven by the model rather than by a hand-maintained list.
-    /// Every name in the base cfg's INVARIANTS and PROPERTIES blocks must have
-    /// a mutation, so adding a property without pairing it fails here.
-    /// <para>
-    /// This is the gate that keeps #2323 closed rather than merely satisfied
-    /// once. A pairing rule that covers today's properties but not tomorrow's
-    /// decays into exactly the state the audit found.
-    /// </para>
+    /// Completeness, drift, and catalogue well-formedness are checked by
+    /// <see cref="SpecMutationCatalogueTests"/>, which needs no toolchain and
+    /// therefore runs even where this fixture is skipped.
     /// </summary>
-    [Test]
-    public void Every_property_the_base_model_checks_has_a_mutation()
-    {
-        var checkedProperties = SpecMutationCatalogue.ReadCheckedProperties(BaseConfig);
-        var paired = Mutations().Select(m => m.Target).ToArray();
-
-        Assert.That(
-            checkedProperties,
-            Is.Not.Empty,
-            "parsed no properties out of spec/AtomicCommit.cfg, so this gate would be vacuous.");
-
-        Assert.That(
-            paired,
-            Is.EquivalentTo(checkedProperties),
-            "every property spec/AtomicCommit.cfg checks needs a mutation in spec/mutations/ that makes "
-            + "it fire, and every mutation needs to target a property the model actually checks. "
-            + $"Model checks: [{string.Join(", ", checkedProperties.Order(StringComparer.Ordinal))}]. "
-            + $"Mutations target: [{string.Join(", ", paired.Order(StringComparer.Ordinal))}].");
-
-        Assert.That(paired, Is.Unique, "two mutations target the same property; each needs its own.");
-    }
-
-    /// <summary>
-    /// The drift gate, and deliberately cheap: it applies every mutation to the
-    /// current base without running TLC, so an edit to
-    /// <c>spec/AtomicCommit.tla</c> that invalidates an anchor fails in
-    /// milliseconds with a message naming the mutation and the exact anchor
-    /// text, instead of surfacing as a confusing TLC parse error minutes later.
-    /// </summary>
-    [Test]
-    public void Every_mutation_applies_cleanly_to_the_current_base_specification()
-    {
-        var baseSpec = BaseSpecification;
-        var mutations = Mutations().ToArray();
-
-        Assert.That(mutations, Is.Not.Empty, "expected at least one mutation in spec/mutations/.");
-
-        Assert.Multiple(() =>
-        {
-            foreach (var mutation in mutations)
-            {
-                Assert.DoesNotThrow(
-                    () => mutation.Apply(baseSpec),
-                    $"mutation '{mutation.Name}' no longer applies to spec/AtomicCommit.tla.");
-            }
-        });
-    }
-
     private static bool IsContinuousIntegration =>
         string.Equals(
             Environment.GetEnvironmentVariable("GITHUB_ACTIONS"),
@@ -364,6 +311,14 @@ public sealed class TlcModelCheckTests
             {
                 // A scratch directory the OS still holds open is not worth
                 // failing a verification run over; the temp path is disposable.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Reached on the timeout path, where a just-killed JVM may
+                // still hold a handle open. On Windows that surfaces here
+                // rather than as IOException, and letting it escape would
+                // replace the hang diagnostic - the one that matters most in
+                // that case - with an unrelated cleanup error.
             }
         }
     }

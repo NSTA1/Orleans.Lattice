@@ -1,8 +1,6 @@
 # Pairs with VisibilityMatchesDecision. A leaf that treats "a terminal was
 # applied" as "the post-saga value is visible" surfaces an ABORTED saga's
-# writes, because an abort terminal is a terminal too. Note this mutation is
-# uniform across the fan-out, so AllOrNothing still holds once broadcast
-# completes: only the sharpened property catches it.
+# writes, because an abort terminal is a terminal too.
 MODULE: VisibilityMatchesDecisionTerminalPresence
 TARGET: VisibilityMatchesDecision
 CLASS: Invariant

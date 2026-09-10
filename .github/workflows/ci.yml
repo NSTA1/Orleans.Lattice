@@ -1316,7 +1316,8 @@ jobs:
           done
 
       # The TLA+ toolchain for the `Tlc` category in test/lattice, which runs
-      # TLC over spec/ and over each checked-in mutant in spec/mutations/ so
+      # TLC over spec/ and over a mutant generated from each definition in
+      # spec/mutations/ so
       # that every property has to demonstrate it can go red. See spec/README.md
       # and issue #2323.
       #
