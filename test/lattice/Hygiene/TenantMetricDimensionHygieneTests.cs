@@ -192,6 +192,18 @@ public sealed class TenantMetricDimensionHygieneTests
         // would partition a series that cannot vary by tenant. The outcome tag is the
         // dimension that carries the signal.
         "_annSweeps",
+        // repocontext.ann.build.corpus - what the approximate-index build coordinator
+        // actually read, partitioned by coverage (nonempty / unrestricted / filtered /
+        // denied / unknown), and repocontext.ann.build.terminal_denials - builds
+        // withheld because the corpus read was refused outright. Both meter the same
+        // HOST-PROCESS build loop as _annSweeps and are unscopable for the same reason:
+        // one build covers every registered repository at once, and the coverage the
+        // read was granted is a property of how this host resolved its own run
+        // authority, not of any tenant's traffic. The coverage tag is the dimension
+        // that carries the signal, and the nonempty arm is what makes a zero on the
+        // denied arm a measured absence rather than a plane that never ran.
+        "_corpusCoverage",
+        "_terminalDenials",
         // repocontext.retrieval.unavailable - vector-plane fault episodes. Same reason:
         // the plane is unavailable for the whole process, not for one tenant.
         "_unavailable",

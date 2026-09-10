@@ -166,7 +166,7 @@ internal sealed class RepoContextAnnBuildCorpusReporter : IDisposable
     // publishing an instrument against a null meter. See the metrics conventions in
     // .github/copilot-instructions.md.
     private readonly Meter _meter;
-    private readonly Counter<long> _corpus;
+    private readonly Counter<long> _corpusCoverage;
     private readonly Counter<long> _terminalDenials;
 
     private readonly Lock _gate = new();
@@ -181,7 +181,7 @@ internal sealed class RepoContextAnnBuildCorpusReporter : IDisposable
     public RepoContextAnnBuildCorpusReporter()
     {
         _meter = new Meter(RepoContextUsageRecorder.MeterName);
-        _corpus = _meter.CreateCounter<long>(
+        _corpusCoverage = _meter.CreateCounter<long>(
             CorpusInstrumentName,
             unit: "{build}",
             description:
@@ -212,11 +212,11 @@ internal sealed class RepoContextAnnBuildCorpusReporter : IDisposable
         // host reports coverage=denied at 0 rather than omitting it. An absent
         // series and a series reading zero look identical on a dashboard but are
         // very different claims, and only the second is falsifiable.
-        _corpus.Add(0, new KeyValuePair<string, object?>(CoverageTagKey, CoverageNonEmptyTag), LatticeTenantLabel.Platform);
-        _corpus.Add(0, new KeyValuePair<string, object?>(CoverageTagKey, CoverageUnrestrictedTag), LatticeTenantLabel.Platform);
-        _corpus.Add(0, new KeyValuePair<string, object?>(CoverageTagKey, CoverageFilteredTag), LatticeTenantLabel.Platform);
-        _corpus.Add(0, new KeyValuePair<string, object?>(CoverageTagKey, CoverageDeniedTag), LatticeTenantLabel.Platform);
-        _corpus.Add(0, new KeyValuePair<string, object?>(CoverageTagKey, CoverageUnknownTag), LatticeTenantLabel.Platform);
+        _corpusCoverage.Add(0, new KeyValuePair<string, object?>(CoverageTagKey, CoverageNonEmptyTag), LatticeTenantLabel.Platform);
+        _corpusCoverage.Add(0, new KeyValuePair<string, object?>(CoverageTagKey, CoverageUnrestrictedTag), LatticeTenantLabel.Platform);
+        _corpusCoverage.Add(0, new KeyValuePair<string, object?>(CoverageTagKey, CoverageFilteredTag), LatticeTenantLabel.Platform);
+        _corpusCoverage.Add(0, new KeyValuePair<string, object?>(CoverageTagKey, CoverageDeniedTag), LatticeTenantLabel.Platform);
+        _corpusCoverage.Add(0, new KeyValuePair<string, object?>(CoverageTagKey, CoverageUnknownTag), LatticeTenantLabel.Platform);
         _terminalDenials.Add(0, LatticeTenantLabel.Platform);
     }
 
@@ -227,7 +227,7 @@ internal sealed class RepoContextAnnBuildCorpusReporter : IDisposable
     /// <param name="coverage">How much of the vector prefix the gate admitted.</param>
     public void RecordCoverage(RepoContextAnnBuildCorpusCoverage coverage)
     {
-        _corpus.Add(
+        _corpusCoverage.Add(
             1,
             new KeyValuePair<string, object?>(CoverageTagKey, DescribeCoverage(coverage)),
             LatticeTenantLabel.Platform);
