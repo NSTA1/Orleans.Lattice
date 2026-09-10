@@ -920,6 +920,49 @@ A host that registers an `ILatticeAccessGate` receives one `LatticeOperation` fl
 
 `Telemetry`, `Replication`, and `TreeLifecycle` are deliberately separate from `Admin`; granting one does not imply any other capability.
 
+### Reading an empty range read under a gate
+
+A denied **point** read throws. A denied **range** read does not: it resolves to a
+reject-all key filter and returns a clean, successful, **empty** result. So
+`KeysAsync`, `EntriesAsync`, their predicate overloads, both `CountAsync`
+overloads, and the snapshot cursors all report "you may not look here" and "there
+is nothing here" identically - no exception, no log, every instrument healthy.
+
+That is deliberate. A denied scan stays cheap and non-fatal, and making it throw
+would break every existing caller. The cost is that **emptiness alone is
+uninterpretable under a gate**, so a caller that draws a conclusion from an empty
+range read must confirm the range was actually readable:
+
+```csharp verify
+static async Task<bool> RangeIsGenuinelyEmptyAsync(
+    ILattice tree, string startInclusive, string endExclusive, CancellationToken ct)
+{
+    await foreach (var key in tree.KeysAsync(startInclusive, endExclusive, cancellationToken: ct))
+    {
+        return false; // Not empty at all.
+    }
+
+    // Empty. Ask whether that is a fact about the store or about authorization.
+    var coverage = await tree.GetRangeReadGateCoverageAsync(startInclusive, endExclusive, ct);
+    return coverage == LatticeRangeReadGateCoverage.Unrestricted;
+}
+```
+
+`GetRangeReadGateCoverageAsync` reports `Unrestricted`, `Filtered`, or `Denied`.
+Only `Unrestricted` licenses reading emptiness as absence: under `Filtered` an
+unknown subset of keys is withheld, and under `Denied` every key is. It is a
+coverage classification and never names the withheld keys, for the same reason
+`GatedMultiReadResult.PrunedByAccessGate` is a count - identities would make any
+range read an authorization oracle.
+
+Call it **only when a range read came back empty** and you are about to act on
+that emptiness. The scan hot path pays nothing.
+
+A background component is the classic victim, because its turn carries no caller
+credential at all: under a fail-closed gate every one of its scans returns empty,
+so it concludes the store is empty and does nothing, forever, with a healthy log
+at every layer. If a component reads on a background turn, give it a credential
+(see the trusted system-origin scope below) rather than relying on this check.
 ### Trusted system-origin scope
 
 A co-hosted infrastructure extension that must run a trusted, gate-bypassing

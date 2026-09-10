@@ -66,9 +66,15 @@ public sealed class RepoContextEffectiveConfigurationReporter(
 
         var settings = Describe();
         var overridden = settings.Count(line => line.Contains("[OVERRIDDEN", StringComparison.Ordinal));
+        var environment = RepoContextEffectiveConfiguration.ReadProcessEnvironment();
         var unread = RepoContextEffectiveConfiguration.DescribeUnreadVariables(
-            RepoContextEffectiveConfiguration.ReadProcessEnvironment(),
-            KnownKeys);
+            environment,
+            KnownKeys,
+            KnownKeyPrefixes);
+        var families = RepoContextEffectiveConfiguration.DescribePrefixMatchedVariables(
+            environment,
+            KnownKeys,
+            KnownKeyPrefixes);
 
         logger.LogInformation(
             "Repository-context effective configuration: {Count} setting(s), of which "
@@ -80,8 +86,28 @@ public sealed class RepoContextEffectiveConfigurationReporter(
             overridden,
             unread.Count);
 
+        // The scope statement, and not a decoration (issue #2470). Without it this
+        // enumeration presents itself as the authority on effective configuration while
+        // covering one input channel, so a setting it never had access to reads as a
+        // setting it checked and found unset - and the silence is loudest for exactly the
+        // settings nobody thought to check, which are the ones this report is worth having
+        // for. Absence is only evidence when the boundary it sits inside is stated.
+        logger.LogInformation(
+            "Repository-context effective configuration: {Scope}",
+            RepoContextEffectiveConfiguration.ScopeStatement);
+
         foreach (var line in settings)
         {
+            logger.LogInformation("Repository-context effective configuration: {Setting}", line);
+        }
+
+        foreach (var line in families)
+        {
+            // Information rather than warning: a member of a published prefix family is
+            // read, so it is not the #2279 failure. It is reported at all because this
+            // host recognises the family and not the member, and saying so is the
+            // difference between a bounded claim and the unbounded one issue #2460 was
+            // filed about.
             logger.LogInformation("Repository-context effective configuration: {Setting}", line);
         }
 
@@ -105,10 +131,17 @@ public sealed class RepoContextEffectiveConfigurationReporter(
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>
-    /// Every environment variable this host resolves. Used to decide which supplied
-    /// <c>LATTICE_</c> variables are read by nothing.
+    /// The keys this host's own configuration classes declare, as distinct from the ones
+    /// the repository-context package publishes.
     /// </summary>
-    public static IReadOnlyList<string> KnownKeys { get; } =
+    /// <remarks>
+    /// Declared <b>above</b> <see cref="KnownKeys"/> because that property spreads this
+    /// one: static initialisers run in declaration order, so the reverse order silently
+    /// yields a <see cref="KnownKeys"/> built from a null sequence. This is the same
+    /// declaration-order hazard the repository documents for a metrics class's
+    /// <c>Meter</c> field.
+    /// </remarks>
+    private static IReadOnlyList<string> HostKeys { get; } =
     [
         RepoContextHostConfiguration.DurabilityKey,
         RepoContextHostConfiguration.WalProviderKey,
@@ -133,6 +166,55 @@ public sealed class RepoContextEffectiveConfigurationReporter(
         RepoContextClaimLeases.MaxLockLeaseSecondsKey,
         RepoContextShutdownBudget.StopGracePeriodKey,
     ];
+
+    /// <summary>
+    /// Every environment variable this host resolves whose full name is known at compile
+    /// time: this host's own keys, plus the ones the repository-context package publishes
+    /// through <see cref="RepoContextEnvironmentVariables.All"/>. Used to decide which
+    /// supplied <c>LATTICE_</c> variables are read by nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The package half is derived, not restated (issue #2460).</b> This list was
+    /// previously hand-maintained and drawn only from this host's own configuration
+    /// classes, so eleven variables the repository-context package reads were absent from
+    /// it and every one of them was reported <c>[SUPPLIED BUT NOT READ BY THIS HOST]</c> -
+    /// the inversion of the truth, in a report whose tone invites trust. An operator was
+    /// told a throttle they had deliberately set was inert while it was visibly steering
+    /// the runtime.
+    /// </para>
+    /// <para>
+    /// The failure was not that somebody forgot a key. It was that this list asserted its
+    /// own exhaustiveness over a surface it had no access to, and the guard test that
+    /// checked the assertion scanned only this assembly - so the claim was broader than
+    /// the check, and the gap between them was invisible from either side. Adding the
+    /// missing keys by hand would have fixed the eleven and left that mechanism intact.
+    /// </para>
+    /// <para>
+    /// <b>Names known only at run time are not here.</b> See
+    /// <see cref="KnownKeyPrefixes"/>.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<string> KnownKeys { get; } =
+    [
+        .. HostKeys,
+        .. RepoContextEnvironmentVariables.All,
+    ];
+
+    /// <summary>
+    /// Every prefix under which this host resolves a family of variables whose full names
+    /// are only known at run time, because part of the name is a repository id.
+    /// </summary>
+    /// <remarks>
+    /// A member of one of these families is read, so reporting it as unread would be the
+    /// same defect <see cref="KnownKeys"/> documents. It is reported as prefix-matched
+    /// instead of silently dropped, because prefix membership is a weaker claim than
+    /// name-for-name recognition: a mistyped setting inside a recognised family is still a
+    /// setting nothing binds, and quietly counting it as read would replace one
+    /// unsupported claim with another.
+    /// </remarks>
+    public static IReadOnlyList<string> KnownKeyPrefixes { get; } =
+        RepoContextEnvironmentVariables.Prefixes;
 
     /// <summary>
     /// Builds the report lines by pairing each resolved value with the value this host
@@ -197,6 +279,19 @@ public sealed class RepoContextEffectiveConfigurationReporter(
                 Number(Environment.ProcessorCount),
                 Number(Environment.ProcessorCount)),
         };
+
+        // The repository-context package's own settings, resolved by the package rather
+        // than by this host (issue #2460 half two). Recognising them in KnownKeys stops
+        // them being reported as unread; without a value line here they would instead
+        // vanish from the report altogether, which is strictly worse for an operator than
+        // being wrongly labelled - a wrong label is at least visible.
+        foreach (var setting in RepoContextEnvironmentVariables.DescribeResolvedSettings())
+        {
+            lines.Add(RepoContextEffectiveConfiguration.DescribeSetting(
+                setting.Name,
+                setting.Resolved,
+                setting.Default));
+        }
 
         lines.Sort(StringComparer.Ordinal);
         return lines;

@@ -190,10 +190,118 @@ public sealed class RepoContextMetricsCollectorTests
         });
     }
 
+    /// <summary>
+    /// A ceiling that drops silently leaves an absent series ambiguous between
+    /// "never recorded" and "recorded and refused", which is the ambiguity that left
+    /// issue #2480 undiagnosed for as long as it was. The attribution counter has to
+    /// name both the family that was refused and the ceiling that refused it, so a
+    /// single exploding instrument is distinguishable from an estate that has
+    /// reached the memory backstop.
+    /// </summary>
     [Test]
-    public void Measurements_beyond_the_series_ceiling_are_dropped_and_counted()
+    public void A_dropped_measurement_is_attributed_to_its_family_and_ceiling()
     {
-        using var collector = new RepoContextMetricsCollector(maxSeries: 2);
+        using var collector = new RepoContextMetricsCollector(maxSeriesPerFamily: 2);
+        using var meter = new Meter("orleans.lattice.probe.attribution");
+        var counter = meter.CreateCounter<long>("orleans.lattice.probe.attributed");
+        for (var i = 0; i < 20; i++)
+        {
+            counter.Add(1, new KeyValuePair<string, object?>("id", i));
+        }
+
+        var payload = collector.Render();
+        var attributed = SampleLines(payload, RepoContextMetricsCollector.DroppedByFamilyCounterName)
+            .FirstOrDefault(l => l.Contains("orleans_lattice_probe_attributed_total", StringComparison.Ordinal));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(attributed, Is.Not.Null,
+                "a refused measurement must be attributed to the family it was refused for: " + payload);
+            Assert.That(attributed, Does.Contain(
+                $"{RepoContextMetricsCollector.FamilyLabelName}=\"orleans_lattice_probe_attributed_total\""));
+            Assert.That(attributed, Does.Contain(
+                $"{RepoContextMetricsCollector.CeilingLabelName}=\"{RepoContextMetricsCollector.FamilyCeilingLabel}\""),
+                "the per-family ceiling must be named as the one that refused");
+            Assert.That(attributed, Does.EndWith(" 18"),
+                "the attributed tally must carry the refused count, not merely the label");
+        });
+    }
+
+    /// <summary>
+    /// The negative control for the attribution surface: a collector that has
+    /// refused nothing must not emit the family breakdown at all, so a present
+    /// series always means a real refusal.
+    /// </summary>
+    [Test]
+    public void No_drop_attribution_is_emitted_when_nothing_was_refused()
+    {
+        using var collector = new RepoContextMetricsCollector();
+
+        Assert.That(
+            SampleLines(collector.Render(), RepoContextMetricsCollector.DroppedByFamilyCounterName),
+            Is.Empty);
+    }
+
+    /// <summary>
+    /// The regression test for issue #2480, which is the reason the ceiling is per
+    /// family rather than global.
+    /// </summary>
+    /// <remarks>
+    /// A single global ceiling let one high-cardinality family consume the whole
+    /// budget and then permanently block every other family from creating a series.
+    /// The failure was silent: a series that already exists keeps updating, because
+    /// the lookup precedes the ceiling check, so the exposition still looked busy
+    /// and complete. Only a series whose FIRST occurrence fell after saturation was
+    /// missing. That is exactly how the ANN search counter lost its
+    /// <c>approximate</c> arm - the <c>bootstrapping</c> and <c>exhaustive</c> arms
+    /// are created within seconds of start-up and published forever, while
+    /// <c>approximate</c> cannot occur until a plane has trained, hours later and
+    /// long past saturation. A trained plane was therefore indistinguishable from
+    /// one that never armed.
+    /// </remarks>
+    [Test]
+    public void A_saturated_family_does_not_block_a_late_arm_of_another_family()
+    {
+        using var collector = new RepoContextMetricsCollector(maxSeriesPerFamily: 4);
+        using var meter = new Meter("orleans.lattice.probe.starvation");
+
+        // A family with an unanticipated high-cardinality tag, saturating its budget.
+        var runaway = meter.CreateCounter<long>("orleans.lattice.probe.runaway");
+        for (var i = 0; i < 200; i++)
+        {
+            runaway.Add(1, new KeyValuePair<string, object?>("id", i));
+        }
+
+        // A bounded family whose third arm occurs for the FIRST time only after the
+        // neighbouring family has saturated, exactly as state="approximate" does.
+        var bounded = meter.CreateCounter<long>("orleans.lattice.probe.bounded");
+        bounded.Add(1, new KeyValuePair<string, object?>("state", "bootstrapping"));
+        bounded.Add(1, new KeyValuePair<string, object?>("state", "exhaustive"));
+        bounded.Add(1, new KeyValuePair<string, object?>("state", "approximate"));
+
+        var payload = collector.Render();
+        var boundedLines = SampleLines(payload, "orleans_lattice_probe_bounded_total");
+
+        Assert.Multiple(() =>
+        {
+            // Without a saturated neighbour the test would prove nothing, so prove
+            // the neighbour really did saturate before the late arm was recorded.
+            Assert.That(SampleLines(payload, "orleans_lattice_probe_runaway_total"), Has.Count.EqualTo(4),
+                "the runaway family must be held at its per-family ceiling");
+            Assert.That(MetaValue(payload, RepoContextMetricsCollector.DroppedCounterName), Is.GreaterThanOrEqualTo(196),
+                "every measurement the runaway family's ceiling refused must be counted");
+
+            Assert.That(boundedLines, Has.Count.EqualTo(3),
+                "a bounded family must keep its own budget while a neighbour is saturated: " + payload);
+            Assert.That(boundedLines.Any(l => l.Contains("state=\"approximate\"", StringComparison.Ordinal)), Is.True,
+                "the late-arriving arm must publish; this is the #2480 regression");
+        });
+    }
+
+    [Test]
+    public void Measurements_beyond_the_per_family_ceiling_are_dropped_and_counted()
+    {
+        using var collector = new RepoContextMetricsCollector(maxSeriesPerFamily: 2);
         using var meter = new Meter("orleans.lattice.probe.cardinality");
         var counter = meter.CreateCounter<long>("orleans.lattice.probe.unbounded");
         for (var i = 0; i < 20; i++)
@@ -203,22 +311,60 @@ public sealed class RepoContextMetricsCollectorTests
 
         var payload = collector.Render();
 
-        // The ceiling is global across families, and the collector replays every
-        // instrument already published in this process, so some slots may already be
-        // spoken for by another fixture's live meters. The invariant that matters is
-        // that the cap holds and the overflow is counted rather than silently lost -
-        // not which measurement happened to claim a slot.
+        // Assert on this family's own series rather than the process-wide gauge: the
+        // collector replays every instrument already published in the process and
+        // polls every observable one on render, so the global figure carries other
+        // fixtures' meters and is not this test's to pin.
         Assert.Multiple(() =>
         {
-            Assert.That(MetaValue(payload, RepoContextMetricsCollector.SeriesGaugeName), Is.EqualTo(2),
-                "the series ceiling must be enforced exactly");
+            Assert.That(SampleLines(payload, "orleans_lattice_probe_unbounded_total"), Has.Count.EqualTo(2),
+                "the per-family ceiling must be enforced exactly");
             Assert.That(MetaValue(payload, RepoContextMetricsCollector.DroppedCounterName), Is.GreaterThanOrEqualTo(18),
                 "every measurement refused by the ceiling must be counted");
         });
     }
 
+    /// <summary>
+    /// The global ceiling survives as a memory backstop. It is set far above any
+    /// healthy estate precisely so it does not bind in normal operation, but it must
+    /// still hold when it is reached.
+    /// </summary>
     [Test]
-    public void Constructing_with_a_non_positive_ceiling_is_rejected()
+    public void Measurements_beyond_the_global_ceiling_are_dropped_and_counted()
+    {
+        using var collector = new RepoContextMetricsCollector(maxSeriesPerFamily: 1000, maxSeries: 1);
+        using var meter = new Meter("orleans.lattice.probe.backstop");
+        var counter = meter.CreateCounter<long>("orleans.lattice.probe.global");
+        for (var i = 0; i < 20; i++)
+        {
+            counter.Add(1, new KeyValuePair<string, object?>("id", i));
+        }
+
+        var payload = collector.Render();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(MetaValue(payload, RepoContextMetricsCollector.SeriesGaugeName), Is.EqualTo(1),
+                "the global backstop must be enforced exactly, even below the per-family ceiling");
+            Assert.That(MetaValue(payload, RepoContextMetricsCollector.DroppedCounterName), Is.GreaterThanOrEqualTo(19),
+                "every measurement refused by the backstop must be counted");
+            Assert.That(
+                SampleLines(payload, RepoContextMetricsCollector.DroppedByFamilyCounterName)
+                    .Any(l => l.Contains(
+                        $"{RepoContextMetricsCollector.CeilingLabelName}=\"{RepoContextMetricsCollector.GlobalCeilingLabel}\"",
+                        StringComparison.Ordinal)),
+                Is.True,
+                "a backstop refusal must be attributed to the global ceiling, not the per-family one");
+        });
+    }
+
+    [Test]
+    public void Constructing_with_a_non_positive_per_family_ceiling_is_rejected()
+        => Assert.Throws<ArgumentOutOfRangeException>(
+            () => new RepoContextMetricsCollector(maxSeriesPerFamily: 0));
+
+    [Test]
+    public void Constructing_with_a_non_positive_global_ceiling_is_rejected()
         => Assert.Throws<ArgumentOutOfRangeException>(() => new RepoContextMetricsCollector(maxSeries: 0));
 
     /// <summary>
@@ -281,6 +427,32 @@ public sealed class RepoContextMetricsCollectorTests
         var line = SampleLine(payload, metricName);
         Assert.That(line, Is.Not.Null, $"the exposition carried no '{metricName}' sample");
         return long.Parse(line!.AsSpan(metricName.Length).Trim(), CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Returns every sample line for a metric name, skipping the <c># HELP</c> and
+    /// <c># TYPE</c> comments and any longer name that merely starts with it. Used
+    /// to count a single family's series without consulting the process-wide gauge,
+    /// which other fixtures' live meters also contribute to.
+    /// </summary>
+    private static IReadOnlyList<string> SampleLines(string payload, string metricName)
+    {
+        var matches = new List<string>();
+        foreach (var line in payload.Split('\n'))
+        {
+            if (line.StartsWith('#') || !line.StartsWith(metricName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var rest = line.AsSpan(metricName.Length);
+            if (rest.Length > 0 && (rest[0] == ' ' || rest[0] == '{'))
+            {
+                matches.Add(line);
+            }
+        }
+
+        return matches;
     }
 
     /// <summary>

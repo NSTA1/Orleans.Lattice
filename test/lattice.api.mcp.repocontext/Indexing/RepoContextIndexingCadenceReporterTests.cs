@@ -121,4 +121,37 @@ public sealed class RepoContextIndexingCadenceReporterTests
         Assert.That(line.Message, Does.Contain("including jitter"),
             "The reported spacing must be the one the conversion actually divides by.");
     }
+
+    [Test]
+    public void The_report_states_the_sweep_cadence_and_that_it_is_not_part_of_the_matched_set()
+    {
+        // Issue #2459. The three wall-clock knobs above genuinely are a matched set,
+        // and this line is where an operator learns that. The approximate-index sweep
+        // used to behave as though it were a fourth member - it took its cadence from
+        // the reconcile interval - so reporting it here without saying it is separate
+        // would teach exactly the wrong thing to the reader most likely to act on it.
+        var options = new RepoContextIndexingOptions
+        {
+            ReconcileInterval = TimeSpan.FromHours(24),
+            ReconcileIntervalJitter = TimeSpan.Zero,
+        };
+
+        var provider = new CapturingLoggerProvider();
+        using var factory = LoggerFactory.Create(b => b.AddProvider(provider));
+        new RepoContextIndexingCadenceReporter(
+                options, factory.CreateLogger<RepoContextIndexingCadenceReporter>())
+            .StartAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+        var line = provider.Entries.Single(e => e.Level == LogLevel.Information);
+        Assert.Multiple(() =>
+        {
+            Assert.That(line.Message, Does.Contain("900"),
+                "The sweep cadence is its own 15-minute default and must not follow the "
+                + "day-long reconcile interval configured here.");
+            Assert.That(line.Message, Does.Contain("independent"),
+                "Printing a fourth cadence beside a documented matched set, without saying it "
+                + "is not a member, would read as though raising the reconcile interval "
+                + "re-denominated it too - which is the belief this change exists to end.");
+        });
+    }
 }

@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// <para>
 /// <b>Why these drive the method rather than a running sweep.</b> The episode is a
 /// state machine over successive passes, and
-/// <c>RepoContextAnnIndexSweepService.MinimumSweepInterval</c> puts a one-minute
+/// <c>RepoContextIndexingOptions.MinimumAnnSweepInterval</c> puts a one-minute
 /// floor between passes of the hosted loop, so driving three transitions through
 /// <c>StartAsync</c> would take two minutes of wall clock or a new timing seam
 /// injected into the sweep. Widening an observability check into the sweep's timing

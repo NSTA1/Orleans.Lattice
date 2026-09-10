@@ -34,14 +34,6 @@ internal sealed class RepoContextAnnIndexSweepService(
     private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
 
-    /// <summary>
-    /// The floor on the re-sweep cadence. The sweep follows the reconcile interval
-    /// so it stays in step with the pass that produces the vectors it schedules an
-    /// index over, but a host that makes the reconcile near-continuous must not
-    /// turn this into a hot loop of grain calls.
-    /// </summary>
-    private static readonly TimeSpan MinimumSweepInterval = TimeSpan.FromMinutes(1);
-
     private readonly RepoContextAnnIndexSweepReporter _reporter = new();
 
     /// <summary>
@@ -69,6 +61,28 @@ internal sealed class RepoContextAnnIndexSweepService(
     private readonly HashSet<string> _deferred = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// The repositories already named by the partial-sweep warning, so a repository
+    /// that stays unarmed across many sweeps is announced once rather than on every
+    /// pass. Cleared per repository the moment it arms, so a recurrence is announced
+    /// again instead of being absorbed by the announcement it already made.
+    /// <para>
+    /// Deliberately separate from <see cref="_deferred"/> rather than reusing it,
+    /// even though the two move together on most sweeps. They track different
+    /// predicates and re-arm at different moments: a sweep where <b>every</b>
+    /// coordinator defers is <see cref="RepoContextAnnSweepOutcome.Empty"/>, not a
+    /// partial one, and it populates <see cref="_deferred"/> without ever being
+    /// partial. Reusing that set would let the first genuinely partial sweep find
+    /// every repository already recorded and announce nothing at all - which is the
+    /// exact silence this change exists to remove.
+    /// </para>
+    /// <para>
+    /// Not synchronised, for the same reason as <see cref="_announcedContradiction"/>:
+    /// every access is on the single <see cref="ExecuteAsync"/> loop.
+    /// </para>
+    /// </summary>
+    private readonly HashSet<string> _unarmed = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// The sweep's outcome counters, cumulative since process start. Exposed so a
     /// test can assert on the partition without standing up a meter listener.
     /// </summary>
@@ -84,9 +98,7 @@ internal sealed class RepoContextAnnIndexSweepService(
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var interval = options.ReconcileInterval > MinimumSweepInterval
-            ? options.ReconcileInterval
-            : MinimumSweepInterval;
+        var interval = options.EffectiveAnnSweepInterval;
 
         // Unconditional, and deliberately ahead of every branch. This is the only
         // signal that can separate "the sweep loop never started" from "it started
@@ -95,12 +107,28 @@ internal sealed class RepoContextAnnIndexSweepService(
         // do on a host that has only just come up. Emitting the line before the
         // branch rather than inside one also makes it structurally impossible for a
         // later edit to add a path that returns silently.
+        //
+        // The cadence is reported with the variable that sets it, which is the half
+        // that was missing (issue #2459). The value was never hidden - this line
+        // already printed it - but it was derived from the reconcile interval, so an
+        // operator who read "1.00:00:00" here had no way to learn that the number
+        // came from a variable about a different subsystem, and no reason to suspect
+        // one. Naming the knob is what turns an observation into something
+        // actionable.
         logger.LogInformation(
             "Repository-context approximate-index build sweep entered. Scheduling is {SchedulingDecision}. "
-            + "Configured sweep cadence {SweepInterval}. Outcomes are counted onto '{Instrument}'; the absence "
-            + "of this line from a host's log means the sweep service never executed.",
+            + "Configured sweep cadence {SweepInterval}, from '{SweepIntervalKey}' ({SweepIntervalSource}). "
+            + "This cadence is independent of '{ReconcileIntervalKey}', which paces the content reconcile "
+            + "only. Outcomes are counted onto '{Instrument}'; the absence of this line from a host's log "
+            + "means the sweep service never executed.",
             scheduler.DescribeSchedulingState(),
             interval,
+            RepoContextIndexingOptions.AnnSweepIntervalSecondsKey,
+            options.AnnSweepIntervalIsFloored
+                ? $"raised to the {RepoContextIndexingOptions.MinimumAnnSweepInterval} floor from the "
+                    + $"configured {options.AnnSweepInterval}"
+                : "as configured",
+            RepoContextIndexingOptions.ReconcileIntervalSecondsKey,
             RepoContextAnnIndexSweepReporter.SweepInstrumentName);
 
         if (!scheduler.CanSchedule)
@@ -165,11 +193,29 @@ internal sealed class RepoContextAnnIndexSweepService(
     /// The outcome, or <see langword="null"/> when shutdown cancelled the sweep -
     /// which is not an outcome and is deliberately not recorded.
     /// </returns>
-    private async Task<RepoContextAnnSweepOutcome?> TrySweepAsync(CancellationToken stoppingToken)
+    /// <remarks>
+    /// Internal rather than private so a test can drive individual passes. The loop
+    /// waits a full <see cref="RepoContextIndexingOptions.EffectiveAnnSweepInterval"/>
+    /// after any non-faulted sweep - at least a minute, by its floor -
+    /// so the damping and re-announcement of the partial-sweep warning - both of
+    /// which are defined across successive passes - are not reachable through
+    /// <see cref="ExecuteAsync"/> inside a test's time budget. The type is itself
+    /// internal, so this widens no public surface.
+    /// </remarks>
+    internal async Task<RepoContextAnnSweepOutcome?> TrySweepAsync(CancellationToken stoppingToken)
     {
         var armed = 0;
         var observed = 0;
         var deferred = 0;
+
+        // The identities behind the counts. The 'armed' outcome tag can report that
+        // at least one coordinator armed and nothing more, so a sweep that arms four
+        // repositories out of five is indistinguishable on the counter from one that
+        // arms all five. Attribution has to travel to the announcement seam or it is
+        // lost: the loop is the only place that knows WHICH repository was left out.
+        // Identity belongs in the log rather than on the instrument - see the durable
+        // decision 'no-repo-tag-on-pass-arm-faults' and issue #2453.
+        var unarmed = new List<string>();
         Exception? faulted = null;
         try
         {
@@ -237,11 +283,28 @@ internal sealed class RepoContextAnnIndexSweepService(
                                 + "after previously deferring it.",
                                 repoId);
                         }
+
+                        // Re-arm the partial-sweep damping. A repository that arms
+                        // now and stops arming later must be named again, or the
+                        // second episode is silently absorbed by the first.
+                        _unarmed.Remove(repoId);
+                    }
+                    else
+                    {
+                        // Reachable only through the scheduler's process-global
+                        // guard (no embedder, or scheduling switched off), which
+                        // ExecuteAsync already checks before entering this loop and
+                        // which cannot be true for one repository and false for
+                        // another. Recorded anyway so 'did not arm' is derived from
+                        // what happened rather than from the assumption that a
+                        // non-timeout is always a success.
+                        unarmed.Add(repoId);
                     }
                 }
                 catch (TimeoutException ex)
                 {
                     deferred++;
+                    unarmed.Add(repoId);
 
                     // Announced once per repository per episode, then counted. A
                     // coordinator busy for hours would otherwise warn on every
@@ -286,24 +349,29 @@ internal sealed class RepoContextAnnIndexSweepService(
         }
         catch (Exception ex)
         {
-            Announce(RepoContextAnnSweepOutcome.Faulted, armed, observed, deferred, ex);
+            Announce(RepoContextAnnSweepOutcome.Faulted, armed, observed, deferred, unarmed, ex);
             return RepoContextAnnSweepOutcome.Faulted;
         }
 
         if (faulted is not null)
         {
-            Announce(RepoContextAnnSweepOutcome.Faulted, armed, observed, deferred, faulted);
+            Announce(RepoContextAnnSweepOutcome.Faulted, armed, observed, deferred, unarmed, faulted);
             return RepoContextAnnSweepOutcome.Faulted;
         }
 
         var outcome = armed > 0 ? RepoContextAnnSweepOutcome.Armed : RepoContextAnnSweepOutcome.Empty;
-        Announce(outcome, armed, observed, deferred, exception: null);
+        Announce(outcome, armed, observed, deferred, unarmed, exception: null);
         return outcome;
     }
 
     /// <summary>Records one outcome and writes the log line its transition warrants.</summary>
     private void Announce(
-        RepoContextAnnSweepOutcome outcome, int armed, int observed, int deferred, Exception? exception)
+        RepoContextAnnSweepOutcome outcome,
+        int armed,
+        int observed,
+        int deferred,
+        IReadOnlyList<string> unarmed,
+        Exception? exception)
     {
         var report = _reporter.Record(outcome);
         switch (report.Announcement)
@@ -331,8 +399,17 @@ internal sealed class RepoContextAnnIndexSweepService(
             case RepoContextAnnSweepAnnouncement.FirstArmed:
                 logger.LogInformation(
                     "Repository-context approximate-index sweep armed {ArmedCount} build coordinator(s) for the "
-                    + "first time in this process. Later sweeps are counted onto '{Instrument}' rather than logged.",
+                    + "first time in this process, out of {ObservedRepositoryCount} repository id(s) observed in "
+                    + "the store listing, {DeferredRepositoryCount} of which did not answer the arming call within "
+                    + "the grain call timeout. Read the three numbers together: an armed count equal to the "
+                    + "observed count is a complete sweep, whereas a smaller one means some repository's "
+                    + "approximate index is not being built. The '{Outcome}' arm of '{Instrument}' records only "
+                    + "that at least one coordinator armed, so it cannot make that distinction and later sweeps "
+                    + "are counted onto it rather than logged. A repository left out is named by its own warning.",
                     armed,
+                    observed,
+                    deferred,
+                    RepoContextAnnIndexSweepReporter.OutcomeArmedTag,
                     RepoContextAnnIndexSweepReporter.SweepInstrumentName);
                 break;
 
@@ -358,6 +435,17 @@ internal sealed class RepoContextAnnIndexSweepService(
                 break;
         }
 
+        // Deliberately outside the switch, because the switch is once-per-process
+        // and this must not be. FirstArmed fires on the first armed sweep and never
+        // again, so a repository that arms normally for an hour and then stops would
+        // fall entirely inside the silent steady state - which is precisely the
+        // failure this exists to make audible. Damped per repository instead of per
+        // process, in the same shape as the deferral warning above.
+        if (outcome == RepoContextAnnSweepOutcome.Armed && unarmed.Count > 0)
+        {
+            AnnouncePartialSweep(armed, observed, deferred, unarmed);
+        }
+
         // Deliberately outside the switch, and deliberately not gated on the
         // once-per-process announcement above: the retrieval plane usually reaches
         // 'serving' well AFTER the first sweep that armed nothing, so a contradiction
@@ -366,6 +454,71 @@ internal sealed class RepoContextAnnIndexSweepService(
         if (outcome != RepoContextAnnSweepOutcome.Faulted)
         {
             AnnounceReadinessContradiction(observed);
+        }
+    }
+
+    /// <summary>
+    /// Names the repositories a sweep did not arm, on a sweep that armed something
+    /// else.
+    /// <para>
+    /// <b>Why this is a log line and not a metric dimension.</b> The remedy for an
+    /// aggregate that cannot be decomposed is attribution, and attribution here is
+    /// an identity. Repositories are registered at runtime through
+    /// <c>repocontext_add_repo</c>, so a repository dimension on the sweep counter
+    /// would have no compile-time bound, and every instrument on this meter is
+    /// documented as carrying low-cardinality tags and never a repository id. The
+    /// standing rule is that identity dimensions belong in logs and outcome
+    /// dimensions belong in metrics; see the durable decision
+    /// <c>no-repo-tag-on-pass-arm-faults</c>. So the counter keeps its shape and the
+    /// attribution goes here.
+    /// </para>
+    /// <para>
+    /// <b>Why a partial sweep is worth a warning at all.</b> Nothing is permanently
+    /// lost: arming is idempotent and the next sweep retries, so this is a
+    /// diagnosability defect rather than a correctness one. The cost is entirely in
+    /// what an operator can see. A repository whose coordinator never arms while its
+    /// siblings arm normally produces a steadily rising <c>armed</c> counter, no
+    /// warning, and a box that looks healthy, while that repository's approximate
+    /// index is never built and its searches silently stay on the fallback path. The
+    /// counter answers "did at least one coordinator arm" when the question an
+    /// operator has is "did every coordinator arm".
+    /// </para>
+    /// <para>
+    /// Announced once per repository per episode and re-armed the moment that
+    /// repository arms, in the same shape as the deferral warning, so a coordinator
+    /// legitimately busy for hours is named once rather than on every sweep.
+    /// </para>
+    /// </summary>
+    private void AnnouncePartialSweep(int armed, int observed, int deferred, IReadOnlyList<string> unarmed)
+    {
+        foreach (var repoId in unarmed)
+        {
+            if (_unarmed.Add(repoId))
+            {
+                logger.LogWarning(
+                    "Repo {RepoId}: the approximate-index build coordinator was not armed by a sweep that armed "
+                    + "{ArmedCount} of the {ObservedRepositoryCount} repository id(s) it observed, "
+                    + "{DeferredRepositoryCount} of which did not answer the arming call within the grain call "
+                    + "timeout. The '{Outcome}' arm of '{Instrument}' records only that at least one coordinator "
+                    + "armed, so a sweep that arms some repositories is indistinguishable there from one that arms "
+                    + "all of them, and this line is the only surface that names which repository was left out. "
+                    + "Arming is idempotent, so the next sweep retries it and nothing is permanently lost; a "
+                    + "repository named here sweep after sweep is one whose approximate index is never built while "
+                    + "the counter continues to read as success. Further partial sweeps are not logged for this "
+                    + "repository until it arms again.",
+                    repoId,
+                    armed,
+                    observed,
+                    deferred,
+                    RepoContextAnnIndexSweepReporter.OutcomeArmedTag,
+                    RepoContextAnnIndexSweepReporter.SweepInstrumentName);
+            }
+            else
+            {
+                logger.LogDebug(
+                    "Repo {RepoId}: still not armed by a partial sweep; already announced for this episode.",
+                    repoId);
+            }
         }
     }
 
@@ -397,7 +550,8 @@ internal sealed class RepoContextAnnIndexSweepService(
     /// <para>
     /// Internal rather than private so a test can drive the episode across several
     /// passes - announce, hold, clear, announce again - without waiting out
-    /// <see cref="MinimumSweepInterval"/> once per transition. The re-arm is the half
+    /// <see cref="RepoContextIndexingOptions.EffectiveAnnSweepInterval"/> once per
+    /// transition. The re-arm is the half
     /// that only matters at the <i>second</i> incident, so leaving it to a timing
     /// seam would leave it permanently unproven.
     /// </para>

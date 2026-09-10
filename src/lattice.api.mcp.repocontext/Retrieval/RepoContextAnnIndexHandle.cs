@@ -154,9 +154,16 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
     /// <summary>
     /// Drives <see cref="AdvanceAsync(CancellationToken)"/> until the index is
-    /// serving. Each step is bounded and the turn is released between steps, so a
-    /// query issued while this runs is answered by the fall-back path immediately
-    /// rather than queueing behind the build.
+    /// serving. Each step is bounded by both a vector count and a wall-clock
+    /// budget, and the turn is released between steps.
+    /// <para>
+    /// A concurrent <see cref="SearchAsync"/> does not wait on either: it reads
+    /// <see cref="IsServing"/> without taking the turn and falls back to the
+    /// exact scan while a build runs. What a long step does block is every other
+    /// caller of this handle - the coordinator's own pump, and the arming path -
+    /// which is why the step is bounded in time and not only in work. See
+    /// <see cref="RepoContextAnnOptions.IngestSliceBudget"/> and issue #2483.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the build between steps.</param>
     /// <exception cref="ObjectDisposedException">The handle has been disposed.</exception>
@@ -438,18 +445,25 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         // generous reconnect budget. Treating exhaustion as "unknown, therefore
         // possibly behind" keeps the build going down the path that repairs, which
         // is the safe direction and the one the upper-bound case already takes.
+        //
+        // There are now two ways to be unknown and they are handled identically. An
+        // EnumerationAbortedException is the store losing the enumerator; a
+        // RepoContextCountBudgetExceededException is the source declining to spend
+        // more wall clock on the walk (#2447). The distinction matters in a log line
+        // and nowhere else: neither yields a figure, and a missing figure has exactly
+        // one safe reading here.
         var behind = true;
         try
         {
             var expected = await _source.CountAsync(cancellationToken).ConfigureAwait(false);
             behind = expected > index.Count;
         }
-        catch (EnumerationAbortedException ex)
+        catch (Exception ex) when (ex is EnumerationAbortedException or RepoContextCountBudgetExceededException)
         {
             _logger.LogInformation(
                 ex,
                 "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} could not count the "
-                + "source within its reconnect budget; treating the persisted index as possibly behind and repairing.",
+                + "source within its budget; treating the persisted index as possibly behind and repairing.",
                 _repoId,
                 _space.ModelId,
                 _space.Dimension);
@@ -556,13 +570,35 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         }
 
         Volatile.Write(ref _serving, true);
+
+        // The latch is deliberately NOT conditioned on the partition count. A
+        // build that finished without partitioning still serves, exhaustively and
+        // exactly, and declining to latch would spin EnsureBuiltAsync forever
+        // against a corpus that is simply too small to partition. What must not
+        // survive the partition count being zero is the CLAIM: announcing
+        // approximate retrieval for an index holding no partitioning is the
+        // dishonest half, and it is the half that is fixed here.
+        if (_progress.PartitionsTotal > 0)
+        {
+            _logger.LogInformation(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is serving "
+                + "{VectorsIndexed} vectors across {Partitions} partitions; semantic retrieval is now approximate.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension,
+                _progress.VectorsIndexed,
+                _progress.PartitionsTotal);
+            return;
+        }
+
         _logger.LogInformation(
-            "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is serving "
-            + "{VectorsIndexed} vectors across {Partitions} partitions; semantic retrieval is now approximate.",
+            "Repository-context index for {RepoId} in space {ModelId}/{Dimension} is serving "
+            + "{VectorsIndexed} vectors with no partitioning, so semantic retrieval stays exhaustive and exact. "
+            + "Training declined to partition this corpus; it is below the minimum training count or resolves "
+            + "to fewer than two partitions.",
             _repoId,
             _space.ModelId,
             _space.Dimension,
-            _progress.VectorsIndexed,
-            _progress.PartitionsTotal);
+            _progress.VectorsIndexed);
     }
 }

@@ -111,6 +111,9 @@ Two further variables are the kill switches for the approximate index's own hous
 |---|---|---|
 | `LATTICE_REPOCONTEXT_ANN_INDEX_SCHEDULING` | `true` | Whether the approximate index build is scheduled by its durable, reminder-anchored coordinator - which is what lets a restored volume converge to a serving index with no client traffic at all, and what resumes a build interrupted by a process death. Set `false` and no index is built at all: every semantic query is answered by the exact scan with complete recall. An absent or unrecognised value falls back to `true`. |
 | `LATTICE_REPOCONTEXT_ANN_INDEX_RECLAMATION` | `true` | Whether an index that has just reached `Ready` retires the sibling prefixes of its own repository whose embedding-space fingerprint is no longer live. A model or dimension change otherwise leaves the previous index resident forever. Set `false` to keep a superseded space for a deliberate roll-back. An absent or unrecognised value falls back to `true`. |
+| `LATTICE_REPOCONTEXT_ANN_SWEEP_INTERVAL_SECONDS` | `900` | How often the build sweep re-arms every registered repository's coordinator. Floored at 60 seconds: a shorter value is raised to the floor, and the startup line says so rather than leaving the setting to look ignored. |
+
+> **The sweep cadence is deliberately not part of the matched set above.** It used to be: the sweep took its interval from `LATTICE_RECONCILE_INTERVAL_SECONDS`, so raising that variable to quiesce walk load - a reasonable action, with nothing in its name to suggest otherwise - throttled index arming by the same factor. That is worse than a slow sweep. Two things arm a coordinator, this sweep and the self-index grain finishing a vectorising pass; a converged repository whose index was never built has no vectorising pass to finish, so the sweep is its **only** arming path, and the vectorising pass was paced by the reconcile interval too. Raising it did not slow one path of two, it slowed the only two there are. The index then serves nothing while the retrieval counter records `state="bootstrapping"`, which at the metric is indistinguishable from a genuine index defect. `LATTICE_REPOCONTEXT_ANN_SWEEP_INTERVAL_SECONDS` defaults to 900 seconds, which is the reconcile interval's own default, so a host that configures neither variable sweeps at exactly the cadence it always did.
 
 Two further variables bound resources whose defaults are derived from a runtime fact rather than from the deployment's real limit, so a constrained container can state the limit it actually has:
 
@@ -122,6 +125,21 @@ Two further variables bound resources whose defaults are derived from a runtime 
 
 > **Set the replay ceiling wherever you set a CPU limit.** `Environment.ProcessorCount` honours a container CPU quota only while `DOTNET_PROCESSOR_COUNT` does not override it, and that variable takes precedence over the quota-derived value. A container granted 6 CPUs whose environment also carries `DOTNET_PROCESSOR_COUNT=16` therefore sizes this gate at 16, not 6, and nothing inside the process can tell the difference. The two figures are two halves of one statement and are only checkable against each other when they are declared together, so keep the ceiling beside the `cpus` / `NanoCpus` limit rather than in a file that does not itself constrain CPU. The host logs the resolved ceiling once at startup, alongside the configured option and the `Environment.ProcessorCount` the runtime reported, so the effective figure can be read off the log instead of inferred from the host's vCPU count.
 An opt-in family of `LATTICE_REPOCONTEXT_GIT_*` variables switches a repository from the mounted workspace to a git remote; see [Index source strategies](#index-source-strategies).
+
+### Reading the effective configuration off the log
+
+The container's real settings usually arrive from an untracked compose override, so reading this repository does not tell you what a running process resolved. The host therefore states its own resolved configuration once at startup, on the `Repository-context effective configuration:` prefix, and that report supersedes any file when the two disagree:
+
+- one line per setting, carrying the value this process resolved, marked `[OVERRIDDEN...]` when it differs from the host default;
+- a `SCOPE:` line, described below;
+- one line per prefix-matched variable family;
+- a **warning** per supplied `LATTICE_` variable that nothing in this host binds.
+
+Grep the log for `SUPPLIED BUT NOT READ` to find a variable an operator set that never reaches anything - the silent failure that motivated the report. Values are printed through an allowlist, so a key that is not classified as safe to print renders as `<redacted: unclassified>` rather than leaking; a variable matched only by a prefix renders as `<withheld: matched by prefix only>`, because the host recognises the family without having verified that member individually.
+
+**The report covers one input channel, and says so.** The `SCOPE:` line states that it covers settings resolved from the process environment plus `Environment.ProcessorCount`, and that it does **not** cover `LatticeOptions` configured in code through `ConfigureLattice` - `WalRetention` among them - nor any value supplied through some other channel. So a setting absent from the report is a setting outside its scope, not a setting proven unset. Read a silence that way and nothing else in the report has to be qualified by hand.
+
+The set of keys the report treats as read is derived, not restated: the package publishes them as `RepoContextEnvironmentVariables`, whose `All` and `Prefixes` are built from the option classes' own constants, and the host folds that set into its own. A key added to an option class and published there is covered by the report without a second edit, which is what stops the two drifting apart.
 
 ## Registering repositories at runtime
 

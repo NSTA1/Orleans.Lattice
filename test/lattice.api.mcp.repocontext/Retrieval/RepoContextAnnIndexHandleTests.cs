@@ -145,6 +145,59 @@ public sealed class RepoContextAnnIndexHandleTests
     }
 
     [Test]
+    public async Task A_corpus_too_small_to_partition_serves_without_claiming_to_be_partitioned()
+    {
+        // Four vectors against a MinimumTrainingCount of eight, so VectorIndex.Train()
+        // declines, drops any partitioning, and returns false - while the build still
+        // reaches Ready, correctly, because it really did finish and the index really
+        // does serve. Issue #2439: the two must be separately observable.
+        using var rig = new Rig();
+        rig.SeedRing(4);
+
+        // This completing at all is half the assertion. EnsureBuiltAsync loops
+        // "while (!IsServing)", so conditioning the serving latch on the partition
+        // count - the obvious-looking repair - would spin here forever against a
+        // corpus that is merely too small. The latch is about whether the plane
+        // answers; the partition count is about how.
+        await rig.Handle.EnsureBuiltAsync(Ct);
+
+        var progress = await rig.Handle.AdvanceAsync(Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Handle.IsServing, Is.True,
+                "an unpartitioned index still serves, exhaustively and exactly");
+            Assert.That(progress.Phase, Is.EqualTo(VectorIndexBuildPhase.Ready),
+                "the build finished, so the phase is Ready");
+            Assert.That(progress.PartitionsTotal, Is.Zero,
+                "training declined to partition a corpus this small");
+            Assert.That(progress.IsReady, Is.False,
+                "IsReady reports whether the index answers FROM ITS PARTITIONING, and it does not");
+        });
+    }
+
+    [Test]
+    public async Task A_partitioned_corpus_reports_ready_on_both_signals()
+    {
+        // The positive control for the test above: same handle, same options, a
+        // corpus large enough to train. Without this arm the assertion "IsReady is
+        // false" could be satisfied by IsReady never being true at all.
+        using var rig = new Rig();
+        rig.SeedRing(32);
+
+        await rig.Handle.EnsureBuiltAsync(Ct);
+        var progress = await rig.Handle.AdvanceAsync(Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Handle.IsServing, Is.True);
+            Assert.That(progress.Phase, Is.EqualTo(VectorIndexBuildPhase.Ready));
+            Assert.That(progress.PartitionsTotal, Is.GreaterThan(1));
+            Assert.That(progress.IsReady, Is.True);
+        });
+    }
+
+    [Test]
     public async Task A_write_whose_vectors_are_the_wrong_width_applies_nothing()
     {
         using var rig = new Rig();
@@ -239,6 +292,42 @@ public sealed class RepoContextAnnIndexHandleTests
             Assert.That(outcome.State, Is.Not.EqualTo(RepoContextAnnServingState.Bootstrapping));
             Assert.That(outcome.Matches.Select(static m => m.VectorId), Does.Contain("vec-999999"),
                 "treating 'unknown' as 'possibly behind' is what keeps the repair on the safe path");
+        });
+    }
+
+    [Test]
+    public async Task A_source_whose_count_ran_out_of_budget_is_repaired_on_the_same_reasoning()
+    {
+        // The sibling of the test above, and the reason the catch was widened rather
+        // than a second handler added. There are now two ways the count can be
+        // unavailable - the store losing the enumerator (#1844) and the source
+        // declining to spend more wall clock on the walk (#2447) - and the
+        // distinction matters in a log line and nowhere else. Neither yields a
+        // figure, and a missing figure has exactly one safe reading here: possibly
+        // behind, therefore repair.
+        //
+        // Worth pinning separately because the failure mode of getting it wrong is
+        // silent. A budget-stopped count that propagated would fail the build; one
+        // that returned its partial figure would under-count, read as "not behind",
+        // and skip this repair with no error anywhere.
+        using var rig = new Rig();
+        rig.SeedRing(16);
+        await rig.Handle.EnsureBuiltAsync(Ct);
+
+        rig.Restart();
+        rig.Source.Set("vec-999999", RepoContextKeys.File(RepoId, "src/Late.cs"), Rig.Unit(1));
+        rig.Source.FailNextCounts(
+            1, static () => new RepoContextCountBudgetExceededException(RepoId, 12, TimeSpan.FromSeconds(10)));
+
+        Assert.That(async () => await rig.Handle.EnsureBuiltAsync(Ct), Throws.Nothing,
+            "a count abandoned on its own budget must not fail the build either");
+
+        var outcome = await rig.Handle.SearchAsync(Rig.Unit(1), 5, Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Handle.IsServing, Is.True);
+            Assert.That(outcome.Matches.Select(static m => m.VectorId), Does.Contain("vec-999999"),
+                "an unknown count must repair, however it came to be unknown");
         });
     }
 
