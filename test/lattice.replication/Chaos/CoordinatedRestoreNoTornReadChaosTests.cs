@@ -68,24 +68,29 @@ public sealed class CoordinatedRestoreNoTornReadChaosTests
         await AdvancePastCutAsync(us);
         await AdvancePastCutAsync(eu);
 
-        // A concurrent reader samples the US tree's whole-key visibility throughout
-        // the restore. Every sample must show either all six cut facts (restored) or
-        // all eight advanced facts (pre-restore) - never a partial subset (torn).
-        var observed = new ConcurrentQueue<int>();
+        // A concurrent reader samples the US tree's whole-tree size throughout the
+        // restore. Every sample must show either the six cut facts (restored) or the
+        // eight advanced facts (pre-restore) - never a partial subset (torn).
+        //
+        // The sample MUST be a single atomic observation. An earlier form of this
+        // reader composed the size from eight sequential GetAsync calls, which is
+        // not a snapshot: the advanced state is a strict superset of the cut state,
+        // so all six cut facts are present in both and only ReworkKey/FinalKey vary.
+        // Reading those two adjacently and non-atomically across the single atomic
+        // alias swap yields a size of 7 - a torn OBSERVATION, not a torn tree - and
+        // the assertion then failed on correct behaviour (issue #2633). CountAsync
+        // resolves routing once, stamps one registry snapshot across the fan-out and
+        // re-checks the shard-map version afterwards, retrying on an alias or
+        // topology change, so it returns a size from one coherent tree version.
+        // That makes a 7 here mean what the assertion says it means.
+        var observed = new ConcurrentQueue<(string Phase, int Sample)>();
+        var phase = "before-prepare";
         using var stop = new CancellationTokenSource();
         var reader = Task.Run(async () =>
         {
             while (!stop.IsCancellationRequested)
             {
-                var present = 0;
-                foreach (var key in CutFactKeys)
-                {
-                    if (await us.GetAsync(key) is not null) present++;
-                }
-
-                var rework = await us.GetAsync(ReworkKey) is not null ? 1 : 0;
-                var final = await us.GetAsync(FinalKey) is not null ? 1 : 0;
-                observed.Enqueue(present + rework + final);
+                observed.Enqueue((Volatile.Read(ref phase), await us.CountAsync()));
             }
         });
 
@@ -105,6 +110,7 @@ public sealed class CoordinatedRestoreNoTornReadChaosTests
         // Commit US first, then hold: EU is a laggard that has not yet flipped. The
         // globally-gated shipping resume keeps shipping paused, so no re-advance can
         // occur during the window between the two clusters' flips.
+        Volatile.Write(ref phase, "committing-us");
         await usParticipant.CommitAsync(requestUs);
 
         var pausedSnapshot = await _fixture.Fence(SagaId).GetSnapshotAsync();
@@ -112,10 +118,12 @@ public sealed class CoordinatedRestoreNoTornReadChaosTests
             "shipping stays globally gated while the laggard has not flipped");
 
         // Let the reader observe the half-flipped window under the paused gate.
+        Volatile.Write(ref phase, "half-flipped-gate-paused");
         await UnionShipIfResumedAsync(us, eu);
         await UnionShipIfResumedAsync(eu, us);
 
         // The laggard finally flips.
+        Volatile.Write(ref phase, "committing-eu");
         await euParticipant.CommitAsync(requestEu);
 
         // Global completion observed: shipping resumes.
@@ -123,6 +131,7 @@ public sealed class CoordinatedRestoreNoTornReadChaosTests
         var resumed = await _fixture.Fence(SagaId).PollResumeAsync();
         Assert.That(resumed.ShippingResumed, Is.True);
 
+        Volatile.Write(ref phase, "shipping-resumed");
         await UnionShipIfResumedAsync(us, eu);
         await UnionShipIfResumedAsync(eu, us);
 
@@ -130,21 +139,20 @@ public sealed class CoordinatedRestoreNoTornReadChaosTests
         await reader;
 
         // Drain a final batch of samples now the workload is quiescent.
+        Volatile.Write(ref phase, "quiescent");
         for (var i = 0; i < 8; i++)
         {
-            var present = 0;
-            foreach (var key in CutFactKeys)
-            {
-                if (await us.GetAsync(key) is not null) present++;
-            }
-            observed.Enqueue(present);
+            observed.Enqueue(("quiescent", await us.CountAsync()));
         }
 
         // No torn read: every sampled whole-tree size is one of the two legal states.
-        foreach (var sample in observed)
+        // The phase is carried alongside the sample so a failure is attributable to a
+        // point in the saga rather than being an unplaceable integer (issue #2633).
+        foreach (var (samplePhase, sample) in observed)
         {
             Assert.That(sample is CutCount or AdvancedCount, Is.True,
-                $"reader observed a torn tree size {sample}; expected {CutCount} or {AdvancedCount}");
+                $"reader observed a torn tree size {sample} during phase '{samplePhase}'; "
+                + $"expected {CutCount} or {AdvancedCount}");
         }
 
         // Deterministic end state: both clusters restored to the cut, no re-advance.
