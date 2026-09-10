@@ -172,6 +172,7 @@ internal sealed class RepoContextVectorWriter
     private readonly RepoContextVectorCache _cache;
     private readonly RepoContextVectorPlaneReDeriver _reDeriver;
     private readonly IRepoContextAnnIndex? _annIndex;
+    private readonly RepoContextCoverageDigestStore? _coverageDigest;
     private readonly ILogger<RepoContextVectorWriter> _logger;
 
     /// <summary>
@@ -251,7 +252,8 @@ internal sealed class RepoContextVectorWriter
         RepoContextVectorCache cache,
         RepoContextVectorPlaneReDeriver reDeriver,
         IRepoContextAnnIndex? annIndex = null,
-        ILogger<RepoContextVectorWriter>? logger = null)
+        ILogger<RepoContextVectorWriter>? logger = null,
+        RepoContextCoverageDigestStore? coverageDigest = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -264,6 +266,7 @@ internal sealed class RepoContextVectorWriter
         _cache = cache;
         _reDeriver = reDeriver;
         _annIndex = annIndex;
+        _coverageDigest = coverageDigest;
         _logger = logger ?? NullLogger<RepoContextVectorWriter>.Instance;
     }
 
@@ -651,6 +654,19 @@ internal sealed class RepoContextVectorWriter
 
         await EnableMembershipManyAsync(keys, cancellationToken).ConfigureAwait(false);
 
+        // Membership FIRST, digest second (issue #2486). The digest is allowed to
+        // trail membership - that under-reports coverage and costs a redundant,
+        // idempotent embed - but must never lead it, which would report a source as
+        // covered before its embedding landed and mask a real gap permanently.
+        if (_coverageDigest is not null)
+        {
+            await _coverageDigest.RecordCoveredAsync(
+                repoId,
+                sourceKeys.Select(VectorCodec.SourceId),
+                contentlessSourceIds: null,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         // Membership does not feed the gather, but a batch's membership write always
         // trails its StoreAsync vectors, so invalidate defensively to keep the cache
         // consistent with any future gather that consults membership.
@@ -854,15 +870,27 @@ internal sealed class RepoContextVectorWriter
     /// <param name="Passes">How many calls this walk of the range has already taken.</param>
     private sealed record MemoryKeyMarkerCursor(IReadOnlySet<string> Keys, string? ContinuationToken, int Passes);
 
-    private Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
-        => GuardMembershipAsync(async () =>        {
+    private async Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
+    {
+        // Digest FIRST, membership second (issue #2486) - the mirror image of the add
+        // ordering, and for the same reason: an interleaving or a crash between the
+        // two must leave the digest a subset of membership, never a superset.
+        if (_coverageDigest is not null)
+        {
+            await _coverageDigest.RecordUncoveredAsync(
+                repoId, [sourceId], contentlessSourceIds: null, cancellationToken).ConfigureAwait(false);
+        }
+
+        await GuardMembershipAsync(async () =>
+        {
             var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
             var key = RepoContextKeys.VectorMembership(repoId, sourceId);
 
             // Disable rather than delete so the removal carries causal history and
             // converges add-wins against a concurrent enable on another cluster.
             await tree.OrFlag(key).DisableAsync(cancellationToken).ConfigureAwait(false);
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Records a "considered, no passages" marker for each contentless source in a
@@ -898,6 +926,19 @@ internal sealed class RepoContextVectorWriter
         }
 
         await EnableMembershipManyAsync(keys, cancellationToken).ConfigureAwait(false);
+
+        // Membership first, digest second - see AddMembersAsync for the ordering
+        // invariant. A contentless marker is coverage exactly as an embedding is, so
+        // the digest carries it in its own run rather than conflating the two: the
+        // ingest path still has to tell an embedded file from a marked-empty one.
+        if (_coverageDigest is not null)
+        {
+            await _coverageDigest.RecordCoveredAsync(
+                repoId,
+                embeddedSourceIds: null,
+                sourceKeys.Select(VectorCodec.SourceId),
+                cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -910,18 +951,25 @@ internal sealed class RepoContextVectorWriter
     /// <param name="sourceId">The 16-character source identifier whose marker to clear. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="sourceId"/> is null.</exception>
-    public Task UnmarkContentlessAsync(
+    public async Task UnmarkContentlessAsync(
         string repoId, string sourceId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(sourceId);
 
-        return GuardMembershipAsync(() =>
+        // Digest first, membership second - see RemoveMemberAsync for the ordering.
+        if (_coverageDigest is not null)
+        {
+            await _coverageDigest.RecordUncoveredAsync(
+                repoId, embeddedSourceIds: null, [sourceId], cancellationToken).ConfigureAwait(false);
+        }
+
+        await GuardMembershipAsync(() =>
         {
             var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
             var key = RepoContextKeys.VectorMembership(repoId, ContentlessMarkerPrefix + sourceId);
             return tree.OrFlag(key).DisableAsync(cancellationToken);
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1421,6 +1469,86 @@ internal sealed class RepoContextVectorWriter
             token = page.HasMore ? page.ContinuationToken : null;
         }
         while (token is not null);
+    }
+
+    /// <summary>
+    /// Loads the repository's coverage digest, building it from a one-time whole-set
+    /// membership scan when it does not exist yet (issue #2486).
+    /// <para>
+    /// This is the seam every gap-detection caller goes through, and the bootstrap is
+    /// the reason it exists. On a deployment whose membership predates the digest, a
+    /// naive read of an absent digest would report every source uncovered and
+    /// re-embed the entire repository - the exact whole-repository pass this item was
+    /// opened to remove. So an unbuilt digest is seeded once from the authoritative
+    /// membership scan, and every pass after that reads
+    /// <see cref="RepoContextCoveragePage.PageCount"/> rows regardless of corpus size.
+    /// </para>
+    /// <para>
+    /// A bootstrap failure is not fatal and is not retried here: the digest stays
+    /// unbuilt, the caller falls back to the membership probe it used before, and the
+    /// next pass tries again.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository whose digest to load. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the load.</param>
+    /// <returns>The built digest, or <see cref="RepoContextCoverageDigest.Unbuilt"/> when no digest is available.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public async Task<RepoContextCoverageDigest> LoadCoverageDigestAsync(
+        string repoId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        if (_coverageDigest is null)
+        {
+            return RepoContextCoverageDigest.Unbuilt;
+        }
+
+        var digest = await _coverageDigest.LoadAsync(repoId, cancellationToken).ConfigureAwait(false);
+        if (digest.IsBuilt)
+        {
+            return digest;
+        }
+
+        try
+        {
+            var coverage = await LoadCoverageAsync(repoId, cancellationToken).ConfigureAwait(false);
+            await _coverageDigest.RebuildAsync(repoId, coverage, cancellationToken).ConfigureAwait(false);
+            return await _coverageDigest.LoadAsync(repoId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Repo {RepoId}: could not seed the vector-coverage digest from membership; this pass falls " +
+                "back to the per-source membership probe and the next pass retries.",
+                repoId);
+            return RepoContextCoverageDigest.Unbuilt;
+        }
+    }
+
+    /// <summary>
+    /// Re-derives the repository's coverage digest from an authoritative whole-set
+    /// membership scan, whatever its current state. This is the periodic exhaustive
+    /// audit that bounds digest drift: it is the only remaining O(sources) read on
+    /// the coverage path, which is why it runs on a long cadence while detection runs
+    /// every pass.
+    /// </summary>
+    /// <param name="repoId">The repository to audit. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the audit.</param>
+    /// <returns><see langword="true"/> when the digest was re-derived.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public async Task<bool> AuditCoverageDigestAsync(string repoId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        if (_coverageDigest is null)
+        {
+            return false;
+        }
+
+        var coverage = await LoadCoverageAsync(repoId, cancellationToken).ConfigureAwait(false);
+        await _coverageDigest.RebuildAsync(repoId, coverage, cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     /// <summary>

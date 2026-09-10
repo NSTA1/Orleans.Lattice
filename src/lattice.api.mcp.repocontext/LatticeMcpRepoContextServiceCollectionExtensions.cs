@@ -160,6 +160,7 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetService<IEmbeddingProvider>()));
         services.TryAddSingleton<RepoContextVectorCache>();
         services.TryAddSingleton<RepoContextVectorPlaneReDeriver>();
+        services.TryAddSingleton<RepoContextCoverageDigestStore>();
         services.TryAddSingleton<RepoContextVectorWriter>();
         services.TryAddSingleton<RepoContextEmbeddingGapScanner>();
 

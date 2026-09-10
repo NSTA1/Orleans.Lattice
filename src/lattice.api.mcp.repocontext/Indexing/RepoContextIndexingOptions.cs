@@ -36,6 +36,9 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>Environment variable overriding <see cref="EmbeddingGapScanInterval"/> (in seconds).</summary>
     public const string EmbeddingGapScanIntervalSecondsKey = "LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS";
 
+    /// <summary>Environment variable overriding <see cref="CoverageDigestAuditInterval"/> (in seconds).</summary>
+    public const string CoverageDigestAuditIntervalSecondsKey = "LATTICE_COVERAGE_DIGEST_AUDIT_INTERVAL_SECONDS";
+
     /// <summary>Environment variable overriding <see cref="VectorCacheTtl"/> (in seconds).</summary>
     public const string VectorCacheTtlSecondsKey = "LATTICE_VECTOR_CACHE_TTL_SECONDS";
 
@@ -110,15 +113,75 @@ internal sealed class RepoContextIndexingOptions
     /// files whose structural record is committed but whose vector never landed. Expressed
     /// as wall clock; what the reconcile counts is <see cref="PassesPerEmbeddingGapScan"/>.
     /// <para>
-    /// The probe costs two membership reads per indexed source, so on a converged
-    /// repository it is by far the most expensive part of a pass while finding nothing.
-    /// Spacing it out does not delay healing: the self-index grain runs a continuous,
+    /// <b>Why this is now 20 minutes and no longer 4 hours - the derivation, kept next to
+    /// the constant (issue #2486).</b> The old figure was a consequence of the old cost
+    /// model, not a judgement about how quickly a gap should be found. Detection used to
+    /// cost two membership point-reads per indexed source: 2N reads on a corpus of N
+    /// sources, against the one tree that is the write-ahead-log replay-debt hotspot behind
+    /// the symbol re-embed loop (issue #2071). At the ~20k-source scale this deployment
+    /// runs, that is ~40,000 reads per scan on the hottest tree in the system, so the only
+    /// way to make it affordable was to ration it - hence 4 hours (issue #2049), which is
+    /// roughly one scan per 12 reconciles. Detection frequency and replay debt were
+    /// therefore coupled: the window could not be shortened without making the hotspot
+    /// worse.
+    /// </para>
+    /// <para>
+    /// The per-page coverage digest breaks that coupling. A scan now reads
+    /// <see cref="RepoContextCoveragePage.PageCount"/> pages plus one state marker - 257
+    /// rows - on a <b>different</b> tree
+    /// (<see cref="RepoContextTrees.VectorCoverage"/>), and that figure does not move with
+    /// N. So the cost that justified 4 hours is gone in two independent ways at once: it is
+    /// ~155x smaller at 20k sources, and none of it lands on the #2071 hotspot.
+    /// </para>
+    /// <para>
+    /// <b>Re-derived from the new cost model.</b> The remaining reason not to simply scan
+    /// every pass is that the scan is not free: it still walks the structural file range
+    /// (keys only, a read the pass performs anyway) and reads 257 digest rows. Setting the
+    /// interval at or below <see cref="MaximumReconcileSpacing"/> would make
+    /// <see cref="PassesPerEmbeddingGapScan"/> equal 1 - a scan every pass, ~257 rows every
+    /// ~20 minutes. 20 minutes is exactly that boundary at the default spacing
+    /// (<see cref="ReconcileInterval"/> 15 minutes + <see cref="ReconcileIntervalJitter"/>
+    /// 5 minutes), so this value is the shortest detection window the scheduler can
+    /// express, chosen deliberately: at 257 rows there is nothing left to ration, and
+    /// worst-case gap-detection latency drops from ~4 hours to one reconcile.
+    /// </para>
+    /// <para>
+    /// <b>The break-even, stated so the constant is not read as unconditionally cheaper.</b>
+    /// The digest costs a fixed 257 rows, the old probe cost 2N. Below roughly 128 indexed
+    /// sources the old probe was the cheaper read. That is not a regime worth optimising
+    /// for - a 128-source repository reconciles in milliseconds either way - but the digest
+    /// is an accelerator for large corpora, not a universal improvement, and the crossover
+    /// belongs next to the number.
+    /// </para>
+    /// <para>
+    /// Spacing still does not delay healing: the self-index grain runs a continuous,
     /// bounded, paged gap sweep out of band and forces an immediate in-pass scan the moment
     /// it finds a gap, and a repository that has not yet been observed clean is re-probed
     /// on every pass until it is.
     /// </para>
     /// </summary>
-    public TimeSpan EmbeddingGapScanInterval { get; init; } = TimeSpan.FromHours(4);
+    public TimeSpan EmbeddingGapScanInterval { get; init; } = TimeSpan.FromMinutes(20);
+
+    /// <summary>
+    /// How often the coverage digest is re-derived from an authoritative whole-set
+    /// membership scan, bounding how far the digest can drift from the membership tree it
+    /// mirrors.
+    /// <para>
+    /// This is the O(sources) read that <see cref="EmbeddingGapScanInterval"/> used to be,
+    /// and moving it here is the point of the split: the expensive exhaustive read now runs
+    /// on a long cadence and does only the job that genuinely needs it, while detection -
+    /// the job that wants to be frequent - runs every pass off the digest. It is a
+    /// correctness backstop, not the healing path: the digest's write ordering makes it a
+    /// subset of membership at every crash point, so the failure it repairs is
+    /// under-reporting, which costs redundant idempotent embeds rather than missed gaps.
+    /// </para>
+    /// <para>
+    /// 24 hours is chosen so the exhaustive scan's amortised cost against the #2071 hotspot
+    /// is 2N reads per day rather than the 2N per 4 hours it was before - a 6x reduction in
+    /// the exhaustive read alone, on top of removing it from the detection path entirely.
+    /// </para>
+    /// </summary>
+    public TimeSpan CoverageDigestAuditInterval { get; init; } = TimeSpan.FromHours(24);
 
     /// <summary>
     /// The widest spacing two consecutive reconciles can be scheduled at:
@@ -143,6 +206,13 @@ internal sealed class RepoContextIndexingOptions
     /// scans on every pass, exactly as it did before the cadence existed.
     /// </summary>
     public int PassesPerEmbeddingGapScan => PassesPerInterval(EmbeddingGapScanInterval);
+
+    /// <summary>
+    /// <see cref="CoverageDigestAuditInterval"/> expressed as a number of reconciles, which
+    /// is the cadence the reconcile actually enforces for the exhaustive coverage-digest
+    /// re-derivation. Never less than one.
+    /// </summary>
+    public int PassesPerCoverageDigestAudit => PassesPerInterval(CoverageDigestAuditInterval);
 
     /// <summary>
     /// Whether the directory-modification-time prune cache can ever be acted on under
@@ -307,6 +377,8 @@ internal sealed class RepoContextIndexingOptions
             FullWalkInterval = ReadSeconds(FullWalkIntervalSecondsKey, defaults.FullWalkInterval),
             EmbeddingGapScanInterval = ReadSeconds(
                 EmbeddingGapScanIntervalSecondsKey, defaults.EmbeddingGapScanInterval),
+            CoverageDigestAuditInterval = ReadSeconds(
+                CoverageDigestAuditIntervalSecondsKey, defaults.CoverageDigestAuditInterval),
             VectorCacheTtl = ReadSeconds(VectorCacheTtlSecondsKey, defaults.VectorCacheTtl),
             TokenizerProfile = ReadTokenizerProfile(TokenizerProfileKey, defaults.TokenizerProfile),
             Role = ReadIndexingRole(IndexingRoleKey, defaults.Role),
