@@ -293,6 +293,28 @@ internal sealed class RepoContextAnnIndexBuildGrain(
 
         _advancedThisActivation = true;
 
+        // The discriminator this build is otherwise missing. A tick that banks
+        // nothing looks identical from outside whether the slice budget merely
+        // expired on a busy box or the source cannot deliver its first item at
+        // all, and those need opposite remedies. Logging the starved case - and
+        // only that case - names which one is happening while the run is still
+        // observable, instead of leaving it to be argued about afterwards from a
+        // corpus figure that reads 0 either way.
+        if (progress.IsStarvedBySource)
+        {
+            Logger.LogWarning(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is starved by its "
+                + "source: all {Deadlined} ingest slice(s) stopped by the wall-clock budget banked nothing, so the "
+                + "build is bounded but is not advancing and holds {VectorsIndexed} vector(s). The slice budget is "
+                + "being enforced, so this is a source read that cannot complete rather than a budget that is too "
+                + "small; raising the budget will not help.",
+                repoId,
+                space.ModelId,
+                space.Dimension,
+                progress.SlicesDeadlined,
+                progress.VectorsIndexed);
+        }
+
         if (progress.Phase != VectorIndexBuildPhase.Ready)
         {
             return;
