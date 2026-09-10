@@ -304,10 +304,32 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // embed-and-store write load - not the probe - that keeps the membership tree
         // beyond its replay budget. Only the back-fill selection stands down.
         var skipGapScan = ClaimFileGapScanSkip(repoId);
+        var coverageFromDigest = false;
         try
         {
-            coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken)
+            // Digest first (issue #2486). A built digest answers coverage for the
+            // whole candidate set in a fixed number of rows on a different tree, so
+            // this pass makes ZERO membership reads for detection - which is both the
+            // O(sources) cost this item removes and the read pressure it takes off the
+            // #2071 replay-debt hotspot. The projection returns exactly the coverage
+            // shape the probe returned, so every consumer below is unchanged.
+            //
+            // An unbuilt or unreadable digest falls through to the probe unchanged;
+            // LoadCoverageDigestAsync seeds the digest from that same authoritative
+            // scan on its first call, so the O(sources) read happens once rather than
+            // every pass.
+            var digest = await _writer.LoadCoverageDigestAsync(repoId, cancellationToken)
                 .ConfigureAwait(false);
+            if (digest.IsBuilt)
+            {
+                coverage = digest.ProjectOnto(candidateKeys.Select(VectorCodec.SourceId));
+                coverageFromDigest = true;
+            }
+            else
+            {
+                coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -349,6 +371,16 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 changedFiles.Count,
                 unchangedFiles.Count);
         }
+
+        // How this pass paid for detection (issue #2486). Logged rather than metered
+        // so the change adds no instrument and therefore binds no dashboard or metrics
+        // doc surface; the digest arm is the one that costs a fixed number of rows on
+        // a tree that is not the #2071 replay-debt hotspot.
+        _logger.LogDebug(
+            "Repo {RepoId}: coverage for {Candidates} candidate file(s) resolved from {Source}.",
+            repoId,
+            candidateKeys.Count,
+            coverageFromDigest ? "the per-page coverage digest" : "a per-source membership probe");
 
         var toEmbed = coverageProbeFailed || coverageGatePruned || skipGapScan
             ? new List<RepoFileEntry>(changedFiles)

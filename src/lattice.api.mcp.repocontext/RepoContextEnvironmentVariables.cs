@@ -54,6 +54,7 @@ public static class RepoContextEnvironmentVariables
         RepoContextIndexingOptions.ReconcileJitterSecondsKey,
         RepoContextIndexingOptions.FullWalkIntervalSecondsKey,
         RepoContextIndexingOptions.EmbeddingGapScanIntervalSecondsKey,
+        RepoContextIndexingOptions.CoverageDigestAuditIntervalSecondsKey,
         RepoContextIndexingOptions.VectorCacheTtlSecondsKey,
         RepoContextIndexingOptions.TokenizerProfileKey,
         RepoContextIndexingOptions.IndexingRoleKey,
@@ -119,10 +120,19 @@ public static class RepoContextEnvironmentVariables
                 RepoContextIndexingOptions.FullWalkIntervalSecondsKey,
                 Seconds(resolved.FullWalkInterval),
                 Seconds(defaults.FullWalkInterval)),
+            // Both cadence deadlines are counted in reconcile passes, rounded up and
+            // clamped to at least one, so the configured seconds are not the seconds in
+            // force. Reported as the enforced cadence for the reason the sweep interval
+            // below is: an operator shown the value they supplied would take that as
+            // confirmation it applied.
             Snapshot(
                 RepoContextIndexingOptions.EmbeddingGapScanIntervalSecondsKey,
-                Seconds(resolved.EmbeddingGapScanInterval),
-                Seconds(defaults.EmbeddingGapScanInterval)),
+                Seconds(resolved.EffectiveEmbeddingGapScanInterval),
+                Seconds(defaults.EffectiveEmbeddingGapScanInterval)),
+            Snapshot(
+                RepoContextIndexingOptions.CoverageDigestAuditIntervalSecondsKey,
+                Seconds(resolved.EffectiveCoverageDigestAuditInterval),
+                Seconds(defaults.EffectiveCoverageDigestAuditInterval)),
             Snapshot(
                 RepoContextIndexingOptions.VectorCacheTtlSecondsKey,
                 Seconds(resolved.VectorCacheTtl),

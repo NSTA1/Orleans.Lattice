@@ -29,6 +29,10 @@ public sealed class RepoContextCompactionTests
                 // range-deletes a whole superseded generation on every retrain or
                 // rebuild, so it bears deletes like any other churn tree.
                 RepoContextHostTrees.VectorIndex,
+
+                // Every covered source rewrites its digest page, so a converged
+                // repository still rewrites the same fixed page set on every ingest.
+                RepoContextHostTrees.VectorCoverage,
             }));
 
     [Test]
@@ -51,6 +55,7 @@ public sealed class RepoContextCompactionTests
                 RepoContextHostTrees.CrossReference,
                 RepoContextHostTrees.Session,
                 RepoContextHostTrees.VectorIndex,
+                RepoContextHostTrees.VectorCoverage,
             }));
 
     [Test]
@@ -88,6 +93,7 @@ public sealed class RepoContextCompactionTests
             Assert.That(RepoContextHostTrees.VectorPayload, Is.EqualTo("repo-context-vector-payload"));
             Assert.That(RepoContextHostTrees.CrossReference, Is.EqualTo("repo-context-xref"));
             Assert.That(RepoContextHostTrees.Session, Is.EqualTo("repo-context-session"));
+            Assert.That(RepoContextHostTrees.VectorCoverage, Is.EqualTo("repo-context-vector-coverage"));
         });
 
     [Test]

@@ -246,6 +246,19 @@ internal sealed class RepoContextVectorPlaneReDeriver : IDisposable
                 "Repo-context vector plane: tree {Tree} re-derivation reset completed; the always-on gap " +
                 "scanner re-embeds every uncovered source from the store-of-record trees and files.",
                 treeName);
+
+            // Resetting membership invalidates the coverage digest that mirrors it
+            // (issue #2486), and this is the ONE direction the digest's safety argument
+            // does not already cover. Every other path leaves the digest a SUBSET of
+            // membership, which under-reports and costs a redundant idempotent embed. An
+            // emptied membership tree under a surviving digest is the inverse: the digest
+            // becomes a strict SUPERSET, so it reports coverage that no longer exists and
+            // masks a repository-wide gap silently and permanently. Cascading the reset
+            // is what keeps the subset invariant true across a self-heal.
+            if (string.Equals(treeName, RepoContextTrees.VectorMembership, StringComparison.Ordinal))
+            {
+                await ResetCoverageDigestAsync().ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {
@@ -262,6 +275,45 @@ internal sealed class RepoContextVectorPlaneReDeriver : IDisposable
             // fresh reset. Single-flight is about concurrent duplicates, not permanent
             // suppression.
             _inFlight.TryRemove(treeName, out _);
+        }
+    }
+
+    /// <summary>
+    /// Drops the vector-coverage digest tree after a membership reset, so a digest
+    /// derived from the emptied membership cannot survive it and over-report coverage
+    /// (issue #2486). Best-effort and self-contained: the digest is a rebuildable
+    /// accelerator, so a failure here is logged and swallowed rather than failing the
+    /// membership reset that has already succeeded. A digest that is not dropped is
+    /// still repaired by the periodic exhaustive audit, so this narrows the window
+    /// rather than being the only defence.
+    /// </summary>
+    private async Task ResetCoverageDigestAsync()
+    {
+        try
+        {
+            var digest = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorCoverage);
+            await digest.DeleteTreeAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await digest.PurgeTreeAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (LeafProjectionStaleException)
+            {
+                // The soft-delete's reminder-driven purge completes the reclaim.
+            }
+
+            _logger.LogInformation(
+                "Repo-context vector plane: dropped tree {Tree} alongside the membership reset so the " +
+                "coverage digest cannot outlive the membership it mirrors.",
+                RepoContextTrees.VectorCoverage);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Repo-context vector plane: could not drop tree {Tree} after the membership reset. The " +
+                "digest may over-report coverage until the periodic exhaustive audit re-derives it.",
+                RepoContextTrees.VectorCoverage);
         }
     }
 

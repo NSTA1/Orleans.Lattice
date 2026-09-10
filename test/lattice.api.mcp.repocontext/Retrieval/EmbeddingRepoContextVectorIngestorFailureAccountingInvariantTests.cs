@@ -147,7 +147,7 @@ public sealed class EmbeddingRepoContextVectorIngestorFailureAccountingInvariant
                 foreach (var injector in injectors)
                 {
                     silo.Services.AddSingleton<IIncomingGrainCallFilter>(
-                        new LatticeTreeFaultInjectingFilter(injector));
+                        new LatticeTreeFaultInjectingFilter([injector]));
                 }
             },
         };

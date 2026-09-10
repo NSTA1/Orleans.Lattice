@@ -72,6 +72,22 @@ public static class RepoContextHostTrees
     public const string VectorIndex = "repo-context-vector-index";
 
     /// <summary>
+    /// The per-page vector-coverage digest tree (issue #2486): a compacted mirror of
+    /// the membership tree, partitioned into a fixed number of pages so gap detection
+    /// reads a constant number of rows instead of two membership point-reads per
+    /// indexed source.
+    /// <para>
+    /// Like the approximate index, it is wholly derived and deliberately local, so it
+    /// is excluded from the package's replication enrolment list - but it still needs
+    /// a local-agent grant here, because the box runs a default-deny access gate. An
+    /// ungranted digest tree would fail closed on every read, which the digest reader
+    /// treats as "no digest available" and falls back from silently: the accelerator
+    /// would simply never engage while every layer's log stayed clean.
+    /// </para>
+    /// </summary>
+    public const string VectorCoverage = "repo-context-vector-coverage";
+
+    /// <summary>
     /// The churn trees whose re-embed / prune / forget cycles create tombstones
     /// that must be reaped: memory, the two vector projections, structural (which
     /// the bootstrap prunes), the symbol tree (which the bootstrap re-writes
@@ -83,7 +99,9 @@ public static class RepoContextHostTrees
     /// approximate index (which rewrites a cell's chunks on every flush and range-
     /// deletes a whole superseded generation on every retrain or rebuild). The
     /// content-addressed vector-payload tree is write-once with no in-place deletes,
-    /// so it is excluded - it needs no aggressive compaction.
+    /// so it is excluded - it needs no aggressive compaction. The per-page coverage
+    /// digest is included: every covered source rewrites its page, so a converged
+    /// repository still rewrites the same 256 rows on every ingest.
     /// </summary>
     public static IReadOnlyList<string> ChurnTrees { get; } = new[]
     {
@@ -96,6 +114,7 @@ public static class RepoContextHostTrees
         CrossReference,
         Session,
         VectorIndex,
+        VectorCoverage,
     };
 
     /// <summary>Every repository-context tree the box grants the local agent access to.</summary>
@@ -111,6 +130,7 @@ public static class RepoContextHostTrees
         CrossReference,
         Session,
         VectorIndex,
+        VectorCoverage,
     };
 }
 
