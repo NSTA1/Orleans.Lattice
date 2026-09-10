@@ -82,6 +82,30 @@ public sealed class LocalDeploymentRunbookHygieneTests
     /// </summary>
     private static readonly string[] ScalarSettings = ["image", "cpus", "mem_limit"];
 
+    /// <summary>
+    /// The marker a value-redacted row must carry in the Value column, in place of the
+    /// resolved value. A single backticked token, because that is what a table row's
+    /// value cell is; the explanation belongs in the row's rationale column.
+    /// </summary>
+    private const string RedactionMarker = "redacted";
+
+    /// <summary>
+    /// Settings whose value is deliberately not reproduced in the runbook. This list is
+    /// exhaustive and is meant to stay at one entry: every addition widens a hole.
+    /// <para>
+    /// The sole entry is a Blob connection string. It is the well-known public Azurite
+    /// emulator account and is already tracked verbatim in <c>docker-compose.yml</c>, so
+    /// nothing is concealed by omitting it. The reason to omit it is that copying a
+    /// credential-shaped 222-character string into a second tracked file trains readers
+    /// and scanners to treat such strings in documentation as normal. Presence parity
+    /// still covers the key in both directions.
+    /// </para>
+    /// </summary>
+    private static readonly HashSet<string> RedactedValues = new(StringComparer.Ordinal)
+    {
+        "repocontext.LATTICE_BACKUP_BLOB_CONNECTION_STRING",
+    };
+
     private static readonly Regex TableRow = new(
         @"^\|\s*`(?<service>[^`]+)`\s*\|\s*`(?<setting>[^`]+)`\s*\|\s*`(?<value>[^`]*)`\s*\|(?<why>[^|]*)\|\s*$",
         RegexOptions.Compiled);
@@ -176,9 +200,22 @@ public sealed class LocalDeploymentRunbookHygieneTests
 
         var mismatched = documented
             .Where(entry => resolved.TryGetValue(entry.Key, out var actual)
+                && !RedactedValues.Contains(entry.Key)
                 && !Normalise(entry.Key, entry.Value).Equals(Normalise(entry.Key, actual), StringComparison.Ordinal))
             .Select(entry => $"{entry.Key}: runbook says '{entry.Value}', resolved document says "
                 + $"'{resolved[entry.Key]}'")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        // The redaction seam is a deliberate, enumerated hole in value parity. Presence
+        // parity above still applies to these keys in both directions; only the value
+        // comparison is replaced, and it is replaced by two assertions rather than
+        // dropped, so the row cannot quietly become decorative.
+        var badRedaction = RedactedValues
+            .Where(resolved.ContainsKey)
+            .Where(key => !documented.TryGetValue(key, out var cell)
+                || !cell.Equals(RedactionMarker, StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(resolved[key]))
             .Order(StringComparer.Ordinal)
             .ToArray();
 
@@ -201,6 +238,15 @@ public sealed class LocalDeploymentRunbookHygieneTests
                 mismatched,
                 Is.Empty,
                 "these documented values disagree with the resolved compose document.");
+
+            Assert.That(
+                badRedaction,
+                Is.Empty,
+                $"these settings are declared value-redacted, so {RunbookPath} must document "
+                + $"them with the exact cell `{RedactionMarker}` and the resolved document must "
+                + "still supply a non-empty value. A redacted row that stops matching the marker, "
+                + "or whose real value has gone empty, is a hole in the guard rather than a "
+                + "deliberate exception to it.");
         });
     }
 
