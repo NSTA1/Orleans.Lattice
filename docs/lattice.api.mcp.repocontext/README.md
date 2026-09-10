@@ -48,6 +48,7 @@ For a ready-to-run, restart-durable local deployment - "codebase memory in a box
 
 ## Reference
 
+- [Architecture](architecture.md) - a map of the constituent parts, the ingest, retrieval, and convergence flows, and the store-of-record versus rebuildable-projection distinction the design rests on.
 - [Record model](record-model.md) - the named trees, the key grammar, the record families, and the CRDT store-of-record model.
 - [Tools](tools.md) - the full `repocontext_*` tool catalogue and each tool's contract.
 - [Retrieval and token economics](retrieval-economics.md) - explainable search, the graph-navigation tools, the budgeted context bundle, reuse economics, usage accounting, and the shared token counter.
