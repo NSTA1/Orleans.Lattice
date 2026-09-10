@@ -38,17 +38,39 @@ public readonly record struct VectorIndexBuildProgress(
     /// Whether the index answers from its partitioning. While this is
     /// <see langword="false"/> searches are still <i>exact</i>, by exhaustive
     /// scan, and must not be reported as degraded.
+    /// <para>
+    /// Both conditions are load-bearing, and the partition count is the one that
+    /// is easy to omit. <see cref="VectorIndexBuildPhase.Ready"/> means the build
+    /// pipeline ran to the end; it does not mean the pipeline produced a
+    /// partitioning. <c>VectorIndex.Train()</c> returns <see langword="false"/>
+    /// and drops any previous partitioning when the corpus is below
+    /// <c>MinimumTrainingCount</c> or resolves to fewer than two partitions, and
+    /// the build reaches <see cref="VectorIndexBuildPhase.Ready"/> anyway -
+    /// correctly, because the build really is finished and the index really is
+    /// serving, exhaustively and exactly. Reporting that state as answering from
+    /// a partitioning it does not have would be the one thing this type exists
+    /// not to do.
+    /// </para>
     /// </summary>
-    public bool IsReady => Phase == VectorIndexBuildPhase.Ready;
+    public bool IsReady => Phase == VectorIndexBuildPhase.Ready && PartitionsTotal > 0;
 
     /// <summary>
     /// The fraction of the store of record the index currently holds, in
-    /// <c>[0, 1]</c>. Reports <c>1</c> once the index is ready, and when the
+    /// <c>[0, 1]</c>. Reports <c>1</c> once the build has finished, and when the
     /// expected count is unknown, so a caller never renders a progress bar that
     /// implies knowledge the index does not have.
+    /// <para>
+    /// This deliberately tests the phase rather than <see cref="IsReady"/>, and
+    /// the divergence is the point: partitioning has nothing to do with how much
+    /// of the corpus was ingested. A build that finished without partitioning
+    /// still ingested all of it, so reporting a fraction below <c>1</c> for it
+    /// would be a fresh false signal. The two properties answer different
+    /// questions and only ever agreed by accident, so do not "restore
+    /// consistency" by routing this back through <see cref="IsReady"/>.
+    /// </para>
     /// </summary>
     public double IngestedFraction =>
-        IsReady || VectorsExpected <= 0
+        Phase == VectorIndexBuildPhase.Ready || VectorsExpected <= 0
             ? 1d
             : Math.Clamp((double)VectorsIndexed / VectorsExpected, 0d, 1d);
 }

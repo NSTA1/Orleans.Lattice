@@ -145,6 +145,59 @@ public sealed class RepoContextAnnIndexHandleTests
     }
 
     [Test]
+    public async Task A_corpus_too_small_to_partition_serves_without_claiming_to_be_partitioned()
+    {
+        // Four vectors against a MinimumTrainingCount of eight, so VectorIndex.Train()
+        // declines, drops any partitioning, and returns false - while the build still
+        // reaches Ready, correctly, because it really did finish and the index really
+        // does serve. Issue #2439: the two must be separately observable.
+        using var rig = new Rig();
+        rig.SeedRing(4);
+
+        // This completing at all is half the assertion. EnsureBuiltAsync loops
+        // "while (!IsServing)", so conditioning the serving latch on the partition
+        // count - the obvious-looking repair - would spin here forever against a
+        // corpus that is merely too small. The latch is about whether the plane
+        // answers; the partition count is about how.
+        await rig.Handle.EnsureBuiltAsync(Ct);
+
+        var progress = await rig.Handle.AdvanceAsync(Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Handle.IsServing, Is.True,
+                "an unpartitioned index still serves, exhaustively and exactly");
+            Assert.That(progress.Phase, Is.EqualTo(VectorIndexBuildPhase.Ready),
+                "the build finished, so the phase is Ready");
+            Assert.That(progress.PartitionsTotal, Is.Zero,
+                "training declined to partition a corpus this small");
+            Assert.That(progress.IsReady, Is.False,
+                "IsReady reports whether the index answers FROM ITS PARTITIONING, and it does not");
+        });
+    }
+
+    [Test]
+    public async Task A_partitioned_corpus_reports_ready_on_both_signals()
+    {
+        // The positive control for the test above: same handle, same options, a
+        // corpus large enough to train. Without this arm the assertion "IsReady is
+        // false" could be satisfied by IsReady never being true at all.
+        using var rig = new Rig();
+        rig.SeedRing(32);
+
+        await rig.Handle.EnsureBuiltAsync(Ct);
+        var progress = await rig.Handle.AdvanceAsync(Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Handle.IsServing, Is.True);
+            Assert.That(progress.Phase, Is.EqualTo(VectorIndexBuildPhase.Ready));
+            Assert.That(progress.PartitionsTotal, Is.GreaterThan(1));
+            Assert.That(progress.IsReady, Is.True);
+        });
+    }
+
+    [Test]
     public async Task A_write_whose_vectors_are_the_wrong_width_applies_nothing()
     {
         using var rig = new Rig();

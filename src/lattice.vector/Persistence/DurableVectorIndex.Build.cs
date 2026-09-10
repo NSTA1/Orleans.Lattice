@@ -117,8 +117,7 @@ public sealed partial class DurableVectorIndex
     {
         RequireMutable();
 
-        _index.Train();
-        _updatesSinceTraining = 0;
+        TrainCore();
 
         var superseded = _generation;
         await WritePartitionsAsync(_generation + 1, full: true, cancellationToken).ConfigureAwait(false);
@@ -229,9 +228,47 @@ public sealed partial class DurableVectorIndex
         // Synchronous and by far the most expensive step, which is exactly why it
         // is a step of its own: a host that cannot afford it right now simply
         // does not call this one, and keeps serving exact exhaustive answers.
-        _index.Train();
-        _updatesSinceTraining = 0;
+        TrainCore();
         _phase = VectorIndexBuildPhase.Persisting;
+    }
+
+    /// <summary>
+    /// Runs the training pass and consumes its result, which reports whether a
+    /// usable partitioning was produced.
+    /// <para>
+    /// That return value used to be discarded at both call sites, and every
+    /// dishonest readiness signal downstream originated in the discard: nothing
+    /// between here and a consumer could tell a build that partitioned from one
+    /// that did not, because the only value that said so had been thrown away and
+    /// the phase advanced regardless. The phase advancing is correct - the build
+    /// really did finish, and the index really is serving exact exhaustive
+    /// answers - so the repair is not to withhold
+    /// <see cref="VectorIndexBuildPhase.Ready"/> but to keep the partitioning
+    /// observable beside it.
+    /// </para>
+    /// <para>
+    /// <see cref="VectorIndexBuildProgress.PartitionsTotal"/> is what carries it,
+    /// and <see cref="VectorIndexBuildProgress.IsReady"/> now depends on the two
+    /// agreeing: a <see langword="false"/> return drops the partitioning, and a
+    /// <see langword="true"/> return commits at least two cells. Checking that
+    /// agreement here is what consumes the value rather than discarding it again,
+    /// and it converts any future divergence into a loud failure at the point of
+    /// training instead of a quiet lie in a readiness signal several layers away.
+    /// It cannot fire against the current implementation.
+    /// </para>
+    /// </summary>
+    private void TrainCore()
+    {
+        var trained = _index.Train();
+        _updatesSinceTraining = 0;
+
+        if (trained != _index.PartitionCount > 0)
+        {
+            throw new InvalidOperationException(
+                $"Training reported trained={trained} while holding {_index.PartitionCount} partitions. "
+                + "These must agree: readiness is reported from the partition count, so a disagreement "
+                + "would publish a partitioning the index does not have, or hide one it does.");
+        }
     }
 
     private async Task PersistTrainedAsync(CancellationToken cancellationToken)

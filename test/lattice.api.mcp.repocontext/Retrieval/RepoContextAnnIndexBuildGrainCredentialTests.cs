@@ -278,6 +278,10 @@ public sealed class RepoContextAnnIndexBuildGrainCredentialTests
                 + "silently filtered to nothing by a default-deny gate");
             Assert.That(rig.State.State.VectorsIndexed, Is.EqualTo(64),
                 "the index must hold the corpus the store of record actually contains");
+            Assert.That(rig.State.State.PartitionsTotal, Is.GreaterThan(0),
+                "a build over a real corpus partitions, and the persisted state must say so - this is "
+                + "the arm that distinguishes it from the denied build below, which converges with "
+                + "the same Converged flag and a partition count of zero");
         });
     }
 
@@ -318,6 +322,10 @@ public sealed class RepoContextAnnIndexBuildGrainCredentialTests
                 "an empty index is recorded as a completed build, not as a failure");
             Assert.That(rig.State.State.VectorsIndexed, Is.Zero,
                 "the corpus of 64 vectors was filtered to nothing and the build did not notice");
+            Assert.That(rig.State.State.PartitionsTotal, Is.Zero,
+                "training declined to partition an empty corpus, and issue #2439 added this to the "
+                + "persisted state precisely so that after the fact - logs rotated, disk only - a "
+                + "denied build is distinguishable from one that trained");
         });
     }
 

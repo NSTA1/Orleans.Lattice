@@ -55,4 +55,21 @@ internal sealed class RepoContextAnnIndexBuildState
     /// </summary>
     [Id(3)]
     public long VectorsIndexed { get; set; }
+
+    /// <summary>
+    /// How many partitions the index held when it converged, or <c>0</c> when
+    /// training declined to partition the corpus and searches stay exhaustive.
+    /// <para>
+    /// Recorded because <see cref="Converged"/> and <see cref="VectorsIndexed"/>
+    /// together cannot distinguish an index that converged with a partitioning
+    /// from one that converged without one. Both reach <c>Ready</c> and both
+    /// report the same vector count, so after the fact - on disk, with the logs
+    /// long rotated - the two were indistinguishable. Diagnostics only, and
+    /// deliberately so: nothing reads it to make a decision, and a zero (written
+    /// or omitted) reads as "no partitioning", which is the honest reading of an
+    /// absent value rather than a claim about one.
+    /// </para>
+    /// </summary>
+    [Id(4)]
+    public long PartitionsTotal { get; set; }
 }

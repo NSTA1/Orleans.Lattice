@@ -563,13 +563,35 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         }
 
         Volatile.Write(ref _serving, true);
+
+        // The latch is deliberately NOT conditioned on the partition count. A
+        // build that finished without partitioning still serves, exhaustively and
+        // exactly, and declining to latch would spin EnsureBuiltAsync forever
+        // against a corpus that is simply too small to partition. What must not
+        // survive the partition count being zero is the CLAIM: announcing
+        // approximate retrieval for an index holding no partitioning is the
+        // dishonest half, and it is the half that is fixed here.
+        if (_progress.PartitionsTotal > 0)
+        {
+            _logger.LogInformation(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is serving "
+                + "{VectorsIndexed} vectors across {Partitions} partitions; semantic retrieval is now approximate.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension,
+                _progress.VectorsIndexed,
+                _progress.PartitionsTotal);
+            return;
+        }
+
         _logger.LogInformation(
-            "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is serving "
-            + "{VectorsIndexed} vectors across {Partitions} partitions; semantic retrieval is now approximate.",
+            "Repository-context index for {RepoId} in space {ModelId}/{Dimension} is serving "
+            + "{VectorsIndexed} vectors with no partitioning, so semantic retrieval stays exhaustive and exact. "
+            + "Training declined to partition this corpus; it is below the minimum training count or resolves "
+            + "to fewer than two partitions.",
             _repoId,
             _space.ModelId,
             _space.Dimension,
-            _progress.VectorsIndexed,
-            _progress.PartitionsTotal);
+            _progress.VectorsIndexed);
     }
 }
