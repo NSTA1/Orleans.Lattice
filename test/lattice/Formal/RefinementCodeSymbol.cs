@@ -58,6 +58,19 @@ internal sealed record RefinementCodeSymbol
 /// upper-case requirement on the right-hand side.
 /// </para>
 /// <para>
+/// THE DETECTOR COLUMN IS EXCLUDED, BY HEADER NAME. The property and action
+/// tables carry a <c>Detector</c> column (added by #2527) whose cells name
+/// TEST fixtures and methods, for example
+/// <c>AtomicVisibilityGateTests.InFlight_always_falls_through</c>. Those match
+/// the dotted shape perfectly but live under <c>test/</c>, not <c>src/</c>, so
+/// resolving them here would fail every one of them and break the gate. They
+/// are a different kind of claim and get their own resolver
+/// (<see cref="RefinementDetectorResolver"/>), so this extractor skips that
+/// column outright. The skip is keyed on the header text rather than on a
+/// column index, so inserting a column ahead of it cannot silently
+/// re-include it.
+/// </para>
+/// <para>
 /// The cost of that narrowing is honest and worth stating: a rename of a
 /// symbol the note names only in bare form (<c>ExecutePhaseAsync</c>,
 /// <c>AppendTxTerminalAsync</c>, <c>TxDecisionView</c>) is not caught here.
@@ -67,6 +80,12 @@ internal sealed record RefinementCodeSymbol
 /// </summary>
 internal static class RefinementCodeSymbols
 {
+    /// <summary>
+    /// The header of the column naming detecting tests rather than production
+    /// code. Matched case-insensitively against the table's header cells.
+    /// </summary>
+    public const string DetectorHeader = "Detector";
+
     private static readonly Regex BacktickedSpan = new("`([^`]+)`", RegexOptions.Compiled);
 
     private static readonly Regex DottedReference = new(
@@ -79,7 +98,22 @@ internal static class RefinementCodeSymbols
     /// reference in two different rows is returned twice, because each row is
     /// a separate claim and a failure should name the row it came from.
     /// </summary>
-    public static IReadOnlyList<RefinementCodeSymbol> Extract(IEnumerable<RefinementTable> tables)
+    public static IReadOnlyList<RefinementCodeSymbol> Extract(IEnumerable<RefinementTable> tables) =>
+        ExtractCore(tables, detectorColumnOnly: false);
+
+    /// <summary>
+    /// Extracts the dotted references from the <c>Detector</c> column only -
+    /// the mirror image of <see cref="Extract"/>. These name TEST fixtures and
+    /// methods, so they are resolved by
+    /// <see cref="RefinementDetectorResolver"/> against <c>test/</c>, never by
+    /// <see cref="RefinementSymbolResolver"/> against <c>src/</c>.
+    /// </summary>
+    public static IReadOnlyList<RefinementCodeSymbol> ExtractDetectors(IEnumerable<RefinementTable> tables) =>
+        ExtractCore(tables, detectorColumnOnly: true);
+
+    private static IReadOnlyList<RefinementCodeSymbol> ExtractCore(
+        IEnumerable<RefinementTable> tables,
+        bool detectorColumnOnly)
     {
         ArgumentNullException.ThrowIfNull(tables);
 
@@ -88,10 +122,27 @@ internal static class RefinementCodeSymbols
 
         foreach (var table in tables)
         {
+            var detectorColumn = -1;
+            for (var i = 0; i < table.Headers.Count; i++)
+            {
+                if (string.Equals(table.Headers[i], DetectorHeader, StringComparison.OrdinalIgnoreCase))
+                {
+                    detectorColumn = i;
+                    break;
+                }
+            }
+
             foreach (var row in table.Rows)
             {
-                foreach (var cell in row.Cells)
+                for (var column = 0; column < row.Cells.Count; column++)
                 {
+                    if (detectorColumnOnly ? column != detectorColumn : column == detectorColumn)
+                    {
+                        continue;
+                    }
+
+                    var cell = row.Cells[column];
+
                     foreach (Match span in BacktickedSpan.Matches(cell))
                     {
                         foreach (Match reference in DottedReference.Matches(span.Groups[1].Value))
