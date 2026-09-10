@@ -188,11 +188,12 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
         }
 
         // At least one participant declined: compensate the prepared subset so
-        // no prepared state leaks, then vote abort.
-        foreach (var participant in prepared)
-        {
-            await SafeAbortAsync(participant, request);
-        }
+        // no prepared state leaks, then vote abort. SafeAbortAsync swallows
+        // per-participant faults, so the compensations are side-effect isolated
+        // from one another and mutually independent - see
+        // CompensateParticipantsAsync for the full argument.
+        await BoundedFanOut.ForEachAsync(prepared, BoundedFanOut.DefaultWidth,
+            participant => SafeAbortAsync(participant, request));
         _state.State.Phase = SagaPhase.Aborted;
         _state.State.Vote = SagaVote.Abort;
         _state.State.Detail = abortDetail ?? "A local saga participant declined to prepare.";
@@ -207,10 +208,17 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
         switch (_state.State.Phase)
         {
             case SagaPhase.Prepared:
-                foreach (var participant in _participants)
-                {
-                    await participant.CommitAsync(request);
-                }
+                // Every participant voted commit, so the decision is already
+                // made and delivery is unconditional: no participant's commit
+                // can change whether another's is issued, and each targets its
+                // own resource. The serial loop therefore paid one round-trip
+                // latency per participant to deliver a decision that was fixed
+                // before the loop began. Group atomicity is unchanged - the
+                // wave still settles completely before the terminal phase is
+                // persisted, so a fault in any participant surfaces before
+                // Committed is written, exactly as when it was serial.
+                await BoundedFanOut.ForEachAsync(_participants, BoundedFanOut.DefaultWidth,
+                    participant => participant.CommitAsync(request));
                 _state.State.Phase = SagaPhase.Committed;
                 _state.State.FenceDeadlineTicks = 0;
                 _state.State.Detail = null;
@@ -287,16 +295,22 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     /// Compensates (rolls back) every local participant, swallowing per-participant
     /// abort faults so one failure does not strand the others. Used by both the
     /// coordinator-driven abort and the fence-expiry auto-compensation.
+    /// <para>
+    /// Issued in bounded overlapped waves. The compensations are mutually
+    /// independent (each participant rolls back only its own resource) and
+    /// <see cref="SafeAbortAsync"/> already isolates their faults, which is the
+    /// same "one failure must not strand the others" property the serial loop
+    /// relied on - it is preserved exactly, because every wave settles through
+    /// <c>Task.WhenAll</c> and each body has already swallowed its own fault.
+    /// The whole group still completes before this method returns, so the
+    /// caller's terminal-phase write remains group-atomic.
+    /// </para>
     /// </summary>
     private Task CompensateParticipantsAsync() => CompensateParticipantsAsync(RequestFromState());
 
-    private async Task CompensateParticipantsAsync(SagaControlRequest request)
-    {
-        foreach (var participant in _participants)
-        {
-            await SafeAbortAsync(participant, request);
-        }
-    }
+    private Task CompensateParticipantsAsync(SagaControlRequest request) =>
+        BoundedFanOut.ForEachAsync(_participants, BoundedFanOut.DefaultWidth,
+            participant => SafeAbortAsync(participant, request));
 
     private async Task SafeAbortAsync(ISagaParticipant participant, SagaControlRequest request)
     {

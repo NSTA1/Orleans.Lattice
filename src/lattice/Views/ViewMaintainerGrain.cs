@@ -1077,14 +1077,23 @@ internal sealed partial class ViewMaintainerGrain(
         // by the caller's fold. The caller classified the batch during the drain
         // fold, so neither this method nor the fold re-scans the buffer for a
         // range delete.
-        var applied = 0;
-        for (var i = 0; i < survivors.Count; i++)
-        {
-            await ApplyAsync(viewTree, survivors[i], cancellationToken);
-            applied++;
-        }
+        //
+        // The fold is what makes the fan-out safe: every survivor carries a
+        // DISTINCT view key (that is the definition of a coalesced batch), and
+        // this path is only taken when the batch contains no range delete, so no
+        // two writes here can touch the same view row. Applying them serially
+        // therefore collapsed N independent point writes into one round trip
+        // each; issuing them in bounded waves costs ceil(N / DefaultWidth)
+        // round-trip latencies instead of N. Completion order within a wave is
+        // undefined and does not matter - there is no key on which two survivors
+        // could race. Ordering IS load-bearing on the sibling range path, which
+        // is exactly why ApplyInSourceOrderAsync stays a serial HLC-ordered walk.
+        await BoundedFanOut.ForEachAsync(
+            survivors,
+            BoundedFanOut.DefaultWidth,
+            write => ApplyAsync(viewTree, write, cancellationToken));
 
-        return applied;
+        return survivors.Count;
     }
 
     private async Task<int> ApplyInSourceOrderAsync(ILattice viewTree, List<ViewWrite> collected, CancellationToken cancellationToken)

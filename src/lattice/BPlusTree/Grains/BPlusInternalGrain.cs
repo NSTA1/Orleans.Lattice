@@ -136,8 +136,13 @@ internal sealed partial class BPlusInternalGrain(
         // ChildDigestSnapshot upward. SetParentAsync is idempotent on
         // an unchanged parent id, so a re-call from a crash-recovery
         // path is a no-op aside from a refresher publish.
-        await SeedChildParentAsync(leftChild, childrenAreLeaves);
-        await SeedChildParentAsync(rightChild, childrenAreLeaves);
+        //
+        // Overlapped: the two children are distinct grains and the seed
+        // calls touch only the child, so the four RPCs (two per child)
+        // are mutually independent. Each fold into THIS node's aggregates
+        // still runs strictly in left-then-right order - see
+        // SeedChildrenAsync.
+        await SeedChildrenAsync([leftChild, rightChild], childrenAreLeaves);
     }
 
     public async Task InitializeWithChildrenAsync(List<string?> separatorKeys, List<GrainId> childIds, bool childrenAreLeaves)
@@ -171,9 +176,49 @@ internal sealed partial class BPlusInternalGrain(
         // Seed the parent slot on every child so the digest-publication
         // chain is live from the first mutation that touches one of
         // them. See InitializeAsync for the chain rationale.
-        foreach (var id in childIds)
+        await SeedChildrenAsync(childIds, childrenAreLeaves);
+    }
+
+    /// <summary>
+    /// Seeds the parent slot on every child in <paramref name="childIds"/> and
+    /// folds each child's returned <see cref="ChildDigestSnapshot"/> into this
+    /// node's aggregates.
+    /// <para>
+    /// <b>Why this is split into an overlapped read and a serial fold.</b> The
+    /// per-child half - <c>SetParentAsync</c> followed by
+    /// <c>GetChildDigestSnapshotAsync</c> - targets a distinct child grain and
+    /// is independent of every other child's, so running the children serially
+    /// paid 2N round-trip latencies to do work that has no cross-child
+    /// ordering constraint at all. <see cref="BoundedFanOut.ReadAheadAsync"/>
+    /// issues the same 2N calls in ceil(N / <see cref="BoundedFanOut.DefaultWidth"/>)
+    /// overlapped waves and yields the snapshots strictly in input order.
+    /// </para>
+    /// <para>
+    /// The fold half is <b>not</b> overlapped, and must not be:
+    /// <see cref="ApplyChildSnapshotAsync"/> mutates this node's shared
+    /// <c>ChildDigests</c> map and subtree aggregates and persists them, so it
+    /// stays a sequential in-order walk. Because <c>ReadAheadAsync</c> preserves
+    /// input order, the sequence of folds is byte-for-byte the one the serial
+    /// loop produced - the persisted aggregate is unchanged.
+    /// </para>
+    /// </summary>
+    private async Task SeedChildrenAsync(IReadOnlyList<GrainId> childIds, bool childrenAreLeaves)
+    {
+        if (childIds.Count == 1)
         {
-            await SeedChildParentAsync(id, childrenAreLeaves);
+            // Single child: nothing to overlap, so stay on the direct path and
+            // pay no read-ahead window allocation.
+            await SeedChildParentAsync(childIds[0], childrenAreLeaves);
+            return;
+        }
+
+        var index = 0;
+        await foreach (var snapshot in BoundedFanOut.ReadAheadAsync(
+            childIds,
+            BoundedFanOut.DefaultWidth,
+            id => SeedChildParentReadAsync(id, childrenAreLeaves)))
+        {
+            await ApplyChildSnapshotAsync(childIds[index++], snapshot);
         }
     }
 
@@ -196,21 +241,31 @@ internal sealed partial class BPlusInternalGrain(
     /// </summary>
     private async Task SeedChildParentAsync(GrainId childId, bool childIsLeaf)
     {
+        var snapshot = await SeedChildParentReadAsync(childId, childIsLeaf);
+        await ApplyChildSnapshotAsync(childId, snapshot);
+    }
+
+    /// <summary>
+    /// The child-facing half of <see cref="SeedChildParentAsync"/>: persists this
+    /// node's identity into <paramref name="childId"/>'s parent slot and pulls the
+    /// child's current <see cref="ChildDigestSnapshot"/> back. Touches only the
+    /// child grain, so calls for distinct children are mutually independent and
+    /// safe to overlap; the caller folds the returned snapshot into this node's
+    /// state separately, and in order.
+    /// </summary>
+    private async Task<ChildDigestSnapshot> SeedChildParentReadAsync(GrainId childId, bool childIsLeaf)
+    {
         var myId = context.GrainId;
-        ChildDigestSnapshot snapshot;
         if (childIsLeaf)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(childId);
             await leaf.SetParentAsync(myId);
-            snapshot = await leaf.GetChildDigestSnapshotAsync();
+            return await leaf.GetChildDigestSnapshotAsync();
         }
-        else
-        {
-            var inner = grainFactory.GetGrain<IBPlusInternalGrain>(childId);
-            await inner.SetParentAsync(myId);
-            snapshot = await inner.GetChildDigestSnapshotAsync();
-        }
-        await ApplyChildSnapshotAsync(childId, snapshot);
+
+        var inner = grainFactory.GetGrain<IBPlusInternalGrain>(childId);
+        await inner.SetParentAsync(myId);
+        return await inner.GetChildDigestSnapshotAsync();
     }
 
     public Task<(GrainId ChildId, bool ChildrenAreLeaves)> RouteWithMetadataAsync(string key) =>
