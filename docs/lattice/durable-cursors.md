@@ -231,7 +231,17 @@ finally
    to leaves. Every leaf RPC for the step reads the same registry view
    - identical to the steady-state behaviour of
    `GetManyAsync` / `CountAsync` / `CountPerShardAsync`, just held
-   across multiple pages.
+   across multiple pages. Note what carries the per-step guarantee
+   here, because it is easy to credit to the wrong mechanism: inside
+   the scope `BPlusLeafGrain.ResolvePendingStatusAsync` answers from
+   the captured dictionary and **returns without contacting the
+   registry**, so a step's per-key readings were fixed at open and no
+   amount of registry-side pruning can move them. The pin in step 2 is
+   not what makes that true and could not be - there is no registry
+   lookup on this path for it to affect. The pin matters for the reads
+   that *do* reach the registry: an unscoped read of the same keys
+   while the cursor is open, and (per step 2) an entry the snapshot
+   captured as `Indeterminate`.
 4. **Pin refresh.** Each step also calls
    `ITxRegistryGrain.RefreshPinAsync(pinId, ttl)` to slide the
    registry-side TTL. A cursor that pages actively never runs out the

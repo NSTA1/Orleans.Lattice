@@ -23,7 +23,7 @@ public sealed class LockAdmissionCoyoteTests
     [Test]
     public void Stale_token_never_dislodges_current_holder_on_any_order()
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new LockAdmissionModel(useBrokenTokenCheck: false));
     }
 
@@ -37,7 +37,7 @@ public sealed class LockAdmissionCoyoteTests
     [Test]
     public void Release_ignoring_the_fencing_token_is_caught()
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new LockAdmissionModel(useBrokenTokenCheck: true));
     }
 }

@@ -34,7 +34,7 @@ public sealed class ReshardMigrationCoyoteTests
     [Test]
     public void Guarded_migration_never_shadows_a_later_saga_value([Values(2, 3, 4)] int keyCount)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new ReshardMigrationModel(keyCount, ReshardGuardMode.Guarded));
     }
 
@@ -48,7 +48,7 @@ public sealed class ReshardMigrationCoyoteTests
     [Test]
     public void Removing_the_read_guard_reintroduces_the_orphan_split([Values(2, 3)] int keyCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new ReshardMigrationModel(keyCount, ReshardGuardMode.NoReadGuard));
     }
 
@@ -63,7 +63,7 @@ public sealed class ReshardMigrationCoyoteTests
     [Test]
     public void Removing_the_write_guard_reintroduces_the_unknown_round_regression([Values(2, 3)] int keyCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new ReshardMigrationModel(keyCount, ReshardGuardMode.NoWriteGuard));
     }
 }

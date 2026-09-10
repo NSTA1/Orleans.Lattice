@@ -95,7 +95,7 @@ internal sealed partial class RefinementDetectorMappingTests
             "Four options were weighed.",
             // The denominator is legal because it is derived and gated by
             // The_note_yields_the_expected_behaviour_asserting_denominator.
-            "The note has 13 behaviour-asserting rows.",
+            "The note has 14 behaviour-asserting rows.",
             // Issue references are not numerals.
             "The gaps are filed as #2551, #2552, #2553 and #2554.",
             "These are being extracted across level-C Phases 1-4.",

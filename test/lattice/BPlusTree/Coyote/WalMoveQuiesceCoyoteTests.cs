@@ -30,7 +30,7 @@ public sealed class WalMoveQuiesceCoyoteTests
     [Test]
     public void Atomic_fence_check_never_assigns_after_the_fence([Values(1, 2, 3)] int writerCount)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new WalMoveQuiesceModel(writerCount, WalMoveQuiesceMode.AtomicFenceCheck));
     }
 
@@ -44,7 +44,7 @@ public sealed class WalMoveQuiesceCoyoteTests
     [Test]
     public void Split_fence_check_strands_an_offset_past_the_fence([Values(1, 2)] int writerCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new WalMoveQuiesceModel(writerCount, WalMoveQuiesceMode.NonAtomicFenceCheck));
     }
 }

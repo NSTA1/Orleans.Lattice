@@ -29,7 +29,7 @@ public sealed class WalOffsetContiguityCoyoteTests
     [Test]
     public void Atomic_assign_keeps_every_offset_unique_and_dense([Values(1, 2, 3)] int writerCount)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new WalOffsetContiguityModel(writerCount, WalOffsetContiguityMode.AtomicAssign));
     }
 
@@ -43,7 +43,7 @@ public sealed class WalOffsetContiguityCoyoteTests
     [Test]
     public void Split_read_advance_hands_two_appends_the_same_offset([Values(2, 3)] int writerCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new WalOffsetContiguityModel(writerCount, WalOffsetContiguityMode.SplitReadAdvance));
     }
 }

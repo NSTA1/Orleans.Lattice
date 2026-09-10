@@ -18,8 +18,10 @@ using Orleans.Lattice;
 // VisibilityMatchesDecision property is exactly what:
 //   * the production core AtomicVisibilityGate.ResolveKey decides on the hot
 //     path (src/lattice/BPlusTree/),
-//   * the Coyote models assert under every interleaving
-//     (test/lattice/BPlusTree/Coyote/), and
+//   * the Coyote models assert over every explored run of the protocol's step
+//     orderings (test/lattice/BPlusTree/Coyote/) - those orderings are encoded
+//     as data, so what Coyote enumerates is the model's choice space, not a
+//     thread schedule space, and
 //   * the TLA+ spec checks over bounded instances (spec/AtomicCommit.tla).
 // See docs/lattice/verified-atomic-commit.md.
 // ---------------------------------------------------------------------------

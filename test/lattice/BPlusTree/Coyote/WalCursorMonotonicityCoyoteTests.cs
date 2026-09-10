@@ -31,7 +31,7 @@ public sealed class WalCursorMonotonicityCoyoteTests
     [Test]
     public void Max_merge_never_regresses_a_reported_cursor([Values(2, 3, 4)] int consumerCount)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new WalCursorMonotonicityModel(consumerCount, WalCursorMonotonicityMode.RegistryMaxMerge));
     }
 
@@ -44,7 +44,7 @@ public sealed class WalCursorMonotonicityCoyoteTests
     [Test]
     public void Last_writer_wins_regresses_a_cursor_under_reordering([Values(2, 3)] int consumerCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new WalCursorMonotonicityModel(consumerCount, WalCursorMonotonicityMode.LastWriterWinsReplace));
     }
 }

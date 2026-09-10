@@ -85,10 +85,10 @@ checking the presented token matches the current holder. `LockAdmissionCoyoteTes
 has two tests:
 
 - `Stale_token_never_dislodges_current_holder_on_any_order` runs the proven core
-  and calls `CoyoteModelHarness.AssertNoInterleavingViolation(...)` - no explored
+  and calls `CoyoteModelHarness.AssertNoViolationInAnyExploredRun(...)` - no explored
   order trips an assertion.
 - `Release_ignoring_the_fencing_token_is_caught` runs the broken core and calls
-  `CoyoteModelHarness.AssertInterleavingViolationFound(...)` - Coyote *must* find
+  `CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(...)` - Coyote *must* find
   the order (reclaim-and-grant `B`, then deliver `A`'s stale release) that frees
   `B` and trips the assertion.
 

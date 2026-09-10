@@ -24,7 +24,7 @@ public sealed class AtomicActionCoyoteTests
     [Test]
     public void Compensation_runs_in_reverse_order_exactly_once_on_any_order()
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new AtomicActionExecutionModel(useBrokenReverseOrder: false));
     }
 
@@ -38,7 +38,7 @@ public sealed class AtomicActionCoyoteTests
     [Test]
     public void Compensating_in_forward_order_is_caught()
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicActionExecutionModel(useBrokenReverseOrder: true));
     }
 }

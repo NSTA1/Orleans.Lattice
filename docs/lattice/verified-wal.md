@@ -28,7 +28,7 @@ pure core - a single function (or small pure type) that takes explicit inputs an
 returns a verdict, with no `Task`/`await`, no wall-clock or HLC read, no Orleans
 types, and no storage. The production grain hot path calls the core to make the
 real decision, and a Coyote model calls the *same* core to check it under every
-interleaving, so a property proven of the core is a property of production. The
+explored ordering, so a property proven of the core is a property of production. The
 cores are `internal` and exposed to the test assembly through
 `InternalsVisibleTo`.
 
@@ -52,9 +52,10 @@ grains that call them.
 
 The WAL cores are model-checked with [Microsoft Coyote](https://github.com/microsoft/coyote)
 using the same shared harness (`CoyoteModelHarness`) and the same explicit
-cooperative-interleaving style (a model implements `ICoyoteModel` and yields
-decision points; Coyote drives `runtime.RandomBoolean()` to explore the schedule
-space) described in the
+cooperative step-ordering style (a model implements `ICoyoteModel` and advances
+the steps itself; Coyote drives `runtime.RandomBoolean()` to explore the
+resulting choice space, which is not a thread schedule space - the models run at
+a concurrency degree of zero) described in the
 [atomic-commit verification doc](verified-atomic-commit.md#the-coyote-concurrency-tier).
 There is no `coyote rewrite` pass; the concurrency is encoded as data so it is
 fully enumerable.
@@ -78,7 +79,7 @@ As in the atomic-commit tier, a model that checks a property only has value if
 the property can actually fail. Every WAL model therefore ships a companion
 **guard test** that removes exactly the one fix the property depends on and
 asserts Coyote *finds* the resulting violation
-(`AssertInterleavingViolationFound`):
+(`AssertViolationFoundInSomeExploredRun`):
 
 - `WalShippingWatermarkModel` - the guard advances the watermark to the highest
   acked offset ignoring gaps, and Coyote finds the schedule where a reader skips

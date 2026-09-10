@@ -334,8 +334,8 @@ The reusable harness lives in the product-agnostic shared testing library
   the iteration budget is leaking state between iterations, not under-exploring.
 - `CoyoteModelHarness` - `Explore` runs the engine and returns a
   `CoyoteExplorationResult` (iterations, bugs found, bug reports, replayable
-  trace); `AssertNoInterleavingViolation` fails the test with the reproducible
-  trace when any schedule violates the property; `AssertInterleavingViolationFound`
+  trace); `AssertNoViolationInAnyExploredRun` fails the test with the reproducible
+  trace when any schedule violates the property; `AssertViolationFoundInSomeExploredRun`
   asserts a schedule *does* violate it.
 - `FaultBudget` / `FaultDeliveryQueue<T>` - the dependency-free fault-injection
   helpers for **liveness** models. `FaultBudget` is a bounded ledger of drops,
@@ -356,15 +356,15 @@ The reusable harness lives in the product-agnostic shared testing library
    invoking that shared core and asserting the safety property. Express the race
    as cooperative interleaving driven by `runtime.RandomBoolean()`.
 3. Add a `[TestFixture] [Category("Coyote")]` test that calls
-   `CoyoteModelHarness.AssertNoInterleavingViolation(new YourModel(...))` for the
+   `CoyoteModelHarness.AssertNoViolationInAnyExploredRun(new YourModel(...))` for the
    fixed design. **Also** add a companion test that removes the guard and asserts
-   `AssertInterleavingViolationFound(...)` - this proves the model genuinely
+   `AssertViolationFoundInSomeExploredRun(...)` - this proves the model genuinely
    exercises the race, so the passing test is meaningful rather than vacuous.
 4. For a **liveness / progress** model, inject faults from a `FaultBudget` (via
    `FaultDeliveryQueue<T>`) so exploration terminates, encode the property as
    bounded progress (drive to the budget-exhausted point, apply the backstop, then
    assert the good terminal state), and add the mandatory companion guard test that
-   removes the backstop and asserts `AssertInterleavingViolationFound(...)` finds
+   removes the backstop and asserts `AssertViolationFoundInSomeExploredRun(...)` finds
    the stall. **Construct the `FaultBudget` (and `FaultDeliveryQueue<T>`) fresh at
    the top of `Run`, never in the constructor / a field** - store only the raw
    drop / duplicate / restart *counts* as fields and rebuild the budget each
@@ -478,7 +478,7 @@ sibling models did not yet encode. Each of its assertions has a companion guard
 | `CommitIntegrity` | The coordinator commits iff every participant acked; a single nack/unreachable is decisive; never both commit and abort. | `SagaCoordinatorCore` (Phase 2) | `SagaCoordinatorModel` asserts the fold verdict against the vote multiset. | `SagaCoordinatorModel` guard test (commit-with-a-nack) in `SagaCoordinatorCoyoteTests`. | Cited (already covered). |
 | `LinearizedTerminals` | A leaf's applied commit/abort terminal matches the recorded decision, so no terminal precedes the decision. | `TxRegistryDecisionCore` + broadcast (Phase 1/3) | `AtomicCommitInvariantModel` asserts a commit terminal implies `Resolve == Committed` and an abort terminal implies `Resolve == Aborted`. | `Broadcasting_before_the_decision_violates_terminal_linearization`. | Net-new. |
 | `NoMixedTerminals` | One saga never applies a commit terminal on one leaf and an abort terminal on another. | `TerminalDecisionGuard` + broadcast (Phase 3) | `AtomicCommitInvariantModel` asserts `!(anyCommit && anyAbort)` across leaves; the serialized-registry write-once rule is additionally pinned by `TerminalDecisionGuardTests`. | `Independent_per_leaf_terminals_violate_no_mixed_terminals`. | Net-new (interleaving) + cited (serialized). |
-| `DecisionDurability` | Once the registry records a terminal decision it never flips to the other terminal, across every duplicate delivery. | `TxRegistryDecisionCore` + `TerminalDecisionGuard` (Phase 1/3) | `AtomicCommitInvariantModel` tracks the first recorded terminal and asserts it never changes under duplicate re-delivery; complementary to the serialized permutation suite `TerminalDecisionGuardTests`. | `Flipping_a_recorded_decision_violates_decision_durability`. | Net-new (interleaving) + cited (serialized). |
+| `DecisionDurability` | Once the registry records a terminal decision it never flips to the other terminal across any duplicate delivery, **and its row is never retired while a participant still holds an undrained prepared bucket**. An absent row resolves to in-flight, so an early retirement hides a committed value exactly as a flip would. | `TxRegistryDecisionCore` + `TerminalDecisionGuard` (Phase 1/3) | `AtomicCommitInvariantModel` tracks the first recorded terminal and asserts it never changes under duplicate re-delivery, and - when the row has since been retired - asserts no participant is still undrained. The lifecycle runs to cleanup, so the second assertion is reached on every fixed run rather than being dead code. Complementary to the serialized permutation suite `TerminalDecisionGuardTests`. | `Flipping_a_recorded_decision_violates_decision_durability` (flip) and `Forgetting_the_decision_before_every_leaf_drained_violates_decision_durability` (unset). | Net-new (interleaving) + cited (serialized). |
 | `MonotonicVisibility` | Once a committed value is observed visible it stays visible (no regression except by a later committed write/tombstone, none of which this model injects). | `AtomicVisibilityGate` + `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` records `EverVisible[k]` and asserts a once-visible key never reverts; the cross-round/reshard form is covered by `ReshardMigrationModel`. | `Flipping_a_recorded_decision_violates_decision_durability` (a flip to abort re-hides a committed key). | Net-new (single-saga temporal) + cited (reshard). |
 | `RevisionMonotonic` | The registry revision counter never decreases; a stale-revision snapshot is exactly what the reader-side probe rejects. | `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` asserts `core.Revision >= previousRevision` after every mutation. | `Lowering_the_revision_counter_violates_revision_monotonicity`. | Net-new (explicit assertion; `AtomicCommitVisibilityModel` relies on it via the probe but does not assert it directly). |
 | `Termination` | Every saga reaches a terminal decision under a bounded fault budget (no permanent stall). | `SagaCoordinatorCore` + registry (Phase 4) | `AtomicCommitLivenessModel` drives to the budget-exhausted point and asserts the good terminal state. | `AtomicCommitLivenessModel` guard test (backstop removed) in `AtomicCommitLivenessCoyoteTests`. | Cited (already covered). |
@@ -490,7 +490,7 @@ model): `VisibilityMatchesDecision`, `StrictIsolation`, `LinearizedTerminals`,
 `DecisionDurability` (as an interleaving property beyond the serialized suite),
 `MonotonicVisibility` (as a single-saga temporal property), and `RevisionMonotonic`
 (as an explicit assertion). All seven live in `AtomicCommitInvariantModel` with a
-one-to-one guard in `AtomicCommitInvariantCoyoteTests`.
+guard in `AtomicCommitInvariantCoyoteTests` - one each, except `DecisionDurability`, whose flip half and unset half are separately guarded because neither guard reds for the other.
 
 **Cited (already-covered) properties**: `AllOrNothing` and the cross-round form of
 `MonotonicVisibility` (`AtomicCommitVisibilityModel` / `ReshardMigrationModel`),

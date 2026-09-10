@@ -7,8 +7,9 @@ namespace Orleans.Lattice.Testing.Coyote;
 
 /// <summary>
 /// A concurrency model that <see cref="CoyoteModelHarness"/> drives under
-/// systematic schedule exploration. An implementation expresses the concurrent
-/// scenario as explicit cooperative interleaving driven by the supplied
+/// systematic exploration of its controlled nondeterministic choices. An
+/// implementation expresses the concurrent scenario as data - an explicit
+/// cooperative step ordering it advances itself - driven by the supplied
 /// <see cref="ICoyoteRuntime"/>'s controlled nondeterminism (for example
 /// <see cref="ICoyoteRuntime.RandomBoolean()"/>), and asserts its safety
 /// property with <see cref="Microsoft.Coyote.Specifications.Specification.Assert(bool, string, object)"/>.
@@ -19,7 +20,7 @@ namespace Orleans.Lattice.Testing.Coyote;
 /// <see cref="Run(ICoyoteRuntime)"/> call and hold no mutable state - instance or
 /// static - between runs. A field may hold only immutable configuration; a mutable
 /// helper such as a <c>FaultBudget</c> must be constructed inside <see cref="Run"/>,
-/// never stored on the instance, or it leaks (drains) across schedules and silently
+/// never stored on the instance, or it leaks (drains) across explored runs and silently
 /// destroys exploration coverage. Because the harness does not apply
 /// <c>coyote rewrite</c>, real <c>Task</c>/<c>await</c> interleavings are not
 /// controlled - drive every scheduling choice through the runtime instead.
@@ -28,8 +29,8 @@ public interface ICoyoteModel
 {
     /// <summary>
     /// Executes one iteration of the model against the controlled
-    /// <paramref name="runtime"/>. Called repeatedly by the harness under
-    /// different explored schedules.
+    /// <paramref name="runtime"/>. Called repeatedly by the harness, once per
+    /// explored resolution of its controlled nondeterministic choices.
     /// </summary>
     void Run(ICoyoteRuntime runtime);
 }
@@ -37,8 +38,8 @@ public interface ICoyoteModel
 /// <summary>
 /// The outcome of a systematic exploration: how many iterations ran, how many
 /// distinct safety-property violations were found, the human-readable bug
-/// reports, and a replayable trace of the first violating schedule (empty when
-/// none was found).
+/// reports, and a replayable trace of the first violating run (empty when none
+/// was found).
 /// </summary>
 public readonly record struct CoyoteExplorationResult(
     int Iterations,
@@ -56,16 +57,29 @@ public readonly record struct CoyoteExplorationResult(
 /// </summary>
 public static class CoyoteModelHarness
 {
-    /// <summary>Default number of schedules explored per assertion.</summary>
+    /// <summary>Default number of runs explored per assertion.</summary>
     public const int DefaultIterations = 1000;
 
     /// <summary>Default upper bound on scheduling steps per iteration.</summary>
     public const int DefaultMaxSteps = 200;
 
     /// <summary>
-    /// Explores up to <paramref name="iterations"/> schedules of
+    /// Explores up to <paramref name="iterations"/> runs of
     /// <paramref name="model"/> and reports what was found, without asserting.
     /// </summary>
+    /// <remarks>
+    /// What is explored is the model's <b>choice</b> space, not a thread
+    /// schedule space. None of the models in this repository create a second
+    /// controlled operation: each resolves every choice through
+    /// <see cref="ICoyoteRuntime.RandomBoolean()"/> on a single operation, with
+    /// no <c>Task.Run</c>, no thread, and no <c>coyote rewrite</c> pass, so the
+    /// concurrency degree Coyote observes is zero and there are no thread
+    /// interleavings to enumerate. That is by design rather than an oversight -
+    /// the models encode the protocol's step orderings as data precisely so
+    /// they are fully enumerable without threads - but it is a real limit, so
+    /// it is named here instead of implied. Raising the degree above zero is
+    /// tracked separately as issue #2319.
+    /// </remarks>
     public static CoyoteExplorationResult Explore(
         ICoyoteModel model,
         int iterations = DefaultIterations,
@@ -89,11 +103,11 @@ public static class CoyoteModelHarness
     }
 
     /// <summary>
-    /// Asserts that no schedule of <paramref name="model"/> violates its safety
-    /// property. On failure, fails the test with the bug report and the
-    /// replayable trace of the first violating schedule.
+    /// Asserts that no explored run of <paramref name="model"/> violates its
+    /// safety property. On failure, fails the test with the bug report and the
+    /// replayable trace of the first violating run.
     /// </summary>
-    public static void AssertNoInterleavingViolation(
+    public static void AssertNoViolationInAnyExploredRun(
         ICoyoteModel model,
         int iterations = DefaultIterations,
         int maxSteps = DefaultMaxSteps)
@@ -102,19 +116,20 @@ public static class CoyoteModelHarness
         if (result.BugsFound > 0)
         {
             Assert.Fail(
-                $"Coyote found {result.BugsFound} interleaving violation(s) in {result.Iterations} iterations.\n" +
+                $"Coyote found {result.BugsFound} safety-property violation(s) in {result.Iterations} explored runs.\n" +
                 $"Bug: {string.Join("\n", result.BugReports)}\n" +
                 $"Reproducible trace:\n{result.ReproducibleTrace}");
         }
     }
 
     /// <summary>
-    /// Asserts that at least one schedule of <paramref name="model"/> violates
-    /// its safety property. Use this to prove a model actually catches a known
-    /// regression (a guard removed / a live read reintroduced): if it finds no
-    /// violation, the model has stopped exercising the race and the test fails.
+    /// Asserts that at least one explored run of <paramref name="model"/>
+    /// violates its safety property. Use this to prove a model actually catches
+    /// a known regression (a guard removed / a live read reintroduced): if it
+    /// finds no violation, the model has stopped exercising the race and the
+    /// test fails.
     /// </summary>
-    public static void AssertInterleavingViolationFound(
+    public static void AssertViolationFoundInSomeExploredRun(
         ICoyoteModel model,
         int iterations = DefaultIterations,
         int maxSteps = DefaultMaxSteps)
@@ -123,7 +138,7 @@ public static class CoyoteModelHarness
         Assert.That(
             result.BugsFound,
             Is.GreaterThan(0),
-            $"Expected Coyote to find an interleaving violation in {result.Iterations} iterations, but none was found. " +
+            $"Expected Coyote to find a safety-property violation in {result.Iterations} explored runs, but none was found. " +
             "The model may no longer exercise the race it is meant to catch.");
     }
 }
