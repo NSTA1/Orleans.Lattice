@@ -713,12 +713,25 @@
       ]
     },
     {
+      "id": 133,
+      "title": "Materialiser lagging consumers on over-threshold trees - issue #2444 (absent = healthy)",
+      "description": "Number of individual WAL cursor consumers whose own reported cursor trails the WAL head by more than WalSaturationMaterialiserLagThreshold (orleans.lattice.materialiser.lagging_consumers), recorded only for a tree whose aggregate drain lag is already over that same threshold on the same tick. Read it against the drain-lag panel above: that aggregate is a min() across consumers, so one legitimately dormant consumer holding the frontier down and a broad materialiser stall produce an identical lag reading while calling for opposite responses, and this count is what separates them (issue #2444). ABSENT IS NOT ZERO. No series means no tree was over threshold in this window, which is the healthy reading. These targets deliberately omit the 'or vector(0)' fallback the neighbouring panels use, because substituting a literal zero for an absent series would draw a healthy estate identically to an instrument that never fired, which is the very confusion this panel exists to remove. A drawn 0 is different again and is anomalous: whenever the aggregate is over threshold the consumer holding the minimum is over it too, so the count should be at least 1. Consumers that have never reported a cursor (HLC zero) are excluded, exactly as they are from the min() meet that produces the aggregate. Consumer identity is unbounded cardinality and is deliberately not a tag, so this panel tells you which of the two shapes you are in, not which consumer to open next (issue #2505). The second series is the rate of emitted samples, that is how often the tree was over threshold at all, which separates a brief trip from a continuous one.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 150 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_materialiser_lagging_consumers_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (tree) (rate(orleans_lattice_materialiser_lagging_consumers_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "lagging consumers {{tree}}" },
+        { "refId": "B", "expr": "sum by (tree) (rate(orleans_lattice_materialiser_lagging_consumers_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "over-threshold samples/s {{tree}}" }
+      ]
+    },
+    {
       "id": 127,
       "title": "Mutation-observer inline latency p95 (ms) by observer",
       "description": "Per-observer breakdown of the inline IMutationObserver callback cost (orleans.lattice.observer.duration), split by the observer CLR type. Observers run inline on the write path, so this is latency the caller pays: it is the by-observer decomposition of the aggregate observer step on the Commit-step latency panel above. A single series climbing away from its peers names the misbehaving observer (synchronous I/O, a blocking call, a chatty downstream). The measurement is taken on the faulting path too, so an observer that throws slowly still shows up here.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 150 },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 157 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, observer) (rate(orleans_lattice_observer_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{observer}}" },
@@ -731,7 +744,7 @@
       "description": "Caller-observed duration of a durable leaf-materialiser pin write (orleans.lattice.materialiser.pin.durable_write_latency), recorded by LeafCursorReporter around each pin grain call that reached WalSaturationMaterialiserPinLatencyThreshold or faulted. This is the only materialiser instrument that observes the durable retention floor rather than in-memory drain progress, so it is what makes a stalled pin store visible: the drain-lag panel above reads the in-memory cursor registry and stays flat through a pin-store stall. Measured at the call site, so it includes time queued ahead of the shard's non-reentrant activation. Emitted only when the threshold option is set. A sustained climb means the pin store is the bottleneck; the corrective knob is WalMaterialiserPinBuckets.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 157 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 164 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_pin_durable_write_latency_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
@@ -744,7 +757,7 @@
       "description": "Steady-state per-checkpoint pin reports LeafCursorReporter declined to enqueue (orleans.lattice.materialiser.pin.reports_shed) because the target shard's last durable write showed the store is not keeping up. Shedding is always safe - a shed report leaves the durable pin staler, which retains more WAL - and only the steady-state path opts in: the birth block-pin seed and the deactivation flush are last-chance writes and are always issued. Zero is the healthy steady state. A sustained non-zero rate means the pin store is the bottleneck; pair it with the pin write-latency panel and consider raising WalMaterialiserPinBuckets.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 157 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 164 },
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_materialiser_pin_reports_shed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "shed {{tree}}" }
@@ -756,7 +769,7 @@
       "description": "What a leaf activation banked on its way out, split cold vs warm, plus the activations that never got out at all. checkpoint_delta is the sum across WAL partitions of (checkpoint leaving OnDeactivateAsync - checkpoint entering it), recorded once per graceful deactivation and tagged by tree, deactivation reason and activation temperature (never by leaf: the leaf population is unbounded, so per-leaf detail is on the debug log line instead). activation_failures counts leaf activations that THREW out of OnActivateAsync, by reason (canceled / canceled_awaiting_permit / faulted). READ BOTH SERIES TOGETHER. THIS PAIR IS A LOWER BOUND ON DEACTIVATIONS AND MUST NOT BE QUOTED AS A CENSUS: crash, kill and silo failure bypass the deactivation hook by design, and Orleans does not run that hook at all when OnActivateAsync throws (measured with a positive control on Orleans 10.2.2), which is why the failure counter exists as a separate series rather than as another arm of the histogram. A ZERO delta on the cold arm is EXPECTED and is not by itself a fault: a cold replay restarts from the -1 sentinel and the projection checkpoint is strictly monotonic, so a cold activation cannot bank anything until its scanned-through offset passes the mark it started above. Progress below that mark is not discarded, it is unrepresentable, so a flat zero on the cold arm is arithmetically forced rather than symptomatic. The offsets are scanned-through, not applied-through (issue #2270): replay advances the checkpoint over entries it skips as another leaf's work, because the WAL retention floor is the minimum of these offsets. A non-zero delta is durable forward progress through the log, not a count of mutations this leaf applied. The fault shape to look for is a sustained cold activation-failure rate on a tree whose cold checkpoint_delta never leaves zero across many activations.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 164 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 171 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, activation_temperature) (rate(orleans_lattice_leaf_deactivation_checkpoint_delta_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 banked offsets {{activation_temperature}}" },
@@ -771,7 +784,7 @@
       "description": "Leaf activations that could not load their snapshot (orleans.lattice.leaf.snapshot.load_failures), split by reason. READ THIS PANEL WITH THE ACTIVATION-FAILURE PANEL ABOVE, NOT INSTEAD OF IT: this counter does not count activations that failed, it counts activations that SUCCEEDED while silently giving up their warm start. A failed snapshot load is not fatal - the leaf declines the snapshot, activates cold, and replays its whole readable WAL window - so the fault is invisible in availability terms and shows up only as slower activations and higher WAL read volume. Before this instrument existed the decline was indistinguishable from a leaf that genuinely had no snapshot, so the failure population read as zero at every rate of occurrence, which is not a weak measurement but no measurement. reason=resource_exhausted means the load ran out of memory, which under a container memory limit is the self-reinforcing shape: the cgroup limit sizes the .NET GC heap hard limit, so the process is never OOM-killed and there is no restart, no exit code and no resource event - the allocation simply fails inside the storage provider deserialising the snapshot blob, and surfaces to an operator as the provider's own \"Error reading grain state\". A memory shortage wearing a storage fault's clothes. The cold replay that follows raises memory pressure further, so a non-zero resource_exhausted rate tends to climb rather than settle. reason=faulted is every other cause, and is what a snapshot-grain activation failure arrives as, because that failure is raised in-process inside the snapshot grain and never crosses a grain-call boundary carrying the original exception. Zero is the healthy steady state. Any sustained non-zero rate means leaves are paying for full-window replays they should not be paying for; correlate with container memory headroom first.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 172 },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 179 },
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_snapshot_load_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{reason}}/s" }
@@ -783,7 +796,7 @@
       "description": "Cold leaf activations cancelled at or past the consecutive-cancellation escalation threshold (orleans.lattice.leaf.activation.cold_replay_loop). READ THIS AS A DEFECT SIGNAL, NOT A COST SIGNAL, AND THAT IS THE WHOLE POINT OF IT EXISTING SEPARATELY FROM THE ACTIVATION-FAILURE PANEL ABOVE. That counter is an aggregate: it cannot distinguish one leaf cancelled five times from five leaves cancelled once, and those are a defect and a cost respectively. This one counts only cancellations on a leaf that has been cancelled repeatedly IN A ROW WITH NO SUCCESSFUL ACTIVATION IN BETWEEN, which is the pathology: a cold activation replays the whole readable WAL window, and when it is cancelled it latches neither of the two signals the snapshot capture gate requires, so no snapshot is banked, the next activation finds no anchor and replays the whole window again - the condition that causes the cancellation is REPRODUCED BY the cancellation. The count is CONSECUTIVE and resets on any successful activation, so the threshold measures leaf health and not how long the process has been up; a cumulative count would reach any fixed threshold eventually on a healthy leaf and fire falsely. The threshold is set one above the highest value seen in the field measurement behind issue #2280 (79 runtime cancellations over ~40 minutes across 67 distinct leaves: 55 cancelled once, 12 twice, none more than twice), so ZERO IS THE EXPECTED READING and any sustained non-zero rate is a real finding rather than background. Not tagged by leaf - that population is unbounded - so take the leaf identity, the consecutive count and the mid-replay / queued-for-permit split from the paired warning, which names the pathology in full. A high queued-for-permit share points at replay concurrency (issues #2279, #2256); a high mid-replay share points at bounding a cold replay (issue #2411). This instrument is a DIAGNOSTIC ONLY: it changes no leaf behaviour, and the underlying activations still fail exactly as they did before it existed.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 179 },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 186 },
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_activation_cold_replay_loop_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "loop-escalated cancellations {{tree}}/s" }
