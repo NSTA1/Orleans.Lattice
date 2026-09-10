@@ -134,13 +134,38 @@ All seven invariants and all five temporal properties held; no deadlock.
 
 ## CI decision
 
-TLC is **not** a required per-PR check. It needs a Java runtime plus the TLA+
-tools, which the .NET build image does not carry, and the specification tracks
-the protocol *design* rather than any single code change - so gating every PR
-on it would add a heavyweight toolchain for little marginal signal. Local
-invocation (above) is the supported path; the coordinator or any contributor
-runs it when the protocol design changes. This decision is recorded in
-[`.github/instructions/testing.instructions.md`](../.github/instructions/testing.instructions.md).
-A non-required scheduled workflow could run TLC nightly if the portfolio
-grows; it is deliberately left unwired here to avoid a required-check
-dependency on the TLA+ toolchain.
+TLC **is** run per PR, as an ordinary NUnit fixture
+(`test/lattice/Formal/TlcModelCheckTests.cs`) tagged `[Category("Tlc")]`. It
+therefore rides the existing test fan-out with no change to the matrix planner:
+the `deterministic` tier is the complement of `Chaos` and `Coyote`, so a new
+category lands in it automatically, and `test/lattice`'s last shard is a
+complement shard, so a new namespace is picked up without editing the shard
+config. The workflow provisions a Temurin 17 JRE and a digest-pinned
+`tla2tools.jar` before the leg runs.
+
+This reverses an earlier decision recorded here, which is worth stating plainly
+rather than quietly overwriting. That decision rested on two premises: that the
+.NET build image carries no Java runtime, and that the specification tracks the
+protocol *design* rather than any single code change, so gating a PR on it would
+buy little marginal signal. The first premise was simply wrong - the GitHub
+runner image ships several JDKs, and `actions/setup-java` selects one from the
+image cache in a couple of seconds. The second was right about what TLC *was*
+being asked to do, and is the part that changed: the fixture no longer only
+checks that the specification holds. It checks that each paired **mutant** makes
+its property fire, by name. That is a claim about the specification's own
+diagnostic power, and unlike the design it tracks, it regresses silently the
+moment somebody weakens a property - which is exactly the failure the atomicity
+audit (epic #2299) found four times over.
+
+The local invocation documented above remains supported and is still the fast
+path when iterating on the protocol design.
+
+The dev loop does **not** run this category. The Tier 1 filter in
+[`.github/instructions/testing.instructions.md`](../.github/instructions/testing.instructions.md)
+excludes `Tlc` alongside `AzureStorageEmulator`, for the same reason: a
+contributor without the external toolchain should not be blocked. Absence is
+handled asymmetrically and deliberately - the fixture skips locally (a visible
+`Skipped` count, not `Assert.Inconclusive`, which NUnit counts as neither passed
+nor failed nor skipped and which has already produced a false green here) and
+**fails** when `GITHUB_ACTIONS` is set, because in CI a missing toolchain is a
+broken pipeline rather than a missing convenience.
