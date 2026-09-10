@@ -10,67 +10,81 @@ layout contract for the trees and keys named here.
 ## The parts
 
 ```mermaid
-flowchart TB
+flowchart LR
     agent["AI coding agent<br/>(MCP client)"]
 
     subgraph surface["Tool surface"]
-        gate["Api.Mcp permission-aware discovery<br/>+ fail-closed authorization gate<br/>+ workspace guard (path containment)"]
-        handlers["repocontext_* tool group<br/>capture, retrieval, graph, claims, workspace"]
+        gate["Permission-aware discovery<br/>fail-closed authorization gate<br/>workspace guard, path containment"]
+        handlers["repocontext_* tool group<br/>capture, retrieval, graph,<br/>claims, workspace"]
         gate --> handlers
-    end
-
-    subgraph ingest["Ingest plane"]
-        srcgate["Index-source gate<br/>(per-repository, mutually exclusive)"]
-        mount["Mounted workspace (default)<br/>walk + content digest<br/>mtime pruning, stat fast-path"]
-        git["Git source (opt-in, hub-only)<br/>fetch ref, diff commit"]
-        boot["Bootstrap service<br/>walk, reconcile, apply, vectorise"]
-        rec["Reconcilers<br/>structural, content, symbol, cross-reference"]
-        ving["Vector ingestor<br/>file windows, symbols, memory entries"]
-        srcgate --> mount & git --> boot --> rec --> ving
-    end
-
-    subgraph grains["Orchestration (grains, anchored by reminders)"]
-        job["Index job grain<br/>one durable pass, resumed after a restart"]
-        self["Self-index grain (per repository)<br/>keep-alive, paged gap sweep,<br/>periodic reconcile, git refresh"]
-        annb["ANN build coordinator<br/>one per (repository, embedding space)"]
-        sweep["Build sweep service<br/>arms a coordinator per repository"]
-        self --> job --> boot
-        sweep --> annb
-        self --> annb
-    end
-
-    subgraph store["Record store: key grammar routes a family to its tree"]
-        sor["Store of record<br/>structural, symbol, memory"]
-        proj["Rebuildable projections<br/>content, cross-reference, session,<br/>vector membership / payload / metadata"]
-        local["Local-derived, never replicated<br/>approximate index"]
     end
 
     subgraph retrieve["Retrieval plane"]
         search["Search service<br/>reports which path answered"]
-        ann["Approximate index (default)"]
-        exact["Exact kNN scan<br/>+ corpus bound, + fault breaker"]
-        kw["Keyword BM25 over the content projection"]
-        graph["Graph service<br/>outline, related, changed"]
-        bundle["Bundle service<br/>packer, session reuse, token counter"]
+        ann["Approximate index<br/>the default path"]
+        exact["Exact kNN scan<br/>corpus bound, fault breaker"]
+        kw["Keyword BM25"]
+        graphsvc["Graph service<br/>outline, related, changed"]
+        bundle["Bundle service<br/>packer, session reuse,<br/>token counter"]
         search --> ann --> exact --> kw
     end
 
-    claims["Claims: leased, fenced,<br/>over the distributed lock"]
-    embed["Embedding provider (HTTP companion)"]
+    subgraph grains["Orchestration"]
+        self["Self-index grain, per repository<br/>keep-alive, paged gap sweep,<br/>periodic reconcile, git refresh"]
+        job["Index job grain<br/>one durable pass,<br/>resumed after a restart"]
+        annb["ANN build coordinator<br/>one per repository<br/>and embedding space"]
+        sweep["Build sweep service"]
+        self --> job
+        self --> annb
+        sweep --> annb
+    end
+
+    subgraph ingest["Ingest plane"]
+        srcgate["Index-source gate<br/>per repository, mutually exclusive"]
+        mount["Mounted workspace, the default<br/>walk and digest, mtime pruning"]
+        git["Git source, opt-in and hub-only<br/>fetch ref, diff commit"]
+        boot["Bootstrap pass<br/>walk, reconcile, apply, vectorise"]
+        rec["Reconcilers<br/>structural, content,<br/>symbol, cross-reference"]
+        ving["Vector ingestor<br/>file windows, symbols,<br/>memory entries"]
+        srcgate --> mount & git --> boot --> rec --> ving
+    end
+
+    subgraph store["Record store"]
+        sor["Store of record<br/>structural, symbol, memory"]
+        proj["Rebuildable projections<br/>content, cross-reference, session,<br/>vector membership, payload, metadata"]
+        local["Local-derived, never replicated<br/>approximate index"]
+    end
+
+    claims["Claims<br/>leased and fenced,<br/>over the distributed lock"]
+    embed["Embedding provider<br/>HTTP companion"]
+    healer["Vector-plane re-deriver<br/>fail-closed allow-list"]
     lattice[("Lattice CRDT B+ trees<br/>WAL, TTL, tombstone compaction")]
     repl["Replication companion<br/>enrols the replicated trees"]
-    healer["Vector-plane re-deriver<br/>fail-closed allow-list"]
 
     agent --> gate
-    handlers --> search & graph & bundle & claims & store & job
+    handlers --> search
+    handlers --> graphsvc
+    handlers --> bundle
+    handlers --> claims
+    handlers --> self
+    job --> boot
+    annb --> local
     ving <-->|embed| embed
+    rec --> sor
+    rec --> proj
     ving --> proj
-    rec --> sor & proj
+    search --> sor
     ann --> local
-    exact & kw & search --> store
-    store <--> lattice
-    repl -.-> lattice
+    exact --> proj
+    kw --> proj
+    graphsvc --> sor
+    bundle --> proj
+    claims --> sor
     healer -.-> proj
+    sor <--> lattice
+    proj <--> lattice
+    local <--> lattice
+    repl -.-> lattice
 ```
 
 ## The flows that matter
