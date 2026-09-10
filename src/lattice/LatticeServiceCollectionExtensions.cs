@@ -698,6 +698,63 @@ public static class LatticeServiceCollectionExtensions
         return builder;
     }
 
+    /// <summary>
+    /// Installs the silo-wide grain-call observation filter, which records
+    /// <see cref="LatticeMetrics.GrainCallOutstandingDepth"/> and
+    /// <see cref="LatticeMetrics.GrainCallDuration"/> for every outgoing grain
+    /// call this silo makes, tagged by target grain type. Idempotent: calling it
+    /// more than once installs a single filter.
+    /// <para>
+    /// <b>What it is for.</b> Orleans describes its per-activation
+    /// non-reentrancy queue through exactly one channel out of the box - the
+    /// <c>NonReentrancyQueueSize=</c> clause of the
+    /// <c>Response did not arrive on time</c> timeout diagnostic - and that
+    /// channel is censored: it fires only for a request already approaching the
+    /// message timeout, and the clause describes that request's own wait, so a
+    /// grain type whose calls queue deeply but which never itself trips the
+    /// timeout contributes <b>no rows at all</b>. An operator reading only that
+    /// channel can therefore conclude, consistently and reproducibly, that
+    /// nothing is queueing while a grain type carries the deepest queues in the
+    /// cluster. This filter observes at dispatch instead, unconditionally, so
+    /// the depth of a grain type's queue is visible during a <em>healthy</em>
+    /// run with no timeout required.
+    /// </para>
+    /// <para>
+    /// <b>Why it is opt-in.</b> It runs on every outgoing grain call, so it is
+    /// not free: a dictionary lookup, a lock, and two histogram records per
+    /// call. A host that has not asked for the observation pays none of it.
+    /// Enable it on a host being investigated for saturation, or on one whose
+    /// operators want per-grain-type contention permanently visible.
+    /// </para>
+    /// <para>
+    /// Read <see cref="LatticeMetrics.GrainCallOutstandingDepth"/> for the
+    /// precise semantics of the recorded value, including the three limits that
+    /// make it a floor on contention rather than a measurement of Orleans' own
+    /// queue: it counts only calls issued from this silo, it counts dispatch
+    /// rather than admission, and on a reentrant grain type outstanding calls
+    /// interleave rather than queue.
+    /// </para>
+    /// <para>Example:</para>
+    /// <code>
+    /// silo.AddLattice((silo, name) =&gt; silo.AddMemoryGrainStorage(name))
+    ///     .AddLatticeGrainCallObservation();
+    /// </code>
+    /// </summary>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <returns>The same <paramref name="builder"/>, for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder"/> is <c>null</c>.</exception>
+    public static ISiloBuilder AddLatticeGrainCallObservation(this ISiloBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        // TryAddEnumerable keyed on the implementation type, so repeated calls
+        // (a host that enables it and a package that also does) install one
+        // filter rather than double-counting every call.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IOutgoingGrainCallFilter, LatticeGrainCallObservationFilter>());
+        return builder;
+    }
+
     /// <summary>Internal hosted-service marker; registered once per silo.</summary>
     internal sealed class CrdtShapeRegistryStartupMarker { }
 

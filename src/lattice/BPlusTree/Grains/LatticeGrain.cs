@@ -37,6 +37,23 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="_compactionEnsured"/>, <see cref="_monitorEnsured"/>) are
 /// activation-scoped and remain safe under multiple parallel activations.
 /// </para>
+/// <para>
+/// <b>The timeout diagnostic quoted above is a censored channel; do not size a
+/// queue from it.</b> Orleans emits that clause only for a request already
+/// approaching the 30 s response deadline, and the clause describes the
+/// <em>emitting</em> request's own wait, so a grain type whose calls queue
+/// deeply but which does not itself trip the timeout contributes no rows to it
+/// at all. A depth read from it is therefore conditioned on failure and biased
+/// towards requests that were not queued; on one real gate run the grain type
+/// with the deepest queues in the system contributed zero of the diagnostic's
+/// 154 samples, and two independent extractions agreed - consistently and
+/// wrongly - that nothing was queueing. It is evidence that <em>this</em>
+/// request waited, never evidence about the distribution. For an uncensored
+/// per-grain-type depth, enable
+/// <see cref="LatticeServiceCollectionExtensions.AddLatticeGrainCallObservation"/>
+/// and read <see cref="LatticeMetrics.GrainCallOutstandingDepth"/>, which
+/// records at dispatch on every call and requires no timeout to exist.
+/// </para>
 /// </remarks>
 [StatelessWorker(maxLocalWorkers: 32)]
 internal sealed partial class LatticeGrain(

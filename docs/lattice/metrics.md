@@ -41,7 +41,7 @@ Every Lattice instrument carries a consistent set of low-cardinality tags:
 | `stage` | `orleans.lattice.set.stage.duration`, `orleans.lattice.set_many.stage.duration`, `orleans.lattice.get.stage.duration`, `orleans.lattice.get_many.stage.duration`, `orleans.lattice.saga.broadcast.shard.stage.duration` | Sub-stage name within an envelope - see each instrument below |
 | `phase` | `orleans.lattice.provider.commit.duration`, `orleans.lattice.provider.retry.exhausted`, `orleans.lattice.provider.idempotent_replays` | `phase1` (per-batch partition txn) or `phase2` (manifest partition txn); `idempotent_replays` is always `phase1` |
 | `status` | `orleans.lattice.provider.retry.attempts`, `orleans.lattice.provider.retry.exhausted`, `orleans.lattice.provider.retry.short_circuited` | Azure Tables HTTP status string (e.g. `503`, `429`; `0` for a transport-level failure with no HTTP exchange; `unknown` when the SDK surfaced no status) |
-| `outcome` | `orleans.lattice.atomic_write.completed`, `orleans.lattice.atomic_write.duration`, `orleans.lattice.atomic_write.batch_size`, `orleans.lattice.leaf.replay.duration`, `orleans.lattice.leaf.replay.entries`, `orleans.lattice.compaction.leaves.visited` | Discriminator - see each instrument below |
+| `outcome` | `orleans.lattice.atomic_write.completed`, `orleans.lattice.atomic_write.duration`, `orleans.lattice.atomic_write.batch_size`, `orleans.lattice.leaf.replay.duration`, `orleans.lattice.leaf.replay.entries`, `orleans.lattice.compaction.leaves.visited`, `orleans.lattice.grain.call.duration` | Discriminator - see each instrument below |
 | `kind` | `orleans.lattice.coordinator.completed`, `orleans.lattice.tree.lifecycle`, `orleans.lattice.events.published` | Discriminator - see each instrument below |
 | `trigger` | `orleans.lattice.compaction.pass.duration`, `orleans.lattice.compaction.leaves.visited` | `reminder`, `ratio`, `size`, or `operator` |
 | `path` | `orleans.lattice.compaction.leaves.visited` | `walk` or `dirty-set` |
@@ -51,6 +51,7 @@ Every Lattice instrument carries a consistent set of low-cardinality tags:
 | `wal_max_pending_batches` | every `orleans.lattice.wal.*` histogram | `LatticeOptions.WalMaxPendingBatches` at the time of activation (Phase A attribution) |
 | `pipeline_phase2` | `orleans.lattice.provider.commit.duration` | `true` or `false`, reflecting `AzureTableWalStorageOptions.PipelinePhaseTwoCommits` |
 | `shard_count` | `orleans.lattice.warmup.duration` | Per-tree physical-shard-root probe fan-out |
+| `grain_type` | `orleans.lattice.grain.call.outstanding_depth`, `orleans.lattice.grain.call.duration` | Target Orleans grain type name (e.g. `bplusleaf`) |
 
 Leaf grain ids are **not** emitted as a tag - in a large tree they would produce
 unbounded tag cardinality. All leaf instruments are aggregated to the tree level.
@@ -433,6 +434,57 @@ each instrument tagged with the `index` name. See [Tag indexes](api.md#tag-index
 | `orleans.lattice.tag_index.reconcile.trees.mismatched` | `Counter<long>` | `{tree}` | Covered trees a reconciliation sweep found divergent from their digest baseline. |
 | `orleans.lattice.tag_index.reconcile.orphan_rows.removed` | `Counter<long>` | `{row}` | Orphan membership rows removed by background tag-index reconciliation. |
 | `orleans.lattice.tag_index.reconcile.duration` | `Histogram<double>` | `ms` | Wall-clock duration of a background tag-index reconciliation sweep. |
+
+### Grain-call observation (opt-in)
+
+Registered by `ISiloBuilder.AddLatticeGrainCallObservation()`, which installs
+`IOutgoingGrainCallFilter` on the silo. It is **opt-in** because it observes
+every outgoing grain call the silo makes - not only calls into Lattice grains -
+so a host chooses to pay for it. Both instruments are tagged `grain_type` (the
+target's Orleans grain type name, low-cardinality) and carry the platform tenant
+sentinel: a target activation's queue is the aggregate of every caller's arrivals
+and no single tenant owns it, so the series is deliberately not tenant-scoped and
+is invisible to a tenant-scoped telemetry query.
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.grain.call.outstanding_depth` | `Histogram<int>` | `{call}` | Calls this silo had already issued to the same target activation and not yet seen complete, sampled **at dispatch** on every outgoing call. On a non-reentrant target this is the depth the new call queues behind. Tagged `grain_type`. |
+| `orleans.lattice.grain.call.duration` | `Histogram<double>` | `ms` | Wall-clock duration of an outgoing grain call, from dispatch to completion or fault. Tagged `grain_type` and `outcome` (`completed` / `faulted`). |
+
+#### Why this exists, and what it is not
+
+Orleans' only built-in queue signal is the `NonReentrancyQueueSize=` clause of
+its `Response did not arrive on time` timeout diagnostic. That clause is
+**censored twice over**: the runtime emits it only for a request already
+approaching the 30-second response deadline, and the clause reports the
+*emitting* request's own wait - so a grain type whose calls queue deeply, but
+which does not itself trip the timeout, contributes **no rows at all**. On one
+real investigation the grain type carrying the deepest queues in the system
+contributed 0 of the diagnostic's 154 samples, and two independent extractions
+from those samples agreed - consistently and wrongly - that nothing was queueing.
+Agreement between two extractions that apply the same selection predicate
+validates the arithmetic, not the sampling frame.
+
+`orleans.lattice.grain.call.outstanding_depth` removes both conditions: it is
+recorded at dispatch, before the call is awaited, so no timeout, fault, or
+threshold gates the emission, and it describes the target's contention rather
+than the emitter's luck.
+
+Three limits, all of which understate rather than invent contention:
+
+- **Per-silo.** Only calls issued from *this* silo are counted, so cluster-wide
+  contention on a shared activation is under-stated. Treat the value as a floor.
+- **Reentrancy changes the meaning.** On a `[Reentrant]` or `[AlwaysInterleave]`
+  target the outstanding calls interleave rather than queue, so a high value
+  there means pipelining, not contention.
+- **Dispatch, not admission.** The window includes network transit and the
+  response hop, not only scheduler queueing.
+
+The companion duration histogram is split by `outcome` deliberately: the
+`faulted` series carries the 30-second message timeouts, which would otherwise
+pile up at the deadline and dominate any quantile taken over the combined
+population - reproducing, inside the new channel, exactly the censoring that
+makes the log diagnostic unusable.
 
 ## Replication meter
 

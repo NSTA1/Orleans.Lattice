@@ -1513,6 +1513,40 @@
         { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_atomic_action_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p95" },
         { "refId": "P99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_atomic_action_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p99" }
       ]
+    },
+    {
+      "id": 64,
+      "title": "Grain-call contention (uncensored)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 191 },
+      "panels": []
+    },
+    {
+      "id": 65,
+      "title": "Outstanding calls per target activation, by grain type",
+      "description": "Per-grain-type contention from orleans_lattice_grain_call_outstanding_depth, recorded at dispatch on EVERY outgoing grain call by the LatticeGrainCallObservationFilter (enable with ISiloBuilder.AddLatticeGrainCallObservation). The value is how many calls this silo had already issued to the same target activation and not yet seen complete, so on a non-reentrant target it is the depth the new call queues behind. Read this instead of the NonReentrancyQueueSize= clause of the Orleans near-timeout diagnostic: that clause is emitted only for a request already approaching the 30s deadline and describes only that request's own wait, so a grain type that queues deeply without tripping the timeout contributes nothing to it. Two known limits: the count is per-silo, so cluster-wide contention is under-stated (treat it as a floor), and on a reentrant or AlwaysInterleave target a high value means pipelining rather than queueing.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 192 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "MEAN", "expr": "sum by (grain_type) (rate(orleans_lattice_grain_call_outstanding_depth_sum{cluster=~\"$cluster\"}[5m])) / clamp_min(sum by (grain_type) (rate(orleans_lattice_grain_call_outstanding_depth_count{cluster=~\"$cluster\"}[5m])), 1)", "legendFormat": "{{grain_type}} mean" },
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le, grain_type) (rate(orleans_lattice_grain_call_outstanding_depth_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "{{grain_type}} p95" }
+      ]
+    },
+    {
+      "id": 66,
+      "title": "Grain-call duration by grain type and outcome",
+      "description": "orleans_lattice_grain_call_duration_milliseconds, recorded by the same filter for every outgoing grain call and tagged outcome = completed | faulted. Split by outcome deliberately: the faulted series carries the 30s message timeouts, which would otherwise pile up at the deadline and dominate any quantile taken over the combined population - the same censoring that makes the near-timeout log diagnostic unusable for sizing a queue. Compare against the outstanding-depth panel: rising duration WITH rising depth is contention on the target; rising duration with flat depth is the target itself getting slower.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 192 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le, grain_type, outcome) (rate(orleans_lattice_grain_call_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "{{grain_type}} {{outcome}} p95" },
+        { "refId": "RATE", "expr": "sum by (grain_type, outcome) (rate(orleans_lattice_grain_call_duration_milliseconds_count{cluster=~\"$cluster\"}[5m]))", "legendFormat": "{{grain_type}} {{outcome}} calls/s" }
+      ]
     }
   ]
 }

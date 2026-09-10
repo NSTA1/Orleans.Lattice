@@ -447,6 +447,21 @@ public static class RepoContextHostBuilder
         // and through Error-level Orleans messaging problems, which these filters
         // keep. Raise them back to Warning when diagnosing a hang that does NOT
         // clear on its own.
+        //
+        // If you do raise them: those lines are a CENSORED channel, and the
+        // "NonReentrancyQueueSize=" clause they carry must not be used to decide
+        // whether anything is queueing. Orleans emits the line only for a request
+        // already approaching the 30s deadline, and the clause describes that
+        // request's own wait, so a grain type whose calls queue deeply but which
+        // does not itself trip the timeout contributes NO rows at all. On gate
+        // run 2 the grain type with the deepest queues in this container
+        // contributed 0 of 154 samples, and two independent extractions from
+        // those samples agreed exactly - and wrongly - that queueing was
+        // refuted. Agreement between two extractions applying the same selection
+        // predicate validates the arithmetic, not the sampling frame. For queue
+        // depth, read the orleans.lattice.grain.call.outstanding_depth histogram
+        // (enabled in DurabilitySelector via AddLatticeGrainCallObservation),
+        // which records at dispatch on every call and needs no timeout to exist.
         logging.AddFilter("Orleans.Runtime.CallbackData", LogLevel.Error);
         logging.AddFilter("Orleans.Messaging", LogLevel.Error);
 
