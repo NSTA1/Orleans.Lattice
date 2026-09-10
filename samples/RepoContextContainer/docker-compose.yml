@@ -58,6 +58,47 @@ services:
       # cpu, or cuda on an NVIDIA host started with a device reservation.
       # An unknown value falls back to the CPU rather than failing to boot.
       EMBED_PROVIDER: cpu
+      # EMBED_INTRA_THREADS is deliberately NOT set here, and deliberately not
+      # given a placeholder value either, for the same reason
+      # LATTICE_WAL_MAX_CONCURRENT_REPLAYS is left unset below: the correct value
+      # is a property of YOUR CPU grant, and copying a literal out of somebody
+      # else's deployment is precisely the failure the setting exists to prevent.
+      #
+      # WHAT IT IS. It sizes the ONNX Runtime intra-op thread pool - the threads
+      # that parallelise a single inference. Left unset, this server derives it
+      # from the container's ENFORCED cgroup CPU quota, which is the right answer
+      # in every case we have measured. You only need to declare it if you want
+      # to depart from that.
+      #
+      # WHY IT IS DERIVED FROM THE QUOTA AND NOT FROM THE CORE COUNT. ONNX
+      # Runtime's own default sizes the pool from the HOST core count and does
+      # not consult the cgroup quota. Under any CPU limit that oversubscribes by
+      # the ratio between the two, and the cost is not proportional - it is far
+      # worse. Measured on a 4.0-CPU grant on a 16-core host (issue #2606): a
+      # pool of 16, the kernel throttling 296 of 298 consecutive scheduling
+      # periods, and 346.3 CPU-seconds stalled against 118.8 running. The
+      # arithmetic is elementary once stated: 16 threads drain a 400ms quota in
+      # 25ms and are then frozen for the remaining 75ms, so 75:25 = 3.0 stalled
+      # per unit run, against 2.91 measured. Because ONNX Runtime synchronises
+      # intra-op threads at EVERY operator boundary and a transformer crosses
+      # hundreds per inference, a freeze landing mid-barrier stalls the whole
+      # operator rather than one thread, so throughput degrades super-linearly.
+      #
+      # WHY DOTNET_PROCESSOR_COUNT CANNOT BE REUSED FOR THIS. It is set on the
+      # repocontext service below, where it sizes an unrelated WAL replay gate.
+      # It OVERRIDES Environment.ProcessorCount and wins over the quota, so
+      # copying that service's environment block onto this one - an entirely
+      # ordinary thing to do - would silently restore the oversubscription. This
+      # server reads the quota directly and is immune to it, and logs a warning
+      # naming both figures when the two disagree.
+      #
+      # HOW TO DERIVE IT IF YOU DO SET IT. Use the container's actual CPU grant,
+      # rounded UP: `cpus: "4.5"` -> 5. Not the host core count, and not
+      # DOTNET_PROCESSOR_COUNT. IF YOU LATER CHANGE THE GRANT BELOW, A DECLARED
+      # VALUE DOES NOT FOLLOW IT - that is the whole hazard of pinning one, and
+      # is why leaving it unset is the recommended configuration. The startup log
+      # reports the resolved count and whether it was DECLARED or DERIVED, so
+      # check there rather than inferring it from this file.
     expose:
       - "9000"
     # Run PID 1 as an init process (issue #2576). Docker bind-mounts its own

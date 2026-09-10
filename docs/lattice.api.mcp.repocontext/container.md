@@ -145,6 +145,26 @@ Verify rather than assume. The effective-configuration report states `GC.Mode`, 
 
 **The claim is narrow on purpose.** Server GC with a bounded heap count removes the class of pause that is multi-minute, process-wide, and attributed to the collector by the runtime itself. It is not a general remedy for stalls: measurement of the same container found collector pauses accounted for under a third of long-silence time and did not explain its largest timeout burst at all. A stall the runtime does not attribute to the collector needs its own diagnosis, and `GC.GetTotalPauseDuration` is the quantity to reach for rather than gaps between log timestamps.
 
+### Thread pools on a CPU-limited container
+
+The collector is not the only pool sized from a number that a CPU limit does not constrain. The `embedder` service in the same sample sizes its ONNX Runtime intra-op pool - the threads that parallelise a single inference - and its own default reads the **host core count** while ignoring the cgroup quota entirely.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `EMBED_INTRA_THREADS` | derived from the enforced cgroup CPU quota | Sizes the ONNX Runtime intra-op thread pool. `0` hands the decision back to the runtime. |
+
+It is not set in the sample, for the same reason the heap count is not: the right value is a property of your CPU grant rather than of any file in this repository. Left unset, the embedder reads the quota itself, which is the recommended configuration.
+
+**The cost of getting it wrong is worse than proportional.** Measured on a 4.0-CPU grant (`cpu.max = "400000 100000"`) on a 16-core host: an intra-op pool of **16**, a 4x oversubscription, with the kernel throttling **296 of 298** consecutive scheduling periods and the pool accumulating **346.3 CPU-seconds stalled against 118.8 CPU-seconds run**. The arithmetic behind that ratio is elementary once written down: sixteen threads drain a 400ms quota in 400/16 = **25ms** of wall time and are then frozen for the remaining **75ms** of the period, predicting 75:25 = **3.0** stalled per unit run against **2.91** measured, within 3%. Throughput does not merely fall by the oversubscription ratio, because ONNX Runtime synchronises its intra-op threads at **every operator boundary** and a transformer inference crosses hundreds of them; a freeze landing mid-barrier stalls the whole operator rather than one thread. The observed embedding rate was 1.8 files per minute, projecting roughly 77 hours for a single 8,315-file checkout.
+
+> **`DOTNET_PROCESSOR_COUNT` cannot double as the thread count either.** This is the same variable, doing a third job with a third set of requirements. It is set on the `repocontext` service to hold the WAL replay gate's permits, it **overrides** `Environment.ProcessorCount` and wins over the quota, and copying that service's environment block onto the embedder - an entirely ordinary thing to do - would silently restore the oversubscription. The embedder reads `/sys/fs/cgroup/cpu.max` directly and is immune to it. When the two disagree it logs a `CPU GRANT MISMATCH` warning naming both figures and the resulting factor, because a process that believes it has sixteen processors under a four-CPU grant will oversubscribe **every** pool sized from that belief, not only this one.
+
+**Deriving it, if you choose to declare it.** Use the container's actual CPU grant, rounded **up**: `cpus: "4.5"` becomes `5`. That matches what .NET itself reports for the same limit, so the declared pool never disagrees with the runtime in the unsafe direction. Do not use the host core count, and do not use `DOTNET_PROCESSOR_COUNT`.
+
+> **A declared value does not follow the grant.** If you later change `cpus` and leave `EMBED_INTRA_THREADS` pinned, the pair silently diverges and nothing in the container will object - the number is no longer wrong in a way any single file reveals. That is the entire hazard of pinning one, and it is why the derived default is recommended. If you do pin it, keep it beside the `cpus` limit so the two are checkable against each other, exactly as the replay ceiling above must be.
+
+Verify rather than assume. The embedder states its resolved intra-op count once at startup, marked `DECLARED` when an operator supplied it and `DERIVED` when it did not, so the effective figure can be read off the log rather than inferred from this file. Reading a compose file tells you what was written; only the log tells you what the process resolved.
+
 ### Reading the effective configuration off the log
 
 The container's real settings usually arrive from an untracked compose override, so reading this repository does not tell you what a running process resolved. The host therefore states its own resolved configuration once at startup, on the `Repository-context effective configuration:` prefix, and that report supersedes any file when the two disagree:
