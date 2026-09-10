@@ -34,14 +34,6 @@ internal sealed class RepoContextAnnIndexSweepService(
     private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
 
-    /// <summary>
-    /// The floor on the re-sweep cadence. The sweep follows the reconcile interval
-    /// so it stays in step with the pass that produces the vectors it schedules an
-    /// index over, but a host that makes the reconcile near-continuous must not
-    /// turn this into a hot loop of grain calls.
-    /// </summary>
-    private static readonly TimeSpan MinimumSweepInterval = TimeSpan.FromMinutes(1);
-
     private readonly RepoContextAnnIndexSweepReporter _reporter = new();
 
     /// <summary>
@@ -106,9 +98,7 @@ internal sealed class RepoContextAnnIndexSweepService(
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var interval = options.ReconcileInterval > MinimumSweepInterval
-            ? options.ReconcileInterval
-            : MinimumSweepInterval;
+        var interval = options.EffectiveAnnSweepInterval;
 
         // Unconditional, and deliberately ahead of every branch. This is the only
         // signal that can separate "the sweep loop never started" from "it started
@@ -117,12 +107,28 @@ internal sealed class RepoContextAnnIndexSweepService(
         // do on a host that has only just come up. Emitting the line before the
         // branch rather than inside one also makes it structurally impossible for a
         // later edit to add a path that returns silently.
+        //
+        // The cadence is reported with the variable that sets it, which is the half
+        // that was missing (issue #2459). The value was never hidden - this line
+        // already printed it - but it was derived from the reconcile interval, so an
+        // operator who read "1.00:00:00" here had no way to learn that the number
+        // came from a variable about a different subsystem, and no reason to suspect
+        // one. Naming the knob is what turns an observation into something
+        // actionable.
         logger.LogInformation(
             "Repository-context approximate-index build sweep entered. Scheduling is {SchedulingDecision}. "
-            + "Configured sweep cadence {SweepInterval}. Outcomes are counted onto '{Instrument}'; the absence "
-            + "of this line from a host's log means the sweep service never executed.",
+            + "Configured sweep cadence {SweepInterval}, from '{SweepIntervalKey}' ({SweepIntervalSource}). "
+            + "This cadence is independent of '{ReconcileIntervalKey}', which paces the content reconcile "
+            + "only. Outcomes are counted onto '{Instrument}'; the absence of this line from a host's log "
+            + "means the sweep service never executed.",
             scheduler.DescribeSchedulingState(),
             interval,
+            RepoContextIndexingOptions.AnnSweepIntervalSecondsKey,
+            options.AnnSweepIntervalIsFloored
+                ? $"raised to the {RepoContextIndexingOptions.MinimumAnnSweepInterval} floor from the "
+                    + $"configured {options.AnnSweepInterval}"
+                : "as configured",
+            RepoContextIndexingOptions.ReconcileIntervalSecondsKey,
             RepoContextAnnIndexSweepReporter.SweepInstrumentName);
 
         if (!scheduler.CanSchedule)
@@ -189,7 +195,8 @@ internal sealed class RepoContextAnnIndexSweepService(
     /// </returns>
     /// <remarks>
     /// Internal rather than private so a test can drive individual passes. The loop
-    /// waits a full <see cref="MinimumSweepInterval"/> after any non-faulted sweep,
+    /// waits a full <see cref="RepoContextIndexingOptions.EffectiveAnnSweepInterval"/>
+    /// after any non-faulted sweep - at least a minute, by its floor -
     /// so the damping and re-announcement of the partial-sweep warning - both of
     /// which are defined across successive passes - are not reachable through
     /// <see cref="ExecuteAsync"/> inside a test's time budget. The type is itself
@@ -543,7 +550,8 @@ internal sealed class RepoContextAnnIndexSweepService(
     /// <para>
     /// Internal rather than private so a test can drive the episode across several
     /// passes - announce, hold, clear, announce again - without waiting out
-    /// <see cref="MinimumSweepInterval"/> once per transition. The re-arm is the half
+    /// <see cref="RepoContextIndexingOptions.EffectiveAnnSweepInterval"/> once per
+    /// transition. The re-arm is the half
     /// that only matters at the <i>second</i> incident, so leaving it to a timing
     /// seam would leave it permanently unproven.
     /// </para>

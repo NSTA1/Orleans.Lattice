@@ -54,6 +54,9 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>Environment variable overriding <see cref="AnnIndexReclamation"/>.</summary>
     public const string AnnIndexReclamationKey = "LATTICE_REPOCONTEXT_ANN_INDEX_RECLAMATION";
 
+    /// <summary>Environment variable overriding <see cref="AnnSweepInterval"/> (in seconds).</summary>
+    public const string AnnSweepIntervalSecondsKey = "LATTICE_REPOCONTEXT_ANN_SWEEP_INTERVAL_SECONDS";
+
     /// <summary>The <see cref="SemanticRetrieval"/> value selecting the persisted approximate index (the default).</summary>
     public const string SemanticRetrievalApproximate = "approximate";
 
@@ -292,6 +295,67 @@ internal sealed class RepoContextIndexingOptions
         AnnIndexScheduling && SemanticRetrieval == RepoContextSemanticRetrievalMode.Approximate;
 
     /// <summary>
+    /// The floor on <see cref="EffectiveAnnSweepInterval"/>. Arming is idempotent, so a
+    /// re-sweep is cheap, but it is one grain call and one reminder re-registration per
+    /// registered repository - which must not become a hot loop on a host that configures
+    /// a very short interval.
+    /// </summary>
+    public static readonly TimeSpan MinimumAnnSweepInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// How often the approximate-index build sweep re-arms every registered repository's
+    /// build coordinator. Resolved from <see cref="AnnSweepIntervalSecondsKey"/>; floored
+    /// at <see cref="MinimumAnnSweepInterval"/> when read, through
+    /// <see cref="EffectiveAnnSweepInterval"/>.
+    /// <para>
+    /// <b>This is deliberately not derived from <see cref="ReconcileInterval"/>, and used
+    /// to be (issue #2459).</b> The two pace unrelated subsystems: the reconcile walks the
+    /// workspace for changed files, while the sweep arms index build coordinators. An
+    /// operator who raised the reconcile interval to quiesce walk load - a reasonable and
+    /// innocuous-looking action, with nothing in its name or documentation to suggest
+    /// otherwise - also throttled arming by the same factor, observed live at 86400s
+    /// against this 60s floor, a factor of 1440.
+    /// </para>
+    /// <para>
+    /// That is worse than a slow sweep. Two things arm a coordinator: this sweep, and the
+    /// self-index grain finishing a vectorising pass. A converged repository whose index
+    /// was never built has no vectorising pass to finish, so the sweep is its <b>only</b>
+    /// arming path - and the vectorising pass was paced by the reconcile interval too, so
+    /// raising it did not slow one path of two, it slowed the only two that exist. The
+    /// index then serves nothing and the retrieval counter records only
+    /// <c>state="bootstrapping"</c>, which is indistinguishable at the metric from a
+    /// genuine approximate-index defect. The coupling did not merely degrade the system;
+    /// it manufactured a fault that was then misattributed.
+    /// </para>
+    /// <para>
+    /// The default is 15 minutes, which is <see cref="ReconcileInterval"/>'s own default,
+    /// so a host that configures neither variable sweeps at exactly the cadence it did
+    /// before this option existed. The only deployments whose behaviour changes are those
+    /// that set the reconcile interval - which is precisely the population the coupling
+    /// was mistreating.
+    /// </para>
+    /// </summary>
+    public TimeSpan AnnSweepInterval { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// <see cref="AnnSweepInterval"/> with <see cref="MinimumAnnSweepInterval"/> applied.
+    /// This is the value the sweep actually runs at, and the one to report: deriving it
+    /// here rather than at the sweep is what keeps the cadence the host announces and the
+    /// cadence it runs from being two separate calculations that can drift apart.
+    /// </summary>
+    public TimeSpan EffectiveAnnSweepInterval =>
+        AnnSweepInterval > MinimumAnnSweepInterval ? AnnSweepInterval : MinimumAnnSweepInterval;
+
+    /// <summary>
+    /// Whether <see cref="MinimumAnnSweepInterval"/> is what decides
+    /// <see cref="EffectiveAnnSweepInterval"/>, rather than the configured
+    /// <see cref="AnnSweepInterval"/>. Reported so an operator who configures a shorter
+    /// interval and observes a longer one is told the floor raised it, instead of being
+    /// left to conclude the setting was ignored.
+    /// </summary>
+    public bool AnnSweepIntervalIsFloored => AnnSweepInterval <= MinimumAnnSweepInterval;
+
+    /// <summary>
     /// Resolves the options from environment variables, falling back to the defaults (the
     /// original behaviour) for any variable that is absent or malformed.
     /// </summary>
@@ -313,6 +377,7 @@ internal sealed class RepoContextIndexingOptions
             SemanticRetrieval = ReadSemanticRetrieval(SemanticRetrievalKey, defaults.SemanticRetrieval),
             AnnIndexScheduling = ReadBoolean(AnnIndexSchedulingKey, defaults.AnnIndexScheduling),
             AnnIndexReclamation = ReadBoolean(AnnIndexReclamationKey, defaults.AnnIndexReclamation),
+            AnnSweepInterval = ReadSeconds(AnnSweepIntervalSecondsKey, defaults.AnnSweepInterval),
         };
     }
 

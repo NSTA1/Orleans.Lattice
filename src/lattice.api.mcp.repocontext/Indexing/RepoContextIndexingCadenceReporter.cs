@@ -19,6 +19,16 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// directory-modification-time pruning stops happening at all. See issue #2075.
 /// </para>
 /// <para>
+/// The approximate-index build sweep cadence is reported beside them precisely because it
+/// is <i>not</i> a member of that matched set. It used to be - it was derived from the
+/// reconcile interval, so raising that variable throttled arming as well (issue #2459) -
+/// and stating the two cadences together, with the independence spelled out, is what makes
+/// the separation visible to the operator who previously had no way to see the coupling.
+/// The line reports configuration only: whether the sweep runs is decided elsewhere and
+/// announced by the sweep service's own entry line, and re-deriving that decision here
+/// would put a second copy of a guard in a second place.
+/// </para>
+/// <para>
 /// This is observability only: it reads the options and logs. It changes no behaviour and
 /// never fails startup, because a cadence this service disagrees with is still a cadence
 /// the host is entitled to run.
@@ -46,14 +56,18 @@ internal sealed class RepoContextIndexingCadenceReporter(
             + "(spacing {SpacingSeconds:0.###} s including jitter); full walk "
             + "{FullWalkSeconds:0.###} s = {FullWalkPasses} pass(es); embedding gap scan "
             + "{GapScanSeconds:0.###} s = {GapScanPasses} pass(es); "
-            + "directory-modification-time pruning can engage: {PruningCanEngage}.",
+            + "directory-modification-time pruning can engage: {PruningCanEngage}. "
+            + "The approximate-index build sweep is configured at {AnnSweepSeconds:0.###} s, "
+            + "which is independent of the reconcile cadence above (issue #2459); whether that "
+            + "sweep runs at all is a separate decision this line does not report.",
             options.ReconcileInterval.TotalSeconds,
             options.MaximumReconcileSpacing.TotalSeconds,
             options.FullWalkInterval.TotalSeconds,
             options.PassesPerFullWalk,
             options.EmbeddingGapScanInterval.TotalSeconds,
             options.PassesPerEmbeddingGapScan,
-            options.PruningCanEngage);
+            options.PruningCanEngage,
+            options.EffectiveAnnSweepInterval.TotalSeconds);
 
         if (!options.PruningCanEngage)
         {

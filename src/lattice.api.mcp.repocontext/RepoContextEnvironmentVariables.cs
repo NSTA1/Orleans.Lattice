@@ -60,6 +60,7 @@ public static class RepoContextEnvironmentVariables
         RepoContextIndexingOptions.SemanticRetrievalKey,
         RepoContextIndexingOptions.AnnIndexSchedulingKey,
         RepoContextIndexingOptions.AnnIndexReclamationKey,
+        RepoContextIndexingOptions.AnnSweepIntervalSecondsKey,
     ];
 
     /// <summary>
@@ -146,6 +147,14 @@ public static class RepoContextEnvironmentVariables
                 RepoContextIndexingOptions.AnnIndexReclamationKey,
                 resolved.AnnIndexReclamation.ToString(),
                 defaults.AnnIndexReclamation.ToString()),
+
+            // Reported as the effective value, floor applied, because that is the cadence
+            // the sweep runs at. An operator who sets ten seconds and is shown ten seconds
+            // here would be told the setting took, when it did not.
+            Snapshot(
+                RepoContextIndexingOptions.AnnSweepIntervalSecondsKey,
+                Seconds(resolved.EffectiveAnnSweepInterval),
+                Seconds(defaults.EffectiveAnnSweepInterval)),
 
             // Reported as the resolved repository count rather than the raw list: the
             // list is the opt-in, and how many repositories it actually parsed to is the
