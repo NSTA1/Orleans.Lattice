@@ -251,13 +251,23 @@ public sealed class ShardRootGrainBulkLoadGraftTests
         // and only surfaces later as a broken reverse walk or a botched merge.
         await h.Grain.BulkLoadRawAsync("op-1", RawEntries(5));
 
-        var chained = h.Leaves.Values
-            .Count(l => l.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.SetPrevSiblingAsync)));
-        var forward = h.Leaves.Values
-            .Count(l => l.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.SetNextSiblingAsync)));
+        // The four birth-time setters collapse into one InitializeSiblingAsync
+        // batch, so the chain is asserted through that call's payload. That is
+        // a stronger check than counting setter invocations was: it reads the
+        // pointer values the leaf was actually handed rather than observing
+        // only that some setter ran.
+        var inits = h.Leaves.Values
+            .SelectMany(l => l.ReceivedCalls()
+                .Where(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.InitializeSiblingAsync))
+                .Select(c => (SiblingInitialization)c.GetArguments()[0]!))
+            .ToList();
+
+        var forward = inits.Count(i => i.NextSibling is not null);
+        var chained = inits.Count(i => i.PrevSibling is not null);
 
         Assert.Multiple(() =>
         {
+            Assert.That(inits, Has.Count.EqualTo(3), "one initialization batch per leaf");
             Assert.That(forward, Is.EqualTo(2), "each leaf but the last points forward");
             Assert.That(chained, Is.EqualTo(2), "each leaf but the first points back");
             Assert.That(h.State.State.LastCompletedBulkOperationId, Is.EqualTo("op-1"));
