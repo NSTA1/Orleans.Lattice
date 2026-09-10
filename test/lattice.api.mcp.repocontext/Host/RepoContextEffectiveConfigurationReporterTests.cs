@@ -28,7 +28,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// </para>
 /// </remarks>
 [TestFixture]
-public sealed class RepoContextEffectiveConfigurationReporterTests
+public sealed partial class RepoContextEffectiveConfigurationReporterTests
 {
     private const string UnknownKey = "LATTICE_SOMETHING_NOBODY_HAS_CLASSIFIED";
 
@@ -150,9 +150,87 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
     [Test]
     public void Every_LATTICE_key_this_host_declares_is_covered_by_the_report()
     {
-        var declared = typeof(RepoContextHostConfiguration).Assembly
-            .GetTypes()
-            .Where(t => t.Namespace == typeof(RepoContextHostConfiguration).Namespace)
+        var declared = DeclaredLatticeConstants();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                declared,
+                Is.Not.Empty,
+                "the scan must find the key constants; a scan that matched nothing "
+                + "would pass vacuously and guard nothing at all");
+            Assert.That(
+                declared.Where(v => !Covered(v)),
+                Is.Empty,
+                "a key this host reads but the report does not list would be reported as "
+                + "'supplied but not read', which is exactly backwards. This test is the "
+                + "reason the report cannot become the stale claim about configuration that "
+                + "#2294 was filed about");
+        });
+    }
+
+    /// <summary>
+    /// The scan's own reach, asserted rather than assumed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the assertion whose absence caused issue #2460. The guard above scanned only
+    /// the host assembly's namespace while <see cref="RepoContextEffectiveConfigurationReporter.KnownKeys"/>
+    /// claimed to cover every variable the host resolves - including the eleven the
+    /// repository-context package resolves. The claim was broader than the check, the gap
+    /// was invisible from either side, and the guard passed for years while every one of
+    /// those keys was reported <c>[SUPPLIED BUT NOT READ BY THIS HOST]</c>.
+    /// </para>
+    /// <para>
+    /// Widening the scan alone would not stop that recurring: a future key in a third
+    /// assembly would be outside the widened scan exactly as it was outside the narrow one.
+    /// Pinning the scanned assemblies makes the reach a reviewable decision, so adding an
+    /// assembly the host reads configuration from fails here until somebody says so.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void The_coverage_scan_reaches_both_assemblies_that_declare_keys()
+    {
+        var scanned = ScannedAssemblies.Select(a => a.GetName().Name).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                scanned,
+                Is.EquivalentTo(new[]
+                {
+                    "Orleans.Lattice.Api.Mcp.RepoContext.Host",
+                    "Orleans.Lattice.Api.Mcp.RepoContext",
+                }),
+                "the scan's reach is pinned because a coverage guard is only as strong as "
+                + "the surface it looks at, and #2460 is what a guard narrower than its own "
+                + "claim costs");
+
+            Assert.That(
+                DeclaredLatticeConstants(),
+                Has.Some.EqualTo(RepoContextIndexingOptions.ReconcileIntervalSecondsKey),
+                "a positive control on the widened half: without it, a scan that silently "
+                + "stopped reaching the package assembly would still pass the guard above");
+        });
+    }
+
+    /// <summary>
+    /// The assemblies the coverage scan reads key constants from: this host, and the
+    /// repository-context package whose options classes the host composes.
+    /// </summary>
+    private static IReadOnlyList<Assembly> ScannedAssemblies { get; } =
+    [
+        typeof(RepoContextHostConfiguration).Assembly,
+        typeof(RepoContextEnvironmentVariables).Assembly,
+    ];
+
+    /// <summary>
+    /// Every <c>LATTICE_</c>-prefixed string constant declared by the scanned assemblies,
+    /// which is the set the report must account for one way or another.
+    /// </summary>
+    private static IReadOnlyList<string> DeclaredLatticeConstants()
+        => ScannedAssemblies
+            .SelectMany(a => a.GetTypes())
             .SelectMany(t => t.GetFields(BindingFlags.Public | BindingFlags.Static))
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
             .Select(f => (string?)f.GetRawConstantValue())
@@ -163,22 +241,15 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(
-                declared,
-                Is.Not.Empty,
-                "the scan must find the host's key constants; a scan that matched nothing "
-                + "would pass vacuously and guard nothing at all");
-            Assert.That(
-                declared.Except(RepoContextEffectiveConfigurationReporter.KnownKeys, StringComparer.OrdinalIgnoreCase),
-                Is.Empty,
-                "a key this host reads but the report does not list would be reported as "
-                + "'supplied but not read', which is exactly backwards. This test is the "
-                + "reason the report cannot become the stale claim about configuration that "
-                + "#2294 was filed about");
-        });
-    }
+    /// <summary>
+    /// Whether the report accounts for a declared constant, either by naming it or by
+    /// publishing it as a prefix under which a run-time-named family is read.
+    /// </summary>
+    private static bool Covered(string declared)
+        => RepoContextEffectiveConfigurationReporter.KnownKeys
+               .Contains(declared, StringComparer.OrdinalIgnoreCase)
+           || RepoContextEffectiveConfigurationReporter.KnownKeyPrefixes
+               .Contains(declared, StringComparer.OrdinalIgnoreCase);
 
     [Test]
     public void Every_covered_key_is_classified_one_way_or_the_other_and_the_split_is_pinned()
