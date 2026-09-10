@@ -225,7 +225,12 @@ They surface three ways:
   reassurance rather than removing it. Counting the whole partition means a zero on
   `state=approximate` alongside a climbing `state=bootstrapping` is a *measured
   absence* - "queries are being served and none of them by the trained plane" -
-  rather than an absent measurement. The one case it cannot distinguish is no
+  rather than an absent measurement. All three arms are pre-minted at zero when the
+  reporter is constructed, so each is present from process start rather than
+  appearing on its first occurrence; an arm that is *absent* rather than zero means
+  the collector refused it at a series ceiling, which `lattice_metrics_series` and
+  `lattice_metrics_dropped_measurements_by_family_total` establish. The one case it
+  cannot distinguish is no
   traffic at all, where every series is legitimately zero; `/health/ready` covers
   that, because the readiness probe converges without waiting for a query.
 - **An information-level line the first time each state is reached** for a

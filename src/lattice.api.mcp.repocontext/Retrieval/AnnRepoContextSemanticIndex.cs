@@ -216,7 +216,11 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         // Recorded for every outcome, Bootstrapping included, so the instrument
         // partitions the whole query population rather than only its serving half.
         // A zero on one state is then denominated by a total that rises with
-        // traffic, which is what makes it a measured absence.
+        // traffic, which is what makes it a measured absence. On the exported
+        // counter that holds only while the collector is unsaturated, which is why
+        // RepoContextRetrievalGuardReporter pre-mints all three arms (issue #2515);
+        // the periodic log line reads these same counters in process, so its
+        // equivalent statement holds unconditionally.
         if (_guards.RecordPlaneOutcome(repoId, outcome.State)
             && outcome.State != RepoContextAnnServingState.Bootstrapping)
         {
@@ -528,7 +532,9 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             + "{Bootstrapping} reached the fallback. Of the plane's answers, {PlaneApproximate} came from a trained "
             + "partitioning and {PlaneExhaustive} from an exhaustive scan of the vectors it holds, so a zero in the "
             + "first against a non-zero search count is a measured absence of approximate retrieval rather than an "
-            + "absent measurement. Exact-scan budget: {BudgetEvaluations} evaluation(s) - "
+            + "absent measurement. These are this process's own counters, read directly rather than scraped, so "
+            + "unlike the exported 'repocontext.retrieval.ann.search' arms that reading cannot be voided by a "
+            + "saturated collector. Exact-scan budget: {BudgetEvaluations} evaluation(s) - "
             + "{BudgetUnbounded} with no bound configured, {BudgetCorpusUnknown} that read an uncounted corpus and "
             + "so failed open and let the gather run, {BudgetWithinBudget} cleared as affordable, {BudgetExceeded} "
             + "skipped as unaffordable; last read corpus {Corpus} against an affordable {Affordable}. Exact-scan "
