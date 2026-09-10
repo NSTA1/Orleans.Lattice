@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Backup;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Replication.Grains;
 
 namespace Orleans.Lattice.Replication;
@@ -548,11 +549,16 @@ internal sealed class RestoreParticipant(
         // every member idempotently (BuildShadowAsync is resumable).
         if (!_builtSets.TryGetValue(request.SagaId, out var built))
         {
-            var rebuilt = new List<LatticeRestoreResult>(requests.Count);
-            foreach (var restoreRequest in requests)
-            {
-                rebuilt.Add(await engine!.BuildShadowAsync(restoreRequest, cancellationToken));
-            }
+            // Each build targets a DISTINCT member tree and produces that member's
+            // own shadow, so no build can observe another's effect. RunAsync
+            // returns the results in slot order, so `built` is still in the
+            // resolved tree-id order BuildSetRestoreRequests produced - which is
+            // what the commit wave and the abort compensations index against.
+            var rebuilt = await BoundedFanOut.RunAsync(
+                requests.Count,
+                BoundedFanOut.DefaultWidth,
+                slot => engine!.BuildShadowAsync(requests[slot], cancellationToken),
+                cancellationToken);
 
             built = rebuilt;
             _builtSets[request.SagaId] = built;
@@ -569,10 +575,17 @@ internal sealed class RestoreParticipant(
             FenceWindowSeconds = CutoverFenceWindowSeconds,
         });
 
-        foreach (var result in built)
-        {
-            await engine!.CommitShadowAsync(result, cancellationToken);
-        }
+        // The alias swaps run INSIDE the fence, so this loop's length is the
+        // window during which every member tree refuses writes. Each swap targets
+        // a distinct member and the group's atomicity is supplied by the fence
+        // spanning all of them - not by the order they flip in - so overlapping
+        // them shortens the write stall from N round trips to ceil(N / width)
+        // without weakening the guarantee. A fault still surfaces after every
+        // launched swap has settled, because ForEachAsync observes them all.
+        await BoundedFanOut.ForEachAsync(
+            built,
+            BoundedFanOut.DefaultWidth,
+            result => engine!.CommitShadowAsync(result, cancellationToken));
 
         await fence.UnblockWritesAsync();
         RecordCommit(LatticeReplicationMetrics.SagaReasonSet);
@@ -600,11 +613,20 @@ internal sealed class RestoreParticipant(
 
         if (_builtSets.TryGetValue(request.SagaId, out var built))
         {
-            foreach (var result in built)
-            {
-                await SafeRevertAsync(result, cancellationToken);
-                await SafeDeleteShadowByIdAsync(result.ShadowPhysicalTreeId, cancellationToken);
-            }
+            // Per member the revert must precede that member's shadow delete, so
+            // the two steps stay serial INSIDE the body; across members there is
+            // no such constraint, because each pair touches only its own tree.
+            // Both steps are the Safe* wrappers, which swallow per-member faults,
+            // so "one failure must not strand the others" is a property of the
+            // body rather than of the serialisation - overlapping preserves it.
+            await BoundedFanOut.ForEachAsync(
+                built,
+                BoundedFanOut.DefaultWidth,
+                async result =>
+                {
+                    await SafeRevertAsync(result, cancellationToken);
+                    await SafeDeleteShadowByIdAsync(result.ShadowPhysicalTreeId, cancellationToken);
+                });
 
             _builtSets.TryRemove(request.SagaId, out _);
         }
@@ -613,11 +635,11 @@ internal sealed class RestoreParticipant(
             // Reactivation lost the cache: re-derive each member's shadow id and GC
             // it without a rebuild. No commit can precede an abort in this saga
             // model, so each alias is still the pre-restore tree and no revert is
-            // required.
-            foreach (var restoreRequest in BuildSetRestoreRequests(members))
-            {
-                await SafeGarbageCollectAsync(restoreRequest, cancellationToken);
-            }
+            // required. One GC per distinct member tree, so the wave is safe.
+            await BoundedFanOut.ForEachAsync(
+                BuildSetRestoreRequests(members),
+                BoundedFanOut.DefaultWidth,
+                restoreRequest => SafeGarbageCollectAsync(restoreRequest, cancellationToken));
         }
 
         await fence.LiftAsync();
@@ -630,16 +652,24 @@ internal sealed class RestoreParticipant(
         IReadOnlyList<LatticeRestoreRequest> requests,
         CancellationToken cancellationToken)
     {
-        foreach (var result in built)
-        {
-            await SafeDeleteShadowByIdAsync(result.ShadowPhysicalTreeId, cancellationToken);
-        }
+        // Every delete addresses a distinct shadow tree and routes through the
+        // fault-swallowing Safe* wrapper, so the cleanup is order-insensitive.
+        await BoundedFanOut.ForEachAsync(
+            built,
+            BoundedFanOut.DefaultWidth,
+            result => SafeDeleteShadowByIdAsync(result.ShadowPhysicalTreeId, cancellationToken));
 
         // Also resolve-and-GC any member whose build never completed, so a partial
         // set prepare leaks no shadow storage.
-        for (var i = built.Count; i < requests.Count; i++)
+        var unbuilt = requests.Count - built.Count;
+        if (unbuilt > 0)
         {
-            await SafeGarbageCollectAsync(requests[i], cancellationToken);
+            var offset = built.Count;
+            await BoundedFanOut.RunAsync(
+                unbuilt,
+                BoundedFanOut.DefaultWidth,
+                slot => SafeGarbageCollectAsync(requests[offset + slot], cancellationToken),
+                cancellationToken);
         }
     }
 

@@ -1054,21 +1054,55 @@ internal sealed partial class ViewMaintainerGrain(
         return true;
     }
 
+    /// <summary>
+    /// Sums the per-partition tail lag. Every probe targets a <b>distinct</b> WAL
+    /// partition and only reads, so no probe can observe another's effect, and the
+    /// reduction is addition - commutative and associative. The serial walk
+    /// therefore paid one round-trip latency per partition to gather values whose
+    /// order never mattered; the probes now overlap in bounded waves and the sum
+    /// is folded afterwards, off the wire.
+    /// <para>
+    /// This is a hot path, not an admin one: every view maintainer calls it on each
+    /// drain tick and again on every convergence check, so its cost is paid on the
+    /// idle cadence of every view in the cluster, multiplied by the partition count.
+    /// </para>
+    /// </summary>
     private async Task<long> ComputeLagAsync(string sourceTreeId, int partitions, CancellationToken cancellationToken)
     {
-        long lag = 0;
-        for (var partition = 0; partition < partitions; partition++)
+        if (partitions <= 0)
         {
-            var head = await commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken);
-            var checkpoint = state.State.AppliedOffsets.GetValueOrDefault(partition, -1);
-            var partitionLag = head - (checkpoint + 1);
-            if (partitionLag > 0)
-            {
-                lag += partitionLag;
-            }
+            return 0;
+        }
+
+        // Single-partition trees are the dominant shape and have nothing to
+        // overlap, so keep the direct await rather than paying for the task array.
+        if (partitions == 1)
+        {
+            return PartitionLag(
+                await commitLogReader.GetHeadOffsetAsync(sourceTreeId, 0, cancellationToken),
+                0);
+        }
+
+        var heads = await BoundedFanOut.RunAsync(
+            partitions,
+            BoundedFanOut.DefaultWidth,
+            partition => commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken),
+            cancellationToken);
+
+        long lag = 0;
+        for (var partition = 0; partition < heads.Length; partition++)
+        {
+            lag += PartitionLag(heads[partition], partition);
         }
 
         return lag;
+
+        long PartitionLag(long head, int partition)
+        {
+            var checkpoint = state.State.AppliedOffsets.GetValueOrDefault(partition, -1);
+            var partitionLag = head - (checkpoint + 1);
+            return partitionLag > 0 ? partitionLag : 0;
+        }
     }
 
     private async Task<int> ApplySurvivorsAsync(ILattice viewTree, IReadOnlyList<ViewWrite> survivors, CancellationToken cancellationToken)

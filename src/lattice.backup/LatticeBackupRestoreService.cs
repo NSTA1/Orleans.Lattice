@@ -932,17 +932,61 @@ internal sealed class LatticeBackupRestoreService(
             total++;
         }
 
-        foreach (var (shardIndex, entries) in perShard)
+        // Final drain. Every remaining bucket belongs to a DISTINCT physical shard
+        // and is delivered to that shard's own root grain under its own operation
+        // id, so no two of these calls touch the same grain and none can observe
+        // another's effect. The per-shard ascending key order BulkLoadRawAsync
+        // needs lives INSIDE each bucket and is untouched by the order the buckets
+        // are dispatched in, so the serial walk was paying one round-trip latency
+        // per shard to preserve an ordering that never existed between shards.
+        var pending = DrainShardBuckets(perShard);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (pending.Count == 1)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}");
-            using (LatticeAccessGateContext.EnterSystemOrigin())
-            {
-                await shard.BulkLoadRawAsync($"{operationId}-restore-{shardIndex}", entries).ConfigureAwait(false);
-            }
+            // Single-shard trees are the dominant shape and have nothing to
+            // overlap: keep the direct await rather than building a task array.
+            var (onlyShard, onlyEntries) = pending[0];
+            await BulkLoadShardAsync(routing, operationId, onlyShard, onlyEntries).ConfigureAwait(false);
+        }
+        else if (pending.Count > 1)
+        {
+            await BoundedFanOut.ForEachAsync(
+                pending,
+                BoundedFanOut.DefaultWidth,
+                bucket => BulkLoadShardAsync(routing, operationId, bucket.ShardIndex, bucket.Bucket)).ConfigureAwait(false);
         }
 
         return total;
+    }
+
+    /// <summary>
+    /// Materialises the occupied <c>(shardIndex, bucket)</c> pairs of a shard-indexed
+    /// accumulator so they can be dispatched as one bounded wave. The accumulator
+    /// exposes only a struct enumerator, which a fan-out cannot re-walk per slot.
+    /// </summary>
+    private static List<(int ShardIndex, T Bucket)> DrainShardBuckets<T>(ShardSlots<T> perShard)
+        where T : class
+    {
+        var pending = new List<(int, T)>(perShard.Count);
+        foreach (var (shardIndex, bucket) in perShard)
+        {
+            pending.Add((shardIndex, bucket));
+        }
+
+        return pending;
+    }
+
+    private async Task BulkLoadShardAsync(
+        RoutingInfo routing,
+        string operationId,
+        int shardIndex,
+        List<LwwEntry> entries)
+    {
+        var shard = grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}");
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await shard.BulkLoadRawAsync($"{operationId}-restore-{shardIndex}", entries).ConfigureAwait(false);
+        }
     }
 
     private async Task<long> MergeApplyAsync(
@@ -994,12 +1038,29 @@ internal sealed class LatticeBackupRestoreService(
             }
         }
 
-        foreach (var (shardIndex, batch) in perShard)
+        // Final drain, same argument as the bulk-load path: each remaining batch
+        // belongs to a DISTINCT shard root grain, so the buckets are mutually
+        // independent. Within a shard, order is still preserved - a mid-stream
+        // flush for a shard always completes before this drain issues that shard's
+        // trailing batch, because the flush is awaited inside the streaming loop
+        // above - and MergeManyAsync is a CRDT merge, so it is commutative anyway.
+        var pending = DrainShardBuckets(perShard);
+        if (pending.Count == 1)
         {
-            if (batch.Count > 0)
+            var (onlyShard, onlyBatch) = pending[0];
+            if (onlyBatch.Count > 0)
             {
-                await MergeShardBatchAsync(routing, shardIndex, batch, cancellationToken).ConfigureAwait(false);
+                await MergeShardBatchAsync(routing, onlyShard, onlyBatch, cancellationToken).ConfigureAwait(false);
             }
+        }
+        else if (pending.Count > 1)
+        {
+            await BoundedFanOut.ForEachAsync(
+                pending,
+                BoundedFanOut.DefaultWidth,
+                bucket => bucket.Bucket.Count == 0
+                    ? Task.CompletedTask
+                    : MergeShardBatchAsync(routing, bucket.ShardIndex, bucket.Bucket, cancellationToken)).ConfigureAwait(false);
         }
 
         return total;
