@@ -79,7 +79,8 @@ public sealed partial class RepoContextEffectiveConfigurationReporterTests
         var line = RepoContextEffectiveConfiguration.DescribeSetting(
             "LATTICE_POSTGRES_CONNECTION_STRING",
             SuppliedSecret,
-            null);
+            null,
+            RepoContextSettingProvenance.Declared);
 
         Assert.Multiple(() =>
         {
@@ -99,16 +100,26 @@ public sealed partial class RepoContextEffectiveConfigurationReporterTests
     public void A_classified_setting_states_the_value_the_process_resolved()
         => Assert.That(
             RepoContextEffectiveConfiguration.DescribeSetting(
-                RepoContextHostConfiguration.McpPortKey, "8080", "8080"),
-            Is.EqualTo("LATTICE_MCP_PORT = 8080"),
-            "an un-overridden setting carries no marker, so the overridden ones stand out");
+                RepoContextHostConfiguration.McpPortKey,
+                "8080",
+                "8080",
+                RepoContextSettingProvenance.Declared),
+            Is.EqualTo("LATTICE_MCP_PORT = 8080 (DECLARED)"),
+            "an un-overridden setting carries no OVERRIDDEN marker, so the overridden ones "
+            + "stand out - but it still states where the value came from, because a value "
+            + "equal to the default may have been written down by an operator or reached "
+            + "because nobody wrote anything, and issue #2586 is what conflating the two "
+            + "costs");
 
     [Test]
     public void An_overridden_setting_is_marked_and_carries_the_default_it_departed_from()
         => Assert.That(
             RepoContextEffectiveConfiguration.DescribeSetting(
-                RepoContextHostConfiguration.DataRootKey, "/mnt/data", "/data"),
-            Is.EqualTo("LATTICE_DATA_ROOT = /mnt/data [OVERRIDDEN, default /data]"),
+                RepoContextHostConfiguration.DataRootKey,
+                "/mnt/data",
+                "/data",
+                RepoContextSettingProvenance.Declared),
+            Is.EqualTo("LATTICE_DATA_ROOT = /mnt/data (DECLARED) [OVERRIDDEN, default /data]"),
             "this is the evidence shape #2294 was actually proved with - a resolved value "
             + "read against an expected one - and the marker is what makes the overridden "
             + "subset greppable instead of a twenty-line eyeball diff");
@@ -283,7 +294,8 @@ public sealed partial class RepoContextEffectiveConfigurationReporterTests
 
         Assert.That(
             logger.Messages,
-            Has.Exactly(1).Contains("LATTICE_DATA_ROOT = /mnt/data [OVERRIDDEN, default /data]"),
+            Has.Exactly(1).Contains(
+                "LATTICE_DATA_ROOT = /mnt/data (DECLARED) [OVERRIDDEN, default /data]"),
             "the default is derived by resolving the same configuration class against an "
             + "empty configuration, so it cannot drift from the code that applies it");
     }

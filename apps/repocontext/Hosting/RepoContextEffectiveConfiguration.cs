@@ -103,6 +103,28 @@ public static class RepoContextEffectiveConfiguration
     public const string PrefixMatchedMarker = "<withheld: matched by prefix only>";
 
     /// <summary>
+    /// Appended to a value that was supplied to this process.
+    /// </summary>
+    public const string DeclaredMarker = "(DECLARED)";
+
+    /// <summary>
+    /// Appended to a value nothing supplied, so that it cannot be read as a declared one.
+    /// </summary>
+    /// <remarks>
+    /// The whole of issue #2586 is that this marker was absent: a live container reported
+    /// <c>LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD = 120s</c> for a variable that was not set
+    /// anywhere, in the same shape it would have reported a declared one, seconds after
+    /// warning that the variable was unset.
+    /// </remarks>
+    public const string DefaultedMarker = "(DEFAULTED, not declared)";
+
+    /// <summary>
+    /// Appended to a reported fact about the runtime, which is not a setting and therefore
+    /// neither declared nor defaulted.
+    /// </summary>
+    public const string RuntimeMarker = "(RUNTIME FACT, not a declared setting)";
+
+    /// <summary>
     /// The keys whose resolved values may be written to the log. This is an
     /// <b>allowlist</b>: a key absent from it is redacted, including a key that does not
     /// exist yet. Add a key here only after deciding its value is not credential-bearing.
@@ -190,22 +212,85 @@ public static class RepoContextEffectiveConfiguration
     }
 
     /// <summary>
-    /// Renders one setting as <c>NAME = value</c>, appending an <c>[OVERRIDDEN]</c> marker
-    /// and the default it departed from when the resolved value differs from the one this
-    /// host reaches with nothing supplied.
+    /// Classifies a raw supplied value as declared or defaulted.
     /// </summary>
+    /// <remarks>
+    /// Whitespace counts as absent, matching
+    /// <see cref="RepoContextShutdownBudget.Resolve"/>, so that this report cannot call a
+    /// value declared that the code resolving it treated as missing. A provenance marker
+    /// derived from a different emptiness rule than the resolution it describes would be
+    /// the same defect it exists to remove, one level down.
+    /// </remarks>
+    /// <param name="raw">The raw value as supplied, or null when nothing was supplied.</param>
+    /// <returns>The provenance the raw value implies.</returns>
+    public static RepoContextSettingProvenance ProvenanceOf(string? raw)
+        => string.IsNullOrWhiteSpace(raw)
+            ? RepoContextSettingProvenance.Defaulted
+            : RepoContextSettingProvenance.Declared;
+
+    /// <summary>
+    /// Renders the marker that qualifies a value's origin.
+    /// </summary>
+    /// <param name="provenance">Where the value came from.</param>
+    /// <returns>The marker text.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The provenance is not one this renderer knows. Refused rather than rendered as an
+    /// empty string, because an unrecognised provenance silently producing no marker is
+    /// precisely the unqualified line issue #2586 was filed about.
+    /// </exception>
+    public static string RenderProvenance(RepoContextSettingProvenance provenance)
+        => provenance switch
+        {
+            RepoContextSettingProvenance.Declared => DeclaredMarker,
+            RepoContextSettingProvenance.Defaulted => DefaultedMarker,
+            RepoContextSettingProvenance.Runtime => RuntimeMarker,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(provenance),
+                provenance,
+                "Every reported value must carry a provenance marker; an unknown provenance "
+                + "cannot be rendered as silence, because silence is the shape that reads as "
+                + "declared."),
+        };
+
+    /// <summary>
+    /// Renders one setting as <c>NAME = value (PROVENANCE)</c>, appending an
+    /// <c>[OVERRIDDEN]</c> marker and the default it departed from when the resolved value
+    /// differs from the one this host reaches with nothing supplied.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The provenance marker is required, not optional (issue #2586).</b> An overload
+    /// that omitted it would leave the unqualified line reachable, and the unqualified
+    /// line is the defect: a value nothing declared printed in the shape of one somebody
+    /// did. It sits on the same line as the value because a reader who greps for the
+    /// variable name has to receive the qualification in the same result.
+    /// </para>
+    /// <para>
+    /// <b>Provenance and <c>[OVERRIDDEN]</c> are orthogonal and both are printed.</b>
+    /// <c>[OVERRIDDEN]</c> compares values and answers <i>did this move?</i>; provenance
+    /// answers <i>did anybody set it?</i>. A key nothing declared can still resolve away
+    /// from the pristine default because a neighbouring key moved it, and a key an
+    /// operator declared can resolve to exactly the default - which is the case that
+    /// produced this issue. Neither marker implies the other.
+    /// </para>
+    /// </remarks>
     /// <param name="name">The setting name.</param>
     /// <param name="resolved">The value this host actually resolved.</param>
     /// <param name="default">The value this host resolves when nothing is supplied.</param>
+    /// <param name="provenance">Where the resolved value came from.</param>
     /// <returns>The rendered line.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
-    public static string DescribeSetting(string name, string? resolved, string? @default)
+    public static string DescribeSetting(
+        string name,
+        string? resolved,
+        string? @default,
+        RepoContextSettingProvenance provenance)
     {
         ArgumentNullException.ThrowIfNull(name);
 
         var line = string.Create(
             CultureInfo.InvariantCulture,
-            $"{name} = {RenderValue(name, resolved)}");
+            $"{name} = {RenderValue(name, resolved)} {RenderProvenance(provenance)}");
 
         return string.Equals(resolved, @default, StringComparison.Ordinal)
             ? line
@@ -272,7 +357,7 @@ public static class RepoContextEffectiveConfiguration
 
             lines.Add(string.Create(
                 CultureInfo.InvariantCulture,
-                $"{name} = {UnclassifiedMarker} [SUPPLIED BUT NOT READ BY THIS HOST]"));
+                $"{name} = {UnclassifiedMarker} {DeclaredMarker} [SUPPLIED BUT NOT READ BY THIS HOST]"));
         }
 
         lines.Sort(StringComparer.Ordinal);
@@ -325,7 +410,7 @@ public static class RepoContextEffectiveConfiguration
 
             lines.Add(string.Create(
                 CultureInfo.InvariantCulture,
-                $"{name} = {PrefixMatchedMarker} [MATCHED BY A PREFIX THIS HOST READS, NOT VERIFIED INDIVIDUALLY]"));
+                $"{name} = {PrefixMatchedMarker} {DeclaredMarker} [MATCHED BY A PREFIX THIS HOST READS, NOT VERIFIED INDIVIDUALLY]"));
         }
 
         lines.Sort(StringComparer.Ordinal);
