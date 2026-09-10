@@ -1,8 +1,10 @@
 namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
-/// The per-row rule behind the <c>Detector</c> column gate: a row that claims
-/// its behaviour is detected must name at least one test that resolves.
+/// The per-row rule behind the <c>Detector</c> column gate: a row that asserts
+/// a production behaviour must name at least one test that resolves, whatever
+/// verdict its cell declares. It was scoped to rows claiming detection until
+/// #2557 widened it; see <see cref="MustNameAResolvableDetector"/>.
 /// <para>
 /// WHY THIS IS PER ROW AND NOT GLOBAL (issue #2561). The gate as first written
 /// asked two questions, and a cell could evade both. It asked whether a cell
@@ -33,25 +35,62 @@ internal static class RefinementDetectorRule
     public const string DetectedVerdict = "Yes:";
 
     /// <summary>
-    /// THE ONE CONDITION #2557 WIDENS. Scoped today to cells claiming
-    /// <see cref="DetectedVerdict"/>, because a <c>None</c> or <c>Partial</c>
-    /// cell legitimately names no test - that is what a gap row IS, and gaps
-    /// are open right now (#2552, #2554). Demanding a resolvable detector from
-    /// every behaviour-asserting row is therefore not implementable until
-    /// those close, and it is #2557's job to demand it once they have.
+    /// WIDENED BY #2557, and now unconditional: every behaviour-asserting row
+    /// must name at least one resolvable test, whatever verdict it declares.
+    /// The caller has already filtered out the non-behavioural rows, so every
+    /// row reaching here is one the Detector column's question applies to.
     /// <para>
-    /// When #2557 lands, it replaces the body of this method with
-    /// <c>true</c> - every row reaching here already had the non-behavioural
-    /// rows filtered out by the caller - and everything downstream tightens
-    /// with it. It does not need, and must not grow, a second predicate
-    /// alongside this one: two rules over one column is how the column ends up
-    /// with two different answers about what it requires.
+    /// #2561 left this scoped to <see cref="DetectedVerdict"/> cells and named
+    /// #2557 as the issue that would widen it, on the reasoning that a
+    /// <c>None</c> or <c>Partial</c> cell legitimately names no test. That
+    /// reasoning held for <c>None</c>, which no row now declares. It did not
+    /// hold for <c>Partial</c>, and the distinction is the point of the
+    /// widening: a partial cell is not a cell that cites nothing, it is a cell
+    /// that cites real coverage and then says what that coverage does not
+    /// reach. Both open gap rows already cited a resolvable test while
+    /// reporting <c>Partial</c>, so the widened rule was satisfiable before the
+    /// gaps closed rather than only after - which is why this landed ahead of
+    /// them instead of behind them.
+    /// </para>
+    /// <para>
+    /// The predicate is kept rather than inlined so the column still has
+    /// exactly one place that answers "which rows must cite a detector", and
+    /// so a future narrowing has to be written down here rather than smuggled
+    /// into a caller. It must not grow a second predicate beside it: two rules
+    /// over one column is how the column ends up with two different answers
+    /// about what it requires.
     /// </para>
     /// </summary>
     public static bool MustNameAResolvableDetector(string detectorCell)
     {
         ArgumentNullException.ThrowIfNull(detectorCell);
-        return detectorCell.TrimStart().StartsWith(DetectedVerdict, StringComparison.Ordinal);
+        return true;
+    }
+
+    /// <summary>
+    /// The number of rows the rule actually examines: every row of the
+    /// supplied tables that is not listed as non-behavioural. This is the
+    /// denominator behind
+    /// <see cref="BehaviourRowsWithoutAResolvableTest"/>, exposed so a
+    /// caller can assert the rule read a corpus at all.
+    /// <para>
+    /// Anti-vacuity has to be asserted on this number rather than on the
+    /// failure list, because an empty failure list is exactly what a passing
+    /// gate and a gate that read nothing both produce. #2561 found the same
+    /// shape one level down, where a cell yielding zero detector names
+    /// satisfied "every extracted name resolves" vacuously.
+    /// </para>
+    /// </summary>
+    public static int BehaviourRowsExamined(
+        IEnumerable<RefinementTable> tables,
+        IReadOnlyCollection<string> nonBehaviouralRows)
+    {
+        ArgumentNullException.ThrowIfNull(tables);
+        ArgumentNullException.ThrowIfNull(nonBehaviouralRows);
+
+        return tables
+            .SelectMany(t => t.Rows)
+            .Count(r => !nonBehaviouralRows.Contains(r.Label, StringComparer.Ordinal));
     }
 
     /// <summary>
@@ -76,8 +115,15 @@ internal static class RefinementDetectorRule
     }
 
     /// <summary>
-    /// One message per row that claims detection but is backed by no
-    /// resolvable test, ready to be asserted empty.
+    /// One message per behaviour-asserting row that is backed by no resolvable
+    /// test, ready to be asserted empty.
+    /// <para>
+    /// Named for the rows it examines rather than for a verdict it no longer
+    /// filters on. Before #2557 it considered only cells opening
+    /// <see cref="DetectedVerdict"/>, and a name carrying that scope would now
+    /// describe the method as checking less than it does - the drift this
+    /// column exists to catch, in the gate itself.
+    /// </para>
     /// </summary>
     /// <param name="tables">The behaviour-asserting tables to check.</param>
     /// <param name="nonBehaviouralRows">
@@ -89,7 +135,7 @@ internal static class RefinementDetectorRule
     /// Injected rather than hard-wired so the rule can be exercised over
     /// hand-written markdown without indexing the repository.
     /// </param>
-    public static IReadOnlyList<string> RowsClaimingDetectionWithoutAResolvableTest(
+    public static IReadOnlyList<string> BehaviourRowsWithoutAResolvableTest(
         IEnumerable<RefinementTable> tables,
         IReadOnlyCollection<string> nonBehaviouralRows,
         Func<RefinementCodeSymbol, bool> resolves)
@@ -145,13 +191,15 @@ internal static class RefinementDetectorRule
 
     private static string Describe(RefinementRow row, IReadOnlyList<RefinementCodeSymbol> cited) =>
         cited.Count == 0
-            ? $"spec/Refinement.md line {row.LineNumber}: row {row.Label} claims detection "
-              + $"('{DetectedVerdict}') but its Detector cell names no test at all. A verdict of "
-              + $"'{DetectedVerdict}' has to cite a backticked `Fixture.TestMethod` name, or the "
-              + "claim is prose that nothing can falsify. If the behaviour is genuinely undetected, "
-              + "say 'None' or 'Partial' and cite the gap issue instead."
-            : $"spec/Refinement.md line {row.LineNumber}: row {row.Label} claims detection "
-              + $"('{DetectedVerdict}') but none of the tests it names resolves: "
+            ? $"spec/Refinement.md line {row.LineNumber}: row {row.Label} asserts a production "
+              + "behaviour but its Detector cell names no test at all. Every behaviour-asserting "
+              + "row has to cite a backticked `Fixture.TestMethod` name, whatever verdict it "
+              + $"declares. A '{DetectedVerdict}' cell that cites nothing is prose that nothing "
+              + "can falsify. A 'Partial' or 'None' cell still has to name the coverage that does "
+              + "exist and cite the issue for the part that does not; if there is genuinely no "
+              + "test at all, the row is a gap that has not been written down yet."
+            : $"spec/Refinement.md line {row.LineNumber}: row {row.Label} asserts a production "
+              + "behaviour but none of the tests its Detector cell names resolves: "
               + string.Join(", ", cited.Select(c => $"'{c.Text}'"))
               + ". The row was probably left behind by a rename.";
 }
