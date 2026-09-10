@@ -142,6 +142,29 @@ The scheduling decision the startup line carries names **every** condition curre
 
 Faults are announced once per episode rather than once per attempt. The first fault of a run is a warning carrying the exception; its repetitions go to the counter, because the retry backoff tops out at thirty seconds and an unconditional line would write roughly 2,880 of them a day for as long as the fault lasted. A sweep that completes after one or more faults logs a closing line reporting how long the episode ran, so an episode that has ended is distinguishable from one still in progress.
 
+### Telling a denied corpus from an empty repository
+
+The sweep signals above settle whether a build was ever *armed*. They say nothing about what the build then *read*, and that is a separate blindness with the same shape.
+
+A denied **point** read throws. A denied **range** read does not: the access gate resolves it to a reject-all key filter, which returns a clean, successful, empty result with no exception, no log, and every instrument healthy. The build's corpus is a range read, and nothing below it refuses an empty corpus - the count reports zero, the ingest completes on its first step, training declines to partition and returns without throwing, and the build reaches `Ready` holding nothing. The coordinator would then record the build as converged, log a **success** line, and stand itself down, so a refused read became durably indistinguishable from a repository that genuinely had nothing to index, and nothing re-drove it.
+
+Two signals separate them:
+
+| Signal | Kind | What it settles |
+| --- | --- | --- |
+| `repocontext.ann.build.corpus` | counter, tag `coverage` = `nonempty` \| `unrestricted` \| `filtered` \| `denied` \| `unknown` | **Whether an empty index is an honest one.** Every build that reaches `Ready` is counted, and one that holds nothing is classified against the gate before it is banked. |
+| `repocontext.ann.build.denial_terminal` | counter, untagged | **Whether a denial is being retried or is permanent.** Emitted once per episode, when a coordinator gives up on the phase cadence and parks on the capped retry interval. |
+
+Read a zero on `coverage="denied"` as a measurement, not as silence. The partition is total over every completed build, including the ordinary `nonempty` ones, so the total advances whenever the plane builds at all - which is what makes `denied` pinned at zero beside a rising total a *measured* absence of denial. All five series are also pre-minted at process start, so `denied` is present and reads `0` on a healthy host rather than being absent. An absent series and a series reading zero look identical on a dashboard and are very different claims, and only the second is falsifiable.
+
+`denied` and `filtered` are not the same event and are not treated alike. `denied` means the read **did not happen**, so the store's contents are unknown rather than empty; the build is not recorded as converged, and the coordinator backs off and retries instead of standing down. `filtered` means the authority resolved correctly and the gate legitimately returned a subset - a complete and correct read of what the caller may see - so it converges normally. Refusing to converge on `filtered` would permanently wedge any host that legitimately restricts content. Converge on a known subset; never on an unknown.
+
+`unknown` means the coverage probe itself could not answer, so a probe that fails is never read as permission granted. It withholds convergence like `denied` does, but only up to the terminal threshold, after which the build converges anyway and the terminal counter fires. The probe is a diagnostic on a path that has already finished its work, and letting a diagnostic wedge the pipeline it observes would invert the blast radius it exists to reduce.
+
+Refusing to converge means the coordinator stays alive, so it must not spin. Retries back off from the two-second phase period out to a five-minute ceiling, and a backed-off tick takes no build step and no probe at all. After five consecutive uninterpretable reads the coordinator emits `repocontext.ann.build.denial_terminal` once and one `Error` line, then keeps retrying at the capped interval - so a grant that seeds slightly after the first phase tick is still picked up without a restart, while a permanently refused deployment is loudly parked rather than quietly busy. Any non-zero value on that counter warrants an operator: an index that should exist does not, and it will not appear on its own.
+
+Denials are announced once per episode, not once per tick, and the closing line reports the episode's length - the same discipline the sweep signals use, and for the same reason: an unconditional line at the two-second phase period would write over forty thousand lines a day, which is how a real signal gets tuned out.
+
 ### When the exact fallback is declined
 
 The exact fallback is bounded rather than unconditional, because on a large corpus it can cost more than it is worth while the build holds the same tree. The gather range-scans the whole vector-metadata prefix a page at a time, and while the build is streaming into those same shards a page fill can queue behind the build's writes on non-reentrant shard roots until it exceeds `LatticeOptions.MaxScanPageStallDuration` and the shard root abandons it. The query then reaches keyword recall anyway, having spent the full ceiling first, and having spent it loading the very tree whose build completing is the only thing that would end the condition.
