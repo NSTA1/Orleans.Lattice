@@ -1419,11 +1419,14 @@ jobs:
   # here, reintroduced one level up. `build-and-test` accepts only `success`
   # from this job, never `skipped`, so the two halves cannot drift apart.
   #
-  # Cost: one restore, one solution build, one filtered test pass. Measured at
-  # about 2 minutes of tests on top of the ~1.2 minute build that every other
-  # leg already pays. On a code change it runs beside the matrix and adds no
-  # wall-clock; on a docs-only change it is the only test job that runs, and it
-  # deliberately does NOT drag in the deterministic or chaos matrix.
+  # Cost: one restore, one solution build, one filtered test pass. Measured on
+  # a real ubuntu-latest run: 24s restore, 148s build, 97s tests, about 4m50s
+  # of job wall-clock. The build dominates, and every other test leg already
+  # pays an equivalent one. On a code change this job runs beside the matrix
+  # and adds no wall-clock to the PR; on a docs-only change it is the only test
+  # job that runs, and it deliberately does NOT drag in the deterministic or
+  # chaos matrix - roughly five minutes for a docs PR against zero before,
+  # where "zero" meant the gates never ran.
   #
   # Documentation snippet compilation is included here on purpose. It is the
   # expensive family (it needs the solution built, which the other two do not),
@@ -1454,7 +1457,19 @@ jobs:
       # `Tlc` is excluded deliberately: `TlcModelCheckTests` needs a JVM and
       # `tla2tools.jar`, and it reads only `.tla` and `.cfg` files, which are
       # not markdown and therefore already reach the `test` matrix.
-      CONTENT_GATE_FILTER: (FullyQualifiedName~Formal|FullyQualifiedName~Hygiene|FullyQualifiedName~Docs)&Category!=Tlc
+      #
+      # `Orleans.Lattice.Explorer.UiTests` is excluded for the same reason its
+      # tree is already carved out of the `code` and `nonSample` filters above:
+      # every test in that assembly runs behind a `[SetUpFixture]` that starts
+      # the Explorer host and launches Playwright chromium, so selecting even
+      # one of them costs a browser install. `ui-tests.yml` is their only
+      # runner. Two of its fixtures are named `*HygieneTests` and so match the
+      # `Hygiene` selector, but they police TEST CODE (fixture categories and
+      # namespaces), not prose - they cannot regress on a markdown-only diff,
+      # which is the diff shape this job exists for. `CiContentGateWiringTests`
+      # asserts that no fixture in a gate DIRECTORY is caught by this
+      # exclusion, so it cannot quietly grow into a hole.
+      CONTENT_GATE_FILTER: (FullyQualifiedName~Formal|FullyQualifiedName~Hygiene|FullyQualifiedName~Docs)&Category!=Tlc&FullyQualifiedName!~Explorer.UiTests
 
     steps:
       - uses: actions/checkout@v5

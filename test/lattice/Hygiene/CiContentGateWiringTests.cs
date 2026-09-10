@@ -32,7 +32,8 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// <item>The required check stops depending on it, or starts accepting
 /// <c>skipped</c> from it, which has the same effect by a different route.</item>
 /// <item>A gate fixture is added, renamed, or moved so that the job's
-/// <c>--filter</c> no longer selects it. That failure is silent: the job stays
+/// <c>--filter</c> no longer selects it, or an exclusion added to that filter
+/// grows until it swallows one. That failure is silent: the job stays
 /// green while enforcing less than it claims.</item>
 /// </list>
 /// <para>
@@ -187,6 +188,16 @@ public sealed class CiContentGateWiringTests
             .Select(match => match.Groups["name"].Value)
             .ToArray();
 
+        // Exclusions are parsed as well as inclusions. The filter carries one
+        // (`Orleans.Lattice.Explorer.UiTests`, whose every test sits behind a
+        // Playwright browser launch), and an exclusion is the quietest way to
+        // hollow this gate out: the selector still names the family, the job
+        // still passes, and a whole slice of it silently stops running.
+        var excludedNames = Regex
+            .Matches(filter, @"FullyQualifiedName!~(?<term>[\w.]+)")
+            .Select(match => match.Groups["term"].Value)
+            .ToArray();
+
         Assert.That(selectors, Is.Not.Empty, $"could not parse any selector out of '{filter}'");
 
         var fixtures = DiscoverFixtures();
@@ -223,6 +234,23 @@ public sealed class CiContentGateWiringTests
             + "(for example '...Tests.Hygiene'), or widen the filter."
             + Environment.NewLine
             + string.Join(Environment.NewLine, unselected));
+
+        var suppressed = fixtures
+            .Where(fixture => excludedNames.Any(term =>
+                fixture.FullName.Contains(term, StringComparison.Ordinal)))
+            .Select(fixture => $"{fixture.Path}: {fixture.FullName}")
+            .OrderBy(entry => entry, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.That(
+            suppressed,
+            Is.Empty,
+            $"these fixtures live in a content-gate directory but an exclusion in '{filter}' removes them "
+            + "from the run. An exclusion is allowed to carve out a test project that cannot run in this "
+            + "job (the Explorer UI suite needs a browser), but it must never reach a fixture whose whole "
+            + "purpose is to police repository text. Narrow the exclusion, or move the fixture."
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, suppressed));
     }
 
     /// <summary>
