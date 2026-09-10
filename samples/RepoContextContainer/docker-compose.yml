@@ -153,6 +153,12 @@ services:
     depends_on:
       embedder:
         condition: service_healthy
+      # Wait for the backup sink so the first capture at startup has somewhere
+      # to write. service_started rather than service_healthy on purpose: a
+      # sink that is slow to come up must never gate the MCP host's own
+      # readiness, and the capture path retries with backoff anyway.
+      azurite-backup-sink:
+        condition: service_started
     environment:
       # Default local, durable, zero-external-dependency profile.
       LATTICE_DURABILITY: local
@@ -351,6 +357,53 @@ services:
       # undetectable at run time and reintroduces the silent kill of issue #2389.
       # Change the two together, always.
       LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD: "120s"
+      # --------------------------------------------------------------------
+      # Durable agent-memory backup (issue #2602).
+      #
+      # WHAT THIS PROTECTS. The repo-context-memory tree holds the decisions,
+      # gotchas, conventions and glossary entries agents write across
+      # sessions. Unlike the code-index trees it is NOT derivable from the
+      # workspace: destroyed, it is gone. On 2026-09-10 a routine
+      # "docker compose down -v", intended only to clear the code index,
+      # destroyed several hundred such entries with no copy anywhere.
+      #
+      # WHAT IS BACKED UP. Only repo-context-memory, by name. The code-index
+      # trees are deliberately excluded: they are orders of magnitude larger
+      # and can be rebuilt by re-adding the repository, so capturing them
+      # would fill the sink with the one thing that does not need protecting
+      # and age out the one thing that does.
+      #
+      # WHERE IT GOES. The azurite-backup-sink service below, whose storage
+      # is a HOST BIND MOUNT and therefore not a compose-managed volume, so
+      # "docker compose down -v" cannot reach it. See that service for the
+      # precise list of gestures this does and does not survive.
+      #
+      # Presence of the connection string is what enables backup. Unset it
+      # and the container runs with NO backup and says so at WARNING on
+      # startup rather than being silently indistinguishable from a backed-up
+      # one. This is the fixed, public Azurite development account, which is
+      # published in Microsoft's own documentation and is not a secret.
+      LATTICE_BACKUP_BLOB_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup-sink:10000/devstoreaccount1;"
+      # Cadence. An initial FULL capture runs at startup - manifest
+      # validation rejects an incremental with no base, so a full must exist
+      # first - and incrementals follow on this interval. Both values are the
+      # library defaults, restated here so the configured cadence is visible
+      # in the deployment and not only in code.
+      LATTICE_BACKUP_INCREMENTAL_MINUTES: "60"
+      LATTICE_BACKUP_FULL_HOURS: "24"
+      # Retention keeps a backup satisfying EITHER bound, and always
+      # preserves the base chain a retained increment depends on.
+      LATTICE_BACKUP_RETENTION_KEEP_LAST: "60"
+      LATTICE_BACKUP_RETENTION_MAX_AGE_DAYS: "14"
+      # OPERATOR-DRIVEN RESTORE. Left unset. Set it to a specific backup id
+      # and restart to replay that backup into the memory tree before the
+      # capture cadence starts, then UNSET it again. There is no latest
+      # value and no automatic restore-on-empty: a restore is an explicit
+      # human act. The replay merges by hybrid-logical-clock order, so it
+      # cannot clobber entries written since the backup was captured.
+      #
+      #   LATTICE_BACKUP_RESTORE_BACKUP_ID: "<backup-id>"
+      # --------------------------------------------------------------------
     ports:
       # The MCP streamable-HTTP endpoint (and the health probes) on the host.
       #
@@ -474,15 +527,79 @@ services:
         max-size: "20m"
         max-file: "5"
 
+  # The DEDICATED sink the agent-memory backups are written to (issue #2602).
+  #
+  # WHY A SEPARATE SERVICE AND A SEPARATE STORE. A backup that lives in the
+  # same store it protects is not a backup: the gesture that destroys the
+  # primary destroys the copy at the same instant, while the deployment still
+  # reports itself as backed up. That is strictly worse than having no backup,
+  # because absence is visible and false protection is not. So this is its own
+  # Azurite instance on its own storage, and the host is configured to write
+  # here rather than to the default in-cluster sink.
+  #
+  # WHY A BIND MOUNT AND NOT A NAMED VOLUME. A down -v removes every named
+  # volume declared in this project. If this sink used one, the exact command
+  # that caused the loss this wiring exists to prevent would also destroy the
+  # backups. A bind mount is not a compose-managed volume and is not declared
+  # in the volumes: block below, so down -v has nothing to remove.
+  #
+  # An external: true volume also survives down -v and was considered. It was
+  # rejected because compose refuses to start until an operator has run
+  # docker volume create by hand, and a backup that needs a manual pre-step is
+  # exactly the backup that will not exist on the machine that needs it.
+  #
+  # WHAT THIS DOES AND DOES NOT SURVIVE. Stated precisely, because claiming
+  # more coverage than was implemented is the failure mode this issue is about.
+  #
+  #   SURVIVES: docker compose down -v, down, stop, restart, rm, image
+  #             rebuild, docker volume prune, docker system prune, and
+  #             deleting the repocontext-data volume by hand.
+  #
+  #   DOES NOT SURVIVE: deleting the host directory itself (by default
+  #             ./backup-sink, next to this file), git clean -xdf in this
+  #             directory, deleting or reformatting the host disk, or losing
+  #             the machine. This is a same-host copy, NOT an off-site backup.
+  #
+  # To place it outside the repository, or on another disk, set
+  # REPOCONTEXT_BACKUP_PATH to an absolute path in .env or the environment. To
+  # make it genuinely off-host, point LATTICE_BACKUP_BLOB_CONNECTION_STRING at
+  # a real Azure Storage account instead and remove this service.
+  azurite-backup-sink:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    # Blob only: backups are blobs, so the queue and table endpoints are not
+    # started. --skipApiVersionCheck keeps a newer Azure SDK from being
+    # rejected by an older emulator build.
+    command: azurite-blob --blobHost 0.0.0.0 --location /data --skipApiVersionCheck
+    volumes:
+      - ${REPOCONTEXT_BACKUP_PATH:-./backup-sink}:/data
+    ports:
+      # Published so an operator can point Azure Storage Explorer or azcopy at
+      # the sink during a restore without exec-ing into the container.
+      # Overridable because 11000 may already be taken on the host.
+      - "${REPOCONTEXT_BACKUP_SINK_PORT:-11000}:10000"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10000"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
 volumes:
   # Durable Lattice state (WAL + SQLite): the heart of "codebase memory in a box".
   #
-  # Both the rebuildable code index AND the irreplaceable agent memory live in
-  # here, and no configuration separates them (issue #2601): a tree's durable
-  # state spans a WAL root that is one directory per PROVIDER and a grain store
-  # that is one SQLite file for every tree, so there is no per-tree path to
-  # mount elsewhere. A second named volume would not have helped either -
-  # `docker compose down -v` removes every volume declared in this section, so
-  # both would die together. The protection is the /memory-archive BIND MOUNT on
   # the service above, which is not a declared volume and so is not removed.
+  #
+  # NOTE: the agent-memory backup sink is likewise NOT declared here. It is a
+  # host bind mount on the azurite-backup-sink service, for the same reason and
+  # by the same mechanism. Do not tidy either of them into a named volume. The
+  # two are separate and neither replaces the other: #2601's /memory-archive is
+  # an automatic restore-on-empty of the memory tree, while this sink holds
+  # scheduled, retained, manifest-tracked backups that only an operator
+  # restores.
   repocontext-data:

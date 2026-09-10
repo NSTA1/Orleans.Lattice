@@ -42,6 +42,13 @@
     <ProjectReference Include="..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.auth\Orleans.Lattice.Api.Auth.csproj" />
     <ProjectReference Include="..\..\src\lattice.scaling\Orleans.Lattice.Scaling.csproj" />
+    <!-- The memory backup sink (issue #2602). ProjectReferences, deliberately,
+         and NOT the published NuGet packages the reference architecture uses: a
+         package reference would pin this image to the last published version, so
+         a backup fix made in the same commit would silently not be exercised by
+         the container that most needs it. -->
+    <ProjectReference Include="..\..\src\lattice.backup\Orleans.Lattice.Backup.csproj" />
+    <ProjectReference Include="..\..\src\lattice.backup.azureblob\Orleans.Lattice.Backup.AzureBlob.csproj" />
     <ProjectReference Include="..\..\src\lattice.storage.file\Orleans.Lattice.Storage.File.csproj" />
     <ProjectReference Include="..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
   </ItemGroup>
