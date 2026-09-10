@@ -171,6 +171,19 @@ running store rather than out of a file. It therefore also catches the case wher
 mount is correct but the *registered* root is still the stale one, which a mount check
 alone passes.
 
+Both were exercised against this deployment, before and after its repair, and they do
+discriminate the states:
+
+| | Broken | Repaired |
+| --- | --- | --- |
+| `docker inspect` mount source | `C:\dev\copilot-worktrees\lattice` | `C:\dev` |
+| `repocontext_changed` on `/workspace/lattice` | refused: *"outside the indexed root of repository '/workspace/bucket4-merge'"* | returns a file list |
+
+The refusal is the useful part, and it is worth reading closely: it names the indexed
+root it is comparing against. That is the one place the wrong state is currently
+visible, and it is visible only because the call **failed**. Nothing reports it on
+success, which is what #2617 addresses.
+
 ### Why the guard test cannot cover this
 
 The compose-settings guard described under
