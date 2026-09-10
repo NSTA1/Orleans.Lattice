@@ -86,7 +86,7 @@ internal sealed partial class RefinementDetectorMappingTests
     [Test]
     public void A_row_claiming_detection_in_prose_alone_is_rejected()
     {
-        var failures = RefinementDetectorRule.RowsClaimingDetectionWithoutAResolvableTest(
+        var failures = RefinementDetectorRule.BehaviourRowsWithoutAResolvableTest(
             NoteWithDetectorCell(ProseOnlyCell),
             NonBehaviouralRows,
             _ => true);
@@ -125,7 +125,7 @@ internal sealed partial class RefinementDetectorMappingTests
     {
         var resolver = RefinementDetectorResolver.ForRepository();
 
-        var failures = RefinementDetectorRule.RowsClaimingDetectionWithoutAResolvableTest(
+        var failures = RefinementDetectorRule.BehaviourRowsWithoutAResolvableTest(
             NoteWithDetectorCell($"Yes: `{RottedDetectorName}`."),
             NonBehaviouralRows,
             d => resolver.TestExists(d.TypeName, d.MemberName));
@@ -240,42 +240,23 @@ internal sealed partial class RefinementDetectorMappingTests
         Assert.That(extracted, Is.Empty);
     }
 
-    /// <summary>
-    /// The gate itself, over the real note: every row claiming detection names
-    /// a test that resolves.
-    /// <para>
-    /// Scoped to <c>Yes:</c> cells today because a <c>None</c> or
-    /// <c>Partial</c> cell legitimately names no test - that is what a gap row
-    /// is, and gaps are open (#2552, #2554). #2557 widens this to every
-    /// behaviour-asserting row once they close, by widening the single
-    /// condition in
-    /// <see cref="RefinementDetectorRule.MustNameAResolvableDetector"/>.
-    /// </para>
-    /// </summary>
-    [Test]
-    public void Every_row_claiming_detection_names_a_resolvable_test()
-    {
-        var resolver = RefinementDetectorResolver.ForRepository();
-
-        var failures = RefinementDetectorRule.RowsClaimingDetectionWithoutAResolvableTest(
-            BehaviourTables(),
-            NonBehaviouralRows,
-            d => resolver.TestExists(d.TypeName, d.MemberName));
-
-        Assert.That(failures, Is.Empty, string.Join(Environment.NewLine + Environment.NewLine, failures));
-    }
-
-    /// <summary>
-    /// Anti-vacuity for the gate above. If no row claims detection at all, the
-    /// gate passes while checking nothing, which is the failure mode this
-    /// whole area exists to remove.
-    /// </summary>
-    [Test]
-    public void At_least_one_row_claims_detection()
-    {
-        var claiming = BehaviourRows()
-            .Count(r => RefinementDetectorRule.MustNameAResolvableDetector(r.Detector));
-
-        Assert.That(claiming, Is.GreaterThan(0));
-    }
+    // RETIRED BY #2557, deliberately, and not by deleting the protection.
+    //
+    // #2561 wrote two tests here that ran the rule over the real note: the gate
+    // itself, and an anti-vacuity companion counting rows that claimed
+    // detection. Both were right while the rule was scoped to "Yes:" cells.
+    // Once #2557 widened RefinementDetectorRule.MustNameAResolvableDetector to
+    // cover every behaviour-asserting row, the pair degenerated: the gate became
+    // identical to
+    // RefinementDetectorMappingTests.Every_behaviour_asserting_row_names_a_resolvable_test,
+    // and the companion collapsed into "the note has at least one row", which
+    // reads as anti-vacuity while asserting almost nothing. #2561's author
+    // anticipated exactly this and asked #2557 to re-think them rather than
+    // keep them as ceremony.
+    //
+    // Both real-note assertions now live in one place, beside the floor they
+    // replace, with anti-vacuity asserted on the examined denominator rather
+    // than on a claim count. What stays in this file is what only this file
+    // proves: the extraction regressions over hand-written notes, which is
+    // where #2561's two holes were found and which no other fixture covers.
 }

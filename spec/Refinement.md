@@ -113,10 +113,10 @@ not hypothetical: an earlier revision of this paragraph stated counts the
 Detector column did not support, and the same wrong counts were restated in the
 gate's own comment (#2560). `RefinementDetectorMappingTests` checks the parts
 that can be checked mechanically - the behaviour-asserting denominator, that
-every row declares a verdict, that every named test resolves, that every
-admitted gap cites an issue, and that the column has not been flattened into
-uniform reassurance - and `The_note_records_no_hand_maintained_census_count`
-keeps a tally from being written back into this prose.
+every row declares a verdict, that every admitted gap cites an issue, and that
+every behaviour-asserting row names a test that still resolves - and
+`The_note_records_no_hand_maintained_census_count` keeps a tally from being
+written back into this prose.
 
 The census was performed; this paragraph declines to repeat its result, which
 is not the same as the result never existing. It is recorded in the body of
