@@ -96,11 +96,40 @@ an issue. It does not, and cannot, prove that a named test is a *good* detector.
 That judgement was made by reading each test against the row it answers, and
 revising it means redoing that reading.
 
-The census found ten rows detected, three partial or undetected. The gaps are
-the point of the exercise rather than a blemish on it: `LinearizedTerminals`
-(#2551), `NoMixedTerminals` (#2552), `PrepareTx(t)` (#2553) and
-`ShadowForwardOrphan(t,k)` (#2554). A row reading "None" is a stronger artefact
-than a row reading nothing at all, because only the first can be closed.
+No census result is recorded here, deliberately. The census is *derived from*
+the table rather than *asserted about* it, so a reader re-derives it instead of
+trusting a figure that no gate evaluates. The method: take every
+behaviour-asserting row, which is every row of the action and property tables
+except `Stutter` (it asserts no production behaviour, so the Detector column's
+question does not apply to it); read the verdict token each row's `Detector`
+cell opens with, one of `Yes`, `Partial` or `None`; and tally those tokens. The
+rows reporting `Partial` or `None` are the open gaps, and each cites the issue
+that closes it, so the gap list is whatever those cells say today rather than
+whatever this paragraph said when it was written.
+
+A hand-maintained tally in this note would be a drift generator, because the
+tallies move every time a gap closes and nothing would re-derive them. That is
+not hypothetical: an earlier revision of this paragraph stated counts the
+Detector column did not support, and the same wrong counts were restated in the
+gate's own comment (#2560). `RefinementDetectorMappingTests` checks the parts
+that can be checked mechanically - the behaviour-asserting denominator, that
+every row declares a verdict, that every named test resolves, that every
+admitted gap cites an issue, and that the column has not been flattened into
+uniform reassurance - and `The_note_records_no_hand_maintained_census_count`
+keeps a tally from being written back into this prose.
+
+The census was performed; this paragraph declines to repeat its result, which
+is not the same as the result never existing. It is recorded in the body of
+epic #2556, pinned to the commit it was derived from, in a document that does
+not change as the column does. That is the whole argument in one line: the
+tally taken at that commit was already falsified twice over within a day of
+being written, as gap issues landed, and it will be falsified again by the ones
+still open. A reader who wants today's figure derives it by the method above,
+which cannot be stale.
+
+The gaps are the point of the exercise rather than a blemish on it. A row
+reading "None" is a stronger artefact than a row reading nothing at all,
+because only the first can be closed.
 
 ## Territory owned by other open issues
 
