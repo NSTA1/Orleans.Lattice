@@ -292,7 +292,7 @@ public class RwSetAccessorTests
         seed.Add(Bytes("apple"), "r1", 1);
         var accessor = Seeded("k", seed).RwSet("k");
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await accessor.ContainsAsync(Bytes("apple")), Is.True);
             Assert.That(await accessor.ContainsAsync(Bytes("pear")), Is.False);

@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 using System.Collections.Concurrent;
 using System.Text;
@@ -186,8 +187,16 @@ public class ShardSplitIntegrationTests
             }),
         };
 
-        // Let workers warm up so reads are definitely in flight when split begins.
-        await Task.Delay(100);
+        // The concurrency this test exists to exercise is only real if the point
+        // readers are actually running when the split begins. A fixed sleep only
+        // hopes for that; wait for an observed read instead, so a split driven
+        // against idle workers fails at this barrier rather than passing as a
+        // "concurrent" run that was never concurrent.
+        await TestPoll.UntilAsync(
+            () => Volatile.Read(ref readsCompleted) > 0,
+            "the point readers to be in flight before the split begins");
+
+        var readsBeforeSplit = Volatile.Read(ref readsCompleted);
 
         // Drive a manual split of shard 0 to completion while readers run.
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
@@ -195,8 +204,12 @@ public class ShardSplitIntegrationTests
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
 
-        // Allow readers to also exercise the post-swap path (refreshed shard map).
-        await Task.Delay(250);
+        // Readers must also exercise the post-swap path (refreshed shard map).
+        // Waiting for an observed read is what makes that true; a fixed window
+        // could elapse without a single read crossing the new map.
+        await TestPoll.UntilAsync(
+            () => Volatile.Read(ref readsCompleted) > readsBeforeSplit,
+            "a point read to complete against the post-swap shard map");
 
         cts.Cancel();
         await Task.WhenAll(pointReaders.Concat(scanReaders));
@@ -204,7 +217,8 @@ public class ShardSplitIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty, $"Concurrent reads/scans observed inconsistencies during split:\n {string.Join("\n ", failures.Take(20))}");
-            Assert.That(readsCompleted, Is.GreaterThan(0), "At least one point read should have executed during the split window.");
+            Assert.That(readsCompleted, Is.GreaterThan(readsBeforeSplit),
+                "At least one point read should have executed during the split window.");
             Assert.That(scansCompleted + scansAborted, Is.GreaterThan(0), "At least one scan attempt should have executed during the split window.");
         });
 
@@ -246,6 +260,7 @@ public class ShardSplitIntegrationTests
         const int workerCount = 4;
         const int keysPerWorker = 100;
         var lastWritten = new ConcurrentDictionary<string, byte[]>();
+        var writesCompleted = 0;
         using var cts = new CancellationTokenSource();
 
         var writers = Enumerable.Range(0, workerCount).Select(workerId => Task.Run(async () =>
@@ -260,6 +275,7 @@ public class ShardSplitIntegrationTests
                 {
                     await tree.SetAsync(key, value);
                     lastWritten[key] = value;
+                    Interlocked.Increment(ref writesCompleted);
                     iteration++;
                 }
                 catch (Exception ex)
@@ -270,16 +286,25 @@ public class ShardSplitIntegrationTests
             }
         })).ToArray();
 
-        // Let writers warm up.
-        await Task.Delay(100);
+        // Same barrier as the read test: the split must be driven against writers
+        // that are provably in flight, or this measures a split with no concurrent
+        // write load at all and still passes.
+        await TestPoll.UntilAsync(
+            () => Volatile.Read(ref writesCompleted) > 0,
+            "the writers to be in flight before the split begins");
+
+        var writesBeforeSplit = Volatile.Read(ref writesCompleted);
 
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
 
-        // Drive more writes after the swap so we cover the post-reject refresh path too.
-        await Task.Delay(250);
+        // Drive more writes after the swap so we cover the post-reject refresh
+        // path too - observed, not merely waited for.
+        await TestPoll.UntilAsync(
+            () => Volatile.Read(ref writesCompleted) > writesBeforeSplit,
+            "a write to complete against the post-swap shard map");
 
         cts.Cancel();
         await Task.WhenAll(writers);

@@ -9,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
+using Orleans.Lattice.Testing;
 using Orleans.Serialization;
 using Orleans.TestingHost;
 
@@ -48,20 +49,14 @@ internal sealed class AuthApiGrpcClusterFixture
     /// compiled-policy snapshot has rebuilt without reaching into the auth
     /// package's internals. Fails the test if the condition never holds.
     /// </summary>
-    public static async Task WaitUntilAsync(Func<Task<bool>> condition, string because)
-    {
-        for (var attempt = 0; attempt < 100; attempt++)
-        {
-            if (await condition())
-            {
-                return;
-            }
-
-            await Task.Delay(50);
-        }
-
-        Assert.Fail($"Condition was not met within the timeout: {because}");
-    }
+    /// <remarks>
+    /// Routes to the shared <see cref="TestPoll"/> barrier rather than carrying
+    /// another private copy: the timeout is preserved at five seconds, and the
+    /// faster default sampling cadence lets a rebuilt snapshot be observed as
+    /// soon as it lands instead of on the next 50ms tick.
+    /// </remarks>
+    public static Task WaitUntilAsync(Func<Task<bool>> condition, string because) =>
+        TestPoll.UntilAsync(condition, because, TimeSpan.FromSeconds(5));
 
     /// <summary>Deploys the cluster.</summary>
     public async Task InitializeAsync()
