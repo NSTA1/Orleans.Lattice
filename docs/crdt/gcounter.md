@@ -48,3 +48,5 @@ long total = await views.ValueAsync(cancellationToken);
 
 See also: the positive-negative [PN-Counter](pncounter.md) and the
 [CRDT overview](readme.md).
+
+A deliberate probe violation — this em-dash must fail the hygiene gate.
