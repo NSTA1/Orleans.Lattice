@@ -108,7 +108,7 @@ internal sealed partial class RepoContextStore
     /// </summary>
     /// <param name="key">The full repository-context key of the claimed memory record.</param>
     /// <param name="fencingToken">The token from the original grant.</param>
-    /// <param name="leaseSeconds">The lease length to request in seconds, or <see langword="null"/> to defer to the configured default.</param>
+    /// <param name="leaseSeconds">The lease length to request in seconds, or <see langword="null"/> to defer to the configured default. Omitting it defers to the same short default a claim uses, so a renew that omits it shortens a longer-held lease; the outcome is reported in <see cref="RepoContextClaimResult.LeaseShortened"/>.</param>
     /// <param name="cancellationToken">Cancels the renew.</param>
     /// <returns>The renew outcome.</returns>
     /// <exception cref="McpException">The key is malformed or does not address a memory record, or a duration is not positive.</exception>
@@ -122,6 +122,14 @@ internal sealed partial class RepoContextStore
         var lease = ResolveDuration(leaseSeconds, "leaseSeconds");
         var lockName = RepoContextClaimNames.LockName(key);
         var padlock = _grainFactory.GetGrain<ILatticeLockGrain>(lockName);
+
+        // Read the lease this renew is about to replace, so a renew that SHORTENS it
+        // can be reported rather than passing as an ordinary grant. Diagnostic only:
+        // the authority for the new lease is the grant RenewAsync returns, exactly as
+        // GetStatusAsync documents about itself. The read cannot observe another
+        // holder's lease on the granted path, because a token that had been superseded
+        // in the interim fails the renew below and returns before this value is used.
+        var priorExpiry = (await padlock.GetStatusAsync().ConfigureAwait(false)).LeaseExpiresAt;
 
         LockLease renewed;
         try
@@ -144,6 +152,11 @@ internal sealed partial class RepoContextStore
             Region = state.Region ?? _replicaId,
             LeaseExpiresAtUtc = ToIso(renewed.ExpiresAt),
             LeaseSeconds = renewed.LeaseDuration.TotalSeconds,
+            PreviousLeaseExpiresAtUtc = priorExpiry is { } observed ? ToIso(observed) : null,
+
+            // Null means "not observed", never "nothing shrank": an absent prior lease
+            // must not be reported as a positive assurance.
+            LeaseShortened = priorExpiry is { } previous ? renewed.ExpiresAt < previous : null,
         };
     }
 
