@@ -343,6 +343,7 @@ Charted by the Backup & Restore dashboard.
 | `orleans.lattice.backup.capture.retries` | counter | `reason` | Backup | Capture retries / fallbacks |
 | `orleans.lattice.backup.scheduler.skipped` | counter | `scope` | Backup | Scheduler skipped vs overruns |
 | `orleans.lattice.backup.scheduler.overruns` | counter | `scope` | Backup | Scheduler skipped vs overruns |
+| `orleans.lattice.backup.scheduler.failures` | counter | `scope`, `reason` | Backup | Scheduler capture failures by reason |
 | `orleans.lattice.backup.cross_tree_fence.selections` | counter | `tree_count` | Backup | Cross-tree fence selections / drained |
 | `orleans.lattice.backup.cross_tree_fence.drained_in_flight` | counter | (none) | Backup | Cross-tree fence selections / drained |
 | `orleans.lattice.backup.cross_tree_fence.retries` | counter | (none) | Backup | Cross-tree fence retries |

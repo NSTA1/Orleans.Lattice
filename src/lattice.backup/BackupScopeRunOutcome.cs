@@ -16,4 +16,12 @@ public enum BackupScopeRunOutcome
 
     /// <summary>The most recent capture cycle faulted.</summary>
     Failure = 2,
+
+    /// <summary>
+    /// The most recent capture cycle was refused by the access gate. Recorded
+    /// distinctly from <see cref="Failure"/> so a denial on a gated host reads as
+    /// a denial rather than as a generic fault or, worse, as "nothing to back up"
+    /// (issue #2608).
+    /// </summary>
+    Denied = 3,
 }
