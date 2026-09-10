@@ -1,7 +1,9 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -240,18 +242,18 @@ public partial class AccessGateKeyFilterIntegrationTests
     // copies the source in its entirety, a partial-coverage (filtered) allow on
     // the source must be refused rather than silently narrowed.
 
-    private static async Task PollUntilAsync(Func<Task<bool>> predicate, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (await predicate())
-                return;
-            await Task.Delay(100);
-        }
-
-        Assert.Fail($"Condition was not met within {timeout}.");
-    }
+    /// <summary>
+    /// The fixture's bounded-poll barrier. It routes to the shared
+    /// <see cref="TestPoll"/> so a barrier that never opens fails naming the
+    /// condition it was waiting for - the caller's own source text for
+    /// <paramref name="predicate"/> is captured automatically, so every existing
+    /// call site gains the description for free.
+    /// </summary>
+    private static Task PollUntilAsync(
+        Func<Task<bool>> predicate,
+        TimeSpan timeout,
+        [CallerArgumentExpression(nameof(predicate))] string? because = null) =>
+        TestPoll.UntilAsync(predicate, because ?? "the polled condition", timeout);
 
     [Test]
     public async Task MergeAsync_denies_when_the_caller_cannot_read_the_source_tree()
