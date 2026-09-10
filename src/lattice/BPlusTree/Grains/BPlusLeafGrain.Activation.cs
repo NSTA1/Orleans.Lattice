@@ -775,38 +775,136 @@ internal sealed partial class BPlusLeafGrain
         }
         catch (OperationCanceledException)
         {
-            // Bank whatever this cold rebuild re-read before it was cut short
-            // (issue #2280). This is the ONLY reachable banking point on this
-            // path: Orleans does not run OnDeactivateAsync when OnActivateAsync
-            // throws, and a cancelled cold replay leaves activation BY throwing,
-            // so the graceful-deactivation capture hook never sees it. Without
-            // this, the whole re-read prefix is discarded and the next
-            // activation starts again from the WAL start - the loop the
-            // SELF-REINFORCING COLD REPLAY LOOP diagnostic names.
+            // Bank whatever this replay absorbed before it was cut short. This
+            // is the ONLY reachable banking point on this path: Orleans does not
+            // run OnDeactivateAsync when OnActivateAsync throws, and a cancelled
+            // replay leaves activation BY throwing, so the graceful-deactivation
+            // durability hooks never see it. Without this, everything the replay
+            // absorbed is discarded and the next activation re-enters from the
+            // same persisted offset - the stalled-replay livelock that
+            // orleans.lattice.leaf.activation_stalled_replays names.
             //
-            // CancellationToken.None, deliberately: the incoming token is
-            // already cancelled, so passing it through would abandon the very
-            // write that makes the cancellation survivable. The capture is a
-            // single blob write, and TryCaptureSnapshotForAdvisoryAsync's
-            // fault-swallowing contract does not apply here - a failure to bank
-            // must not mask the cancellation, so any fault is swallowed
-            // explicitly below and the original cancellation is rethrown.
-            try
+            // The two arms bank DIFFERENT things and must not be merged. A cold
+            // rebuild (issue #2280) re-read the WAL from the start, so its
+            // durable claim is the frontier it actually reached, which
+            // TryBankColdReplayProgressAsync computes fail-closed per partition;
+            // stamping checkpoint-derived coverage there would over-claim for a
+            // partition the cancelled pass never re-read. A warm activation
+            // rehydrated from a snapshot and applied only the tail, so its claim
+            // is exactly the pending checkpoint advance the coalescing window
+            // was still holding - the same pair OnDeactivateAsync banks.
+            //
+            // CancellationToken.None throughout, deliberately: the incoming
+            // token is already cancelled, so passing it through would abandon
+            // the very writes that make the cancellation survivable. A failure
+            // to bank must not mask the cancellation, so every fault is
+            // swallowed explicitly and the original cancellation is rethrown.
+            if (_cacheRebuiltFromWalStartThisActivation)
             {
-                await TryBankColdReplayProgressAsync(CancellationToken.None);
+                try
+                {
+                    await TryBankColdReplayProgressAsync(CancellationToken.None);
+                }
+                catch (Exception bankFault)
+                {
+                    ResolveLogger()?.LogWarning(
+                        bankFault,
+                        "Failed to bank cold-replay progress for leaf '{LeafId}' of tree '{TreeId}' after the "
+                        + "replay was cancelled. The activation still fails as it did before; the only loss is "
+                        + "that the next activation re-reads the prefix this one had already absorbed.",
+                        context.GrainId.ToString(),
+                        state.State.TreeId ?? "<unset>");
+                }
             }
-            catch (Exception bankFault)
+            else
             {
-                ResolveLogger()?.LogWarning(
-                    bankFault,
-                    "Failed to bank cold-replay progress for leaf '{LeafId}' of tree '{TreeId}' after the "
-                    + "replay was cancelled. The activation still fails as it did before; the only loss is "
-                    + "that the next activation re-reads the prefix this one had already absorbed.",
-                    context.GrainId.ToString(),
-                    state.State.TreeId ?? "<unset>");
+                await BankCancelledWarmReplayProgressAsync();
             }
 
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Banks the durable progress a cancelled WARM tail replay had already
+    /// absorbed: persists the pending checkpoint advance the coalescing window
+    /// was still holding, then captures the snapshot coverage that lets the next
+    /// activation resume warm from it. Best-effort by construction - every fault
+    /// is swallowed so it cannot mask the cancellation being rethrown.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the warm counterpart to <see cref="TryBankColdReplayProgressAsync"/>
+    /// and closes the arm that had no rescue at all. A warm activation's replay
+    /// advances its checkpoint through <c>SetCheckpointOffsetAsync</c> at every
+    /// slice boundary, but that call is NOT a durable write: it records the
+    /// advance in the in-memory pending map and defers the persist behind the
+    /// coalescing window (<see cref="LatticeOptions.MaterialiserCheckpointInterval"/>,
+    /// whose clock restarts at every activation, and
+    /// <see cref="LatticeOptions.MaterialiserCheckpointEntries"/>). An activation
+    /// cancelled inside that window - which is what runtime idle collection
+    /// (<c>DeactivationReasonCode.RuntimeRequested</c>) produces, at volume -
+    /// discarded the entire pending advance, so the next activation re-entered
+    /// replay at the identical persisted offset and the leaf never converged.
+    /// </para>
+    /// <para>
+    /// The pair mirrors <c>OnDeactivateAsync</c> exactly, and both halves are
+    /// required. Persisting the checkpoint alone would be safe but useless: the
+    /// entry cache is per-activation and never persisted, so a checkpoint
+    /// advanced past the snapshot that hydrated it forces the NEXT activation to
+    /// take the -1 cold-rebuild override instead of rehydrating, trading a warm
+    /// stall for a cold one. Capturing the covering snapshot is what makes the
+    /// advance resumable.
+    /// </para>
+    /// <para>
+    /// Nothing here can over-claim. The pending offsets were produced by
+    /// <see cref="TryFlushRecoveredCeilingAsync"/>, already clamped below every
+    /// unresolved deferred terminal and saga prepare, so they never run ahead of
+    /// an applied offset; and
+    /// <see cref="TryCaptureSnapshotOnDeactivateAsync"/> re-applies the #1535
+    /// no-loss gate itself, capturing only over cache-resident applies. A warm
+    /// activation's cache is the rehydrated snapshot plus exactly the tail
+    /// entries this replay applied, so every offset it stamps as covered is one
+    /// the cache holds. Should the capture fail, coverage simply does not
+    /// advance, the WAL prefix is retained rather than trimmed, and the worst
+    /// case is the pre-existing behaviour.
+    /// </para>
+    /// </remarks>
+    private async Task BankCancelledWarmReplayProgressAsync()
+    {
+        try
+        {
+            await ((ILeafProjection)this).FlushCheckpointAsync(CancellationToken.None);
+        }
+        catch (Exception flushFault)
+        {
+            ResolveLogger()?.LogWarning(
+                flushFault,
+                "Failed to persist the pending checkpoint advance for leaf '{LeafId}' of tree '{TreeId}' "
+                + "after the warm tail replay was cancelled. The activation still fails as it did before; "
+                + "the loss is that the next activation re-enters replay at the same persisted offset.",
+                context.GrainId.ToString(),
+                state.State.TreeId ?? "<unset>");
+
+            // No checkpoint landed, so there is nothing for a snapshot to
+            // cover; capturing here could only stamp coverage the persisted
+            // checkpoint does not back.
+            return;
+        }
+
+        try
+        {
+            await TryCaptureSnapshotOnDeactivateAsync(CancellationToken.None);
+        }
+        catch (Exception captureFault)
+        {
+            ResolveLogger()?.LogWarning(
+                captureFault,
+                "Failed to capture snapshot coverage for leaf '{LeafId}' of tree '{TreeId}' after the warm "
+                + "tail replay was cancelled. The checkpoint advance did persist, so no work is lost; the "
+                + "next activation rebuilds its cache from the WAL start rather than resuming warm.",
+                context.GrainId.ToString(),
+                state.State.TreeId ?? "<unset>");
         }
     }
 
