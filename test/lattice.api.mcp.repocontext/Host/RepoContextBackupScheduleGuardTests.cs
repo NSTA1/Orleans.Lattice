@@ -52,8 +52,52 @@ public sealed class RepoContextBackupScheduleGuardTests
             ValidateOptionsResult.Success;
     }
 
-    private static LatticeBackupScheduleOptions ResolveMemoryScopeSchedule()
+    /// <summary>
+    /// The default deployment - no sink configured - must still be able to construct
+    /// every service the host would register, and the scheduler is the one that is
+    /// absent there.
+    /// </summary>
+    /// <remarks>
+    /// This pins a defect that reached a full test run: the backup cadence service
+    /// was registered as a hosted service unconditionally, while
+    /// <c>ILatticeBackupScheduler</c> only exists once <c>AddLatticeBackup</c> has
+    /// run - which happens only when an external sink is configured. So a host with
+    /// no sink, which is the default and by far the commonest configuration, failed
+    /// at startup with "Unable to resolve service for type ILatticeBackupScheduler"
+    /// and never served a request. An optional durability feature had silently
+    /// become mandatory. The asymmetry the fix relies on is asserted here rather
+    /// than described in a comment: the <b>status</b> is registered either way, so
+    /// the health surface can state positively that nothing is being captured, while
+    /// the <b>service</b> is registered only when there is something for it to do.
+    /// </remarks>
+    [Test]
+    public void The_backup_scheduler_is_absent_when_no_sink_is_configured_so_the_service_must_not_be_registered()
     {
+        var settings = RepoContextBackup.Resolve(new ConfigurationBuilder().Build());
+
+        Assert.That(
+            settings.Enabled,
+            Is.False,
+            "the default deployment configures no sink, and this test is only "
+            + "meaningful while that remains the disabled case");
+
+        var silo = new FakeSiloBuilder();
+        silo.Services.AddSingleton<IValidateOptions<LatticeOptions>, NoOpLatticeOptionsValidator>();
+        silo.Services.AddOptions();
+
+        silo.ConfigureRepoContextBackup(settings);
+
+        using var provider = silo.Services.BuildServiceProvider();
+
+        Assert.That(
+            provider.GetService<ILatticeBackupScheduler>(),
+            Is.Null,
+            "with no sink the backup package is never registered, so anything the "
+            + "host resolves eagerly from it - a hosted service in particular - takes "
+            + "the whole container down at startup rather than degrading to no backup");
+    }
+
+    private static LatticeBackupScheduleOptions ResolveMemoryScopeSchedule()    {
         var settings = RepoContextBackup.Resolve(
             new ConfigurationBuilder()
                 .AddInMemoryCollection(

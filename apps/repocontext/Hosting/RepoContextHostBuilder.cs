@@ -347,7 +347,23 @@ public static class RepoContextHostBuilder
         builder.Services.AddSingleton(backupSettings);
         builder.Services.AddSingleton(
             new RepoContextBackupStatus(backupSettings.Enabled, RepoContextHostTrees.Memory));
-        builder.Services.AddHostedService<RepoContextBackupService>();
+
+        // The status is registered unconditionally and the service is not, and the
+        // asymmetry is deliberate rather than an oversight. The status is what lets
+        // the health surface say "backup is DISABLED" positively instead of falling
+        // silent, so it must exist in exactly the deployment that has no backup. The
+        // service depends on ILatticeBackupScheduler, which only exists once
+        // AddLatticeBackup has run - and that only happens when an external sink is
+        // configured. Registering the service unconditionally therefore fails the
+        // whole host at startup ("Unable to resolve service for type
+        // ILatticeBackupScheduler") in the DEFAULT configuration, where no sink is
+        // set. That is the failure mode this guard exists to prevent, and it is
+        // covered by RepoContextHostBuilderTests: a host that cannot boot without a
+        // backup sink would make an optional durability feature mandatory.
+        if (backupSettings.Enabled)
+        {
+            builder.Services.AddHostedService<RepoContextBackupService>();
+        }
 
         var healthChecks = builder.Services.AddHealthChecks();
         healthChecks.AddCheck<RepoContextLivenessHealthCheck>(
