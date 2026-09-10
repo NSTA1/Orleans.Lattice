@@ -57,6 +57,7 @@ For a ready-to-run, restart-durable local deployment - "codebase memory in a box
 - [The agent-operated backlog](backlog.md) - leased, fenced claims over memory records, and the backlog they make safe for concurrent agent workers.
 - [Semantic search](semantic-search.md) - the embedding seam, the exact-kNN index and its warm vector cache, keyword search over file content, and fail-closed degradation.
 - [Container quickstart](container.md) - running the module as a single durable local container.
+- [Local deployment runbook](local-deployment-runbook.md) - operating a long-lived tuned local deployment: the build-and-tag ladder, the pin and rollback procedure, every setting the tracked compose files resolve to and the measurement behind it, the host-cores-versus-cgroup pool-sizing class, and recovering the deployment from nothing.
 
 Related package docs:
 

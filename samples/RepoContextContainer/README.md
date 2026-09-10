@@ -27,6 +27,13 @@ Two containers, one private network:
   is pointed at it via `LATTICE_EMBEDDING_ENDPOINT`. Its model weights are baked
   into an image layer, so it needs no cache volume and no download on first run.
 
+For a **long-lived, tuned** deployment rather than a first run - the CPU and
+memory grants, the reduced scan cadence, the image pin, the rollback ladder, and
+how to rebuild the whole thing from nothing - see the
+[local deployment runbook](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md)
+and the tracked `docker-compose.tuning.yml` beside this file. The walkthrough below
+uses the untuned defaults and does not need either.
+
 ## Prerequisites
 
 - Docker with Compose v2.
@@ -613,21 +620,39 @@ agree, printing every value it read either way:
 
 ### The count assertion, and why it is not a walk of tracked files
 
-The stack's real deployment is **two** compose files: the tracked
-`docker-compose.yml`, which carries a `build:` stanza and no `image:`, and a
-`docker-compose.override.yml` that is **untracked and gitignored on purpose**
-because it is machine-local. That override is load-bearing. It supplies the
-image pin the tracked file does not have, the memory limit, the CPU caps, and
-the scan-cadence variables every prior measurement on a given box was taken
-against.
+The stack's real deployment is **two** compose files. The tracked
+`docker-compose.yml` carries a `build:` stanza and no `image:`, so on its own it
+cannot resolve an image for `up -d --no-build` at all. A second file supplies the
+image pin, the memory limit, the CPU caps, and the scan-cadence variables every
+prior measurement on a given box was taken against.
 
-So the obvious remedy for a compose-provenance failure - relaunch from the
-checkout you meant - **silently drops the override**, leaving no image pin, no
-memory limit and a different scan cadence, while the tree looks perfectly
-correct and every path the container reports still resolves under the right
-directory. Only the count dissents, which is why check 1 asserts it and why the
-check reads the container's label rather than walking the repository: **it has to
-be able to fail on a file git has never heard of.**
+That second file used to be an untracked, gitignored
+`docker-compose.override.yml`, which put the entire tuned configuration on
+exactly one machine with no review, no history, and no diff (issue #2609). It is
+now the **tracked** `docker-compose.tuning.yml`, layered by name:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tuning.yml up -d --no-build
+```
+
+The rationale behind every value in it, the build-and-tag ladder that produces
+the image pin, and the rollback procedure are in the
+[local deployment runbook](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md).
+
+The count is still two, so this check needs no new argument. Naming the files
+explicitly also **suppresses** an automatic `docker-compose.override.yml`, which
+is what makes the deployed configuration reproducible from the checkout alone;
+layering a personal override on top of the tuning file makes it three, and you
+say so with `-ExpectedConfigFileCount 3`.
+
+A machine-local override remains legitimate, and it is why check 1 reads the
+container's label rather than walking the repository: **it has to be able to fail
+on a file git has never heard of.** The obvious remedy for a compose-provenance
+failure - relaunch from the checkout you meant - **silently drops** whichever
+second file the original launch had, leaving no image pin, no memory limit and a
+different scan cadence, while the tree looks perfectly correct and every path the
+container reports still resolves under the right directory. Only the count
+dissents.
 
 The general form is worth stating, because it is not specific to compose:
 *fixing a provenance defect by changing the launch directory is itself a
