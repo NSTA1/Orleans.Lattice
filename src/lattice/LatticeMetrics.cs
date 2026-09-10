@@ -1270,6 +1270,43 @@ public static class LatticeMetrics
             description: "Leaf-materialiser drain lag sampled by the WAL saturation sampler, tagged by tree.");
 
     /// <summary>
+    /// Number of individually lagging WAL cursor consumers behind a tree's
+    /// materialiser drain-lag, recorded by the WAL saturation sampler for a tree
+    /// whose aggregate lag is <b>already over</b>
+    /// <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> on that
+    /// tick. A consumer counts when its own reported cursor trails the WAL head
+    /// wall clock by more than that same threshold; consumers that have never
+    /// reported a cursor (<see cref="HybridLogicalClock.Zero"/>) are excluded, as
+    /// they are from the <c>min(cursor)</c> meet that produces the aggregate.
+    /// <para>
+    /// <b>Why this exists (issue #2444).</b>
+    /// <see cref="MaterialiserDrainLag"/> is a minimum across consumers, so a
+    /// single value cannot distinguish <i>one</i> dormant consumer holding the
+    /// minimum down from <i>many</i> consumers genuinely falling behind. Those
+    /// two conditions have opposite responses, and the aggregate reads
+    /// identically for both. This count separates them.
+    /// </para>
+    /// <para>
+    /// <b>What it deliberately does not do.</b> It does not name the contributing
+    /// consumer. Consumer identity is unbounded cardinality and is not a safe tag,
+    /// so this makes the aggregate <b>triageable, not diagnosable</b>: it tells an
+    /// operator which of the two shapes they are in, not which consumer to look
+    /// at. Naming the contributor is tracked out of band as issue #2505, where
+    /// <see cref="IWalCursorRegistry.SnapshotAsync"/> already supplies the
+    /// identity.
+    /// </para>
+    /// <para>
+    /// <b>Cost.</b> Sampled only for trees already found over threshold, so a
+    /// healthy estate adds no per-tick work: a tree that never trips never
+    /// triggers the snapshot read that backs this instrument.
+    /// </para>
+    /// Tagged with <see cref="TagTree"/> and the derived tenant label.
+    /// </summary>
+    public static readonly Histogram<int> MaterialiserLaggingConsumers =
+        Meter.CreateHistogram<int>("orleans.lattice.materialiser.lagging_consumers", unit: "{consumer}",
+            description: "Count of individually lagging WAL cursor consumers on a tree already over the drain-lag threshold, tagged by tree.");
+
+    /// <summary>
     /// Counter of activation-time leaf materialiser replays started, emitted by
     /// <c>BPlusLeafGrain.OnActivateAsync</c> once a per-silo replay permit
     /// (<see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>) is
