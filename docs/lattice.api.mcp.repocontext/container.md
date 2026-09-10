@@ -126,6 +126,25 @@ Two further variables bound resources whose defaults are derived from a runtime 
 > **Set the replay ceiling wherever you set a CPU limit.** `Environment.ProcessorCount` honours a container CPU quota only while `DOTNET_PROCESSOR_COUNT` does not override it, and that variable takes precedence over the quota-derived value. A container granted 6 CPUs whose environment also carries `DOTNET_PROCESSOR_COUNT=16` therefore sizes this gate at 16, not 6, and nothing inside the process can tell the difference. The two figures are two halves of one statement and are only checkable against each other when they are declared together, so keep the ceiling beside the `cpus` / `NanoCpus` limit rather than in a file that does not itself constrain CPU. The host logs the resolved ceiling once at startup, alongside the configured option and the `Environment.ProcessorCount` the runtime reported, so the effective figure can be read off the log instead of inferred from the host's vCPU count.
 An opt-in family of `LATTICE_REPOCONTEXT_GIT_*` variables switches a repository from the mounted workspace to a git remote; see [Index source strategies](#index-source-strategies).
 
+### Garbage collection on a multi-GiB heap
+
+This host's steady-state working set is measured in GiB, and .NET's default collector is the wrong one at that size. Workstation GC collects a single heap and its blocking gen2 phases are effectively single-threaded, so one collection walks the whole heap on one thread with every other thread in the process suspended. A deployment of this host at about 11 GiB resident had the runtime attribute a **252 second** pause to the collector, against a 30 second Orleans request timeout.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DOTNET_gcServer` | `0` (Workstation) | `1` selects Server GC, which collects several heaps in parallel. |
+| `DOTNET_GCHeapCount` | one heap per processor | Bounds how many heaps Server GC creates. **Read as hexadecimal** - see below. Inert unless `DOTNET_gcServer=1`. |
+
+Neither is set in the sample, because the right heap count is a property of your CPU grant rather than of any file in this repository.
+
+> **`DOTNET_PROCESSOR_COUNT` cannot double as the heap count.** Server GC sizes its heap count from the processor count, which is exactly what `DOTNET_PROCESSOR_COUNT` overrides - the same variable the replay ceiling above discusses. That variable may legitimately be pinned **above** the container's CPU grant to hold the WAL replay gate's permits, and reusing it as a heap count would then create one heap per phantom processor on a heap already near its ceiling. One variable, two jobs, opposite requirements. `DOTNET_GCHeapCount` separates them: derive it from the container's actual CPU grant, independently of `DOTNET_PROCESSOR_COUNT`, and leave the processor count to size the replay gate.
+
+> **Write the heap count in hexadecimal.** The collector reads its numeric **environment variables** as hex, while the same settings in `runtimeconfig.json` are decimal. `DOTNET_GCHeapCount=10` therefore asks for **16** heaps and `=16` asks for **22**, silently and with no error. Values below `10` read identically either way, which is what makes this easy to miss on a small box and then get wrong on a large one. Prefer an explicit `0x` prefix.
+
+Verify rather than assume. The effective-configuration report states `GC.Mode`, `GC.HeapCount` (the figure the collector **resolved**, not the one declared), the process's memory ceiling, and the accumulated `GC.GetTotalPauseDuration`, and it raises a `GC HAZARD` **warning** when the process runs Workstation GC against a large ceiling, when a heap count is declared under Workstation GC and is therefore inert, or when the resolved heap count disagrees with the number that was written. Grep the log for `GC HAZARD`.
+
+**The claim is narrow on purpose.** Server GC with a bounded heap count removes the class of pause that is multi-minute, process-wide, and attributed to the collector by the runtime itself. It is not a general remedy for stalls: measurement of the same container found collector pauses accounted for under a third of long-silence time and did not explain its largest timeout burst at all. A stall the runtime does not attribute to the collector needs its own diagnosis, and `GC.GetTotalPauseDuration` is the quantity to reach for rather than gaps between log timestamps.
+
 ### Reading the effective configuration off the log
 
 The container's real settings usually arrive from an untracked compose override, so reading this repository does not tell you what a running process resolved. The host therefore states its own resolved configuration once at startup, on the `Repository-context effective configuration:` prefix, and that report supersedes any file when the two disagree:
@@ -133,11 +152,14 @@ The container's real settings usually arrive from an untracked compose override,
 - one line per setting, carrying the value this process resolved, marked `[OVERRIDDEN...]` when it differs from the host default;
 - a `SCOPE:` line, described below;
 - one line per prefix-matched variable family;
-- a **warning** per supplied `LATTICE_` variable that nothing in this host binds.
+- a **warning** per supplied `LATTICE_` variable that nothing in this host binds;
+- a **warning** per hazardous garbage-collector configuration, prefixed `GC HAZARD`.
 
 Grep the log for `SUPPLIED BUT NOT READ` to find a variable an operator set that never reaches anything - the silent failure that motivated the report. Values are printed through an allowlist, so a key that is not classified as safe to print renders as `<redacted: unclassified>` rather than leaking; a variable matched only by a prefix renders as `<withheld: matched by prefix only>`, because the host recognises the family without having verified that member individually.
 
-**The report covers one input channel, and says so.** The `SCOPE:` line states that it covers settings resolved from the process environment plus `Environment.ProcessorCount`, and that it does **not** cover `LatticeOptions` configured in code through `ConfigureLattice` - `WalRetention` among them - nor any value supplied through some other channel. So a setting absent from the report is a setting outside its scope, not a setting proven unset. Read a silence that way and nothing else in the report has to be qualified by hand.
+**The report covers one input channel, and says so.** The `SCOPE:` line states that it covers settings resolved from the process environment - the `LATTICE_` variables plus the `DOTNET_` garbage-collector variables - together with the runtime facts stated as such (`Environment.ProcessorCount` and the collector's resolved mode, heap count, memory ceiling and pause total), and that it does **not** cover `LatticeOptions` configured in code through `ConfigureLattice` - `WalRetention` among them - nor any value supplied through some other channel. So a setting absent from the report is a setting outside its scope, not a setting proven unset. Read a silence that way and nothing else in the report has to be qualified by hand.
+
+**Every value states where it came from, and a runtime fact is not a setting.** A value an operator supplied is marked `(DECLARED)`; a value nothing supplied is marked `(DEFAULTED, not declared)` and must not be read as configured; an observation such as `GC.Mode` or `GC.HeapCount` is marked `(RUNTIME FACT, not a declared setting)`, so nobody goes looking for a variable of that name. The distinction is load-bearing for the collector lines in particular: a resolved heap count of `6` says nothing about whether `DOTNET_GCHeapCount` was set, and the two lines together are what let you tell a declaration that was applied from one that was misread or ignored.
 
 The set of keys the report treats as read is derived, not restated: the package publishes them as `RepoContextEnvironmentVariables`, whose `All` and `Prefixes` are built from the option classes' own constants, and the host folds that set into its own. A key added to an option class and published there is covered by the report without a second edit, which is what stops the two drifting apart.
 

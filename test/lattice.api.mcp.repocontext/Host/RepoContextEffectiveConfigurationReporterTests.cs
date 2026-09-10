@@ -418,6 +418,18 @@ public sealed partial class RepoContextEffectiveConfigurationReporterTests
     {
         public List<string> Messages { get; } = [];
 
+        /// <summary>
+        /// The subset of <see cref="Messages"/> logged at warning or above.
+        /// </summary>
+        /// <remarks>
+        /// Captured separately because "the report states this" and "the report shouts
+        /// this" are different claims, and the second is the one issue #2596 turns on: the
+        /// runtime already stated the collector flavour at information level and it went
+        /// unread through two failed gate runs. A fixture that only inspected message text
+        /// could not tell a hazard from a value line.
+        /// </remarks>
+        public List<string> Warnings { get; } = [];
+
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull => null;
 
@@ -431,7 +443,13 @@ public sealed partial class RepoContextEffectiveConfigurationReporterTests
             Func<TState, Exception?, string> formatter)
         {
             ArgumentNullException.ThrowIfNull(formatter);
-            Messages.Add(formatter(state, exception));
+            var message = formatter(state, exception);
+            Messages.Add(message);
+
+            if (logLevel >= LogLevel.Warning)
+            {
+                Warnings.Add(message);
+            }
         }
     }
 }

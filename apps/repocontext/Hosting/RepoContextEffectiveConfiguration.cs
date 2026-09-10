@@ -93,11 +93,13 @@ public static class RepoContextEffectiveConfiguration
     /// </remarks>
     public const string ScopeStatement =
         "SCOPE: this report covers settings resolved from the process environment (the "
-        + "LATTICE_ variables listed above) plus Environment.ProcessorCount. It does NOT "
-        + "cover LatticeOptions configured in code through ConfigureLattice - WalRetention "
-        + "among them - nor any value supplied through a channel other than the process "
-        + "environment. A setting absent from this report is a setting outside its scope, "
-        + "not a setting proven unset.";
+        + "LATTICE_ variables listed above, plus the DOTNET_ garbage-collector variables) "
+        + "and the runtime facts stated as such: Environment.ProcessorCount and the "
+        + "collector's resolved mode, heap count, memory ceiling and pause total. It does "
+        + "NOT cover LatticeOptions configured in code through ConfigureLattice - "
+        + "WalRetention among them - nor any value supplied through a channel other than "
+        + "the process environment. A setting absent from this report is a setting outside "
+        + "its scope, not a setting proven unset.";
 
     /// <summary>Rendered in place of the value of a variable matched only by prefix.</summary>
     public const string PrefixMatchedMarker = "<withheld: matched by prefix only>";
@@ -161,6 +163,18 @@ public static class RepoContextEffectiveConfiguration
             // to this project's own prefix would have missed the most damaging setting in
             // the deployment.
             RuntimeProcessorCountKey,
+
+            // The collector's own settings and resolved facts (issue #2596), classified for
+            // the same reason and on the same evidence: a report scoped to this project's
+            // prefix missed the setting that suspended the whole process for 252 seconds at
+            // a time. None is credential-bearing - two are a boolean and a small integer,
+            // and the rest are figures the runtime reports about itself.
+            RepoContextGarbageCollection.ServerGcKey,
+            RepoContextGarbageCollection.HeapCountKey,
+            RepoContextGarbageCollection.RuntimeModeKey,
+            RepoContextGarbageCollection.RuntimeHeapCountKey,
+            RepoContextGarbageCollection.RuntimeMemoryLimitKey,
+            RepoContextGarbageCollection.RuntimePauseTotalKey,
         };
 
         // The repository-context package's own settings. Every one is a cadence, a count,

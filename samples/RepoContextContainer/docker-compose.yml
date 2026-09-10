@@ -168,6 +168,51 @@ services:
       # and flaky rather than short of memory. Watch
       # orleans.lattice.leaf.snapshot.load_failures with reason=resource_exhausted
       # to name it directly.
+      # GARBAGE COLLECTION. Follows directly from the memory note above, because
+      # the hazard is the PAIR (issue #2596): .NET defaults to Workstation GC,
+      # which collects a single heap with effectively single-threaded blocking
+      # gen2 phases. That is the right default for a small heap and the wrong one
+      # here. Once the heap is multi-GiB one collection walks all of it on one
+      # thread with every other thread in the process suspended. A deployment of
+      # this host at about 11 GiB resident had the runtime attribute a 252 second
+      # pause to the collector, against a 30 second Orleans request timeout.
+      #
+      #   DOTNET_gcServer: "1"
+      #   DOTNET_GCHeapCount: "<hex; see below>"
+      #
+      # Neither is set here, for the same reason as the two settings above: the
+      # right heap count is a property of your CPU grant, not of this file.
+      #
+      # DOTNET_GCHeapCount is what makes the first line safe to set at all. Server
+      # GC otherwise creates one heap per processor, and Environment.ProcessorCount
+      # is what DOTNET_PROCESSOR_COUNT overrides - the same variable the replay
+      # ceiling above discusses. That variable may legitimately be pinned ABOVE
+      # this container's CPU grant to hold the replay gate's permits, and reusing
+      # it as a heap count would then create one heap per phantom processor on a
+      # heap already at its ceiling. One variable, two jobs, opposite
+      # requirements. DOTNET_GCHeapCount separates them: derive it from the
+      # container's actual CPU grant, independently of DOTNET_PROCESSOR_COUNT.
+      #
+      # WRITE THE HEAP COUNT IN HEXADECIMAL. The collector reads its numeric
+      # ENVIRONMENT variables as hex, while the same settings in
+      # runtimeconfig.json are decimal. So "10" asks for 16 heaps and "16" asks
+      # for 22, silently and with no error. Values below 10 read the same either
+      # way, which is what makes this so easy to miss on a small box and then get
+      # wrong on a large one. Prefer an explicit 0x prefix.
+      #
+      # Verify rather than assume: this host reports GC.Mode, GC.HeapCount (the
+      # figure the collector RESOLVED, not the one declared) and its memory
+      # ceiling in the effective-configuration report at startup, and warns there
+      # when the combination is the hazardous one. Check the resolved heap count
+      # against what you wrote; a declaration that was misread or ignored is
+      # visible in that line rather than only in a latency graph.
+      #
+      # The claim here is narrow on purpose. This removes the class of pause that
+      # is multi-minute, process-wide, and attributed to the collector by the
+      # runtime itself. It is NOT a general remedy for stalls: measurement of the
+      # same container found collector pauses accounted for under a third of long
+      # silences and did not explain the largest timeout burst at all. Pauses the
+      # runtime does not attribute to the collector need their own diagnosis.
       # The read-only workspace root. Repositories are registered at runtime by
       # the client through the repocontext_add_repo tool, and every added path
       # must resolve under this root - a path escaping it (via `..` or a symlink)
