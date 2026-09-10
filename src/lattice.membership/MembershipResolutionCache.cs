@@ -4,8 +4,9 @@ using Microsoft.Extensions.Options;
 namespace Orleans.Lattice.Membership;
 
 /// <summary>
-/// The per-silo resolution cache. Stores resolved subjects keyed by credential
-/// token and serves a warm entry without re-authenticating or touching the
+/// The per-silo resolution cache. Stores resolved subjects keyed by the whole
+/// caller credential (see <see cref="MembershipCacheKey"/>) and serves a warm
+/// entry without re-authenticating or touching the
 /// directory. Only a resolved identity is cached: an anonymous verdict is never
 /// stored, so an unauthenticated caller cannot populate the map, and the map is
 /// capped at <see cref="MaxCachedSubjects"/> live entries so a rotating-token
@@ -23,16 +24,17 @@ internal sealed class MembershipResolutionCache(
     IOptionsMonitor<LatticeMembershipOptions> options) : IMutationObserver
 {
     /// <summary>
-    /// The hard ceiling on cached subjects. The cache key is the caller-supplied
-    /// credential token, so without a ceiling a population that rotates tokens
-    /// grows the map without bound: entries expire logically but nothing removes
+    /// The hard ceiling on cached subjects. The cache key is derived from the
+    /// caller-supplied credential, so without a ceiling a population that
+    /// rotates tokens grows the map without bound: entries expire logically but
+    /// nothing removes
     /// them until a membership tree happens to mutate. Refusing an insert at the
     /// ceiling is safe because a miss re-authenticates and re-resolves, so the
     /// bound costs latency and never correctness.
     /// </summary>
     internal const int MaxCachedSubjects = 4096;
 
-    private readonly ConcurrentDictionary<string, Entry> _entries = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<MembershipCacheKey, Entry> _entries = new();
 
     /// <summary>The number of live cache entries. Exposed for tests.</summary>
     internal int Count => _entries.Count;
@@ -42,10 +44,10 @@ internal sealed class MembershipResolutionCache(
     /// allocating a resolver closure. Lets the caller skip building the
     /// cache-miss delegate on the common warm-hit path.
     /// </summary>
-    /// <param name="cacheKey">The credential token used as the cache key.</param>
+    /// <param name="cacheKey">The key covering the whole caller credential.</param>
     /// <param name="subject">The cached subject when warm; otherwise <c>default</c>.</param>
     /// <returns><c>true</c> when a live entry was served.</returns>
-    public bool TryGetCached(string cacheKey, out LatticeSubject subject)
+    public bool TryGetCached(in MembershipCacheKey cacheKey, out LatticeSubject subject)
     {
         if (options.CurrentValue.ResolutionCacheTtl > TimeSpan.Zero
             && _entries.TryGetValue(cacheKey, out var entry)
@@ -68,11 +70,11 @@ internal sealed class MembershipResolutionCache(
     /// otherwise invokes <paramref name="resolver"/> and caches the result
     /// bounded by the cache lifetime and the token's expiry.
     /// </summary>
-    /// <param name="cacheKey">The credential token used as the cache key.</param>
+    /// <param name="cacheKey">The key covering the whole caller credential.</param>
     /// <param name="resolver">Resolves the subject on a cache miss.</param>
     /// <param name="cancellationToken">Cancels the resolution.</param>
     public async ValueTask<LatticeSubject> ResolveAsync(
-        string cacheKey,
+        MembershipCacheKey cacheKey,
         Func<CancellationToken, ValueTask<ResolvedSubject>> resolver,
         CancellationToken cancellationToken)
     {
@@ -123,7 +125,7 @@ internal sealed class MembershipResolutionCache(
     /// key at the ceiling first drops whatever has already expired, and skips
     /// the insert only when the map is genuinely full of live entries.
     /// </summary>
-    private void StoreBounded(string cacheKey, Entry entry, DateTimeOffset now)
+    private void StoreBounded(in MembershipCacheKey cacheKey, Entry entry, DateTimeOffset now)
     {
         if (_entries.ContainsKey(cacheKey))
         {

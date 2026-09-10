@@ -59,11 +59,6 @@ jobs:
       benchmark_changed: ${{ steps.benchmark.outputs.changed }}
       version_only: ${{ steps.verbump.outputs.version_only }}
       to_test: ${{ steps.discover.outputs.to_test }}
-      # The test projects whose content-hygiene and docs-snippet gates own a
-      # file this pull request changed and that the test matrix will NOT run.
-      # Empty means every owning gate is already covered by the matrix, so the
-      # `hygiene` job below is skipped. See `Select content-hygiene projects`.
-      hygiene_projects: ${{ steps.hygiene.outputs.projects }}
       # Defaulted so a skipped plan yields a well-formed empty matrix rather
       # than an empty string, which `fromJson` would reject and turn a
       # deliberate no-op into a workflow-level error.
@@ -745,139 +740,6 @@ jobs:
             echo "not that any package's tests were executed."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # -----------------------------------------------------------------------
-      # CONTENT-HYGIENE SELECTION (#2443).
-      #
-      # The em-dash, mojibake, deletion-mandate and docs-snippet gates are
-      # ordinary NUnit fixtures, so they run only when the test matrix runs. A
-      # markdown-only pull request sets `run_tests=false`, skips the matrix
-      # entirely, and reports a green `build-and-test` having executed NO
-      # markdown gate whatsoever - on precisely the change most likely to carry
-      # an em-dash, because markdown is where prose gets pasted in from word
-      # processors. `apps/`-only, `benchmark/`-only and `.txt`-only changes take
-      # the same path and escape the same way.
-      #
-      # This step names the test projects that OWN the changed files, so the
-      # `hygiene` job can run their gates without the matrix. Ownership is the
-      # model the fixtures themselves implement, not a new one:
-      #
-      #   * em-dash / mojibake / deletion-mandate are SLICE-partitioned. A
-      #     package fixture owns `src/<pkg>` + `test/<pkg>` and nothing else;
-      #     the CORE project (`test/lattice`) owns every repo-level file no
-      #     package slice claims - all of `docs/`, `samples/`, `.github/`,
-      #     `apps/`, `benchmark/`, `tools/`, shared test infrastructure and the
-      #     root files. See `CoreHygieneScope` and `HygieneScanScope`.
-      #   * docs snippets are partitioned by `docs/<pkg>` root, with the core
-      #     fixture compiling every root no package claims. See
-      #     `CoreDocsSnippetScope`.
-      #
-      # Selection therefore adds the core project whenever a changed file lies
-      # outside every package slice, and adds `<pkg>` whenever a changed file
-      # lies under `src/<pkg>`, `test/<pkg>` or `docs/<pkg>`. Adding BOTH for a
-      # `docs/<pkg>` change is deliberate: whether that root is claimed by the
-      # package fixture or left to the core one is a fact recorded in C#, and
-      # restating it here would be a second copy free to drift. Running both
-      # covers either answer.
-      #
-      # A candidate is kept only when `test/<pkg>` actually contains hygiene or
-      # docs-snippet fixtures. That existence check is what lets the job below
-      # assert it executed at least one test: a selection that cannot contribute
-      # a test is never made in the first place, so a zero count means the gates
-      # did not run rather than that they had nothing to run.
-      #
-      # Finally the packages the matrix is already running are subtracted. That
-      # is a subset check against a concrete output, not an assumption about
-      # what the matrix probably covers - every changed file's owning gate runs
-      # in exactly one of the two places, and neither is inferred.
-      - name: Select content-hygiene projects
-        id: hygiene
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          TO_TEST: ${{ steps.discover.outputs.to_test }}
-        run: |
-          set -euo pipefail
-
-          # Three-dot: diff against the merge base, so this sees the files THIS
-          # branch changed. The reasoning is spelled out on `Discover changed
-          # packages` above and applies unchanged here.
-          #
-          # Deletions are filtered out: the gates scan the working tree, so a
-          # file this branch removed has nothing left to scan and its package
-          # would be selected for no reason.
-          changed=$(git diff --name-only --diff-filter=ACMRT "$BASE_SHA...$HEAD_SHA" || true)
-
-          # A project qualifies only if it owns fixtures the lane's filter can
-          # actually select.
-          has_gates() {
-            [ -d "test/$1/Hygiene" ] || [ -d "test/$1/Docs" ]
-          }
-
-          candidates=""
-          add() {
-            case " $candidates " in
-              *" $1 "*) ;;
-              *) candidates="$candidates $1" ;;
-            esac
-          }
-
-          while IFS= read -r path; do
-            [ -n "$path" ] || continue
-
-            owner=""
-            case "$path" in
-              src/*/*|test/*/*|docs/*/*)
-                owner=$(printf '%s' "$path" | cut -d/ -f2)
-                ;;
-            esac
-
-            if [ -n "$owner" ] && [ -d "test/$owner" ]; then
-              add "$owner"
-
-              # A package owns its own `src`/`test` slice only when it declares
-              # slice fixtures of its own; otherwise the core fixture's
-              # repo-level scan covers that slice and must also be selected.
-              # `docs/<pkg>` never suppresses the core selection, because a docs
-              # root the package does not claim falls to the core fixture.
-              case "$path" in
-                src/*|test/*)
-                  if [ -d "test/$owner/Hygiene" ]; then
-                    continue
-                  fi
-                  ;;
-              esac
-            fi
-
-            # Everything else is repo-level content, which the core project's
-            # fixtures own.
-            add "lattice"
-          done < <(printf '%s\n' "$changed")
-
-          selected=""
-          skipped=""
-          for name in $candidates; do
-            if ! has_gates "$name"; then
-              continue
-            fi
-            # Already covered by the test matrix.
-            case " $TO_TEST " in
-              *" $name "*) skipped="$skipped $name"; continue ;;
-            esac
-            selected="$selected $name"
-          done
-
-          selected=$(printf '%s' "$selected" | xargs || true)
-          echo "projects=$selected" >> "$GITHUB_OUTPUT"
-
-          if [ -n "$selected" ]; then
-            echo "::notice::Content-hygiene lane will run: $selected"
-          else
-            echo "No content-hygiene projects to run outside the test matrix."
-          fi
-          if [ -n "$skipped" ]; then
-            echo "Already covered by the test matrix:$skipped"
-          fi
-
       # Turn the selected packages into parallel legs. `test/lattice` is about
       # half of all test time, so a package-level fan-out alone would leave it
       # as a single long pole; it is sharded by namespace via test-shards.json.
@@ -1531,36 +1393,90 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # CONTENT HYGIENE (#2443).
+  # CONTENT GATES. Unconditional by construction - no `needs:`, no `if:`.
   #
-  # The em-dash, mojibake, deletion-mandate and docs-snippet gates are ordinary
-  # NUnit fixtures, so before this job existed they ran only when the test
-  # matrix ran. A markdown-only pull request skips the matrix entirely and
-  # reported a green `build-and-test` having executed no gate at all - on the
-  # class of change most likely to introduce an em-dash. The same was true of
-  # any change confined to `apps/`, `benchmark/`, `docs/`, `reference-
-  # architecture/` or `*.txt`, all of which the `nonSample` filter excludes.
+  # Every gate that polices TEXT rather than code is an ordinary NUnit test:
+  # the formal refinement fixtures (`test/lattice/Formal/`, which read
+  # `spec/*.md`), the hygiene fixtures (`test/<pkg>/Hygiene/`, which scan every
+  # tracked text file for em-dashes and mojibake), and the documentation
+  # snippet compilations (`test/<pkg>/Docs/`, which compile the fenced C# in
+  # `docs/`). Nothing else in this workflow enforces any of them.
   #
-  # This job runs those gates for the projects that OWN the changed files and
-  # that the matrix is not already running - the selection is computed in
-  # `plan`, which explains the ownership model. When the selection is empty
-  # every owning gate is covered by the matrix and this job does not run.
+  # The `test` matrix above cannot be relied on to run them, for two reasons:
   #
-  # It builds only the selected test projects rather than the solution: the
-  # gates are static scans over the working tree with no cluster fixture behind
-  # them, so a project build is all they need.
+  #   1. It does not run at all on a markdown-only diff. The paths filter
+  #      excludes `**/*.md`, so `code` is false, `leg_count` is 0, and the
+  #      whole matrix is skipped - on precisely the diff shape the em-dash gate
+  #      exists to catch. Its miss rate on its own target population was 100%.
+  #   2. Even when it does run, it selects packages seeded from the changed
+  #      code paths and expanded along reverse project references. A pull
+  #      request touching only `src/lattice.explorer/**` plus `spec/*.md`
+  #      never selects `lattice`, so the formal fixtures still do not run.
+  #
+  # Hence: no condition of any kind on this job. That is not belt-and-braces,
+  # it is the fix. A conditional job can be SKIPPED, and a skipped job is
+  # non-blocking in Actions by default - which is the very defect being closed
+  # here, reintroduced one level up. `build-and-test` accepts only `success`
+  # from this job, never `skipped`, so the two halves cannot drift apart.
+  #
+  # Cost: one restore, one solution build, one filtered test pass. Measured on
+  # a real ubuntu-latest run: 24s restore, 148s build, 97s tests, about 4m50s
+  # of job wall-clock. The build dominates, and every other test leg already
+  # pays an equivalent one. On a code change this job runs beside the matrix
+  # and adds no wall-clock to the PR; on a docs-only change it is the only test
+  # job that runs, and it deliberately does NOT drag in the deterministic or
+  # chaos matrix - roughly five minutes for a docs PR against zero before,
+  # where "zero" meant the gates never ran.
+  #
+  # Documentation snippet compilation is included here on purpose. It is the
+  # expensive family (it needs the solution built, which the other two do not),
+  # and it is true that a snippet usually breaks because the public surface it
+  # compiles against moved - a code change, already covered. But it also breaks
+  # when the snippet itself is edited, and a snippet lives in `docs/**/*.md`,
+  # which is exactly the diff shape that reached no test at all. Since the
+  # build is already paid for by the other two families, the marginal cost of
+  # including it is the test time alone, so it is included rather than left on
+  # the code path.
+  #
+  # `run-text-gates.py` refuses to report success on a vacuous run: zero tests
+  # executed, or zero tests executed for any one family, fails the job. That
+  # mirrors `HygieneDenominator.RequireExamined` one level up, where a gate
+  # that never ran cannot be caught by a control inside itself.
+  # `CiContentGateWiringTests` guards the wiring and the filter's coverage of
+  # every declared gate fixture.
   # ---------------------------------------------------------------------------
-  hygiene:
-    name: Content hygiene
-    needs: plan
-    if: needs.plan.result == 'success' && needs.plan.outputs.hygiene_projects != ''
+  content-gates:
+    name: Content gates (formal, hygiene, docs)
     runs-on: ubuntu-latest
+
+    env:
+      # Single source of truth for what this gate selects, read back by
+      # `CiContentGateWiringTests` so a fixture cannot be added to one of the
+      # gate directories and silently fall outside the filter.
+      #
+      # `Tlc` is excluded deliberately: `TlcModelCheckTests` needs a JVM and
+      # `tla2tools.jar`, and it reads only `.tla` and `.cfg` files, which are
+      # not markdown and therefore already reach the `test` matrix.
+      #
+      # `Orleans.Lattice.Explorer.UiTests` is excluded for the same reason its
+      # tree is already carved out of the `code` and `nonSample` filters above:
+      # every test in that assembly runs behind a `[SetUpFixture]` that starts
+      # the Explorer host and launches Playwright chromium, so selecting even
+      # one of them costs a browser install. `ui-tests.yml` is their only
+      # runner. Two of its fixtures are named `*HygieneTests` and so match the
+      # `Hygiene` selector, but they police TEST CODE (fixture categories and
+      # namespaces), not prose - they cannot regress on a markdown-only diff,
+      # which is the diff shape this job exists for. `CiContentGateWiringTests`
+      # asserts that no fixture in a gate DIRECTORY is caught by this
+      # exclusion, so it cannot quietly grow into a hole.
+      CONTENT_GATE_FILTER: (FullyQualifiedName~Formal|FullyQualifiedName~Hygiene|FullyQualifiedName~Docs)&Category!=Tlc&FullyQualifiedName!~Explorer.UiTests
 
     steps:
       - uses: actions/checkout@v5
         with:
-          # Every checkout in this workflow must be full-depth; the guard checks
-          # the file, not the job. See the note on the `plan` checkout.
+          # The hygiene fixtures enumerate tracked files through git, and the
+          # guard tests read the workflow files. Full depth for consistency
+          # with every other checkout in this workflow.
           fetch-depth: 0
 
       - name: Setup .NET
@@ -1575,77 +1491,32 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
           restore-keys: nuget-${{ runner.os }}-
 
-      # The filter selects fixtures by CLASS NAME, not by namespace. The
-      # namespace is not a usable discriminator here: the same gate is declared
-      # in `Orleans.Lattice.Scaling.Tests` in one project and in
-      # `Orleans.Lattice.Integration.Tests.Hygiene` in another, so a
-      # namespace-scoped filter silently selects nothing in most projects. The
-      # class name is uniform - every concrete gate is its shared abstract base
-      # with the `Base` suffix dropped - and `CiContentHygieneLaneTests` proves
-      # that holds for every scoped fixture in the repository, so this filter
-      # cannot fall out of step with the gates it is meant to run.
-      #
-      # DENOMINATOR. `plan` only selects a project that has a `Hygiene/` or
-      # `Docs/` directory, so every selected project can contribute at least one
-      # test. A zero count therefore means the gates did not run, not that there
-      # were none to run, and the run fails rather than reporting a green that
-      # scanned nothing. This mirrors the `HygieneDenominator` assertion the
-      # fixtures themselves carry.
-      - name: Run content-hygiene gates
-        env:
-          PROJECTS: ${{ needs.plan.outputs.hygiene_projects }}
+      - name: Restore
+        run: dotnet restore
+
+      # The docs snippet fixtures compile against the real public surface, so
+      # they need the solution built. The other two families do not, but the
+      # build is a single shared cost.
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Run content gates
         run: |
           set -euo pipefail
+          python3 .github/workflows/run-text-gates.py \
+            --solution Orleans.Lattice.slnx \
+            --filter "$CONTENT_GATE_FILTER" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
 
-          filter='FullyQualifiedName~HygieneTests|FullyQualifiedName~DocsSnippetCompilationTests'
-
-          {
-            echo "### Content hygiene"
-            echo
-            echo "Gates run outside the test matrix, for the projects that own"
-            echo "the files this pull request changed."
-            echo
-            echo "| Project | Tests run |"
-            echo "| --- | --- |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          total=0
-          for name in $PROJECTS; do
-            project=$(find "test/$name" -maxdepth 1 -name '*.csproj' -print -quit)
-            if [ -z "$project" ]; then
-              echo "::error::Selected project 'test/$name' has no csproj."
-              exit 1
-            fi
-
-            echo "::group::test/$name"
-            dotnet test "$project" \
-              --configuration Release \
-              --filter "$filter" \
-              --logger "console;verbosity=normal" \
-              | tee "/tmp/hygiene-$name.txt"
-            echo "::endgroup::"
-
-            # `dotnet test` prints "Passed: N" in its summary line. A filter that
-            # matched nothing prints a zero there rather than failing, which is
-            # exactly the silent pass this job must not produce.
-            ran=$(sed -n 's/.*Passed:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "/tmp/hygiene-$name.txt" | tail -n 1)
-            ran=${ran:-0}
-            echo "| \`test/$name\` | $ran |" >> "$GITHUB_STEP_SUMMARY"
-
-            if [ "$ran" -eq 0 ]; then
-              echo "::error::The content-hygiene filter matched no tests in test/${name}. The gates did not run; a green here would mean nothing was scanned."
-              exit 1
-            fi
-
-            total=$(( total + ran ))
-          done
-
-          if [ "$total" -eq 0 ]; then
-            echo "::error::The content-hygiene lane executed no tests at all."
-            exit 1
-          fi
-
-          echo "::notice::Content-hygiene gates executed ${total} tests."
+      - name: Upload content gate results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: content-gate-results
+          path: |
+            **/text-gates.trx
+          retention-days: 7
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
   # THE REQUIRED CHECK.
@@ -1661,7 +1532,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-and-test:
     name: build-and-test
-    needs: [plan, extras, test, hygiene]
+    needs: [plan, extras, test, content-gates]
     if: always()
     runs-on: ubuntu-latest
 
@@ -1702,20 +1573,29 @@ jobs:
       # FAILED or CANCELLED one never is. Reading the results explicitly rather
       # than relying on job ordering means a new upstream job cannot be added
       # later and silently escape the gate.
+      #
+      # `content-gates` is the ONE exception, and the exception is the point.
+      # It is the only job that always has something to say, because the gates
+      # it runs read text rather than code and every pull request contains
+      # text. Accepting `skipped` from it would recreate the exact defect it
+      # closes: a required check reporting green because the job that would
+      # have failed never ran. Actions treats a skipped dependency as
+      # non-blocking by default, so this has to be spelled out rather than
+      # assumed. It is inspected separately below, and only `success` passes.
       - name: Verdict
         env:
           PLAN: ${{ needs.plan.result }}
           EXTRAS: ${{ needs.extras.result }}
           TEST: ${{ needs.test.result }}
-          HYGIENE: ${{ needs.hygiene.result }}
+          CONTENT_GATES: ${{ needs['content-gates'].result }}
           LEG_COUNT: ${{ needs.plan.outputs.leg_count }}
         run: |
           set -euo pipefail
 
-          echo "plan=$PLAN extras=$EXTRAS test=$TEST hygiene=$HYGIENE legs=$LEG_COUNT"
+          echo "plan=$PLAN extras=$EXTRAS test=$TEST content-gates=$CONTENT_GATES legs=$LEG_COUNT"
 
           ok=true
-          for pair in "plan:$PLAN" "extras:$EXTRAS" "test:$TEST" "hygiene:$HYGIENE"; do
+          for pair in "plan:$PLAN" "extras:$EXTRAS" "test:$TEST"; do
             name="${pair%%:*}"
             result="${pair#*:}"
             case "$result" in
@@ -1723,6 +1603,17 @@ jobs:
               *) echo "::error::Upstream job '${name}' reported '${result}'."; ok=false ;;
             esac
           done
+
+          # Success only. `skipped` is named explicitly so the failure says what
+          # actually went wrong rather than reporting an unexpected state.
+          case "$CONTENT_GATES" in
+            success) ;;
+            skipped)
+              echo "::error::Upstream job 'content-gates' was SKIPPED. It must run on every pull request: it is the only thing that enforces the formal, hygiene, and docs-snippet gates, and a skipped dependency does not block a required check. Remove whatever condition was added to it."
+              ok=false
+              ;;
+            *) echo "::error::Upstream job 'content-gates' reported '${CONTENT_GATES}'."; ok=false ;;
+          esac
 
           if [ "$ok" != "true" ]; then
             exit 1
@@ -1736,14 +1627,10 @@ jobs:
               echo "### Test selection: 0 packages"
               echo ""
               echo "No test legs ran for this change (docs-only, samples-only,"
-              echo "or a release version bump). A green \`build-and-test\` here"
-              echo "means the gates that did run passed, not that any package's"
-              echo "tests were executed."
-              echo ""
-              echo "The content-hygiene gates are not among the ones skipped:"
-              echo "they run in the \`Content hygiene\` job for the projects that"
-              echo "own the changed files, precisely so a change that skips the"
-              echo "matrix is still scanned (#2443). That job reports \`$HYGIENE\`."
+              echo "or a release version bump). The \`content-gates\` job still"
+              echo "ran the formal, hygiene, and docs-snippet fixtures, so this"
+              echo "green means those gates passed - not that any package's own"
+              echo "test suite was executed."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 

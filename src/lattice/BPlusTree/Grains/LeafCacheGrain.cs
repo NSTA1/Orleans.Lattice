@@ -316,15 +316,33 @@ internal sealed class LeafCacheGrain(
         var predicate = LatticePredicateContext.Current;
         List<string>? delegated = null;
         HashSet<string>? delegatedSet = null;
+
+        // Steady state (no pending keys, no migrated or payload-evicted
+        // entries) delegates nothing, and then the partition pass below has
+        // already established every key's answer: the serve pass used to
+        // re-probe _cache for the same key a second time, doubling the
+        // dictionary lookups on the hottest read-through batch path. So the
+        // two passes are fused - the partition pass serves each
+        // non-delegating key straight from the probe it just performed - and
+        // the original two-pass shape is reinstated only once a key actually
+        // delegates. That fallback matters for more than tidiness: the
+        // delegation path awaits a leaf RPC, and re-probing _cache after that
+        // turn boundary (rather than trusting a pre-await snapshot) is what
+        // keeps the served values consistent with the delegated fetch.
+        var result = new Dictionary<string, byte[]>(keys.Count);
+        var hits = 0;
+        var cacheLookups = 0;
         foreach (var key in keys)
         {
             var pending = _pendingKeys.Contains(key);
             bool mustDelegate;
+            LwwValue<byte[]> probe = default;
+            var probeLive = false;
             if (pending)
             {
                 mustDelegate = true;
             }
-            else if (_cache.TryPeek(key, out var probe)
+            else if (_cache.TryPeek(key, out probe)
                 && !probe.IsTombstone
                 && !probe.IsExpired(nowTicks))
             {
@@ -335,6 +353,7 @@ internal sealed class LeafCacheGrain(
                 // retained metadata alone, so payload eviction forces the same
                 // delegation as migration.
                 mustDelegate = probe.IsMigrated || probe.Value is null;
+                probeLive = !mustDelegate;
             }
             else
             {
@@ -347,11 +366,44 @@ internal sealed class LeafCacheGrain(
                 delegatedSet ??= new HashSet<string>();
                 if (delegatedSet.Add(key))
                     delegated.Add(key);
+                continue;
+            }
+
+            // Fused serve. Discarded wholesale below if any key delegates.
+            cacheLookups++;
+            if (probeLive)
+            {
+                _cache.RecordHit(key);
+                if (predicate is not null && !LatticePredicateEvaluator.Matches(probe.Value, predicate.Value))
+                {
+                    hits++;
+                    continue;
+                }
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG cache-hit-many] silo={DiagSiloTag} cache-gid={context.GrainId} primary={PrimaryLeafId} key={key} valRound={DiagSink.DecodeRound(probe.Value!)} hlc={probe.Timestamp} isMig={probe.IsMigrated}");
+#endif
+                result[key] = probe.Value!;
+                hits++;
             }
         }
 
+        if (delegated is null)
+        {
+            var fusedTag = CacheTreeTag();
+            var fusedTenantTag = CacheTenantTag();
+            if (hits > 0) LatticeMetrics.CacheHits.Add(hits, fusedTag, fusedTenantTag);
+            var fusedMisses = cacheLookups - hits;
+            if (fusedMisses > 0) LatticeMetrics.CacheMisses.Add(fusedMisses, fusedTag, fusedTenantTag);
+            return result;
+        }
+
+        // A key delegates: abandon the fused serve and fall back to the
+        // original probe-after-await shape.
+        result.Clear();
+        hits = 0;
+        cacheLookups = 0;
+
         Dictionary<string, byte[]>? delegatedResult = null;
-        if (delegated is not null)
         {
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG cache-delegate-many] silo={DiagSiloTag} cache-gid={context.GrainId} primary={PrimaryLeafId} keys=[{string.Join(',', delegated)}]");
@@ -360,9 +412,6 @@ internal sealed class LeafCacheGrain(
             delegatedResult = await leaf.GetManyAsync(delegated);
         }
 
-        var result = new Dictionary<string, byte[]>(keys.Count);
-        var hits = 0;
-        var cacheLookups = 0;
         foreach (var key in keys)
         {
             if (delegatedSet is not null && delegatedSet.Contains(key))

@@ -291,7 +291,7 @@ public class LatticeTagIndexRoundTripBatchingTests
 
         await index.Key("k1").RemoveAsync(["red", "blue"]);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await index.Key("k1").GetAsync(), Is.EquivalentTo(new[] { "green" }));
             Assert.That(await index.Key("k2").GetAsync(), Is.EquivalentTo(new[] { "red" }));
@@ -307,7 +307,7 @@ public class LatticeTagIndexRoundTripBatchingTests
 
         await index.Key("k1").RemoveAsync(["red"]);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(tree.DeleteAsyncCalls, Is.EqualTo(2));
             Assert.That(await index.Key("k1").GetAsync(), Is.EquivalentTo(new[] { "green" }));
@@ -324,7 +324,7 @@ public class LatticeTagIndexRoundTripBatchingTests
             async () => await index.Key("k1").RemoveAsync(["red", "gr\0een"]),
             Throws.ArgumentException);
 
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(tree.DeleteAsyncCalls, Is.Zero);
             Assert.That(await index.Key("k1").GetAsync(), Is.EquivalentTo(new[] { "red", "green" }));

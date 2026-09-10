@@ -4,6 +4,7 @@ using NSubstitute;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -339,7 +340,7 @@ public class LatticeOptionsResolverPropagationGuardTests
     private static List<string> FindResolvedConsumers(string propName)
     {
         var hits = new List<string>();
-        var repoRoot = FindRepoRoot();
+        var repoRoot = HygieneRepository.FindRepoRoot();
         var srcDir = Path.Combine(repoRoot, "src");
         if (!Directory.Exists(srcDir)) return hits;
 
@@ -352,7 +353,7 @@ public class LatticeOptionsResolverPropagationGuardTests
             $@"(?<![\w])(?<recv>_?\w+)\s*\.\s*{System.Text.RegularExpressions.Regex.Escape(propName)}\b",
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
-        foreach (var file in EnumerateFiles(srcDir, "*.cs"))
+        foreach (var file in HygieneRepository.EnumerateFiles(srcDir, "*.cs"))
         {
             // Skip the resolver itself (it always references the prop
             // name by construction) and the ResolvedLatticeOptions
@@ -404,36 +405,5 @@ public class LatticeOptionsResolverPropagationGuardTests
             }
         }
         return hits;
-    }
-
-    private static IEnumerable<string> EnumerateFiles(string root, string pattern)
-    {
-        if (!Directory.Exists(root)) yield break;
-        foreach (var file in Directory.EnumerateFiles(root, pattern, SearchOption.AllDirectories))
-        {
-            var parts = file.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (parts.Any(p => p.Equals("bin", StringComparison.OrdinalIgnoreCase)
-                            || p.Equals("obj", StringComparison.OrdinalIgnoreCase)
-                            || p.Equals("node_modules", StringComparison.OrdinalIgnoreCase)))
-                continue;
-            yield return file;
-        }
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "README.md"))
-                && Directory.Exists(Path.Combine(dir.FullName, "docs"))
-                && Directory.Exists(Path.Combine(dir.FullName, "src")))
-            {
-                return dir.FullName;
-            }
-            dir = dir.Parent;
-        }
-        throw new InvalidOperationException(
-            "Could not find repository root from " + AppContext.BaseDirectory);
     }
 }

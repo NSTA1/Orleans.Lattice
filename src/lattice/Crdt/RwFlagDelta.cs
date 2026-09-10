@@ -60,4 +60,68 @@ public readonly record struct RwFlagDelta
         Disables = Array.Empty<OrSetDot>(),
         Tombstones = Array.Empty<OrSetDot>(),
     };
+
+    /// <summary>
+    /// Compares two deltas by value, with <see cref="Enables"/>,
+    /// <see cref="Disables"/>, and <see cref="Tombstones"/> compared
+    /// element-by-element using the value equality of <see cref="OrSetDot"/>.
+    /// The compiler-generated record-struct equality compares the collection
+    /// references with <see cref="EqualityComparer{T}.Default"/>, so two
+    /// structurally identical deltas built from independently allocated
+    /// collections - and, in particular, a delta and its post-serialization
+    /// self - would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The delta to compare against.</param>
+    public bool Equals(RwFlagDelta other) =>
+        ListEqual(Enables, other.Enables)
+        && ListEqual(Disables, other.Disables)
+        && ListEqual(Tombstones, other.Tombstones);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        AddList(ref hash, Enables);
+        AddList(ref hash, Disables);
+        AddList(ref hash, Tombstones);
+        return hash.ToHashCode();
+    }
+
+    private static bool ListEqual(IReadOnlyList<OrSetDot>? left, IReadOnlyList<OrSetDot>? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is null || right is null || left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!left[i].Equals(right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void AddList(ref HashCode hash, IReadOnlyList<OrSetDot>? list)
+    {
+        if (list is null)
+        {
+            hash.Add(0);
+            return;
+        }
+
+        hash.Add(list.Count);
+        foreach (var element in list)
+        {
+            hash.Add(element);
+        }
+    }
 }

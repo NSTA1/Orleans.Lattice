@@ -20,7 +20,9 @@ internal sealed class LatticeRegistryGrain(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ITreePlacementResolver? placementResolver = null,
-    TreeAliasObserverDispatcher? aliasObservers = null) : ILatticeRegistry
+    TreeAliasObserverDispatcher? aliasObservers = null,
+    ILatticeAccessGate? accessGate = null,
+    ILatticeMembershipContext? membership = null) : ILatticeRegistry
 {
     // Uses the internal ISystemLattice surface so the registry can address its
     // own backing system tree (`_lattice_trees`). The public ILattice surface
@@ -343,6 +345,49 @@ internal sealed class LatticeRegistryGrain(
         return keys;
     }
 
+    /// <summary>
+    /// Requires the caller to hold whole-tree control of an alias's
+    /// <paramref name="physicalTreeId"/> target before the alias is written.
+    /// <para>
+    /// <see cref="ThrowIfAliasEscalatesNamespace"/> closes the
+    /// <em>namespace</em> half of the alias escalation: it refuses a target in
+    /// the reserved internal namespace, an ordinary-to-system-data crossing,
+    /// and a foreign-tenant target. It cannot close the remaining half, because
+    /// two ordinary same-namespace tree ids are indistinguishable to it and so
+    /// pass unconditionally. That is the whole of the hole: a caller authorized
+    /// on the ordinary tree <c>a</c> could bind it to the equally ordinary tree
+    /// <c>b</c> owned by somebody else, and thereafter read and rewrite every
+    /// key of <c>b</c> through <c>a</c> - because routing resolves the alias
+    /// and addresses <c>b</c>'s shards directly, while every data-plane gate on
+    /// the facade has already been evaluated against the logical id <c>a</c>.
+    /// </para>
+    /// <para>
+    /// Ownership is not a namespace property, so it is answered by the same
+    /// component that answers it everywhere else: the access gate, consulted
+    /// against the target tree. The bar is whole-tree control rather than a
+    /// per-key allow, because an alias confers unrestricted read and write over
+    /// every key the target holds, now and in future - a key-filtered allow is
+    /// therefore refused (<see cref="LatticeAccessGateEnforcement.EnforceWholeTreeControlAsync"/>).
+    /// </para>
+    /// <para>
+    /// A no-op on a host that registered no gate (the default
+    /// <c>NullLatticeAccessGate</c>), and on a system-origin turn - the
+    /// library-internal maintenance flows that derive a physical id from the
+    /// logical one (resize, resharding, schema remediation, shadow restore) are
+    /// already gated at their own entry points, which is the same exemption
+    /// <see cref="ThrowIfAliasEscalatesNamespace"/> takes.
+    /// </para>
+    /// </summary>
+    private ValueTask EnsureAliasTargetIsControlledAsync(string physicalTreeId) =>
+        accessGate is null
+            ? ValueTask.CompletedTask
+            : LatticeAccessGateEnforcement.EnforceWholeTreeControlAsync(
+                accessGate,
+                membership,
+                physicalTreeId,
+                LatticeOperation.Admin,
+                CancellationToken.None);
+
     public async Task SetAliasAsync(string treeId, string physicalTreeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
@@ -357,6 +402,7 @@ internal sealed class LatticeRegistryGrain(
         // against the logical id. Refuse a target that would raise the caller's
         // effective privilege before anything is written.
         ThrowIfAliasEscalatesNamespace(treeId, physicalTreeId);
+        await EnsureAliasTargetIsControlledAsync(physicalTreeId);
 
         // Enforce single-level indirection: the target must not itself be aliased.
         var targetEntry = await GetEntryAsync(physicalTreeId);
