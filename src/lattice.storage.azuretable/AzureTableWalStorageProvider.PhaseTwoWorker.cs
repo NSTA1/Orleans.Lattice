@@ -56,6 +56,49 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     private long _highestCommittedEndOffset = -1L;
 
     /// <summary>
+    /// Guards the accepted-range state
+    /// (<see cref="_acceptedRanges"/>). Taken on the enqueue path -
+    /// which has many concurrent writers, matching the channel's
+    /// <c>SingleWriter = false</c> - and on the drain loop's commit
+    /// and fault-reset paths, so the set can never be read
+    /// half-updated. The critical section is a handful of dictionary
+    /// operations with no I/O and no continuation, so it never
+    /// contends with the Azure round-trip.
+    /// </summary>
+    private readonly object _acceptedGate = new();
+
+    /// <summary>
+    /// Batches this worker has accepted for phase 2 and not yet
+    /// pruned, keyed by start offset with the batch's
+    /// <c>endOffsetInclusive</c> as the value.
+    /// <para>
+    /// An entry here is <b>durable</b>: phase 1 committed its entry
+    /// rows and its per-batch <c>HEAD</c> row atomically, in the
+    /// batch's own partition, before the provider dispatched phase 2.
+    /// What it is missing is only the manifest row and the <c>TAIL</c>
+    /// upsert - precisely the state
+    /// <see cref="AzureTableWalStorageProvider.ReconcileAsync"/> rolls
+    /// <i>forward</i> when the orphan contiguously extends <c>TAIL</c>.
+    /// </para>
+    /// <para>
+    /// <see cref="ContiguousAcceptedEndOffsetInclusive"/> walks this
+    /// set upward from a caller-supplied persisted <c>TAIL</c>, so
+    /// nothing is ever reported across a gap and the answer matches
+    /// what crash recovery would keep. The set is bounded by the
+    /// producer's in-flight batch count
+    /// (<c>WalMaxPendingBatches</c>): entries are pruned as phase 2
+    /// commits them and cleared wholesale when a commit fails.
+    /// </para>
+    /// <para>
+    /// This is an in-memory notion, strictly separate from the
+    /// persisted <c>TAIL</c> row. It is never written to <c>TAIL</c>
+    /// early and is never consulted on the reconciliation path, both
+    /// of which continue to see only what phase 2 actually committed.
+    /// </para>
+    /// </summary>
+    private readonly SortedDictionary<long, long> _acceptedRanges = new();
+
+    /// <summary>
     /// Cached <see cref="LatticeMetrics.TagTree"/> tag forwarded to
     /// <see cref="LatticeMetrics.ProviderCommitDuration"/> and
     /// <see cref="LatticeMetrics.ProviderPhase2BatchSize"/>. Populated
@@ -235,13 +278,149 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     {
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var commit = new PhaseTwoCommit(startOffset, endOffsetInclusive, hasCandidateRow, payloadBytes, tcs);
-        if (!_arrivals.Writer.TryWrite(commit))
+
+        // The publish and the accept happen under one gate. The drain
+        // loop can pick the arrival up and fault it the instant it is
+        // written, and its DiscardAcceptedRanges takes this same gate
+        // - so without the shared critical section a reset could land
+        // between the write and the accept, and the accept would then
+        // silently resurrect a batch that had just been faulted.
+        // TryWrite on an unbounded channel created with
+        // AllowSynchronousContinuations = false never runs a
+        // continuation inline, so nothing re-enters the gate here.
+        lock (_acceptedGate)
         {
-            // Unbounded channel - this is only reachable if the
-            // channel was already completed by Dispose.
-            tcs.TrySetException(new ObjectDisposedException(nameof(PhaseTwoWorker)));
+            if (!_arrivals.Writer.TryWrite(commit))
+            {
+                // Unbounded channel - this is only reachable if the
+                // channel was already completed by Dispose.
+                tcs.TrySetException(new ObjectDisposedException(nameof(PhaseTwoWorker)));
+                return tcs.Task;
+            }
+
+            // Record the batch as accepted only once it is genuinely
+            // queued. A batch that failed to enqueue is faulted above
+            // and must never be vouched for.
+            _acceptedRanges[startOffset] = endOffsetInclusive;
         }
+
         return tcs.Task;
+    }
+
+    /// <summary>
+    /// Highest end offset this worker can vouch for as durable and
+    /// gap-free, given the shard's currently persisted <c>TAIL</c>.
+    /// <para>
+    /// The answer is anchored on <paramref name="persistedTail"/>
+    /// rather than on any self-seeded mark, and that is the whole
+    /// subtlety. Phase 1 completes out of order, so the accepted set
+    /// can transiently contain a hole - batch <c>[8..11]</c> can be
+    /// accepted while <c>[4..7]</c> is still in phase 1, and it can
+    /// even be the <i>first</i> batch this lazily-created worker ever
+    /// sees. Reporting <c>11</c> there would assert durability across
+    /// a gap that does not exist yet, and would diverge from crash
+    /// recovery, which rolls an orphan above a gap <i>back</i> rather
+    /// than forward. Walking upward from the persisted <c>TAIL</c>
+    /// instead makes the answer exactly the run
+    /// <see cref="AzureTableWalStorageProvider.ReconcileAsync"/> would
+    /// keep.
+    /// </para>
+    /// </summary>
+    /// <param name="persistedTail">
+    /// The shard's persisted <c>TAIL</c> offset, or <c>-1</c> when the
+    /// shard has no <c>TAIL</c> row yet.
+    /// </param>
+    /// <returns>
+    /// <paramref name="persistedTail"/> when no accepted batch
+    /// contiguously extends it; otherwise the inclusive end of the
+    /// contiguous accepted run above it.
+    /// </returns>
+    public long ContiguousAcceptedEndOffsetInclusive(long persistedTail)
+    {
+        var frontier = persistedTail;
+        lock (_acceptedGate)
+        {
+            // SortedDictionary enumerates ascending by key, so one
+            // forward pass finds the whole contiguous run and stops
+            // at the first hole.
+            foreach (var (start, endInclusive) in _acceptedRanges)
+            {
+                if (start <= frontier)
+                {
+                    // Already covered - but a batch straddling the
+                    // frontier still extends it.
+                    if (endInclusive > frontier)
+                    {
+                        frontier = endInclusive;
+                    }
+                    continue;
+                }
+
+                if (start > frontier + 1L)
+                {
+                    // A hole. Everything above it is unreachable.
+                    break;
+                }
+
+                frontier = endInclusive;
+            }
+        }
+
+        return frontier;
+    }
+
+    /// <summary>
+    /// Drops accepted ranges that phase 2 has now committed, so the
+    /// set stays bounded by what is actually in flight.
+    /// </summary>
+    /// <param name="committedEndOffsetInclusive">
+    /// The <c>TAIL</c> offset phase 2 just persisted.
+    /// </param>
+    private void PruneAcceptedRanges(long committedEndOffsetInclusive)
+    {
+        lock (_acceptedGate)
+        {
+            while (_acceptedRanges.Count > 0)
+            {
+                var (start, endInclusive) = FirstAcceptedRange();
+                if (endInclusive > committedEndOffsetInclusive)
+                {
+                    break;
+                }
+                _acceptedRanges.Remove(start);
+            }
+        }
+    }
+
+    private KeyValuePair<long, long> FirstAcceptedRange()
+    {
+        foreach (var range in _acceptedRanges)
+        {
+            return range;
+        }
+        throw new InvalidOperationException("The accepted-range set is empty.");
+    }
+
+    /// <summary>
+    /// Discards every accepted range, so the worker vouches for
+    /// nothing beyond the persisted <c>TAIL</c>.
+    /// <para>
+    /// Called when a phase-2 commit fails and at shutdown. The
+    /// sticky-failure model faults the in-flight batch and every later
+    /// pending one, and the producer resyncs from the persisted
+    /// <c>TAIL</c>, so the worker can no longer vouch for anything it
+    /// has not already committed. Reporting those offsets afterwards
+    /// would be exactly the lie this set exists to avoid. Ranges that
+    /// <i>did</i> commit are already reflected in <c>TAIL</c>, so
+    /// clearing wholesale loses nothing.
+    /// </para>
+    /// </summary>
+    private void DiscardAcceptedRanges()
+    {
+        lock (_acceptedGate)
+        {
+            _acceptedRanges.Clear();
+        }
     }
 
     private int _disposed;
@@ -367,6 +546,10 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     new ObjectDisposedException(nameof(PhaseTwoWorker)));
             }
             _pending.Clear();
+
+            // Those offsets are no longer vouched for, exactly as on
+            // the commit-failure path.
+            DiscardAcceptedRanges();
         }
     }
 
@@ -518,6 +701,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             }
 
             _highestCommittedEndOffset = tailToPersist;
+            PruneAcceptedRanges(tailToPersist);
             for (var i = 0; i < commits.Count; i++)
             {
                 commits[i].Completion.TrySetResult();
@@ -541,6 +725,11 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                 pending.Completion.TrySetException(ex);
             }
             _pending.Clear();
+
+            // The producer will resync from the persisted TAIL, so the
+            // worker can no longer vouch for anything above what it
+            // actually committed.
+            DiscardAcceptedRanges();
             LatticeMetrics.ProviderRetryExhausted.Add(
                 1,
                 new System.Diagnostics.TagList

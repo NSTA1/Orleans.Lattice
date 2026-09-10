@@ -1675,6 +1675,49 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Returns the greater of the shard's persisted <c>TAIL</c> row
+    /// and the contiguous run of phase-1-durable batches the live
+    /// phase-2 worker has accepted above it, so an offset returned by
+    /// a completed <see cref="AppendBatchAsync"/> is never reported
+    /// back as though it did not exist.
+    /// <para>
+    /// Under
+    /// <see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
+    /// (on by default) an append returns once its own phase 1 has
+    /// committed and only the <i>predecessor's</i> phase 2 has
+    /// landed, so <c>TAIL</c> alone lags by one batch per shard. The
+    /// entries are nonetheless durable - phase 1 wrote their rows and
+    /// the per-batch HEAD row atomically - and activation-time
+    /// reconciliation rolls exactly such contiguous batches forward,
+    /// so folding in the worker's accepted ranges reports what
+    /// recovery would keep rather than what the manifest happens to
+    /// have caught up with.
+    /// </para>
+    /// <para>
+    /// The walk starts at the persisted <c>TAIL</c> and stops at the
+    /// first hole, so a batch whose lower neighbour is still in phase
+    /// 1 is never reported - matching reconciliation, which rolls an
+    /// orphan above a gap back rather than forward.
+    /// </para>
+    /// <para>
+    /// The fold degrades to the persisted value alone whenever this
+    /// provider instance has no live worker for the shard - a fresh
+    /// activation, another silo, or
+    /// <c>PipelinePhaseTwoCommits = false</c> - and <c>TAIL</c> keeps
+    /// its exact former meaning everywhere else, including on the
+    /// <see cref="ReconcileAsync"/> path, which continues to read the
+    /// persisted row and only the persisted row.
+    /// </para>
+    /// <para>
+    /// <see cref="ReadAsync"/> and <see cref="ReadEncodedAsync"/> are
+    /// unaffected: they stream entry rows through the manifest's
+    /// <c>M</c> rows and still observe a not-yet-committed batch only
+    /// after its phase 2 lands. Use
+    /// <see cref="FlushPhaseTwoAsync"/> when a caller needs
+    /// read-your-writes from those.
+    /// </para>
+    /// </remarks>
     public async Task<long> GetHighestOffsetAsync(
         string treeId,
         int shardIndex,
@@ -1686,6 +1729,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
 
+        long persistedTail;
         try
         {
             // Point-read the per-shard TAIL row. The phase-2 worker
@@ -1697,12 +1741,22 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 manifestPartitionKey,
                 TailRowKey,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
-            return response.Value.Offset;
+            persistedTail = response.Value.Offset;
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
-            return -1L;
+            persistedTail = -1L;
         }
+
+        // Fold in the live worker's accepted ranges. The worker
+        // dictionary is keyed by the same manifest partition key, so
+        // this is one lookup and no extra round-trip. The worker
+        // walks upward from the persisted value and returns it
+        // unchanged when nothing contiguously extends it, so the
+        // answer can never be dragged below TAIL.
+        return _phaseTwoWorkers.TryGetValue(manifestPartitionKey, out var worker)
+            ? worker.ContiguousAcceptedEndOffsetInclusive(persistedTail)
+            : persistedTail;
     }
 
     /// <inheritdoc />

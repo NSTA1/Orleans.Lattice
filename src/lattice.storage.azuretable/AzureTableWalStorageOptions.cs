@@ -280,18 +280,15 @@ public sealed class AzureTableWalStorageOptions
     /// <c>TAIL</c> row.
     /// </para>
     /// <para>
-    /// <b>Visibility lag - the one observable change.</b> A batch
-    /// becomes <i>visible</i> when its phase-2 commit lands, not
-    /// when <c>AppendBatchAsync</c> returns, so between those two
-    /// points the batch is durable but not yet readable. This
-    /// affects <b>every manifest-derived read</b>, not only the
-    /// tail: <see cref="IWalStorageProvider.GetHighestOffsetAsync"/>
-    /// may return the pre-append <c>TAIL</c>, and
+    /// <b>Read visibility lag - the one observable change.</b> A
+    /// batch becomes <i>readable</i> when its phase-2 commit lands,
+    /// not when <c>AppendBatchAsync</c> returns, so between those two
+    /// points the batch is durable but not yet readable.
     /// <see cref="IWalStorageProvider.ReadAsync"/> /
-    /// <c>ReadEncodedAsync</c> may omit the trailing batch entirely,
-    /// because both scan the shard's manifest partition and a batch
-    /// has no manifest row until phase 2 commits. Nothing is lost:
-    /// phase 0+1 are durable and activation-time
+    /// <c>ReadEncodedAsync</c> may therefore omit the trailing batch
+    /// entirely, because both scan the shard's manifest partition and
+    /// a batch has no manifest row until phase 2 commits. Nothing is
+    /// lost: phase 0+1 are durable and activation-time
     /// <see cref="IWalStorageProvider.ReconcileAsync"/> rolls the
     /// batch forward. <c>WalShardGrain</c> tracks <c>_nextOffset</c>
     /// in memory and never re-reads <c>TAIL</c> outside of
@@ -302,6 +299,17 @@ public sealed class AzureTableWalStorageOptions
     /// <see cref="AzureTableWalStorageProvider.FlushPhaseTwoAsync"/>
     /// to drain the outstanding commits rather than sleeping or
     /// polling.
+    /// </para>
+    /// <para>
+    /// <see cref="IWalStorageProvider.GetHighestOffsetAsync"/> does
+    /// <b>not</b> share that lag. It folds the contiguous run of
+    /// already-durable batches the shard's live phase-2 worker has
+    /// accepted over the persisted <c>TAIL</c>, so it never reports
+    /// an offset lower than one a completed append already returned.
+    /// The fold walks upward from <c>TAIL</c> and stops at the first
+    /// gap, which is exactly the run reconciliation would roll
+    /// forward, and it degrades to <c>TAIL</c> alone when the
+    /// provider instance has no live worker for the shard.
     /// </para>
     /// </summary>
     public bool PipelinePhaseTwoCommits { get; set; } = DefaultPipelinePhaseTwoCommits;
