@@ -121,6 +121,40 @@ counterexample trace: a reader observes one key at its post-saga value while a
 sibling key still shows pre-saga - exactly the split view the linearization
 point exists to prevent. Revert the weakening to restore the clean run.
 
+## The refinement note is gated for staleness, not for truth
+
+[`Refinement.md`](Refinement.md) names production C# symbols in backticks. A
+rename or deletion in `src/lattice/` would leave those references pointing at
+code that no longer exists, while the note went on reading as authoritative.
+`RefinementMappingStalenessTests` (in `test/lattice/Formal/`) closes that gap:
+it parses the backticked `Type.Member` references out of the three mapping
+tables and fails if any of them no longer resolves in `src/`. It is
+toolchain-free, needs no JVM, and runs in the deterministic tier in
+milliseconds.
+
+Resolution handles three forms deliberately, because the note uses all three:
+an ordinary type member, a nested type, and a **partial-class file suffix** -
+`ShardRootGrain.TxTerminal` is not a member at all but the file
+`src/lattice/BPlusTree/Grains/ShardRootGrain.TxTerminal.cs`. A checker that
+assumed `Type.Member` would report that (and `BPlusLeafGrain.PendingTx`) as
+missing and be wrong. The gate reads source text rather than using reflection,
+because several mapped symbols are `private` or `internal` and the file-suffix
+form has no reflective existence at all.
+
+**What a green run does and does not mean.** The gate checks that each named
+symbol **exists**. It does not check that the row's claim about that symbol is
+**true**. A row can name a dozen perfectly resolvable symbols and still assert
+behaviour the code does not have; nothing here would notice. Verifying the
+behavioural claims is separate work. Do not read a passing run as the note
+having been validated, only as the note not naming code that has disappeared.
+
+Bare backticked identifiers are not checked. In these tables they are
+indistinguishable from TLA+ variables, spec-level string values, enum members
+quoted without their type, and parameter names, so checking them would produce
+false alarms; a staleness gate that cries wolf gets suppressed and is then
+worse than no gate. The honest cost is that a rename of a symbol the note
+mentions only in bare form is not caught.
+
 ## Last checked
 
 This specification was checked with **TLC 2.19** (tla2tools, rev 5a47802) on a
