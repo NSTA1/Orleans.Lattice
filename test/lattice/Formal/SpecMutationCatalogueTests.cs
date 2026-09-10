@@ -228,4 +228,101 @@ public sealed class SpecMutationCatalogueTests
             }
         });
     }
+
+    /// <summary>
+    /// Encodes the trap that issue #2323 asks the harness to control for: a cfg
+    /// authored by prepending a property to an existing PROPERTIES block rather
+    /// than replacing it, which yielded six conjuncts instead of the intended
+    /// one, named the same property in two blocks, and misattributed two
+    /// separate violations. That produced a confidently wrong headline which
+    /// took four independent routes to overturn.
+    /// <para>
+    /// <see cref="SpecMutation.BuildConfig"/> writes each cfg whole rather than
+    /// editing one, so the fault is currently unreachable by construction. That
+    /// is exactly the claim this epic exists to distrust: "true by
+    /// construction" and "asserted" are different states, and only the second
+    /// survives somebody refactoring the generator into an edit. The check is
+    /// cheap, so there is no reason to owe it to a code-reading.
+    /// </para>
+    /// <para>
+    /// The header count is checked separately from the parsed names because
+    /// <see cref="SpecMutationCatalogue.ReadCheckedPropertiesByBlock"/>
+    /// accumulates a repeated block into one list. A duplicated PROPERTIES
+    /// header is therefore invisible in the parse and visible only here.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void Every_generated_config_names_its_target_once_in_a_single_block()
+    {
+        var baseConfig = BaseConfig;
+        var mutations = Mutations();
+
+        Assert.That(mutations, Is.Not.Empty, "expected at least one mutation in spec/mutations/.");
+
+        Assert.Multiple(() =>
+        {
+            foreach (var mutation in mutations)
+            {
+                var cfg = mutation.BuildConfig(baseConfig);
+                var lines = cfg.ReplaceLineEndings("\n").Split('\n').Select(l => l.Trim()).ToArray();
+
+                var invariantHeaders = lines.Count(l =>
+                    l.StartsWith(SpecMutationCatalogue.InvariantsBlock, StringComparison.Ordinal));
+                var propertyHeaders = lines.Count(l =>
+                    l.StartsWith(SpecMutationCatalogue.PropertiesBlock, StringComparison.Ordinal));
+
+                Assert.That(
+                    invariantHeaders,
+                    Is.EqualTo(1),
+                    $"the cfg generated for mutation '{mutation.Name}' has {invariantHeaders} INVARIANTS "
+                    + "blocks. TLC accumulates them, so the run would check more than the one target this "
+                    + "experiment isolates and a violation could be attributed to the wrong property.");
+
+                Assert.That(
+                    propertyHeaders,
+                    Is.LessThanOrEqualTo(1),
+                    $"the cfg generated for mutation '{mutation.Name}' has {propertyHeaders} PROPERTIES "
+                    + "blocks. That is the authoring mistake #2323 records: the conjuncts accumulate and "
+                    + "two separate violations get misattributed to one property.");
+
+                var blocks = SpecMutationCatalogue.ReadCheckedPropertiesByBlock(cfg);
+                var invariants = blocks[SpecMutationCatalogue.InvariantsBlock];
+                var properties = blocks[SpecMutationCatalogue.PropertiesBlock];
+
+                Assert.That(
+                    invariants.Intersect(properties, StringComparer.Ordinal),
+                    Is.Empty,
+                    $"the cfg generated for mutation '{mutation.Name}' names the same property under both "
+                    + "INVARIANTS and PROPERTIES. TLC then checks it twice by two different semantics, "
+                    + "which is how one defect reports as two violations.");
+
+                var occurrences = invariants.Concat(properties)
+                    .Count(n => string.Equals(n, mutation.Target, StringComparison.Ordinal));
+
+                Assert.That(
+                    occurrences,
+                    Is.EqualTo(1),
+                    $"the cfg generated for mutation '{mutation.Name}' names its target "
+                    + $"'{mutation.Target}' {occurrences} times. The two-arm experiment depends on exactly "
+                    + "one target being checked, because the banner assertion reads a single property name.");
+
+                if (mutation.PropertyClass is SpecPropertyClass.Action or SpecPropertyClass.Temporal)
+                {
+                    Assert.That(
+                        properties,
+                        Is.EqualTo(new[] { mutation.Target }),
+                        $"the cfg generated for mutation '{mutation.Name}' should declare exactly its one "
+                        + $"target '{mutation.Target}' under PROPERTIES, and nothing else.");
+                }
+                else
+                {
+                    Assert.That(
+                        properties,
+                        Is.Empty,
+                        $"mutation '{mutation.Name}' targets an invariant, so the generated cfg should have "
+                        + "no PROPERTIES block at all.");
+                }
+            }
+        });
+    }
 }

@@ -205,6 +205,29 @@ never evidence of reachability. A future revision that lets a saga re-enter
 properties load-bearing, and the mutations are the standing check that they
 would be ready to fire on the day it does.
 
+## Every generated cfg names exactly one target, in one block
+
+Issue #2323 records an authoring mistake made during the audit itself: a mutation
+cfg was written by **prepending** a property to the existing `PROPERTIES` block
+instead of replacing it. The result was six conjuncts where one was intended, the
+same property named in two blocks, and two separate violations misattributed to
+one property - a confidently wrong headline that took four independent routes to
+overturn. The tell was in the log the whole time: the satisfiability report showed
+six branches where the intended cfg shows two.
+
+The issue asks for two things in response, and the harness does both. Each cfg is
+written **whole** by `SpecMutation.BuildConfig` rather than edited, so the fault
+has no way in; and `Every_generated_config_names_its_target_once_in_a_single_block`
+**asserts** it anyway, for every mutation, without a JVM.
+
+The assertion is not redundant with the construction. "Unreachable by
+construction" and "checked" are different states, and only the second survives
+somebody refactoring the generator back into an edit. Distrusting exactly that
+distinction is why this directory exists, so it would be incoherent to owe this
+one to a code-reading. The gate checks the block headers separately from the
+parsed names, because a repeated block header accumulates into a single list when
+parsed and is invisible there.
+
 ## Running one by hand
 
 The modules are generated, so there is nothing here to hand to TLC directly.
