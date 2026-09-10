@@ -166,14 +166,31 @@ internal sealed partial class ShardRootGrain
 
         walk.ReportIfSlow(logger, context.GrainId);
 
-        foreach (var internalId in internalNodeIds)
-        {
-            var internalNode = grainFactory.GetGrain<IBPlusInternalGrain>(internalId);
-            await internalNode.ClearGrainStateAsync();
-        }
+        await ClearInternalNodesAsync(internalNodeIds);
 
         await state.ClearStateAsync();
     }
+
+    /// <summary>
+    /// Clears every collected internal node, in bounded overlapped waves.
+    /// </summary>
+    /// <remarks>
+    /// Unlike the leaf chain - which must stay serial because a leaf's sibling
+    /// pointer has to be read before its state is cleared - the internal-node set
+    /// is fully materialised by <see cref="CollectInternalNodeIds"/> before the
+    /// first clear is issued, so the clears are independent of one another and of
+    /// the traversal that produced them, and their completion order is
+    /// immaterial. Issued one at a time they turn a purge of an I-node tree into
+    /// I sequential round trips; issued in bounded waves they cost
+    /// ceil(I / <see cref="BoundedFanOut.DefaultWidth"/>) instead. The purge runs
+    /// against a tree that is already offline by contract, so nothing observes an
+    /// intermediate state of this sweep either way.
+    /// </remarks>
+    private Task ClearInternalNodesAsync(List<GrainId> internalNodeIds) =>
+        BoundedFanOut.ForEachAsync(
+            internalNodeIds,
+            BoundedFanOut.DefaultWidth,
+            id => grainFactory.GetGrain<IBPlusInternalGrain>(id).ClearGrainStateAsync());
 
     private async Task CollectInternalNodeIds(GrainId rootNodeId, List<GrainId> collected)
     {
