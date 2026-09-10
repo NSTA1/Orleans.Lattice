@@ -769,6 +769,50 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken)
     {
+        try
+        {
+            return await ReplayWalSinceCheckpointCoreAsync(checkpointOverride, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Bank whatever this cold rebuild re-read before it was cut short
+            // (issue #2280). This is the ONLY reachable banking point on this
+            // path: Orleans does not run OnDeactivateAsync when OnActivateAsync
+            // throws, and a cancelled cold replay leaves activation BY throwing,
+            // so the graceful-deactivation capture hook never sees it. Without
+            // this, the whole re-read prefix is discarded and the next
+            // activation starts again from the WAL start - the loop the
+            // SELF-REINFORCING COLD REPLAY LOOP diagnostic names.
+            //
+            // CancellationToken.None, deliberately: the incoming token is
+            // already cancelled, so passing it through would abandon the very
+            // write that makes the cancellation survivable. The capture is a
+            // single blob write, and TryCaptureSnapshotForAdvisoryAsync's
+            // fault-swallowing contract does not apply here - a failure to bank
+            // must not mask the cancellation, so any fault is swallowed
+            // explicitly below and the original cancellation is rethrown.
+            try
+            {
+                await TryBankColdReplayProgressAsync(CancellationToken.None);
+            }
+            catch (Exception bankFault)
+            {
+                ResolveLogger()?.LogWarning(
+                    bankFault,
+                    "Failed to bank cold-replay progress for leaf '{LeafId}' of tree '{TreeId}' after the "
+                    + "replay was cancelled. The activation still fails as it did before; the only loss is "
+                    + "that the next activation re-reads the prefix this one had already absorbed.",
+                    context.GrainId.ToString(),
+                    state.State.TreeId ?? "<unset>");
+            }
+
+            throw;
+        }
+    }
+
+    /// <inheritdoc cref="ReplayWalSinceCheckpointAsync"/>
+    private async Task<bool> ReplayWalSinceCheckpointCoreAsync(long? checkpointOverride, CancellationToken cancellationToken)
+    {
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
             return false;
@@ -2899,6 +2943,17 @@ internal sealed partial class BPlusLeafGrain
             ceiling = minDeferred - 1;
         if (MinUnresolvedPrepareOffsetForPartition(partition) is long minPrepare && minPrepare - 1 < ceiling)
             ceiling = minPrepare - 1;
+
+        // Record the re-read frontier BEFORE the monotonic short-circuit below.
+        // On a cold rebuild the checkpoint still sits at its persisted value
+        // while this activation re-reads from offset 0, so every ceiling below
+        // that value is real progress the checkpoint cannot express - and the
+        // `return false` below is exactly where it was being discarded (issue
+        // #2280). Recording it here banks nothing on its own; it makes the
+        // progress REPRESENTABLE so a mid-replay snapshot capture can bank it.
+        // The checkpoint itself is untouched and stays strictly monotonic.
+        if (_cacheRebuiltFromWalStartThisActivation)
+            RecordColdReplayFrontier(partition, ceiling, partition + 1);
 
         if (ceiling <= GetCurrentCheckpointForPartition(partition))
             return false;
