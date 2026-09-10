@@ -25,16 +25,21 @@ public class MvRegisterEntryTests
     }
 
     [Test]
-    public void Equality_is_value_based_over_replica_and_counter()
+    public void Equality_is_value_based_over_replica_counter_and_value()
     {
         var a = new MvRegisterEntry { ReplicaId = "r1", Counter = 1, Value = new byte[] { 1 } };
         var b = new MvRegisterEntry { ReplicaId = "r1", Counter = 1, Value = new byte[] { 1 } };
         var c = new MvRegisterEntry { ReplicaId = "r1", Counter = 2, Value = new byte[] { 1 } };
-        // Value is by-reference under record-struct default equality on arrays;
-        // but ReplicaId+Counter still differ in c.
-        Assert.That(a, Is.Not.EqualTo(c));
-        // Same replica/counter, different array instances - default record equality
-        // compares each field; arrays use reference equality, so a != b.
-        Assert.That(a, Is.Not.EqualTo(b));
+        var d = new MvRegisterEntry { ReplicaId = "r1", Counter = 1, Value = new byte[] { 2 } };
+        Assert.Multiple(() =>
+        {
+            // Differing counter or value bytes still compare unequal.
+            Assert.That(a, Is.Not.EqualTo(c));
+            Assert.That(a, Is.Not.EqualTo(d));
+            // Same replica/counter and byte-identical value across independently
+            // allocated arrays now compare equal: Value is compared by content.
+            Assert.That(a, Is.EqualTo(b));
+            Assert.That(a.GetHashCode(), Is.EqualTo(b.GetHashCode()));
+        });
     }
 }

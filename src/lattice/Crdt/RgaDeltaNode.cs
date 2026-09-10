@@ -12,16 +12,6 @@ namespace Orleans.Lattice;
 /// position regardless of the post-merge sequence it currently holds -
 /// shipping the post-merge materialised order instead would lose the
 /// concurrent-insert information an <see cref="Rga"/> needs to converge.
-/// <para>
-/// <strong>Equality caveat.</strong> The synthesized record-struct
-/// equality delegates to the default comparer for each field, and the
-/// default comparer for <see cref="byte"/><c>[]</c> is <em>reference</em>
-/// equality. Two structurally-identical nodes built from independently
-/// allocated <see cref="Value"/> arrays therefore compare unequal;
-/// consumers matching nodes across deltas should compare on the dot
-/// tuple (<see cref="ReplicaId"/>, <see cref="Counter"/>), not via record
-/// equality.
-/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.RgaDeltaNode)]
@@ -51,4 +41,42 @@ public readonly record struct RgaDeltaNode
     /// </summary>
     [JsonIgnore]
     public OrSetDot Dot => new() { ReplicaId = ReplicaId, Counter = Counter };
+
+    /// <summary>
+    /// Compares two nodes by value, with <see cref="Value"/> compared by
+    /// content. The compiler-generated record-struct equality compares the
+    /// <see cref="Value"/> byte array with <see cref="EqualityComparer{T}.Default"/> -
+    /// reference equality for a <see cref="byte"/> array - so two nodes built
+    /// from independently allocated but byte-identical values (including a
+    /// node and its post-serialization self) would otherwise never compare
+    /// equal, silently breaking any dedup or round-trip check framed as
+    /// record equality over these nodes. The computed <see cref="Dot"/> is
+    /// derived from <see cref="ReplicaId"/> and <see cref="Counter"/>, so it
+    /// is not compared independently.
+    /// </summary>
+    /// <param name="other">The node to compare against.</param>
+    public bool Equals(RgaDeltaNode other) =>
+        BytesEqual(Value, other.Value)
+        && string.Equals(ReplicaId, other.ReplicaId, StringComparison.Ordinal)
+        && Counter == other.Counter
+        && ParentDot.Equals(other.ParentDot);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        hash.Add(ReplicaId, StringComparer.Ordinal);
+        hash.Add(Counter);
+        hash.Add(ParentDot);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

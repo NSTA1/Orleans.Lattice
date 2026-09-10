@@ -40,13 +40,18 @@ public class OrSetDeltaDotTests
     }
 
     [Test]
-    public void Equality_uses_reference_equality_on_independently_allocated_element_arrays()
+    public void Equality_is_value_based_on_independently_allocated_element_arrays()
     {
-        // Documents the byte[] reference-equality caveat: structurally
-        // identical dots backed by independent arrays are NOT equal.
+        // Structurally identical dots backed by independent but byte-identical
+        // arrays now compare equal: Element is compared by content, not by
+        // reference.
         var a = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r", Counter = 1 };
         var b = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r", Counter = 1 };
-        Assert.That(a, Is.Not.EqualTo(b));
+        Assert.Multiple(() =>
+        {
+            Assert.That(a, Is.EqualTo(b));
+            Assert.That(a.GetHashCode(), Is.EqualTo(b.GetHashCode()));
+        });
     }
 }
 
