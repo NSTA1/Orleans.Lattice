@@ -253,25 +253,70 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
         var bounded = _countBudget > TimeSpan.Zero;
         var startedAt = bounded ? _timeProvider.GetTimestamp() : 0L;
 
+        // The budget has to be a DEADLINE and not just a sample taken between keys.
+        // Sampling in the loop body bounds the gap between keys and nothing else,
+        // so it does not bound a walk that yields NO key - and that is precisely
+        // the walk that needs bounding, because it is the one whose first page
+        // stalls. With CountReconnectAttempts set to 64, an unbounded such walk
+        // spends a 64-deep reconnect storm plus the stall-resume budget derived
+        // from it, all on the build's turn-holding path, before anything gives up.
+        // That was measured as a phase tick active for over four minutes against a
+        // 30-second call timeout, which starved the coordinator's own keep-alive
+        // reminder (issues #2536 and #2483).
+        //
+        // The token is linked rather than substituted so that a caller-cancelled
+        // count is still distinguishable from a merely over-budget one below.
+        using var deadline = bounded
+            ? new CancellationTokenSource(_countBudget, _timeProvider)
+            : null;
+        using var linked = deadline is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        var walkToken = linked?.Token ?? cancellationToken;
+
         var count = 0;
         var overBudget = false;
-        await foreach (var _ in tree
-            .ScanKeysAsync(prefix, endExclusive, maxAttempts: CountReconnectAttempts, cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            count++;
-
-            // Checked AFTER the key is counted, so a budget smaller than the cost of
-            // a single key still makes progress rather than spinning. The walk is
-            // abandoned, not resumed: a count has no checkpoint to resume from, and
-            // the caller does not need one because it only needs to know that the
-            // figure is unavailable.
-            if (bounded && _timeProvider.GetElapsedTime(startedAt) >= _countBudget)
+            await foreach (var _ in tree
+                .ScanKeysAsync(prefix, endExclusive, maxAttempts: CountReconnectAttempts, cancellationToken: walkToken)
+                .ConfigureAwait(false))
             {
-                overBudget = true;
-                break;
+                cancellationToken.ThrowIfCancellationRequested();
+                count++;
+
+                // Checked AFTER the key is counted, so a budget smaller than the cost of
+                // a single key still makes progress rather than spinning. The walk is
+                // abandoned, not resumed: a count has no checkpoint to resume from, and
+                // the caller does not need one because it only needs to know that the
+                // figure is unavailable.
+                //
+                // That reasoning is sound, and it is also the reasoning that produced
+                // the hole this method's deadline now closes, so read it for what it
+                // covers rather than as a statement about the walk as a whole. It
+                // considers a walk that yields keys SLOWLY and concludes - correctly -
+                // that the check belongs after the first one. It does not consider a
+                // walk that yields NO key, which never reaches this line at all, and
+                // which is the walk that was actually observed: the budget was
+                // therefore never evaluated and the count ran on unbounded. Do not
+                // move this check back to the top of the body on the strength of the
+                // first case; the two cases need the two different mechanisms that are
+                // now both present.
+                if (bounded && _timeProvider.GetElapsedTime(startedAt) >= _countBudget)
+                {
+                    overBudget = true;
+                    break;
+                }
             }
+        }
+        catch (OperationCanceledException) when (
+            deadline is { IsCancellationRequested: true } && !cancellationToken.IsCancellationRequested)
+        {
+            // The deadline stopped the walk mid-read. That is the budget being
+            // spent, which this method already has a documented answer for, so it
+            // takes the same exit as the sampled path rather than propagating a
+            // cancellation the caller never asked for.
+            overBudget = true;
         }
 
         // Raised outside the enumeration so the scan's enumerator is disposed first,

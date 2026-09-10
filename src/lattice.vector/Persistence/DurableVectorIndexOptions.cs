@@ -117,6 +117,29 @@ public sealed class DurableVectorIndexOptions
     /// step's progress monotone under a repeating fault as well as under a spent
     /// budget. The fault itself is still raised to the caller.
     /// </para>
+    /// <para>
+    /// <b>And the budget is a deadline, not only a sample.</b> Banking on a fault
+    /// closed one half of #2536 and left the other half open, which the same
+    /// deployment then measured: banking is conditional on having consumed
+    /// something, and the fault that was actually firing was a source page that
+    /// stalled BEFORE yielding its first item. Zero items consumed means the
+    /// in-loop sample above is never reached, so the step is not bounded at all,
+    /// and it means there is nothing to bank, so the cursor never moves and the
+    /// next step re-reads the identical range. The build does not converge slowly
+    /// under that fault - it does not converge. The budget is therefore also
+    /// armed as a cancellation deadline that is handed to the source and raced
+    /// against each read, so a step returns within its budget whether the source
+    /// is slow, stuck, or silent. A step stopped by the deadline banks and
+    /// returns rather than throwing: it is a bounded slice, not a failure.
+    /// </para>
+    /// <para>
+    /// Bounding the step is also what bounds the TURN a host pumps it on. An
+    /// unbounded step held its coordinator's non-reentrant activation for the
+    /// whole of a measured four and a half minutes, behind which that
+    /// coordinator's own keep-alive reminder timed out at thirty seconds - so the
+    /// pump that was supposed to retry the build was starved by the build
+    /// (#2483).
+    /// </para>
     /// </summary>
     public TimeSpan IngestSliceBudget
     {
