@@ -275,11 +275,16 @@ public sealed partial class RepoContextEffectiveConfigurationReporterTests
             Is.EqualTo(new[]
             {
                 RepoContextHostConfiguration.AzureConnectionKey,
+                RepoContextBackup.BlobConnectionStringKey,
                 RepoContextHostConfiguration.PostgresConnectionKey,
             }),
             "the redacted set is pinned so that widening it is a deliberate, reviewable "
             + "edit rather than a side effect; if a new key belongs here, this assertion is "
-            + "where that decision gets recorded");
+            + "where that decision gets recorded. The backup sink's connection string is "
+            + "the third member and belongs here for the same reason as the other two: it "
+            + "carries a storage account key, and the sink it addresses holds the one tree "
+            + "in this host that cannot be rebuilt from anything, so printing it would put "
+            + "read AND delete access to the only copy of agent memory into the log");
     }
 
     [Test]

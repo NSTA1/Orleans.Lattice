@@ -190,6 +190,12 @@ public static class RepoContextHostBuilder
 
         var isAzure = config.Profile == DurabilityProfile.Azure;
 
+        // Resolve the backup settings once, before the silo lambda, so an unusable
+        // value fails the host at startup rather than at the first capture an hour
+        // later. See RepoContextBackup for why capture refuses to run against the
+        // default in-cluster sink.
+        var backupSettings = RepoContextBackup.Resolve(builder.Configuration);
+
         builder.Host.UseOrleans(silo =>
         {
             silo.ConfigureDurability(config);
@@ -238,6 +244,13 @@ public static class RepoContextHostBuilder
             });
             silo.Services.AddSingleton<ILatticeCredentialAuthenticator, LocalTrustedAuthenticator>();
             silo.AddLatticeAuthApi();
+
+            // Capture the durable agent-memory tree into an external blob sink so a
+            // gesture that destroys the primary store does not destroy its only
+            // copy. Registered after AddLattice (ConfigureDurability, above), which
+            // AddLatticeBackup requires. Inert unless an external sink is
+            // configured - see RepoContextBackup.
+            silo.ConfigureRepoContextBackup(backupSettings);
 
             // Scaling signal is azure-only; never wired in the local topology.
             if (isAzure)
@@ -325,6 +338,16 @@ public static class RepoContextHostBuilder
         // retrieval readiness component reports demonstrated capability instead of
         // waiting for traffic an orchestrator will not route to a not-ready box.
         builder.Services.AddHostedService<RepoContextRetrievalWarmupService>();
+
+        // Backup cadence for the durable agent-memory tree: one full baseline at
+        // startup, then incrementals on the configured interval. The status is a
+        // singleton whether or not backup is enabled, so the health surface can
+        // always state positively what is (or is not) being captured rather than
+        // saying nothing when nothing is wired.
+        builder.Services.AddSingleton(backupSettings);
+        builder.Services.AddSingleton(
+            new RepoContextBackupStatus(backupSettings.Enabled, RepoContextHostTrees.Memory));
+        builder.Services.AddHostedService<RepoContextBackupService>();
 
         var healthChecks = builder.Services.AddHealthChecks();
         healthChecks.AddCheck<RepoContextLivenessHealthCheck>(

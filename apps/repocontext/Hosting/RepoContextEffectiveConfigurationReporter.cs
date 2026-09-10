@@ -246,6 +246,14 @@ public sealed class RepoContextEffectiveConfigurationReporter(
         RepoContextReplayConcurrency.MaxConcurrentReplaysKey,
         RepoContextClaimLeases.MaxLockLeaseSecondsKey,
         RepoContextShutdownBudget.StopGracePeriodKey,
+        RepoContextBackup.BlobConnectionStringKey,
+        RepoContextBackup.EnabledKey,
+        RepoContextBackup.ContainerKey,
+        RepoContextBackup.FullHoursKey,
+        RepoContextBackup.IncrementalMinutesKey,
+        RepoContextBackup.RetentionKeepLastKey,
+        RepoContextBackup.RetentionMaxAgeDaysKey,
+        RepoContextBackup.RestoreBackupIdKey,
     ];
 
     /// <summary>

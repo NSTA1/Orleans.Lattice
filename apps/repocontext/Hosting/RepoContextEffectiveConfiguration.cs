@@ -177,6 +177,15 @@ public static class RepoContextEffectiveConfiguration
             RepoContextGarbageCollection.RuntimePauseTotalKey,
         };
 
+        // The memory-backup wiring's own settings (issue #2602). Every one is a
+        // cadence, a count, or a container name. The blob connection string is
+        // deliberately NOT among them: it carries an account key, so it stays
+        // unclassified and is therefore withheld by the allowlist.
+        foreach (var key in RepoContextBackup.SafeToPrintKeys)
+        {
+            keys.Add(key);
+        }
+
         // The repository-context package's own settings. Every one is a cadence, a count,
         // an enum, or a path to a directory this host writes to - none is
         // credential-bearing, so each is classified deliberately rather than by inheriting
