@@ -137,7 +137,12 @@ internal static class RepoTreeWalker
         var options = new ParallelOptions
         {
             CancellationToken = cancellationToken,
-            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount),
+            // Size the fan-out to the CPU the container may actually use, not the
+            // host core count. Environment.ProcessorCount is quota-derived only
+            // while DOTNET_PROCESSOR_COUNT does not override it, and this service
+            // sets that variable, so on a constrained host the count can far
+            // exceed the enforced grant and oversubscribe this pool (issue #2613).
+            MaxDegreeOfParallelism = Math.Max(1, ContainerCpuGrant.Read() ?? Environment.ProcessorCount),
         };
 
         try

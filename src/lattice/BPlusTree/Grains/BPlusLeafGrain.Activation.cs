@@ -202,6 +202,11 @@ internal sealed partial class BPlusLeafGrain
             {
                 max = options.WalMaterialiserMaxConcurrentReplays;
                 if (max <= 0)
+                    // The core library deliberately does not read the cgroup grant itself
+                    // (issues #2278/#2279); an operator pins WalMaterialiserMaxConcurrentReplays
+                    // or DOTNET_PROCESSOR_COUNT on a constrained host, and the disagreement is
+                    // surfaced by LogResolvedReplayConcurrencyGate below rather than resolved here.
+                    // grant-exempt: the library sizes this gate from Environment.ProcessorCount by design (issues #2278/#2279).
                     max = Environment.ProcessorCount;
                 _replayConcurrencyGate = new SemaphoreSlim(max, max);
                 sizedHere = true;
@@ -268,6 +273,7 @@ internal sealed partial class BPlusLeafGrain
                 + "per process and is never re-created or topped up.",
                 max,
                 configured,
+                // grant-exempt: reporting the resolved processor count in a diagnostic, not sizing a pool.
                 Environment.ProcessorCount);
         }
         catch

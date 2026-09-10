@@ -1,8 +1,11 @@
-namespace Orleans.Lattice.Embedding.Onnx.Tests;
+namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests;
 
 /// <summary>
-/// Covers the cgroup CPU-grant reader that decouples the ONNX Runtime intra-op
-/// pool from <see cref="System.Environment.ProcessorCount"/>.
+/// Covers the shared cgroup CPU-grant reader that decouples pool sizing from
+/// <see cref="System.Environment.ProcessorCount"/>. Moved here with issue #2613
+/// when the reader was promoted out of the ONNX embedding app into
+/// <c>src/lattice.api.mcp.repocontext</c> so every pool-sizing site can consult
+/// one implementation.
 /// </summary>
 /// <remarks>
 /// The rows below are not invented. Each was measured on .NET 10 under Docker

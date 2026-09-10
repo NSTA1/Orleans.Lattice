@@ -1,26 +1,25 @@
-namespace Orleans.Lattice.Embedding.Onnx;
+namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
-/// Reads the container's enforced CPU grant from the cgroup filesystem.
+/// Reads the container's enforced CPU grant from the cgroup filesystem, so any
+/// pool-sizing site can ask "how much CPU may this process actually use?" without
+/// re-implementing the cgroup v1/v2 parsing.
 /// </summary>
 /// <remarks>
 /// <para>
-/// MIRROR: this is a byte-identical copy (comments aside) of the canonical
-/// <c>Orleans.Lattice.Api.Mcp.RepoContext.ContainerCpuGrant</c> in
-/// <c>src/lattice.api.mcp.repocontext/Runtime/</c>. It is duplicated rather than
-/// referenced because this container image deliberately has no project reference
-/// into <c>src/</c> and its Docker build context is only <c>apps/embedding-onnx</c>,
-/// so it cannot compile a shared <c>src</c> type without breaking the image. A
-/// divergence guard (<c>ContainerCpuGrantMirrorDriftTests</c>) fails CI if the
-/// executable body here ever drifts from the canonical copy; keep the two in
-/// sync when editing either.
+/// This is the shared, reusable form of the reader introduced by issue #2610
+/// (which sized the ONNX Runtime intra-op pool). It is promoted out of that app
+/// so the whole repository-context deployment can consult one implementation:
+/// <see cref="Bootstrap.RepoTreeWalker"/> uses it here, and the standalone ONNX
+/// embedding companion keeps a byte-identical mirror because its container image
+/// deliberately has no project reference into <c>src/</c> (a divergence guard
+/// fails CI if the two ever drift).
 /// </para>
 /// <para>
-/// This exists because <see cref="System.Environment.ProcessorCount"/> is not a
-/// reliable statement of how much CPU the process may actually use. It is
-/// quota-derived only when nothing overrides it, and <c>DOTNET_PROCESSOR_COUNT</c>
-/// overrides it. Measured on .NET 10 under Docker, all four combinations behave
-/// as follows:
+/// It exists because <see cref="System.Environment.ProcessorCount"/> is not a
+/// reliable statement of how much CPU the process may use. It is quota-derived
+/// only when nothing overrides it, and <c>DOTNET_PROCESSOR_COUNT</c> overrides
+/// it. Measured on .NET 10 under Docker, all four combinations behave as follows:
 /// </para>
 /// <list type="table">
 ///   <listheader>
@@ -48,17 +47,15 @@ namespace Orleans.Lattice.Embedding.Onnx;
 ///   </item>
 /// </list>
 /// <para>
-/// The second row is the reason this type exists. The sample compose project
-/// sets <c>DOTNET_PROCESSOR_COUNT</c> on the repository-context service (it sizes
-/// an unrelated write-ahead-log replay gate), so an operator copying that
-/// service's environment block onto this one is an entirely ordinary thing to do,
-/// and it would silently restore the thread oversubscription this server now
-/// avoids. Reading the quota directly is immune to that, because the quota is the
-/// figure the kernel enforces rather than a figure something else may have
-/// declared.
+/// Reading the quota directly is immune to a <c>DOTNET_PROCESSOR_COUNT</c>
+/// override, because the quota is the figure the kernel enforces rather than a
+/// figure something else may have declared. A <see langword="null"/> result is
+/// not an error: it is the correct answer on an unconstrained host and on a
+/// non-Linux machine, where the caller falls back to
+/// <see cref="System.Environment.ProcessorCount"/>.
 /// </para>
 /// </remarks>
-internal static class ContainerCpuGrant
+public static class ContainerCpuGrant
 {
     /// <summary>The cgroup v2 unified CPU limit file.</summary>
     public const string CgroupV2CpuMaxPath = "/sys/fs/cgroup/cpu.max";

@@ -368,8 +368,8 @@ public sealed class RepoContextEffectiveConfigurationReporter(
             // reintroduce issue #2586 on the one line that is not a setting at all.
             RepoContextEffectiveConfiguration.DescribeSetting(
                 RepoContextEffectiveConfiguration.RuntimeProcessorCountKey,
-                Number(Environment.ProcessorCount),
-                Number(Environment.ProcessorCount),
+                Number(Environment.ProcessorCount), // grant-exempt: effective-config fact, not pool sizing.
+                Number(Environment.ProcessorCount), // grant-exempt: effective-config fact, not pool sizing.
                 RepoContextSettingProvenance.Runtime),
         };
 
