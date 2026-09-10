@@ -56,4 +56,66 @@ public readonly record struct RgaDelta
         Inserts = Array.Empty<RgaDeltaNode>(),
         Tombstones = Array.Empty<OrSetDot>(),
     };
+
+    /// <summary>
+    /// Compares two deltas by value, with <see cref="Inserts"/> and
+    /// <see cref="Tombstones"/> compared element-by-element using the value
+    /// equality of <see cref="RgaDeltaNode"/> and <see cref="OrSetDot"/>. The
+    /// compiler-generated record-struct equality compares the collection
+    /// references with <see cref="EqualityComparer{T}.Default"/>, so two
+    /// structurally identical deltas built from independently allocated
+    /// collections - and, in particular, a delta and its post-serialization
+    /// self - would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The delta to compare against.</param>
+    public bool Equals(RgaDelta other) =>
+        ListEqual(Inserts, other.Inserts) && ListEqual(Tombstones, other.Tombstones);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        AddList(ref hash, Inserts);
+        AddList(ref hash, Tombstones);
+        return hash.ToHashCode();
+    }
+
+    private static bool ListEqual<T>(IReadOnlyList<T>? left, IReadOnlyList<T>? right)
+        where T : IEquatable<T>
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is null || right is null || left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!left[i].Equals(right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void AddList<T>(ref HashCode hash, IReadOnlyList<T>? list)
+    {
+        if (list is null)
+        {
+            hash.Add(0);
+            return;
+        }
+
+        hash.Add(list.Count);
+        foreach (var element in list)
+        {
+            hash.Add(element);
+        }
+    }
 }
