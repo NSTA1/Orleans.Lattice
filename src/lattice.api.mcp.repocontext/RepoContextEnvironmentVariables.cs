@@ -184,7 +184,14 @@ public static class RepoContextEnvironmentVariables
         ];
 
         static RepoContextSettingSnapshot Snapshot(string name, string resolved, string @default)
-            => new(name, resolved, @default);
+            => new(name, resolved, @default, WasDeclared(name));
+
+        // Read from the process environment, which is the same source FromEnvironment()
+        // above resolved the value from, so the declaration claim and the value it
+        // qualifies cannot disagree (issue #2586). Whitespace counts as absent because
+        // every reader in this package treats it that way.
+        static bool WasDeclared(string name)
+            => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name));
 
         static string Seconds(TimeSpan value)
             => string.Create(CultureInfo.InvariantCulture, $"{value.TotalSeconds:0.###}s");

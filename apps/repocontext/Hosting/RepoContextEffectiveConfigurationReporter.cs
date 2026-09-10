@@ -39,6 +39,17 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// merely checkable.
 /// </para>
 /// <para>
+/// <b>Every value states its origin (issue #2586).</b> This report used to print a
+/// defaulted value in exactly the shape it prints a declared one, and that cost two full
+/// gate runs: a container warned that <c>LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD</c> was
+/// unset and then reported <c>= 120s</c> for it seconds later, and the second line won.
+/// A warning is read by whoever is watching when it scrolls past; this report is read by
+/// whoever later asks what the configuration is, which is the deliberate act of somebody
+/// auditing a deployment and is the audience that matters. So every line now carries a
+/// provenance marker beside its value, on the same line, because a reader who greps for a
+/// variable name must receive the qualification in the same result.
+/// </para>
+/// <para>
 /// This is observability only: it reads and logs. It changes no behaviour, validates
 /// nothing, and never fails startup - a malformed setting is reported as malformed and
 /// left for the host's own validation to reject, because a reporter that could keep the
@@ -66,6 +77,8 @@ public sealed class RepoContextEffectiveConfigurationReporter(
 
         var settings = Describe();
         var overridden = settings.Count(line => line.Contains("[OVERRIDDEN", StringComparison.Ordinal));
+        var defaulted = settings.Count(line => line.Contains(
+            RepoContextEffectiveConfiguration.DefaultedMarker, StringComparison.Ordinal));
         var environment = RepoContextEffectiveConfiguration.ReadProcessEnvironment();
         var unread = RepoContextEffectiveConfiguration.DescribeUnreadVariables(
             environment,
@@ -78,12 +91,16 @@ public sealed class RepoContextEffectiveConfigurationReporter(
 
         logger.LogInformation(
             "Repository-context effective configuration: {Count} setting(s), of which "
-            + "{Overridden} differ(s) from this host's default; {Unread} supplied "
-            + "LATTICE_ variable(s) are not read by this host. Values are as this process "
-            + "resolved them, so this supersedes any configuration file when the two "
-            + "disagree. Credential-bearing values are withheld by an allowlist.",
+            + "{Overridden} differ(s) from this host's default and {Defaulted} were not "
+            + "declared at all; {Unread} supplied LATTICE_ variable(s) are not read by "
+            + "this host. Values are as this process resolved them, so this supersedes any "
+            + "configuration file when the two disagree. Every value carries its origin on "
+            + "its own line - a value nobody supplied is marked "
+            + "'(DEFAULTED, not declared)' and must not be read as configured. "
+            + "Credential-bearing values are withheld by an allowlist.",
             settings.Count,
             overridden,
+            defaulted,
             unread.Count);
 
         // The scope statement, and not a decoration (issue #2470). Without it this
@@ -273,11 +290,15 @@ public sealed class RepoContextEffectiveConfigurationReporter(
             // A runtime fact rather than a setting, and reported for that reason: nothing
             // in this list would have exposed it. There is no default to compare against,
             // because the value the runtime would have chosen unaided is not observable
-            // once DOTNET_PROCESSOR_COUNT has already been applied to it.
+            // once DOTNET_PROCESSOR_COUNT has already been applied to it. It carries an
+            // explicit RUNTIME FACT marker rather than none: once every setting is
+            // qualified, an unqualified line reads as declared, so silence here would
+            // reintroduce issue #2586 on the one line that is not a setting at all.
             RepoContextEffectiveConfiguration.DescribeSetting(
                 RepoContextEffectiveConfiguration.RuntimeProcessorCountKey,
                 Number(Environment.ProcessorCount),
-                Number(Environment.ProcessorCount)),
+                Number(Environment.ProcessorCount),
+                RepoContextSettingProvenance.Runtime),
         };
 
         // The repository-context package's own settings, resolved by the package rather
@@ -290,14 +311,29 @@ public sealed class RepoContextEffectiveConfigurationReporter(
             lines.Add(RepoContextEffectiveConfiguration.DescribeSetting(
                 setting.Name,
                 setting.Resolved,
-                setting.Default));
+                setting.Default,
+                setting.WasDeclared
+                    ? RepoContextSettingProvenance.Declared
+                    : RepoContextSettingProvenance.Defaulted));
         }
 
         lines.Sort(StringComparer.Ordinal);
         return lines;
 
         string Line(string key, Func<RepoContextHostConfiguration, string?> read)
-            => RepoContextEffectiveConfiguration.DescribeSetting(key, read(resolved), read(defaults));
+            => RepoContextEffectiveConfiguration.DescribeSetting(
+                key,
+                read(resolved),
+                read(defaults),
+                Provenance(key));
+
+        // Probed from the configuration the value itself was resolved from, and separately
+        // from the resolved-against-default comparison that produces [OVERRIDDEN] (issue
+        // #2586). The two are orthogonal: a key nothing declared can resolve away from the
+        // pristine default because a neighbouring key moved it, and a key an operator
+        // declared can resolve to exactly the default - the case that produced the issue.
+        RepoContextSettingProvenance Provenance(string key)
+            => RepoContextEffectiveConfiguration.ProvenanceOf(configuration[key]);
 
         string Knob(string key, Func<IConfiguration, int> read, int fallback)
         {
@@ -314,7 +350,11 @@ public sealed class RepoContextEffectiveConfigurationReporter(
                 current = string.Create(CultureInfo.InvariantCulture, $"<invalid: {ex.Message}>");
             }
 
-            return RepoContextEffectiveConfiguration.DescribeSetting(key, current, Number(fallback));
+            return RepoContextEffectiveConfiguration.DescribeSetting(
+                key,
+                current,
+                Number(fallback),
+                Provenance(key));
         }
 
         static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
@@ -325,19 +365,36 @@ public sealed class RepoContextEffectiveConfigurationReporter(
             // this reporter reports a malformed value as malformed rather than taking the
             // process down from inside the diagnostic that was supposed to explain it.
             string current;
+            RepoContextSettingProvenance provenance;
             try
             {
-                current = Seconds(RepoContextShutdownBudget.Resolve(configuration).StopGracePeriod);
+                var resolution = RepoContextShutdownBudget.Resolve(configuration);
+                current = Seconds(resolution.StopGracePeriod);
+
+                // The flag the resolver already computes, and that this report used to
+                // discard - which is the whole of issue #2586. Taken from the resolution
+                // rather than re-derived from the configuration so that this line cannot
+                // disagree with the startup warning built from the same resolution.
+                provenance = resolution.GrantWasDeclared
+                    ? RepoContextSettingProvenance.Declared
+                    : RepoContextSettingProvenance.Defaulted;
             }
             catch (InvalidOperationException ex)
             {
                 current = string.Create(CultureInfo.InvariantCulture, $"<invalid: {ex.Message}>");
+
+                // Declared, not defaulted: the resolver only parses, and so only throws,
+                // when a value was actually supplied. Reporting a rejected declaration as
+                // defaulted would tell an operator nobody set the variable they are
+                // staring at in their own compose file.
+                provenance = RepoContextSettingProvenance.Declared;
             }
 
             return RepoContextEffectiveConfiguration.DescribeSetting(
                 RepoContextShutdownBudget.StopGracePeriodKey,
                 current,
-                Seconds(RepoContextShutdownBudget.DefaultStopGracePeriod));
+                Seconds(RepoContextShutdownBudget.DefaultStopGracePeriod),
+                provenance);
         }
 
         static string Seconds(TimeSpan value)
