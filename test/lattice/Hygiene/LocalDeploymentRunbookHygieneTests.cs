@@ -811,6 +811,17 @@ public sealed class LocalDeploymentRunbookHygieneTests
         start.ArgumentList.Add("--format");
         start.ArgumentList.Add("json");
 
+        // ISSUE #2627. REPOCONTEXT_MEMORY_ARCHIVE_PATH is REQUIRED by the base compose
+        // file - it deliberately has no default, because a relative one resolves against
+        // whatever directory compose was invoked from and put the only working backup of
+        // durable agent memory inside an ephemeral git worktree. An operator supplies it
+        // through .env, which is gitignored and so absent in CI, and resolution is what
+        // this fixture is here to do rather than a deployment. Any absolute path resolves
+        // the document identically, so the value is irrelevant and only its presence
+        // matters.
+        start.Environment["REPOCONTEXT_MEMORY_ARCHIVE_PATH"] =
+            Path.Combine(Path.GetTempPath(), "repocontext-memory-archive-hygiene");
+
         Process? process = null;
         try
         {
@@ -834,6 +845,18 @@ public sealed class LocalDeploymentRunbookHygieneTests
 
         if (process.ExitCode != 0)
         {
+            // A required variable that this fixture failed to supply is a fault in the
+            // repository, not an absent toolchain, and routing it through
+            // RequireToolchain would let it SKIP on a developer machine - a green run
+            // over a document that was never resolved.
+            if (stderr.Contains("REPOCONTEXT_MEMORY_ARCHIVE_PATH", StringComparison.Ordinal))
+            {
+                Assert.Fail(
+                    "`docker compose config` refused because REPOCONTEXT_MEMORY_ARCHIVE_PATH was not "
+                    + "supplied. That variable is required by design (issue #2627) and this fixture "
+                    + $"is meant to set it: {stderr.Trim()}");
+            }
+
             // A daemon that is not running, or a Docker CLI without the compose v2
             // plugin, is an absent toolchain rather than a failing assertion.
             RequireToolchain($"`docker compose config` exited {process.ExitCode}: {stderr.Trim()}");
