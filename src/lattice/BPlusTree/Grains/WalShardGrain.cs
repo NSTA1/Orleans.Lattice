@@ -45,7 +45,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// had already committed against now-orphaned offset windows.
 /// </para>
 /// </summary>
-internal sealed class WalShardGrain(
+internal sealed partial class WalShardGrain(
     IGrainContext context,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     LatticeOptionsResolver optionsResolver,
@@ -646,6 +646,7 @@ internal sealed class WalShardGrain(
     public async Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Write);
         EnsureInitialized();
         ThrowIfMoveFenced();
 
@@ -844,6 +845,7 @@ internal sealed class WalShardGrain(
     {
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Write);
         EnsureInitialized();
         ThrowIfMoveFenced();
 
@@ -1103,6 +1105,7 @@ internal sealed class WalShardGrain(
     public async ValueTask<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
 
         if (fromSequence < 0)
         {
@@ -1210,6 +1213,7 @@ internal sealed class WalShardGrain(
     public async ValueTask<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
 
         if (fromSequence < 0)
         {
@@ -1300,6 +1304,7 @@ internal sealed class WalShardGrain(
     public ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
         EnsureInitialized();
         return ValueTask.FromResult(_nextOffset);
     }
@@ -1308,6 +1313,7 @@ internal sealed class WalShardGrain(
     public async Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
         EnsureInitialized();
 
         // The live entry count is `highest - lowest + 1` when the shard
@@ -1341,6 +1347,7 @@ internal sealed class WalShardGrain(
     public Task<long> GetEntryCountAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
         EnsureInitialized();
         return Task.FromResult(_nextOffset);
     }
@@ -1349,6 +1356,7 @@ internal sealed class WalShardGrain(
     public async Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
         EnsureInitialized();
         return await _provider
             .GetRetainedByteSizeAsync(_treeId, _shardIndex, cancellationToken)
@@ -2255,6 +2263,7 @@ internal sealed class WalShardGrain(
     public async Task<WalMoveQuiesceResult> QuiesceForMoveAsync(
         long expectedPlacementVersion, TimeSpan lease, CancellationToken cancellationToken)
     {
+        EnsureInternalOrigin(LatticeOperation.Admin);
         EnsureInitialized();
 
         // Abort (without fencing) only when this activation has resolved a
@@ -2310,6 +2319,7 @@ internal sealed class WalShardGrain(
     /// <inheritdoc />
     public Task DeactivateForMoveAsync(CancellationToken cancellationToken)
     {
+        EnsureInternalOrigin(LatticeOperation.Admin);
         context.Deactivate(new DeactivationReason(
             DeactivationReasonCode.ApplicationRequested,
             "WAL placement move cutover"));

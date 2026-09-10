@@ -59,9 +59,16 @@ internal static class StateObserveTailCursor
                 ?? siloServices.GetRequiredService<IOptionsMonitor<LatticeOptions>>().Get(treeId).WalPartitions);
 
         var payload = new StringBuilder(TokenVersion);
+
+        // The WAL partition grains are internal physical grains: a direct call
+        // from the external test client is refused by the internal-origin
+        // guard, exactly as it refuses one from any other external caller. Read
+        // the tail through the silo's own grain factory, which is how
+        // LatticeStateObserver reaches them when it seeds a fresh cursor.
+        var siloGrains = siloServices.GetRequiredService<IGrainFactory>();
         for (var partition = 0; partition < partitions; partition++)
         {
-            var wal = client.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
+            var wal = siloGrains.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
             var nextSequence = await wal.GetNextSequenceAsync(CancellationToken.None);
             payload.Append('|').Append(nextSequence);
         }
