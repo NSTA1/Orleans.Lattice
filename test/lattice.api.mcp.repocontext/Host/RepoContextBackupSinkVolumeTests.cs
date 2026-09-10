@@ -232,4 +232,49 @@ public sealed class RepoContextBackupSinkVolumeTests
             "the primary repocontext service must not mount the backup sink directory; the sink is reached "
                 + "over the blob endpoint precisely so the two lifetimes stay separate.");
     }
+
+    /// <summary>
+    /// The structural assertions above are statements about the compose file. The
+    /// end-to-end demonstration - start the sink, run the real destructive command,
+    /// see what is left - is a script, and this pins that it exists and still does
+    /// the thing it is cited for.
+    /// </summary>
+    /// <remarks>
+    /// Without this, the script could be renamed or deleted and the only signal
+    /// would be a dead relative link in a document. It also pins the two commands
+    /// that make the demonstration non-vacuous: the run must actually invoke
+    /// <c>down -v</c>, and it must enumerate the project's volumes so it can prove
+    /// that <c>-v</c> really removed them. A run that skipped the second check
+    /// would report success against a <c>-v</c> that had quietly done nothing.
+    /// </remarks>
+    [Test]
+    public void The_end_to_end_durability_demonstration_script_exists_and_still_exercises_down_v()
+    {
+        var scriptPath = Path.Combine(
+            RepoRoot, "samples", "RepoContextContainer", "scripts", "Test-BackupSinkDurability.ps1");
+
+        Assert.That(
+            File.Exists(scriptPath),
+            Is.True,
+            $"expected the durability demonstration script at {scriptPath}; the container documentation "
+                + "links to it as the live proof that the structural assertions in this fixture correspond "
+                + "to real docker behaviour.");
+
+        var script = File.ReadAllText(scriptPath);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                script.Contains("'down', '-v'", StringComparison.Ordinal),
+                Is.True,
+                "the script must run the exact gesture that caused the original loss; a demonstration that "
+                    + "stops short of 'down -v' demonstrates nothing about surviving it.");
+
+            Assert.That(
+                script.Contains("com.docker.compose.project=", StringComparison.Ordinal),
+                Is.True,
+                "the script must enumerate the project's own volumes before and after, so a 'down -v' that "
+                    + "removed nothing is reported as a failed run rather than as surviving state.");
+        });
+    }
 }

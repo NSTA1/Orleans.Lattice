@@ -354,6 +354,8 @@ State the coverage exactly, because a broader claim than the implementation supp
 
 `RepoContextBackupSinkVolumeTests` asserts the survival property structurally against the compose file - that the sink's `/data` source is a host path, and that it appears in no entry of the top-level `volumes:` block - so it is checked rather than described.
 
+That fixture is a statement about the file. To make the same statement about docker, run [`samples/RepoContextContainer/scripts/Test-BackupSinkDurability.ps1`](../../samples/RepoContextContainer/scripts/Test-BackupSinkDurability.ps1). It starts the sink alone under an isolated compose project and an isolated host directory, waits until Azurite has written its own on-disk state (so the thing being destroyed is real service state and not a file the script planted), runs `docker compose down -v`, and then checks two things: that every project-managed volume was in fact removed, and that no sink content was. Asserting the first is what stops the run passing vacuously on a `-v` that quietly did nothing. It starts one Azurite container and neither the MCP server nor the embedder, and refuses to run at all while containers from another project are up, since CPU contention from a probe can corrupt a measurement in progress.
+
 ### Is it actually backed up?
 
 The health signal is a **positive statement about what was captured**, not a success boolean, and it names the tree:
