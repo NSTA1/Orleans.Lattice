@@ -89,14 +89,19 @@ public class OrFlagDeltaTests
     }
 
     [Test]
-    public void Equality_uses_reference_equality_on_independently_allocated_collections()
+    public void Equality_is_value_based_on_independently_allocated_collections()
     {
-        // Documents the IReadOnlyList<> reference-equality caveat at the
-        // delta level: two deltas built from independent arrays of equal
-        // dots are NOT equal under record-struct equality.
+        // Two deltas built from independent arrays of equal dots now compare
+        // equal: Enables and Disables are compared element-by-element using
+        // the value equality of OrSetDot, not by collection reference, so a
+        // delta and its post-serialization self compare equal.
         var dot = new OrSetDot { ReplicaId = "r", Counter = 1 };
         var a = new OrFlagDelta { Enables = new[] { dot }, Disables = Array.Empty<OrSetDot>() };
         var b = new OrFlagDelta { Enables = new[] { dot }, Disables = Array.Empty<OrSetDot>() };
-        Assert.That(a, Is.Not.EqualTo(b));
+        Assert.Multiple(() =>
+        {
+            Assert.That(a, Is.EqualTo(b));
+            Assert.That(a.GetHashCode(), Is.EqualTo(b.GetHashCode()));
+        });
     }
 }

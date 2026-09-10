@@ -625,29 +625,65 @@ internal sealed partial class ViewMaintainerGrain(
         await ThrowIfShipViewConsumerAsync(registration, cancellationToken);
         var sourceTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
-        var head = HybridLogicalClock.Zero;
+        if (partitions <= 0)
+        {
+            return HybridLogicalClock.Zero;
+        }
 
-        for (var partition = 0; partition < partitions; partition++)
+        // Each partition's tail probe is a two-call chain - head offset, then the
+        // cursored read of the single entry below it - against a DISTINCT partition,
+        // and neither call mutates anything, so no partition's probe can observe
+        // another's effect. The reduction is max over the per-partition head HLCs,
+        // which is commutative and associative, so the answer cannot depend on the
+        // order the tails arrive in. The serial walk was therefore paying two
+        // round-trip latencies per partition to gather values whose order never
+        // mattered; the probes now overlap in bounded waves and the max is folded
+        // afterwards, off the wire.
+        if (partitions == 1)
+        {
+            return await PartitionHeadHlcAsync(0);
+        }
+
+        var partitionHeads = await BoundedFanOut.RunAsync(
+            partitions,
+            BoundedFanOut.DefaultWidth,
+            PartitionHeadHlcAsync,
+            cancellationToken);
+
+        var head = HybridLogicalClock.Zero;
+        for (var partition = 0; partition < partitionHeads.Length; partition++)
+        {
+            if (partitionHeads[partition] > head)
+            {
+                head = partitionHeads[partition];
+            }
+        }
+
+        return head;
+
+        async Task<HybridLogicalClock> PartitionHeadHlcAsync(int partition)
         {
             var headOffset = await commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken);
             if (headOffset <= 0)
             {
-                continue;
+                return HybridLogicalClock.Zero;
             }
+
+            var partitionHead = HybridLogicalClock.Zero;
 
             // Read only the tail entry (offset headOffset - 1) by starting the
             // cursored read two below the head; its HLC is this partition's head.
             await foreach (var (_, mutation) in commitLogReader
                 .ReadAsync(sourceTreeId, partition, headOffset - 2, cancellationToken))
             {
-                if (mutation.Timestamp > head)
+                if (mutation.Timestamp > partitionHead)
                 {
-                    head = mutation.Timestamp;
+                    partitionHead = mutation.Timestamp;
                 }
             }
-        }
 
-        return head;
+            return partitionHead;
+        }
     }
 
     /// <inheritdoc />
@@ -718,14 +754,54 @@ internal sealed partial class ViewMaintainerGrain(
     /// never been written here (a thin consumer cluster, or - as a documented
     /// edge case - a producer that has not yet received its first source write) reads
     /// as not locally readable.
+    /// <para>
+    /// The probes read <b>distinct</b> partitions and mutate nothing, and the
+    /// reduction is a logical OR, so the answer is order-independent. Unlike the
+    /// other per-partition walks this one could <b>short-circuit</b>, which is why
+    /// the first probe deliberately stays on its own direct await: a producer whose
+    /// partition 0 has been written still answers in exactly one call, as it always
+    /// did. Only the <i>remainder</i> of the walk is collapsed, which is the part
+    /// that has no short-circuit left to lose - a false answer (the consumer-cluster
+    /// designation this probe exists to make) always walked every partition, and a
+    /// producer whose writes hash away from partition 0 walked up to all of them.
+    /// The result is two round-trip latencies in the worst case instead of one per
+    /// partition, with the best case unchanged. A pure fan-out over all partitions
+    /// was measured and rejected: it collapses the miss but issues every probe in
+    /// the common first-partition hit too, which is a load multiplier bought for no
+    /// latency, and the <c>partitionwaves</c> suite ships that arm as a contrast.
+    /// </para>
     /// </summary>
     private async Task<bool> IsSourceLocallyReadableAsync(ViewRegistration registration, CancellationToken cancellationToken)
     {
         var sourceTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
-        for (var partition = 0; partition < partitions; partition++)
+        if (partitions <= 0)
         {
-            if (await commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken) > 0)
+            return false;
+        }
+
+        if (await commitLogReader.GetHeadOffsetAsync(sourceTreeId, 0, cancellationToken) > 0)
+        {
+            return true;
+        }
+
+        // Single-partition trees are the dominant shape, and the probe above has
+        // already answered for them.
+        if (partitions == 1)
+        {
+            return false;
+        }
+
+        var remaining = partitions - 1;
+        var heads = await BoundedFanOut.RunAsync(
+            remaining,
+            BoundedFanOut.DefaultWidth,
+            slot => commitLogReader.GetHeadOffsetAsync(sourceTreeId, slot + 1, cancellationToken),
+            cancellationToken);
+
+        for (var slot = 0; slot < heads.Length; slot++)
+        {
+            if (heads[slot] > 0)
             {
                 return true;
             }

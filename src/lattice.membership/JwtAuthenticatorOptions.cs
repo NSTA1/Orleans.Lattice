@@ -74,6 +74,29 @@ public sealed class JwtAuthenticatorOptions
     /// </remarks>
     public IList<string> Algorithms { get; } = new List<string>();
 
+    /// <summary>
+    /// Whether an authenticator must refuse every token when no signature-algorithm
+    /// allow-list can be established, instead of validating with the allow-list left
+    /// unrestricted. Defaults to <see langword="false"/>, which preserves the
+    /// historical permissive behaviour for a deployment whose allow-list cannot be
+    /// derived.
+    /// </summary>
+    /// <remarks>
+    /// The allow-list is established from <see cref="Algorithms"/> when it is
+    /// populated, and otherwise derived from the families of the signing keys the
+    /// authenticator resolves. Only when neither yields an allow-list does this flag
+    /// decide the outcome: <see langword="true"/> installs a deny-all validator so
+    /// the authenticator fails closed against algorithm confusion (CWE-347), and
+    /// <see langword="false"/> leaves acceptance unrestricted.
+    /// <para>
+    /// Set it to <see langword="true"/> on any deployment that can state its
+    /// algorithms, and prefer pinning <see cref="Algorithms"/> explicitly. The
+    /// provider subclasses shipped with Lattice (Entra, OIDC) turn it on because
+    /// their providers always name an algorithm.
+    /// </para>
+    /// </remarks>
+    public bool RequireAlgorithmPin { get; set; }
+
     /// <summary>Whether to validate the token audience. Defaults to <c>true</c>.</summary>
     public bool ValidateAudience { get; set; } = true;
 
@@ -88,6 +111,20 @@ public sealed class JwtAuthenticatorOptions
     /// is used verbatim and the issuer / audience / signing-key fields above are
     /// ignored. Provided as an extension point for OIDC / JWKS discovery and
     /// signing-key rotation, where a provider subclass supplies live parameters.
+    /// <para>
+    /// One exception: the algorithm pin is still applied on top. If these
+    /// parameters carry no algorithm restriction of their own (no
+    /// <see cref="TokenValidationParameters.AlgorithmValidator"/> and no non-empty
+    /// <see cref="TokenValidationParameters.ValidAlgorithms"/>), the authenticator
+    /// narrows them to the algorithm families its statically-resolvable signing
+    /// keys can actually produce, and - when <see cref="RequireAlgorithmPin"/> is
+    /// set and no family could be derived - refuses every algorithm. The derived
+    /// allow-list is family-complete, so it can never reject a token that
+    /// legitimately verifies against one of those keys; it only removes the
+    /// cross-family key-confusion path. Set <see cref="Algorithms"/>, or an
+    /// explicit <c>ValidAlgorithms</c> / <c>AlgorithmValidator</c> here, to keep
+    /// full control of the pin.
+    /// </para>
     /// </summary>
     public TokenValidationParameters? ValidationParameters { get; set; }
 }

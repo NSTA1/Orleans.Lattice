@@ -25,6 +25,15 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
     private readonly TokenValidationParameters _staticParameters;
 
     /// <summary>
+    /// The one deny-all algorithm validator, shared by every authenticator in this
+    /// hierarchy. Declared once here because an empty allow-list is read by the
+    /// token validator as "accept any algorithm", so refusing every algorithm has
+    /// to be expressed as an explicit validator delegate; each provider keeping its
+    /// own copy of that delegate is how the guard drifted between providers before.
+    /// </summary>
+    internal static readonly AlgorithmValidator DenyAllAlgorithms = static (_, _, _, _) => false;
+
+    /// <summary>
     /// Initializes a new <see cref="JwtCredentialAuthenticator"/> from the
     /// supplied <paramref name="options"/>.
     /// </summary>
@@ -106,14 +115,195 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
             return null;
         }
 
-        var parameters = await ResolveValidationParametersAsync(credential, cancellationToken).ConfigureAwait(false);
+        var parameters = await ResolvePinnedValidationParametersAsync(credential, cancellationToken).ConfigureAwait(false);
         var result = await _handler.ValidateTokenAsync(credential.Token, parameters).ConfigureAwait(false);
         if (!result.IsValid || result.SecurityToken is not JsonWebToken token || result.ClaimsIdentity is null)
         {
             return null;
         }
 
-        return MapPrincipal(token, result.ClaimsIdentity);
+        var principal = MapPrincipal(token, result.ClaimsIdentity);
+        return principal is null
+            ? null
+            : await EnrichPrincipalAsync(principal, credential, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Post-validation extension point, invoked with the mapped principal once the
+    /// token has been fully validated. Override to enrich the principal from a
+    /// source outside the token - resolving group membership out of band, for
+    /// example. The base returns <paramref name="principal"/> unchanged.
+    /// </summary>
+    /// <remarks>
+    /// This exists so a provider never has to override
+    /// <see cref="AuthenticateAsync"/> to post-process a result. An override there
+    /// would sit outside the algorithm-pin seam and could route around it by not
+    /// calling the base, which is the drift this hierarchy is built to prevent; an
+    /// override here runs after validation has already been enforced and cannot.
+    /// It is only ever called with a non-null principal, so an implementation does
+    /// not have to re-check that the authentication succeeded.
+    /// </remarks>
+    /// <param name="principal">The validated, mapped principal. Never <c>null</c>.</param>
+    /// <param name="credential">The credential that produced <paramref name="principal"/>.</param>
+    /// <param name="cancellationToken">Cancels any out-of-band lookup.</param>
+    /// <returns>The principal to return, enriched or unchanged.</returns>
+    protected virtual ValueTask<LatticePrincipal?> EnrichPrincipalAsync(
+        LatticePrincipal principal,
+        LatticeCredential credential,
+        CancellationToken cancellationToken) => new(principal);
+
+    /// <summary>
+    /// The single seam every authentication funnels through, whichever subclass
+    /// supplied the parameters. It resolves the parameters through the overridable
+    /// <see cref="ResolveValidationParametersAsync"/> extension point and then
+    /// applies the signature-algorithm allow-list to whatever comes back.
+    /// </summary>
+    /// <remarks>
+    /// This method is deliberately <b>not</b> virtual, and
+    /// <see cref="AuthenticateAsync"/> calls it rather than the extension point
+    /// directly. The algorithm allow-list is a property of every validation, not of
+    /// any one provider, so enforcing it here means a subclass cannot construct a
+    /// <see cref="TokenValidationParameters"/> that silently skips it - including a
+    /// subclass written after this type. Enforcing it inside each override instead
+    /// is what previously let the guard drift between providers.
+    /// <para>
+    /// It is <c>protected</c> so a subclass can resolve the fully-enforced
+    /// parameters when it needs them, and non-virtual so no subclass can replace
+    /// the enforcement.
+    /// </para>
+    /// </remarks>
+    /// <param name="credential">The credential being validated.</param>
+    /// <param name="cancellationToken">Cancels any metadata fetch.</param>
+    /// <returns>The resolved parameters, with the signature-algorithm allow-list established.</returns>
+    protected async ValueTask<TokenValidationParameters> ResolvePinnedValidationParametersAsync(
+        LatticeCredential credential,
+        CancellationToken cancellationToken)
+    {
+        var parameters = await ResolveValidationParametersAsync(credential, cancellationToken).ConfigureAwait(false);
+        ApplyAlgorithmPin(parameters, Options.RequireAlgorithmPin);
+        return parameters;
+    }
+
+    /// <summary>
+    /// Establishes the signature-algorithm allow-list on <paramref name="parameters"/>
+    /// when it carries none, closing the algorithm-confusion gap (CWE-347) that an
+    /// unrestricted allow-list leaves open.
+    /// </summary>
+    /// <remarks>
+    /// An empty or absent <see cref="TokenValidationParameters.ValidAlgorithms"/> is
+    /// read by the token validator as "accept any algorithm" rather than "accept
+    /// none", so an allow-list that must admit nothing has to be expressed as an
+    /// explicit <see cref="TokenValidationParameters.AlgorithmValidator"/>. That
+    /// inversion is the footgun behind this whole guard and is stated once, here,
+    /// rather than at each provider.
+    /// <para>
+    /// Precedence: an allow-list the caller already established is authoritative and
+    /// is never widened or replaced. Otherwise the allow-list is derived from the
+    /// families of the resolved signing keys, which can only refuse a token that
+    /// would have been verified against a key of a different family - the attack -
+    /// and never one that legitimately verifies. Only when no family can be
+    /// established does <paramref name="requirePin"/> decide between failing closed
+    /// and preserving the historical unrestricted behaviour.
+    /// </para>
+    /// </remarks>
+    /// <param name="parameters">The validation parameters to establish the allow-list on.</param>
+    /// <param name="requirePin">Whether to fail closed when no allow-list can be established.</param>
+    internal static void ApplyAlgorithmPin(TokenValidationParameters parameters, bool requirePin)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+
+        if (HasAlgorithmRestriction(parameters))
+        {
+            return;
+        }
+
+        var derived = DeriveAlgorithmsFromKeys(CollectResolvedKeys(parameters));
+        if (derived is not null)
+        {
+            parameters.ValidAlgorithms = derived;
+            return;
+        }
+
+        if (requirePin)
+        {
+            parameters.AlgorithmValidator = DenyAllAlgorithms;
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="parameters"/> already constrains which signature
+    /// algorithms are accepted, by either an explicit allow-list or a validator
+    /// delegate. An empty <see cref="TokenValidationParameters.ValidAlgorithms"/> is
+    /// not a restriction - the validator reads it as "accept any".
+    /// </summary>
+    /// <param name="parameters">The validation parameters to inspect.</param>
+    internal static bool HasAlgorithmRestriction(TokenValidationParameters parameters)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+
+        if (parameters.AlgorithmValidator is not null)
+        {
+            return true;
+        }
+
+        var algorithms = parameters.ValidAlgorithms;
+        if (algorithms is null)
+        {
+            return false;
+        }
+
+        foreach (var algorithm in algorithms)
+        {
+            if (!string.IsNullOrWhiteSpace(algorithm))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Gathers every signing key the parameters make available for derivation - the
+    /// collection and the singular property - so a provider that resolves one key
+    /// rather than a set is covered identically. Keys a
+    /// <see cref="TokenValidationParameters.ConfigurationManager"/> supplies during
+    /// validation are not visible here, so such a provider derives nothing and falls
+    /// through to <c>requirePin</c>, which is why the shipped discovery-driven
+    /// providers turn that flag on.
+    /// </summary>
+    /// <param name="parameters">The validation parameters to read keys from.</param>
+    private static List<SecurityKey>? CollectResolvedKeys(TokenValidationParameters parameters)
+    {
+        if (parameters.IssuerSigningKeyResolver is not null
+            || parameters.IssuerSigningKeyResolverUsingConfiguration is not null
+            || parameters.ConfigurationManager is not null)
+        {
+            // Another source can supply keys of a family the statically-visible keys
+            // do not show, so deriving from what is visible here could refuse a
+            // token that legitimately verifies. Derive nothing and let requirePin
+            // decide.
+            return null;
+        }
+
+        List<SecurityKey>? keys = null;
+        if (parameters.IssuerSigningKeys is { } configured)
+        {
+            foreach (var key in configured)
+            {
+                if (key is not null)
+                {
+                    (keys ??= []).Add(key);
+                }
+            }
+        }
+
+        if (parameters.IssuerSigningKey is { } single)
+        {
+            (keys ??= []).Add(single);
+        }
+
+        return keys;
     }
 
     /// <summary>
@@ -124,6 +314,12 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
     /// parameters instance whose <see cref="TokenValidationParameters.IssuerSigningKeys"/>
     /// come from a refreshed JWKS document).
     /// </summary>
+    /// <remarks>
+    /// An override does not need to establish the signature-algorithm allow-list:
+    /// whatever it returns is passed through the non-overridable pin seam before any
+    /// token is validated, so the allow-list cannot be forgotten here. An override
+    /// that <em>does</em> establish one is authoritative and is never widened.
+    /// </remarks>
     /// <param name="credential">The credential being validated.</param>
     /// <param name="cancellationToken">Cancels any metadata fetch.</param>
     protected virtual ValueTask<TokenValidationParameters> ResolveValidationParametersAsync(
@@ -333,11 +529,11 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
     /// caller keeps the historical permissive behaviour rather than locking out a
     /// working host.
     /// </summary>
-    /// <param name="keys">The host's configured issuer signing keys.</param>
+    /// <param name="keys">The signing keys the authenticator resolved.</param>
     /// <returns>The derived algorithm allow-list, or <see langword="null"/> to leave it unrestricted.</returns>
-    private static string[]? DeriveAlgorithmsFromKeys(IList<SecurityKey> keys)
+    private static string[]? DeriveAlgorithmsFromKeys(IList<SecurityKey>? keys)
     {
-        if (keys.Count == 0)
+        if (keys is null || keys.Count == 0)
         {
             return null;
         }
@@ -359,10 +555,33 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
                 case SymmetricSecurityKey:
                     symmetric = true;
                     break;
+                case JsonWebKey jwk:
+                    // A JWKS document is the ordinary way a host supplies keys, so
+                    // this is the common case rather than an exotic one. A
+                    // JsonWebKey derives from SecurityKey directly rather than from
+                    // the family-specific types above, so it has to be classified
+                    // by its declared key type or every discovery-driven deployment
+                    // silently keeps an unrestricted allow-list.
+                    switch (jwk.Kty)
+                    {
+                        case JsonWebAlgorithmsKeyTypes.RSA:
+                            rsa = true;
+                            break;
+                        case JsonWebAlgorithmsKeyTypes.EllipticCurve:
+                            ecdsa = true;
+                            break;
+                        case JsonWebAlgorithmsKeyTypes.Octet:
+                            symmetric = true;
+                            break;
+                        default:
+                            return null;
+                    }
+
+                    break;
                 default:
-                    // An unrecognised key type (a JsonWebKey, a custom key, a
-                    // subclass): the family cannot be established, so fail open to
-                    // the historical behaviour rather than lock a working host out.
+                    // An unrecognised key type (a custom key, a subclass): the
+                    // family cannot be established, so fail open to the historical
+                    // behaviour rather than lock a working host out.
                     return null;
             }
         }

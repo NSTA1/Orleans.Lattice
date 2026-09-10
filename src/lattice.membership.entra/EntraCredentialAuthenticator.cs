@@ -26,25 +26,6 @@ public class EntraCredentialAuthenticator : JwtCredentialAuthenticator
     private readonly string _metadataAddress;
 
     /// <summary>
-    /// The explicit deny-all algorithm validator installed when the configured pin
-    /// is empty, so an empty allow-list denies rather than inheriting the token
-    /// validator's "empty means accept anything" behaviour (CWE-347). Mirrors the
-    /// <c>OidcCredentialAuthenticator</c> sibling. Cached in a static field so
-    /// installing it costs no allocation per authentication.
-    /// <para>
-    /// This is the second of two layers and is deliberately not the primary one.
-    /// <c>LatticeEntraAuthenticatorOptionsValidator</c> refuses an empty
-    /// <see cref="LatticeEntraAuthenticatorOptions.Algorithms"/> at startup, naming
-    /// the option, because denying here instead would present a configuration error
-    /// as a total authentication outage with nothing pointing at its cause. This
-    /// branch remains for the direct-construction path that bypasses options
-    /// validation, so the fail-closed default holds on every branch.
-    /// </para>
-    /// </summary>
-    private static readonly AlgorithmValidator DenyAllAlgorithms =
-        static (algorithm, key, token, parameters) => false;
-
-    /// <summary>
     /// Initializes a new <see cref="EntraCredentialAuthenticator"/> that discovers
     /// OIDC metadata from the live Entra authority.
     /// </summary>
@@ -116,16 +97,17 @@ public class EntraCredentialAuthenticator : JwtCredentialAuthenticator
     }
 
     /// <inheritdoc />
-    public override async ValueTask<LatticePrincipal?> AuthenticateAsync(
+    /// <remarks>
+    /// Resolves group membership out of band when the token overflowed its groups
+    /// claim. This is a post-validation enrichment rather than an
+    /// <c>AuthenticateAsync</c> override so it cannot sit outside - or route around
+    /// - the base's signature-algorithm pin seam.
+    /// </remarks>
+    protected override async ValueTask<LatticePrincipal?> EnrichPrincipalAsync(
+        LatticePrincipal principal,
         LatticeCredential credential,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
-        var principal = await base.AuthenticateAsync(credential, cancellationToken).ConfigureAwait(false);
-        if (principal is null)
-        {
-            return principal;
-        }
-
         // Overage is only resolved out of band when configured to do so and when
         // the token actually overflowed its groups claim.
         if (_entraOptions.GroupResolutionMode != EntraGroupResolutionMode.ResolveOnOverage
@@ -175,20 +157,18 @@ public class EntraCredentialAuthenticator : JwtCredentialAuthenticator
             // key validation, closing the algorithm-confusion gap (CWE-347).
             parameters.ValidAlgorithms = _entraOptions.Algorithms.ToArray();
         }
-        else
-        {
-            // Fail closed, exactly as the OidcCredentialAuthenticator sibling does.
-            // Algorithms is a get-only IList pre-populated with RS256, so binding
-            // adds to it and cannot empty it - but a host that means to replace the
-            // default has to Clear() first, and any path that clears without
-            // repopulating (a misconfigured section, an ordering slip) previously
-            // left this branch silently unrestricted. An empty ValidAlgorithms is
-            // read by the token validator as "no restriction" rather than as "allow
-            // nothing", so the empty pin has to be expressed as an explicit
-            // deny-all validator instead of by leaving the property unset.
-            parameters.AlgorithmValidator = DenyAllAlgorithms;
-        }
 
+        // Algorithms is a get-only IList pre-populated with RS256, so binding adds
+        // to it and cannot empty it - but a host that means to replace the default
+        // has to Clear() first, and any path that clears without repopulating (a
+        // misconfigured section, an ordering slip) reaches here with no allow-list.
+        // The base pin seam fails that closed because BuildBaseOptions sets
+        // RequireAlgorithmPin. It is the second of two layers and deliberately not
+        // the primary one: LatticeEntraAuthenticatorOptionsValidator refuses an
+        // empty allow-list at startup, naming the option, because denying only here
+        // would present a configuration error as a total authentication outage with
+        // nothing pointing at its cause. This layer covers the direct-construction
+        // path that bypasses options validation.
         return new ValueTask<TokenValidationParameters>(parameters);
     }
 
@@ -354,6 +334,11 @@ public class EntraCredentialAuthenticator : JwtCredentialAuthenticator
             SchemeHint = options.SchemeHint,
             ValidateLifetime = options.ValidateLifetime,
             ClockSkew = options.ClockSkew,
+
+            // Entra always names an algorithm (Algorithms is pre-populated with
+            // RS256), so a validation that reaches the seam with no allow-list is a
+            // misconfiguration and must be refused rather than run unrestricted.
+            RequireAlgorithmPin = true,
         };
 
         foreach (var audience in options.Audiences)

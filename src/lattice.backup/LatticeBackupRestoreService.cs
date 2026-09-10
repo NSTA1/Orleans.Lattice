@@ -725,14 +725,29 @@ internal sealed class LatticeBackupRestoreService(
                 .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        foreach (var shardIndex in routing.Map.GetPhysicalShardIndices())
+        // Every physical shard of the shadow is purged. Each call targets a
+        // DISTINCT shard root grain and destroys only that shard's own data, so no
+        // two of them touch the same grain and none can observe another's effect;
+        // the shadow is unreachable by the time this runs, so nothing observes a
+        // partially-purged intermediate state either. The serial walk was paying
+        // one round-trip latency per shard for a wave carrying no cross-shard
+        // ordering constraint - and a shard count is a deployment-scale number, so
+        // it is the corpus-sized fan-out shape that applies, holding the live call
+        // set at the bound however wide the tree is.
+        var shardIndices = routing.Map.GetPhysicalShardIndices();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (shardIndices.Count == 1)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            using (LatticeAccessGateContext.EnterSystemOrigin())
-            {
-                await grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}")
-                    .PurgeAsync().ConfigureAwait(false);
-            }
+            // Single-shard trees are the dominant shape and have nothing to
+            // overlap: keep the direct await rather than building a wave list.
+            await PurgeShadowShardAsync(shardIndices[0]).ConfigureAwait(false);
+        }
+        else if (shardIndices.Count > 1)
+        {
+            await BoundedFanOut.ForEachAsync(
+                shardIndices,
+                BoundedFanOut.DefaultWidth,
+                PurgeShadowShardAsync).ConfigureAwait(false);
         }
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
@@ -742,6 +757,16 @@ internal sealed class LatticeBackupRestoreService(
 
         logger.LogInformation("Garbage-collected orphan restore shadow physical tree {ShadowTreeId}.",
             shadowPhysicalTreeId);
+
+        async Task PurgeShadowShardAsync(int shardIndex)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                await grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}")
+                    .PurgeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>
