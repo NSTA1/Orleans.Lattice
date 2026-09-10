@@ -164,6 +164,7 @@ public sealed class TenantMetricDimensionHygieneTests
         "SagaParticipantCommits",
         "SagaParticipantVotes",
         "SagaPhaseDuration",
+        "SchedulerFailures",
         "SchedulerOverruns",
         "SchedulerSkipped",
         "SnapshotRebuilds",

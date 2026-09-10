@@ -39,7 +39,8 @@ public sealed class BackupSchedulerGrainUnitTests
         LatticeBackupScheduleOptions? options = null,
         IReminderRegistry? reminders = null,
         BackupInventoryRegistry? inventory = null,
-        FakePersistentState<BackupSchedulerState>? state = null)
+        FakePersistentState<BackupSchedulerState>? state = null,
+        ILatticeAccessGate? gate = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("backup-scheduler", GrainKey));
@@ -57,6 +58,7 @@ public sealed class BackupSchedulerGrainUnitTests
             monitor,
             NullLogger<BackupSchedulerGrain>.Instance,
             inventory ?? new BackupInventoryRegistry(),
+            new BackupAccessAuthorizer(gate ?? new NullLatticeAccessGate()),
             state ?? new FakePersistentState<BackupSchedulerState>());
     }
 
@@ -87,6 +89,7 @@ public sealed class BackupSchedulerGrainUnitTests
             monitor,
             NullLogger<BackupSchedulerGrain>.Instance,
             new BackupInventoryRegistry(),
+            new BackupAccessAuthorizer(new NullLatticeAccessGate()),
             new FakePersistentState<BackupSchedulerState>());
 
         Assert.That(grain.GrainContext, Is.SameAs(context));
