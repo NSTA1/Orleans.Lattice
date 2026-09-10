@@ -53,6 +53,8 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     IRepoContextAnnBackingFactory backing,
     RepoContextIndexingOptions options,
     IRepoIndexRunAuthority runAuthority,
+    IRepoContextCorpusGateProbe corpusGateProbe,
+    RepoContextAnnBuildCorpusReporter corpusReporter,
     ILogger<RepoContextAnnIndexBuildGrain> logger,
     [PersistentState("repoContextAnnIndexBuild", global::Orleans.Lattice.LatticeOptions.StorageProviderName)]
     IPersistentState<RepoContextAnnIndexBuildState> state)
@@ -67,6 +69,38 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     private const string KeepaliveReminder = "repo-context-ann-index-build-keepalive";
 
     /// <summary>
+    /// Consecutive uninterpretable corpus reads after which the coordinator
+    /// concludes the host is refusing it, emits
+    /// <see cref="RepoContextAnnBuildCorpusReporter.TerminalDenialInstrumentName"/>
+    /// once, and parks on the capped retry interval.
+    /// <para>
+    /// Deliberately small. The states this separates are "a grant seeded slightly
+    /// late" and "this deployment will never build an index", and five attempts
+    /// spread over roughly a minute of backoff is far more than the first needs
+    /// and far less than the second is worth waiting for.
+    /// </para>
+    /// </summary>
+    internal const int TerminalDenialThreshold = 5;
+
+    /// <summary>
+    /// The ceiling on skipped phase ticks between retries of a refused corpus read.
+    /// At the two-second phase period this parks a permanently-denied coordinator
+    /// at one attempt every five minutes.
+    /// <para>
+    /// <b>Why a bound at all.</b> Refusing to converge means the coordinator stays
+    /// alive, and staying alive on the phase cadence would be a retry every two
+    /// seconds - a busy failure that never ends, because a denial is not a
+    /// condition retrying can clear. A permanently refused host would spin at that
+    /// rate indefinitely while banking nothing, and the container the approximate
+    /// plane runs in is shared with the whole index pipeline, so that cost is
+    /// charged to work that could otherwise proceed. Backing off keeps the
+    /// coordinator loud and alive without being expensive, which is what lets a
+    /// grant that seeds late still be picked up without a restart.
+    /// </para>
+    /// </summary>
+    internal const int MaxDenialSkipTicks = 149;
+
+    /// <summary>
     /// Whether this activation has completed at least one build step. It is what
     /// makes a converged coordinator still do a single pass when it is reactivated:
     /// the durable index is shared, but the in-memory index the registry serves
@@ -75,6 +109,27 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     /// grain exists to have already paid.
     /// </summary>
     private bool _advancedThisActivation;
+
+    /// <summary>
+    /// Phase ticks still to be skipped before the next attempt at a refused corpus
+    /// read. Decremented before any work, so a backed-off tick costs a comparison
+    /// rather than a build step and a probe.
+    /// </summary>
+    private int _denialSkipTicks;
+
+    /// <summary>
+    /// The length of the run of consecutive uninterpretable corpus reads in
+    /// progress, or zero. Activation-local, and correctly so: the coordinator is
+    /// single-threaded and scoped to exactly one repository and embedding space, so
+    /// one repository's denial episode can never suppress another's announcement.
+    /// </summary>
+    private int _consecutiveDenials;
+
+    /// <summary>Whether the current denial episode has already been announced.</summary>
+    private bool _announcedDenial;
+
+    /// <summary>Whether the current denial episode has already been counted as terminal.</summary>
+    private bool _announcedTerminal;
 
     /// <summary>
     /// The repository this coordinator builds for, parsed once from the grain key.
@@ -185,11 +240,18 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         // streams an EMPTY corpus, cleanly. An empty corpus is refused nowhere
         // below: the count probe reports zero, the ingest completes on its first
         // step, training drops the partitioning and returns false rather than
-        // throwing, and the build reaches Ready holding zero vectors. This grain
-        // then records Converged, logs a successful build, and stands the
-        // coordinator down - so the denied read is durably indistinguishable from a
-        // repository that genuinely had nothing to index, and every semantic query
-        // falls back to an exact brute-force scan for good.
+        // throwing, and the build reaches Ready holding zero vectors.
+        //
+        // The credential is the first half of the remedy and is not the whole of
+        // it. Stamping an identity stops the build being anonymous; it cannot stop
+        // a denial being SILENT, and a grant that seeds after the first phase tick
+        // - the startup service seeds on ApplicationStarted with backoff retry,
+        // while this timer fires with dueTime zero - would still produce a denied
+        // read on a correctly configured host. So the second half is below: a
+        // completed build holding zero vectors is classified against the gate
+        // before it is banked, counted on a series whose total advances on every
+        // build, and refused convergence when the read did not happen. See
+        // AdmitsConvergence, and issues #2426 and #2423.
         //
         // This is the same remedy RepoIndexRunner, RepoContextSelfIndexGrain,
         // RepoContextGitSourceArmingService, and RepoContextAnnIndexSweepService
@@ -204,6 +266,18 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         if (!InProgress)
         {
             await CompleteCoordinatorAsync().ConfigureAwait(true);
+            return;
+        }
+
+        // Denial backoff. A refused corpus read leaves this coordinator alive on
+        // purpose - see AdmitsConvergence - and alive on the two-second phase
+        // cadence would be a retry every two seconds for as long as the host keeps
+        // refusing. Skipped ticks cost a comparison and take no step and no probe,
+        // so a permanently-denied coordinator settles at one attempt every five
+        // minutes while still being able to pick up a grant that seeds late.
+        if (_denialSkipTicks > 0)
+        {
+            _denialSkipTicks--;
             return;
         }
 
@@ -248,6 +322,24 @@ internal sealed class RepoContextAnnIndexBuildGrain(
             return;
         }
 
+        // The build has finished and is about to be banked, which is exactly the
+        // moment ILattice.GetRangeReadGateCoverageAsync names for itself: a range
+        // read came back empty and the caller is about to act on that emptiness. A
+        // build holding vectors needs no probe, so the ordinary path costs nothing.
+        var coverage = progress.VectorsIndexed > 0
+            ? RepoContextAnnBuildCorpusCoverage.NonEmpty
+            : await corpusGateProbe.ProbeAsync(repoId, CancellationToken.None).ConfigureAwait(true);
+
+        // Counted before it is acted on, and counted on every completed build
+        // including the ordinary non-empty ones, so the total is a denominator and
+        // a zero on coverage=denied is a measured absence rather than silence.
+        corpusReporter.RecordCoverage(coverage);
+
+        if (!AdmitsConvergence(coverage, repoId, space))
+        {
+            return;
+        }
+
         if (!state.State.Converged)
         {
             state.State.Converged = true;
@@ -279,6 +371,129 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         await ReclaimSupersededSpacesAsync(repoId, space).ConfigureAwait(true);
 
         await CompleteCoordinatorAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Decides whether a completed build may be banked as converged, given how much
+    /// of its corpus the access gate admitted, and drives the denial episode's
+    /// backoff, announcement and terminal signal.
+    /// <para>
+    /// <b>The rule, and why the four classes are not treated alike.</b>
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><c>NonEmpty</c> and <c>Unrestricted</c> converge. The
+    /// read succeeded; an honest empty repository is a legitimate converged
+    /// state and must stay one, or a fresh deployment would never settle.</description></item>
+    /// <item><description><c>Filtered</c> converges. The authority resolved
+    /// correctly and the gate legitimately returned a subset, so this is a
+    /// complete and correct read of what the caller may see. Refusing here would
+    /// permanently wedge any host that legitimately restricts content, which is a
+    /// far larger harm than the one being prevented. Converge on a known subset;
+    /// never on an unknown.</description></item>
+    /// <item><description><c>Denied</c> never converges. The read did not happen,
+    /// so the store's contents are unknown rather than empty, and banking
+    /// <c>Converged</c> on it is precisely the fail-open-into-silence issue #2426
+    /// exists to remove - the coordinator would stand down permanently on an index
+    /// it never built, and nothing would re-drive it.</description></item>
+    /// <item><description><c>Unknown</c> withholds convergence until the episode is
+    /// terminal, then converges. The probe is a diagnostic on a path that has
+    /// already finished its work; letting a probe that cannot answer withhold
+    /// convergence forever would let the observability mechanism wedge the thing it
+    /// observes, which inverts the blast radius. Bounded and loud beats
+    /// unbounded and safe-looking: the terminal counter makes the outcome
+    /// visible.</description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="coverage">How much of the vector prefix the gate admitted.</param>
+    /// <param name="repoId">The repository, for the announcement.</param>
+    /// <param name="space">The embedding space, for the announcement.</param>
+    /// <returns><see langword="true"/> when the build may be banked as converged.</returns>
+    private bool AdmitsConvergence(
+        RepoContextAnnBuildCorpusCoverage coverage, string repoId, EmbeddingSpaceTag space)
+    {
+        if (coverage is RepoContextAnnBuildCorpusCoverage.NonEmpty
+            or RepoContextAnnBuildCorpusCoverage.Unrestricted
+            or RepoContextAnnBuildCorpusCoverage.Filtered)
+        {
+            if (_consecutiveDenials > 0)
+            {
+                // Closes the episode the warning opened. An operator who saw the
+                // denial needs its end more than they need another steady-state
+                // line, and without this the log would leave a resolved episode
+                // looking open forever.
+                Logger.LogInformation(
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} read its "
+                    + "corpus successfully after {Denials} consecutive uninterpretable read(s); the build is "
+                    + "proceeding and {Instrument} will stop advancing on the denied arm.",
+                    repoId,
+                    space.ModelId,
+                    space.Dimension,
+                    _consecutiveDenials,
+                    RepoContextAnnBuildCorpusReporter.CorpusInstrumentName);
+            }
+
+            _consecutiveDenials = 0;
+            _denialSkipTicks = 0;
+            _announcedDenial = false;
+            _announcedTerminal = false;
+            return true;
+        }
+
+        _consecutiveDenials++;
+        _denialSkipTicks = ComputeDenialSkipTicks(_consecutiveDenials);
+        var terminal = _consecutiveDenials >= TerminalDenialThreshold;
+
+        if (!_announcedDenial)
+        {
+            // Once per episode, not once per tick. An unconditional line at the
+            // two-second phase period would be 43,200 lines a day, which is how a
+            // real signal gets tuned out - the same announce-once-then-count
+            // discipline RepoContextAnnIndexSweepReporter established.
+            _announcedDenial = true;
+            Logger.LogWarning(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} completed "
+                + "holding zero vectors and the access gate reports coverage={Coverage} for its vector prefix, so "
+                + "the corpus read cannot be interpreted as an empty repository. The build will NOT be recorded "
+                + "as converged and the coordinator is backing off rather than standing down. Counted on "
+                + "{Instrument}.",
+                repoId,
+                space.ModelId,
+                space.Dimension,
+                RepoContextAnnBuildCorpusReporter.DescribeCoverage(coverage),
+                RepoContextAnnBuildCorpusReporter.CorpusInstrumentName);
+        }
+
+        if (terminal && !_announcedTerminal)
+        {
+            _announcedTerminal = true;
+            corpusReporter.RecordTerminalDenial();
+            Logger.LogError(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} has observed "
+                + "{Denials} consecutive uninterpretable corpus reads (coverage={Coverage}) and is parking on the "
+                + "capped retry interval. The approximate plane will not build for this repository until the "
+                + "host's access gate admits the vector prefix to the build's run authority; every semantic query "
+                + "falls back to an exact scan until then. Counted on {Instrument}.",
+                repoId,
+                space.ModelId,
+                space.Dimension,
+                _consecutiveDenials,
+                RepoContextAnnBuildCorpusReporter.DescribeCoverage(coverage),
+                RepoContextAnnBuildCorpusReporter.TerminalDenialInstrumentName);
+        }
+
+        return coverage == RepoContextAnnBuildCorpusCoverage.Unknown && terminal;
+    }
+
+    /// <summary>
+    /// The number of phase ticks to skip before the next attempt, doubling with the
+    /// length of the denial run and capped at <see cref="MaxDenialSkipTicks"/>.
+    /// </summary>
+    /// <param name="consecutiveDenials">The length of the run so far, one or more.</param>
+    /// <returns>Ticks to skip: 1, 3, 7, 15, 31, 63, 127, then the cap.</returns>
+    internal static int ComputeDenialSkipTicks(int consecutiveDenials)
+    {
+        var shift = Math.Clamp(consecutiveDenials, 1, 8);
+        return Math.Min((1 << shift) - 1, MaxDenialSkipTicks);
     }
 
     /// <summary>

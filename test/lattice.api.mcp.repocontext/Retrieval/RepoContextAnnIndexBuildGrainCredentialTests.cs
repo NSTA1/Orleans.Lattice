@@ -21,15 +21,17 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// rather than an exception, so the corpus stream is <b>empty</b>, cleanly.
 /// </para>
 /// <para>
-/// <b>An empty corpus is refused nowhere below</b>, which is what makes the failure
-/// silent rather than loud - see
-/// <see cref="An_anonymous_build_converges_an_empty_index_against_a_gated_corpus"/>,
+/// <b>An empty corpus is refused nowhere in the build pipeline</b>, which is what
+/// makes the failure silent rather than loud - see
+/// <see cref="An_anonymous_build_reaches_ready_holding_nothing_against_a_gated_corpus"/>,
 /// which is both the impact determination and the negative control for the
-/// fixtures that pin the remedy.
+/// fixtures that pin the remedy. The remedy therefore sits at the coordinator,
+/// which classifies an empty build against the access gate before banking it; that
+/// half is covered in the <c>CorpusSignal</c> partial.
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class RepoContextAnnIndexBuildGrainCredentialTests
+public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
 {
     private const string RepoId = AnnPlaneFixture.RepoId;
     private const string RunSubject = "local-agent";
@@ -70,6 +72,14 @@ public sealed class RepoContextAnnIndexBuildGrainCredentialTests
         /// <summary>The subject observed on each gated read, or <c>null</c> for an anonymous one.</summary>
         public List<string?> Observed { get; } = [];
 
+        /// <summary>
+        /// Refuses every read regardless of the subject presented, standing in for a
+        /// host whose grant has not been seeded yet. Settable so a denial that
+        /// clears can be exercised on one activation, which is the case that
+        /// justifies the coordinator backing off rather than standing down.
+        /// </summary>
+        public bool Denied { get; set; }
+
         /// <inheritdoc />
         public int Dimensions => inner.Dimensions;
 
@@ -79,7 +89,7 @@ public sealed class RepoContextAnnIndexBuildGrainCredentialTests
             // the real gate resolves the caller subject.
             var subject = LatticeCredentialContext.Current?.Token;
             Observed.Add(subject);
-            return string.Equals(subject, RunSubject, StringComparison.Ordinal);
+            return !Denied && string.Equals(subject, RunSubject, StringComparison.Ordinal);
         }
 
         /// <inheritdoc />
@@ -167,6 +177,32 @@ public sealed class RepoContextAnnIndexBuildGrainCredentialTests
             => _inner.ReclaimSupersededSpacesAsync(repoId, liveSpace, cancellationToken);
     }
 
+    /// <summary>
+    /// A corpus gate probe under the fixture's control, standing in for the real
+    /// one's call to <c>ILattice.GetRangeReadGateCoverageAsync</c>. It records how
+    /// many times it was asked, which is what lets a test assert that the probe is
+    /// taken only on the empty path and only on the backoff schedule.
+    /// </summary>
+    private sealed class FakeCorpusGateProbe(RepoContextAnnBuildCorpusCoverage coverage, bool throws = false)
+        : IRepoContextCorpusGateProbe
+    {
+        /// <summary>How many times the coordinator asked for a classification.</summary>
+        public int Calls { get; private set; }
+
+        /// <inheritdoc />
+        public Task<RepoContextAnnBuildCorpusCoverage> ProbeAsync(string repoId, CancellationToken cancellationToken)
+        {
+            Calls++;
+
+            // The production probe never propagates: it catches and classifies as
+            // Unknown, because a diagnostic that can fail a build inverts the blast
+            // radius it exists to reduce. This models that contract rather than the
+            // exception, so the fixture asserts the coordinator's behaviour on
+            // Unknown rather than re-testing the try/catch.
+            return Task.FromResult(throws ? RepoContextAnnBuildCorpusCoverage.Unknown : coverage);
+        }
+    }
+
     /// <summary>The coordinator's persisted state, held in memory as grain storage would.</summary>
     private sealed class FakeBuildState : IPersistentState<RepoContextAnnIndexBuildState>
     {
@@ -184,7 +220,10 @@ public sealed class RepoContextAnnIndexBuildGrainCredentialTests
     }
 
     /// <summary>One activation of the coordinator over a gated store of record.</summary>
-    private sealed class Rig(IRepoIndexRunAuthority authority) : IDisposable
+    private sealed class Rig(
+        IRepoIndexRunAuthority authority,
+        IRepoContextCorpusGateProbe? corpusGateProbe = null)
+        : IDisposable
     {
         private static RepoContextAnnOptions PlaneOptions() => new()
         {
@@ -200,6 +239,17 @@ public sealed class RepoContextAnnIndexBuildGrainCredentialTests
         public GatedBackingFactory Backing { get; } = new();
 
         public FakeBuildState State { get; } = new();
+
+        /// <summary>
+        /// The classifier the coordinator consults when a build completes holding
+        /// nothing. Defaults to an unrestricted answer, which is the correct one for
+        /// an in-process host with no access gate at all.
+        /// </summary>
+        public IRepoContextCorpusGateProbe Probe { get; } =
+            corpusGateProbe ?? new FakeCorpusGateProbe(RepoContextAnnBuildCorpusCoverage.Unrestricted);
+
+        /// <summary>The reporter whose series the denial signal is asserted against.</summary>
+        public RepoContextAnnBuildCorpusReporter Reporter { get; } = new();
 
         public RepoContextAnnIndexRegistry Registry { get; private set; } = null!;
 
@@ -225,6 +275,8 @@ public sealed class RepoContextAnnIndexBuildGrainCredentialTests
                 Backing,
                 new RepoContextIndexingOptions(),
                 authority,
+                Probe,
+                Reporter,
                 NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
                 State);
 
@@ -251,7 +303,25 @@ public sealed class RepoContextAnnIndexBuildGrainCredentialTests
             return MaxTicks;
         }
 
-        public void Dispose() => Registry?.Dispose();
+        /// <summary>
+        /// Drives an exact number of phase ticks whether or not the build converges,
+        /// which is what a build that deliberately refuses to converge needs.
+        /// </summary>
+        /// <param name="ticks">The number of timer ticks to deliver.</param>
+        public async Task PumpTicksAsync(int ticks)
+        {
+            await Grain.EnsureBuildingAsync(Space);
+            for (var tick = 1; tick <= ticks; tick++)
+            {
+                await Grain.ProcessNextPhaseAsync();
+            }
+        }
+
+        public void Dispose()
+        {
+            Registry?.Dispose();
+            Reporter.Dispose();
+        }
     }
 
     [Test]
@@ -286,25 +356,27 @@ public sealed class RepoContextAnnIndexBuildGrainCredentialTests
     }
 
     [Test]
-    public async Task An_anonymous_build_converges_an_empty_index_against_a_gated_corpus()
+    public async Task An_anonymous_build_reaches_ready_holding_nothing_against_a_gated_corpus()
     {
         // THE NEGATIVE CONTROL, AND THE IMPACT DETERMINATION IN ONE.
         //
         // With no authority registered the build presents no subject, so the gated
-        // corpus reads empty. Nothing below refuses an empty corpus: the count
-        // probe reports zero, the ingest completes on its first step, training
-        // drops the partitioning and returns false rather than throwing, and the
-        // build reaches Ready. This grain then records Converged with zero vectors
-        // and stands the coordinator down - so the denied read is durably
-        // indistinguishable from a repository that genuinely had nothing to index,
-        // and nothing re-drives it.
+        // corpus reads empty. Nothing IN THE BUILD PIPELINE refuses an empty
+        // corpus: the count probe reports zero, the ingest completes on its first
+        // step, training drops the partitioning and returns false rather than
+        // throwing, and the build reaches Ready. That is still true and is why the
+        // guard had to be added at the coordinator: there is no lower seam at which
+        // a denied read announces itself.
         //
-        // That is strictly worse than a build that fails and is retried forever,
-        // and it is why the remedy above is a correctness fix rather than a
-        // liveness one. Should a future change refuse to converge an empty index,
-        // this fixture is the one to revisit: the impact statement in #2426 rests
-        // on it.
-        using var rig = new Rig(new NullRepoIndexRunAuthority());
+        // The probe here is deliberately told the prefix is UNRESTRICTED, which
+        // isolates the pipeline's own behaviour from the remedy. Under that answer
+        // the coordinator banks Converged with zero vectors and stands down - which
+        // is exactly the pre-#2426 hazard, reproduced on demand. The paired test
+        // A_denied_corpus_is_counted_and_refused_convergence supplies the truthful
+        // answer and shows the coordinator refusing instead.
+        using var rig = new Rig(
+            new NullRepoIndexRunAuthority(),
+            new FakeCorpusGateProbe(RepoContextAnnBuildCorpusCoverage.Unrestricted));
         rig.Backing.SeedRing(RepoId, Space, 64);
         rig.Start();
 
@@ -319,7 +391,8 @@ public sealed class RepoContextAnnIndexBuildGrainCredentialTests
                 "positive control: the reads must actually have been anonymous, or this fixture "
                 + "is measuring something other than the denial it claims to");
             Assert.That(rig.State.State.Converged, Is.True,
-                "an empty index is recorded as a completed build, not as a failure");
+                "an empty index is recorded as a completed build, not as a failure, whenever the gate "
+                + "reports the prefix unrestricted - the build pipeline itself refuses nothing");
             Assert.That(rig.State.State.VectorsIndexed, Is.Zero,
                 "the corpus of 64 vectors was filtered to nothing and the build did not notice");
             Assert.That(rig.State.State.PartitionsTotal, Is.Zero,

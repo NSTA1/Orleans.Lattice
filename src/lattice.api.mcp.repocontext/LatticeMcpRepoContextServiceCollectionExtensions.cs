@@ -197,6 +197,20 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddSingleton<IRepoContextAnnIndex>(
             sp => sp.GetRequiredService<RepoContextAnnIndexRegistry>());
 
+        // A denied RANGE read returns a clean, successful, EMPTY result rather than
+        // throwing, so an approximate-index build whose corpus was refused reached
+        // Ready holding nothing and banked a converged empty index - durably
+        // indistinguishable from a repository that genuinely had nothing to index.
+        // Two full deployment gates on the repocontext-reliability line ended at an
+        // empty corpus with no series anywhere able to say whether authorization
+        // caused it. The probe classifies the emptiness against the gate and the
+        // reporter turns the answer into a metric, because prose that contradicts a
+        // metric loses whenever only one of the two is being watched. Both are
+        // singletons: the reporter owns a Meter, so a per-activation instance would
+        // leak one per repository. See issue #2426.
+        services.TryAddSingleton<IRepoContextCorpusGateProbe, LatticeRepoContextCorpusGateProbe>();
+        services.TryAddSingleton<RepoContextAnnBuildCorpusReporter>();
+
         // The build scheduler and its startup sweep. The index build is what makes
         // queries fast, so arming it from a query made the acceleration reachable
         // only from the thing it accelerates: nothing resumed it after a process
