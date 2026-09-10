@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// grain timers - are simulated deterministically without a cluster.
 /// </summary>
 [TestFixture]
-public sealed class LatticeLockGrainTests
+public sealed partial class LatticeLockGrainTests
 {
     private const string LockName = "orders/42";
     private static readonly DateTimeOffset T0 = new(2025, 1, 1, 0, 0, 0, TimeSpan.Zero);
@@ -44,6 +44,7 @@ public sealed class LatticeLockGrainTests
         public required FakePersistentState<LatticeLockState> State { get; init; }
         public required MutableClock Clock { get; init; }
         public required List<CapturedTimer> Timers { get; init; }
+        public required IReminderRegistry ReminderRegistry { get; init; }
 
         public Task FireLatestAsync(string purpose)
         {
@@ -91,7 +92,14 @@ public sealed class LatticeLockGrainTests
             },
         };
 
-        return new Harness { Grain = grain, State = state, Clock = clock, Timers = timers };
+        return new Harness
+        {
+            Grain = grain,
+            State = state,
+            Clock = clock,
+            Timers = timers,
+            ReminderRegistry = reminderRegistry,
+        };
     }
 
     private static LockAcquireRequest Request(double leaseSeconds = 30, double maxWaitSeconds = 0) =>
