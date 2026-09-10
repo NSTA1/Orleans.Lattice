@@ -130,7 +130,7 @@ public sealed partial class DurableVectorIndex
 
     private async Task StartBuildAsync(CancellationToken cancellationToken)
     {
-        _expected = await _source.CountAsync(cancellationToken).ConfigureAwait(false);
+        _expected = await CountSourceOrUnknownAsync(cancellationToken).ConfigureAwait(false);
         _phase = VectorIndexBuildPhase.Ingesting;
 
         // Reserving up front is what makes the ingest run allocation-free: the
@@ -141,6 +141,61 @@ public sealed partial class DurableVectorIndex
         }
 
         await WriteBuildStateAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The source's vector count, or <c>0</c> when it cannot be obtained.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>No failure of the count may fail the build.</b>
+    /// <see cref="IVectorSource.CountAsync"/> states that the figure exists only to
+    /// size the initial reservation and report progress, and that nothing depends on
+    /// it for correctness. An unguarded <c>await</c> contradicted that contract: it
+    /// made the one call in the build that is explicitly allowed to be wrong into the
+    /// one call that could abort it.
+    /// </para>
+    /// <para>
+    /// That is not hypothetical. It is what #1844 diagnosed on a live deployment - a
+    /// reclaimed enumerator on the count walk took down the whole index build, which
+    /// then retried and failed identically on every later query, so no index was ever
+    /// persisted while retrieval silently fell back to the exact scan. The fix
+    /// hardened the shortfall probe in the repository-context handle, which is the
+    /// OTHER caller of this same method. This call site was never hardened, so the
+    /// same fault arriving a few milliseconds earlier in the build still had the same
+    /// effect. Bounding the walk by wall clock (#2447) adds a second, deliberate way
+    /// for the count to be unavailable, which is what makes closing this residue
+    /// necessary rather than merely tidy.
+    /// </para>
+    /// <para>
+    /// The catch is broad on purpose, and the contract is what makes that correct
+    /// rather than careless: the count is a hint from an implementation this index
+    /// does not own, so the set of ways it can fail is not this type's to enumerate,
+    /// and every one of them means the same thing here. Narrowing it to the fault
+    /// types known today would re-open the residue for the next one. Cancellation is
+    /// re-thrown, because a cancelled build must stop rather than quietly build
+    /// itself without a reservation.
+    /// </para>
+    /// <para>
+    /// Degrading to <c>0</c> costs only the up-front reservation: the ingest grows
+    /// the cell block as the corpus arrives instead of sizing it once, and progress
+    /// reports an unknown denominator. Both are the documented latitude of a hint.
+    /// </para>
+    /// </remarks>
+    private async Task<int> CountSourceOrUnknownAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _source.CountAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     private async Task IngestAsync(CancellationToken cancellationToken)

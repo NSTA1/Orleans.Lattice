@@ -243,6 +243,42 @@ public sealed class RepoContextAnnIndexHandleTests
     }
 
     [Test]
+    public async Task A_source_whose_count_ran_out_of_budget_is_repaired_on_the_same_reasoning()
+    {
+        // The sibling of the test above, and the reason the catch was widened rather
+        // than a second handler added. There are now two ways the count can be
+        // unavailable - the store losing the enumerator (#1844) and the source
+        // declining to spend more wall clock on the walk (#2447) - and the
+        // distinction matters in a log line and nowhere else. Neither yields a
+        // figure, and a missing figure has exactly one safe reading here: possibly
+        // behind, therefore repair.
+        //
+        // Worth pinning separately because the failure mode of getting it wrong is
+        // silent. A budget-stopped count that propagated would fail the build; one
+        // that returned its partial figure would under-count, read as "not behind",
+        // and skip this repair with no error anywhere.
+        using var rig = new Rig();
+        rig.SeedRing(16);
+        await rig.Handle.EnsureBuiltAsync(Ct);
+
+        rig.Restart();
+        rig.Source.Set("vec-999999", RepoContextKeys.File(RepoId, "src/Late.cs"), Rig.Unit(1));
+        rig.Source.FailNextCounts(
+            1, static () => new RepoContextCountBudgetExceededException(RepoId, 12, TimeSpan.FromSeconds(10)));
+
+        Assert.That(async () => await rig.Handle.EnsureBuiltAsync(Ct), Throws.Nothing,
+            "a count abandoned on its own budget must not fail the build either");
+
+        var outcome = await rig.Handle.SearchAsync(Rig.Unit(1), 5, Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Handle.IsServing, Is.True);
+            Assert.That(outcome.Matches.Select(static m => m.VectorId), Does.Contain("vec-999999"),
+                "an unknown count must repair, however it came to be unknown");
+        });
+    }
+
+    [Test]
     public async Task A_partitioning_the_corpus_has_drifted_away_from_is_retrained()
     {
         // Only a trained index can drift, and retraining rewrites every partition,

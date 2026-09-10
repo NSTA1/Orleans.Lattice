@@ -445,18 +445,25 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         // generous reconnect budget. Treating exhaustion as "unknown, therefore
         // possibly behind" keeps the build going down the path that repairs, which
         // is the safe direction and the one the upper-bound case already takes.
+        //
+        // There are now two ways to be unknown and they are handled identically. An
+        // EnumerationAbortedException is the store losing the enumerator; a
+        // RepoContextCountBudgetExceededException is the source declining to spend
+        // more wall clock on the walk (#2447). The distinction matters in a log line
+        // and nowhere else: neither yields a figure, and a missing figure has exactly
+        // one safe reading here.
         var behind = true;
         try
         {
             var expected = await _source.CountAsync(cancellationToken).ConfigureAwait(false);
             behind = expected > index.Count;
         }
-        catch (EnumerationAbortedException ex)
+        catch (Exception ex) when (ex is EnumerationAbortedException or RepoContextCountBudgetExceededException)
         {
             _logger.LogInformation(
                 ex,
                 "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} could not count the "
-                + "source within its reconnect budget; treating the persisted index as possibly behind and repairing.",
+                + "source within its budget; treating the persisted index as possibly behind and repairing.",
                 _repoId,
                 _space.ModelId,
                 _space.Dimension);
