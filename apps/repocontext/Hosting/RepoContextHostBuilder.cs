@@ -188,6 +188,16 @@ public static class RepoContextHostBuilder
         var metricsCollector = new RepoContextMetricsCollector();
         builder.Services.AddSingleton(metricsCollector);
 
+        // Constructed eagerly, for the same reason and immediately after the
+        // collector: an observable instrument that nobody resolves is never
+        // published, so a lazily-registered singleton here would produce exactly the
+        // failure this instrument exists to remove - a measurand that is present in
+        // the source, absent from the exposition, and whose silence reads as zero
+        // pause (issues #2605 and #2515). Registered after the collector so the
+        // listener is already running when the instruments publish.
+        var gcMeter = new RepoContextGarbageCollectionMeter();
+        builder.Services.AddSingleton(gcMeter);
+
         var isAzure = config.Profile == DurabilityProfile.Azure;
 
         // Resolve the backup settings once, before the silo lambda, so an unusable

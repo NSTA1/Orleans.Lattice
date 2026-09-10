@@ -543,3 +543,18 @@ Seven gauges expose the same state on `/metrics`, so this is alertable without l
 
 **What this does not do, stated plainly so it is not over-read.** It does not make the drain fit. A projection that exceeds the budget is a warning that the next stop will abandon, not a repair of it, and the remedy is still to raise the grace period and the variable that declares it together. Every reading is best-effort: a residency count the runtime will not supply is reported as unavailable and never as zero, and a projection needs a prior measured drain, so a first-ever start forecasts `NoHistory` and offers no projection at all. The point is only that the failure now announces itself while there is still time to act on it.
 
+### Garbage-collector pause time
+
+The host runs a multi-GiB heap by design, so a collector pause is a first-class explanation for a request timeout. The runtime already emits the accumulated pause total by name, and the effective-configuration report names it at startup, where it is necessarily near zero. Two counters make the quantity queryable over a window rather than readable only from a log scrape:
+
+| Counter | Meaning |
+|---------|---------|
+| `lattice_repocontext_gc_pause_seconds_total` | Accumulated seconds this process has spent suspended for garbage collection since it started. |
+| `lattice_repocontext_gc_collections_total` | Garbage collections completed since start, summed across every generation. |
+
+**Read the two together; the first cannot be read alone.** A pause total of zero is otherwise indistinguishable between a collector that has run without suspending the process measurably and a collector that has not run at all. With the count beside it, a zero on `lattice_repocontext_gc_pause_seconds_total` against a rising `lattice_repocontext_gc_collections_total` is a *measured* absence of pause, and both at zero means no collection has happened yet.
+
+Both are observable counters, sampled at scrape time from cumulative runtime figures, so a scrape gap loses resolution rather than corrupting the series and both exist from process start rather than appearing on a first occurrence. A series that is **absent** rather than zero therefore means the host did not construct the meter, or the collector refused the series at one of its ceilings; it never means the process has not paused. Neither carries a tenant dimension: a collector pause is a property of the host process and belongs to no tenant's traffic.
+
+`rate(lattice_repocontext_gc_pause_seconds_total[5m])` is the reading worth alerting on, because it is the fraction of wall-clock the process spent suspended and is directly comparable with a request-latency series.
+

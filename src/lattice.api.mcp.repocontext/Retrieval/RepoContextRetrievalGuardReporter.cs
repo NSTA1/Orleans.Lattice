@@ -244,7 +244,24 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
                 + "'bootstrapping' (the plane could not answer and the fallback ladder ran), 'exhaustive' "
                 + "(the plane answered by scanning the vectors it holds), or 'approximate' (the plane "
                 + "answered from its trained partitioning). Because every outcome is counted, a zero on one "
-                + "state alongside a non-zero total is a measured absence rather than an absent measurement.");
+                + "state alongside a non-zero total is a measured absence rather than an absent measurement. "
+                + "All three arms are pre-minted at zero when this reporter is constructed, so each is present "
+                + "from process start rather than appearing on its first occurrence, which is what keeps that "
+                + "reading available on a long-lived host. If an arm is absent rather than zero, that reading "
+                + "does not hold and nothing should be concluded from this instrument until "
+                + "'lattice_metrics_series' has been read against the collector ceiling and "
+                + "'lattice_metrics_dropped_measurements_by_family_total' checked for a non-zero value: a "
+                + "series whose first occurrence falls after a ceiling is reached is refused at creation and "
+                + "never appears at all.");
+
+        // Pre-mint every arm of the state partition with a zero-valued add. See the
+        // matching note in RepoContextAnnIndexSweepReporter: an arm that has never
+        // been exercised is the arm most likely to be refused by a saturated
+        // collector, and it is exactly the arm the description invites the reader
+        // to read as a measured zero (issue #2515).
+        _annSearches.Add(0, new KeyValuePair<string, object?>(StateTagKey, StateBootstrappingTag), LatticeTenantLabel.Platform);
+        _annSearches.Add(0, new KeyValuePair<string, object?>(StateTagKey, StateExhaustiveTag), LatticeTenantLabel.Platform);
+        _annSearches.Add(0, new KeyValuePair<string, object?>(StateTagKey, StateApproximateTag), LatticeTenantLabel.Platform);
     }
 
     /// <summary>The minimum spacing between summaries for one repository.</summary>

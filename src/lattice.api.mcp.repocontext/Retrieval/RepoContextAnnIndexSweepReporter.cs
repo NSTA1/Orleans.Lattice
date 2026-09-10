@@ -386,8 +386,15 @@ internal sealed class RepoContextAnnIndexSweepReporter : IDisposable
                 + "the total advances once per sweep - at the sweep interval while sweeps complete, and at the "
                 + "faster retry cadence (250 ms doubling to a 30-second ceiling) while they fault, so do not "
                 + "denominate 'faulted' by the sweep interval - and a zero on 'armed' beside a rising 'faulted' is "
-                + "a measured absence of arming rather than an absent measurement. All three series reading zero "
-                + "means the sweep loop is not running at all, which the service's startup line distinguishes. "
+                + "a measured absence of arming rather than an absent measurement. All three arms are "
+                + "pre-minted at zero when this reporter is constructed, so each is present from process start rather "
+                + "than appearing on its first occurrence. All three reading zero therefore means no sweep has "
+                + "completed yet; it does not localise the fault, and in particular does not establish that the sweep "
+                + "loop is not running, which the service's startup line reports directly. If an arm is absent rather "
+                + "than zero, read 'lattice_metrics_series' against the collector ceiling and "
+                + "'lattice_metrics_dropped_measurements_by_family_total' before reading anything into this "
+                + "instrument: a series whose first occurrence falls after a ceiling is reached is refused at "
+                + "creation, so an absent arm carries no information at all. "
                 + "The 'faulted' arm alone carries a second tag, 'cause', drawn from a closed set that is resolved "
                 + "where the fault is raised: 'authority-unavailable' (resolving the run credential threw, so "
                 + "nothing was attempted), 'listing-unavailable' (the repository listing threw, so nothing was "
@@ -401,6 +408,24 @@ internal sealed class RepoContextAnnIndexSweepReporter : IDisposable
                 + "'faulted' flat while 'armed' advances is a startup transient, whereas 'faulted' advancing while "
                 + "'armed' stays flat is not. No cause reports on the corpus, because the sweep only arms a "
                 + "coordinator and never reads a vector count.");
+
+        // Pre-mint every arm of the outcome partition with a zero-valued add, so
+        // each series exists from process start rather than from its first
+        // occurrence. That is what keeps the description's reading available on a
+        // long-lived host: the collector refuses a series whose first occurrence
+        // falls after a ceiling is reached, and the arm most likely to have its
+        // first occurrence late is exactly the never-yet-exercised arm the reader
+        // is invited to read as a measured zero (issue #2515). An absent series and
+        // a series reading zero look identical on a dashboard and are very
+        // different claims; only the second is falsifiable.
+        //
+        // The five 'cause' values are deliberately not pre-minted. They partition
+        // 'faulted' rather than the whole population, so a zero on a cause is only
+        // interpretable once 'faulted' is non-zero, at which point the causes have
+        // been minted by the faults themselves.
+        _annSweeps.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeArmedTag), LatticeTenantLabel.Platform);
+        _annSweeps.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeEmptyTag), LatticeTenantLabel.Platform);
+        _annSweeps.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag), LatticeTenantLabel.Platform);
     }
 
     /// <summary>
