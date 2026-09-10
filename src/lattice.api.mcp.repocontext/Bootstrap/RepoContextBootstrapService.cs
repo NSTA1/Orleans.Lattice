@@ -55,6 +55,24 @@ internal sealed class RepoContextBootstrapService : IDisposable
     private const int VectorisingHeartbeatInterval = 100;
 
     /// <summary>
+    /// The longest a vectorising pass may go without emitting a heartbeat log line,
+    /// regardless of how few files have embedded since the last one.
+    /// <para>
+    /// <see cref="VectorisingHeartbeatInterval"/> alone throttles by COUNT, so the
+    /// wall-clock period between lines is a function of throughput - and it varies
+    /// inversely with it. Measured on a real deployment embedding at 7.58
+    /// files/minute, one line per 100 files is one line every 13 minutes 12
+    /// seconds, so a healthy pass emitted nothing at all for a quarter of an hour
+    /// at a stretch. That is the wrong way round: a count-throttled channel goes
+    /// quietest exactly when the system is slowest, which is precisely when an
+    /// operator needs to tell "slow but alive" from "hung". A time floor makes the
+    /// silence bounded, so an absence of lines for longer than this is evidence of
+    /// a stall rather than an artefact of the throttle.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan VectorisingHeartbeatMaxSilence = TimeSpan.FromMinutes(2);
+
+    /// <summary>
     /// How often the concurrent walk-progress pump samples and reports the running
     /// hashed-file count while the (synchronous) walk is in flight. Short enough to
     /// feel live, long enough that a fast walk emits only a handful of reports.
@@ -716,6 +734,27 @@ internal sealed class RepoContextBootstrapService : IDisposable
 
             var lastVectorisingHeartbeat = 0;
 
+            // Elapsed time reported by the heartbeat below is measured from the
+            // VECTORISING PHASE, not from the start of the job.
+            //
+            // It previously read the job-wide stopwatch, which starts before the
+            // walk. The line's two fields are the only numbers the authoritative
+            // progress channel offers, so a reader divides them to get a rate - and
+            // that division silently included the scan and apply phases in the
+            // denominator. Measured on a real deployment the line read "203 file(s)
+            // embedded after 2758624 ms", giving 4.42 files/min against an actual
+            // embedding rate of 7.58 files/min: a 42% understatement, produced by a
+            // denominator defect sitting inside the very line whose purpose is to
+            // report the rate. Timing the phase makes the two fields divide to the
+            // quantity a reader is already assuming they divide to, which is a
+            // better fix than adding a second number and hoping the reader picks
+            // the right pair.
+            // Timed off the injected TimeProvider rather than a Stopwatch: the
+            // silence floor below is a two-minute behaviour, and a test that had to
+            // wait out two real minutes to observe it would not be written.
+            var vectorisingStartedAt = _timeProvider.GetTimestamp();
+            var lastVectorisingHeartbeatAt = TimeSpan.Zero;
+
             // Failures are collected rather than swallowed. The first is rethrown
             // once every arm has had its turn, so the run is still reported as
             // failed and retried - it just no longer costs the other arms their
@@ -735,12 +774,20 @@ internal sealed class RepoContextBootstrapService : IDisposable
                     unchangedOffered,
                     (count, ct) =>
                     {
-                        if (count - lastVectorisingHeartbeat >= VectorisingHeartbeatInterval)
+                        // Fire on EITHER threshold: enough new files, or enough
+                        // elapsed time. The count arm keeps a fast pass from
+                        // emitting a line per batch; the time arm keeps a slow pass
+                        // from emitting nothing at all.
+                        var elapsed = _timeProvider.GetElapsedTime(vectorisingStartedAt);
+                        if (count - lastVectorisingHeartbeat >= VectorisingHeartbeatInterval
+                            || elapsed - lastVectorisingHeartbeatAt >= VectorisingHeartbeatMaxSilence)
                         {
                             lastVectorisingHeartbeat = count;
+                            lastVectorisingHeartbeatAt = elapsed;
                             _logger.LogInformation(
-                                "Repo {RepoId}: vectorising progress - {Embedded} file(s) embedded after {Elapsed} ms.",
-                                repoId, count, stopwatch.ElapsedMilliseconds);
+                                "Repo {RepoId}: vectorising progress - {Embedded} file(s) embedded after "
+                                + "{Elapsed} ms in the vectorising phase.",
+                                repoId, count, (long)elapsed.TotalMilliseconds);
                         }
 
                         return ReportAsync(
@@ -809,8 +856,58 @@ internal sealed class RepoContextBootstrapService : IDisposable
             // converge in production at all.
             try
             {
+                // The symbol arm reports progress for the same reason the file arm
+                // does, and its silence was the more damaging of the two. This arm
+                // runs even when the structural plan is a no-op, so on a
+                // steady-state repository whose file coverage is already complete
+                // it is the ONLY arm doing substantial work - and it did that work
+                // without a single progress report. The job's updatedAt therefore
+                // froze at the file arm's final report and stayed frozen for as
+                // long as symbols took to back-fill (95 minutes, on the deployment
+                // that surfaced this), while filesEmbedded sat legitimately at 0.
+                // Read together those two say "dead", and the documented
+                // diagnostic rule turns "stalled updatedAt" into "give up and
+                // re-onboard" - a destructive action prescribed against a
+                // perfectly healthy index converging at hundreds of vectors a
+                // minute.
+                //
+                // Reported into its own counter rather than folded into
+                // FilesEmbedded: symbols are not files, and a count that silently
+                // changed units mid-phase would trade one wrong number for
+                // another.
+                var lastSymbolHeartbeat = 0;
+                var lastSymbolHeartbeatAt = TimeSpan.Zero;
+                var symbolStartedAt = _timeProvider.GetTimestamp();
+
                 var symbolsEmbedded = await _vectorIngestor.IngestSymbolsAsync(
-                    repoId, changedSymbolKeys, prunedSymbolKeys, cancellationToken)
+                    repoId,
+                    changedSymbolKeys,
+                    prunedSymbolKeys,
+                    cancellationToken,
+                    (count, ct) =>
+                    {
+                        var elapsed = _timeProvider.GetElapsedTime(symbolStartedAt);
+                        if (count - lastSymbolHeartbeat >= VectorisingHeartbeatInterval
+                            || elapsed - lastSymbolHeartbeatAt >= VectorisingHeartbeatMaxSilence)
+                        {
+                            lastSymbolHeartbeat = count;
+                            lastSymbolHeartbeatAt = elapsed;
+                            _logger.LogInformation(
+                                "Repo {RepoId}: symbol vectorising progress - {Embedded} symbol passage(s) "
+                                + "embedded after {Elapsed} ms in the symbol arm.",
+                                repoId, count, (long)elapsed.TotalMilliseconds);
+                        }
+
+                        return ReportAsync(
+                            progress, new RepoIndexProgressUpdate { SymbolsEmbedded = count }, ct);
+                    })
+                    .ConfigureAwait(false);
+
+                // Report the final tally even when the arm embedded nothing, so the
+                // counter reads as a measured zero rather than as an arm that never
+                // ran - the same reasoning as the unconditional log line below.
+                await ReportAsync(
+                    progress, new RepoIndexProgressUpdate { SymbolsEmbedded = symbolsEmbedded }, cancellationToken)
                     .ConfigureAwait(false);
 
                 // Log the symbol-embedding tally unconditionally, including the zero

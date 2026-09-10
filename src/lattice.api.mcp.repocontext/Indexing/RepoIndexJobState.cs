@@ -96,6 +96,15 @@ internal sealed class RepoIndexJobState
     public int FilesContentProjected { get; set; }
 
     /// <summary>
+    /// The number of symbol passages whose vectors were embedded and stored during
+    /// this run. Distinct from <see cref="FilesEmbedded"/>, which counts files: the
+    /// symbol arm runs even on a pass whose file coverage is already complete, and
+    /// its reports are what keep <see cref="UpdatedAt"/> advancing while it does.
+    /// </summary>
+    [Id(18)]
+    public int SymbolsEmbedded { get; set; }
+
+    /// <summary>
     /// Projects the durable state into the immutable snapshot returned to callers.
     /// </summary>
     /// <param name="repoId">The repository identity carried in the grain key.</param>
@@ -114,6 +123,7 @@ internal sealed class RepoIndexJobState
         ChunksCommitted = ChunksCommitted,
         FilesEmbedded = FilesEmbedded,
         FilesContentProjected = FilesContentProjected,
+        SymbolsEmbedded = SymbolsEmbedded,
         Attempt = Attempt,
         StartedAt = StartedAt,
         UpdatedAt = UpdatedAt,

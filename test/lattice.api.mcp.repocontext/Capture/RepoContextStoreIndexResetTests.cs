@@ -214,6 +214,110 @@ public sealed class RepoContextStoreIndexResetTests
     }
 
     /// <summary>
+    /// The census clear must land before the tree sweep, not after it.
+    /// <para>
+    /// Sampling only after the reset returns cannot tell a correct reset from one
+    /// whose steps are sequenced wrongly: both end in the same state. The window
+    /// that separates them is the sweep itself, which runs for minutes on a real
+    /// corpus and is exactly when an operator asks "did it work?". So this test
+    /// takes two samples - one with the reset provably parked mid-sweep, one after
+    /// it returns - and asserts the cleared census at both.
+    /// </para>
+    /// <para>
+    /// The gate is aimed at the symbol tree because the structural tree is swept
+    /// first: parking a call on the tree that also holds the marker would block the
+    /// very read this test needs to take. <see cref="LatticeTreeCallGate.WasReached"/>
+    /// is asserted so a gate that never matched fails loudly instead of quietly
+    /// degrading this into a single-sample test that proves nothing.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task ResetIndexAsync_clears_the_census_before_the_sweep_so_it_is_observable_while_the_reset_runs()
+    {
+        var gate = new LatticeTreeCallGate
+        {
+            TreeId = RepoContextTrees.Symbol,
+            Method = nameof(ILattice.DeleteRangeAsync),
+        };
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions
+            {
+                Posture = RepoContextMcpAuthPosture.Writer,
+                ConfigureSilo = silo =>
+                {
+                    silo.Services.AddSingleton(gate);
+                    silo.Services.AddSingleton<IIncomingGrainCallFilter, LatticeTreeGatingFilter>();
+                },
+            }, Ct);
+        var store = Store(harness);
+
+        await SeedFullRepoAsync(harness, "acme", Ct);
+        await SeedIngestedMarkerAsync(harness, "acme", Ct);
+
+        var before = (await store.ListReposAsync(Ct)).Repos.Single(r => r.RepoId == "acme");
+        Assert.That(before.FileCount, Is.EqualTo(1234L),
+            "Precondition: before the reset, list_repos serves the ingest census. Without this the "
+            + "mid-sweep sample below could read null because nothing was ever there.");
+
+        var reset = store.ResetIndexAsync("acme", Ct);
+
+        await gate.Reached.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        // Sample A - the reset is parked inside the sweep, one tree in.
+        var during = (await store.ListReposAsync(Ct)).Repos.SingleOrDefault(r => r.RepoId == "acme");
+
+        gate.Release();
+        var result = await reset;
+
+        // Sample B - the reset has returned.
+        var after = (await store.ListReposAsync(Ct)).Repos.SingleOrDefault(r => r.RepoId == "acme");
+
+        Assert.That(gate.WasReached, Is.True,
+            "The gate never matched, so no sample was taken mid-sweep and this test proves nothing "
+            + "about ordering. Fix the gate rather than the assertion.");
+
+        Assert.That(during, Is.Not.Null,
+            "A reset in flight must not un-list the repository: an operator polling list_repos through "
+            + "the sweep would read the repository as gone rather than as resetting.");
+
+        Assert.Multiple(() =>
+        {
+            // Sample A. This is the assertion the pre-fix ordering fails: the clear
+            // used to run after the sweep, so for the sweep's whole duration these
+            // three served the complete pre-reset census at full confidence.
+            Assert.That(during!.FileCount, Is.Null,
+                "Mid-sweep, fileCount still reported the pre-reset census. That is not merely a late "
+                + "signature - it is unobservable at the only moment anyone looks.");
+            Assert.That(during.LastIngested, Is.Null,
+                "Mid-sweep, lastIngested still named an ingest whose index is being deleted.");
+            Assert.That(during.IndexedCommit, Is.Null,
+                "Mid-sweep, indexedCommit still named a revision the index no longer corresponds to.");
+
+            // Sample B. Separates the two candidate mechanisms: if the clear landed
+            // but only late, A fails and B passes; if it never became observable at
+            // all, both fail.
+            Assert.That(after, Is.Not.Null);
+            Assert.That(after!.FileCount, Is.Null, "After the reset, fileCount must be cleared.");
+            Assert.That(after.LastIngested, Is.Null, "After the reset, lastIngested must be cleared.");
+            Assert.That(after.IndexedCommit, Is.Null, "After the reset, indexedCommit must be cleared.");
+
+            // The reset now reports what it did rather than leaving a caller to
+            // infer it from an absence. RepoContextStore has no logger, so the
+            // return value is the only channel available to it.
+            Assert.That(result.CensusCleared, Is.True,
+                "The reset must report clearing the census, so a caller that reads a cleared census can "
+                + "tell 'the reset cleared it' from 'there was never one to clear'.");
+            Assert.That(result.TreesSwept, Is.EquivalentTo(RepoContextTrees.CodeIndexTrees),
+                "The reset must name the trees it swept, so partial coverage is visible rather than "
+                + "presenting as a low deletion count.");
+            Assert.That(result.MemoryPreserved, Is.True,
+                "The reset must state that memory was preserved rather than leaving it to be inferred.");
+            Assert.That(result.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(0L));
+        });
+    }
+
+    /// <summary>
     /// The marker's authored metadata - display name, default branch, and tags -
     /// is not index-derived: it is patched in through <c>repocontext_update</c>
     /// rather than written by an ingest, so a code-only reset has no claim on it.

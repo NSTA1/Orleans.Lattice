@@ -110,4 +110,32 @@ public sealed record RepoIndexProgress
     /// </summary>
     [Id(17)]
     public int FilesContentProjected { get; init; }
+
+    /// <summary>
+    /// The number of symbol passages whose vectors were embedded and stored during
+    /// this run.
+    /// <para>
+    /// Reported separately from <see cref="FilesEmbedded"/> because the two count
+    /// different things and conflating them made a healthy run look dead. The
+    /// symbol arm embeds captured symbols rather than files, so on a pass whose
+    /// file coverage is already complete <see cref="FilesEmbedded"/> is
+    /// legitimately zero while the symbol arm runs for a long time - and before
+    /// this field existed that arm reported no progress of any kind, so
+    /// <see cref="UpdatedAt"/> froze at the file arm's last report and
+    /// <c>index_status</c> was byte-identical across readings taken an hour apart.
+    /// A repository converging at hundreds of vectors a minute was therefore
+    /// indistinguishable from a stalled one, and the documented diagnostic rule
+    /// ("a stalled updatedAt warrants giving up") pointed at a destructive
+    /// re-onboard of a perfectly healthy index.
+    /// </para>
+    /// <para>
+    /// <c>list_repos</c>'s <c>embeddedVectorCount</c> counts sources of every kind
+    /// - files and symbols together - which is why it can be seen rising while
+    /// <see cref="FilesEmbedded"/> stays at zero. That is not a contradiction
+    /// between the two surfaces: it is the sum being observed against only one of
+    /// its terms. This field supplies the missing term.
+    /// </para>
+    /// </summary>
+    [Id(18)]
+    public int SymbolsEmbedded { get; init; }
 }

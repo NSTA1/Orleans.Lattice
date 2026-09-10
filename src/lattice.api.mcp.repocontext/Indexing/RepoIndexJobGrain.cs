@@ -73,6 +73,7 @@ internal sealed class RepoIndexJobGrain(
         state.State.ChunksCommitted = 0;
         state.State.FilesEmbedded = 0;
         state.State.FilesContentProjected = 0;
+        state.State.SymbolsEmbedded = 0;
         state.State.Attempt += 1;
         state.State.StartedAt = now;
         state.State.UpdatedAt = now;
@@ -231,6 +232,7 @@ internal sealed class RepoIndexJobGrain(
         if (update.ChunksCommitted is { } chunksCommitted) state.State.ChunksCommitted = chunksCommitted;
         if (update.FilesEmbedded is { } embedded) state.State.FilesEmbedded = embedded;
         if (update.FilesContentProjected is { } contentProjected) state.State.FilesContentProjected = contentProjected;
+        if (update.SymbolsEmbedded is { } symbolsEmbedded) state.State.SymbolsEmbedded = symbolsEmbedded;
     }
 
     private async Task RegisterResumeReminderAsync()
