@@ -260,4 +260,156 @@ public class LatticeEventPublisherTests
         Assert.That(evt.OperationId, Is.Null);
         Assert.That(evt.Kind, Is.EqualTo(LatticeTreeEventKind.Delete));
     }
+
+    [Test]
+    public async Task CreateBatch_resolves_the_stream_once_for_the_whole_wave()
+    {
+        // The point of the batch seam: a publication wave over N entries must
+        // resolve the keyed provider and build the per-tree stream handle once,
+        // not once per entry. Asserting the resolution COUNT (not just that the
+        // events arrived) is what actually pins the optimisation - a regression
+        // that reinstated per-event resolution would still publish correctly.
+        var stream = Substitute.For<IAsyncStream<LatticeTreeEvent>>();
+        stream.OnNextAsync(Arg.Any<LatticeTreeEvent>(), Arg.Any<StreamSequenceToken?>())
+            .Returns(Task.CompletedTask);
+        var provider = Substitute.For<IStreamProvider>();
+        provider.GetStream<LatticeTreeEvent>(Arg.Any<StreamId>()).Returns(stream);
+
+        using var services = ServicesWith(provider, "Default");
+        var options = new LatticeOptions { PublishEvents = true, EventStreamProviderName = "Default" };
+        using var counters = new EventCounterRecorder();
+
+        var batch = LatticeEventPublisher.CreateBatch(services, options, "tree-batch", NullLogger.Instance);
+        for (var i = 0; i < 8; i++)
+        {
+            await batch.PublishAsync(LatticeTreeEventKind.Set, $"k{i}");
+        }
+
+        provider.Received(1).GetStream<LatticeTreeEvent>(Arg.Any<StreamId>());
+        await stream.Received(8).OnNextAsync(Arg.Any<LatticeTreeEvent>(), Arg.Any<StreamSequenceToken?>());
+        Assert.That(counters.Published(), Is.EqualTo(8),
+            "Every entry must still be counted individually - only the resolution is shared.");
+    }
+
+    [Test]
+    public async Task CreateBatch_stamps_every_event_with_the_tree_and_ambient_operationId()
+    {
+        const string opId = "op-batch";
+        var captured = new List<LatticeTreeEvent>();
+        var stream = Substitute.For<IAsyncStream<LatticeTreeEvent>>();
+        stream.OnNextAsync(Arg.Any<LatticeTreeEvent>(), Arg.Any<StreamSequenceToken?>())
+            .Returns(ci => { captured.Add(ci.Arg<LatticeTreeEvent>()); return Task.CompletedTask; });
+        var provider = Substitute.For<IStreamProvider>();
+        provider.GetStream<LatticeTreeEvent>(Arg.Any<StreamId>()).Returns(stream);
+
+        using var services = ServicesWith(provider, "Default");
+        var options = new LatticeOptions { PublishEvents = true, EventStreamProviderName = "Default" };
+
+        Orleans.Runtime.RequestContext.Set(LatticeEventConstants.OperationIdRequestContextKey, opId);
+        try
+        {
+            var batch = LatticeEventPublisher.CreateBatch(services, options, "tree-stamp", NullLogger.Instance);
+            await batch.PublishAsync(LatticeTreeEventKind.Set, "a");
+            await batch.PublishAsync(LatticeTreeEventKind.Set, "b", shardIndex: 3);
+        }
+        finally
+        {
+            Orleans.Runtime.RequestContext.Remove(LatticeEventConstants.OperationIdRequestContextKey);
+        }
+
+        Assert.That(captured, Has.Count.EqualTo(2));
+        Assert.Multiple(() =>
+        {
+            Assert.That(captured.Select(e => e.TreeId), Is.All.EqualTo("tree-stamp"));
+            Assert.That(captured.Select(e => e.OperationId), Is.All.EqualTo(opId),
+                "The ambient operation id is read once per batch but must still land on every event.");
+            Assert.That(captured[0].Key, Is.EqualTo("a"));
+            Assert.That(captured[0].ShardIndex, Is.Null);
+            Assert.That(captured[1].Key, Is.EqualTo("b"));
+            Assert.That(captured[1].ShardIndex, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public async Task CreateBatch_counts_a_drop_per_event_when_the_provider_is_missing()
+    {
+        // Resolution is shared, but drop accounting is not: a wave of N entries
+        // against a silo with no stream provider must still report N drops, so
+        // the events.dropped counter stays comparable across the change.
+        var services = new ServiceCollection().BuildServiceProvider();
+        var options = new LatticeOptions { PublishEvents = true, EventStreamProviderName = "Default" };
+        using var counters = new EventCounterRecorder();
+
+        var batch = LatticeEventPublisher.CreateBatch(services, options, "tree-missing", NullLogger.Instance);
+        for (var i = 0; i < 5; i++)
+        {
+            await batch.PublishAsync(LatticeTreeEventKind.Set, $"k{i}");
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(counters.Dropped("missing_provider"), Is.EqualTo(5));
+            Assert.That(counters.Published(), Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task CreateBatch_swallows_a_resolution_fault_and_counts_publish_errors()
+    {
+        // A provider that throws while the stream is being resolved must not
+        // fault the write path, and every subsequent entry must be accounted as
+        // a publish_error drop rather than silently vanishing.
+        var provider = Substitute.For<IStreamProvider>();
+        provider.GetStream<LatticeTreeEvent>(Arg.Any<StreamId>())
+            .Throws(new InvalidOperationException("stream provider is not initialised"));
+
+        using var services = ServicesWith(provider, "Default");
+        var options = new LatticeOptions { PublishEvents = true, EventStreamProviderName = "Default" };
+        using var counters = new EventCounterRecorder();
+
+        var batch = LatticeEventPublisher.CreateBatch(services, options, "tree-fault", NullLogger.Instance);
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                await batch.PublishAsync(LatticeTreeEventKind.Set, $"k{i}");
+            }
+        });
+        await Task.CompletedTask;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(counters.Dropped("publish_error"), Is.EqualTo(3));
+            Assert.That(counters.Dropped("missing_provider"), Is.Zero);
+            Assert.That(counters.Published(), Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task CreateBatch_swallows_an_asynchronous_dispatch_fault_per_event()
+    {
+        var stream = Substitute.For<IAsyncStream<LatticeTreeEvent>>();
+        stream.OnNextAsync(Arg.Any<LatticeTreeEvent>(), Arg.Any<StreamSequenceToken?>())
+            .Returns(_ => Task.FromException(new TimeoutException("queue write timed out")));
+        var provider = Substitute.For<IStreamProvider>();
+        provider.GetStream<LatticeTreeEvent>(Arg.Any<StreamId>()).Returns(stream);
+
+        using var services = ServicesWith(provider, "Default");
+        var options = new LatticeOptions { PublishEvents = true, EventStreamProviderName = "Default" };
+        using var counters = new EventCounterRecorder();
+
+        var batch = LatticeEventPublisher.CreateBatch(services, options, "tree-async-batch", NullLogger.Instance);
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            await batch.PublishAsync(LatticeTreeEventKind.Set, "a");
+            await batch.PublishAsync(LatticeTreeEventKind.Set, "b");
+        });
+        await Task.CompletedTask;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(counters.Dropped("publish_error"), Is.EqualTo(2));
+            Assert.That(counters.Published(), Is.Zero);
+        });
+    }
 }

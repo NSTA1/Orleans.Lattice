@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -1116,8 +1117,24 @@ internal sealed class WalCommitLogWriter(
     /// re-route new writes into partitions the materialiser is not
     /// configured to read from.
     /// </para>
+    /// <para>
+    /// Returns <see cref="ValueTask{TResult}"/> rather than
+    /// <see cref="Task{TResult}"/> because the resolver's
+    /// <c>GetWalPartitionsAsync</c> completes synchronously on every cache
+    /// hit - which is every append after a tree's first - and on the
+    /// system-tree branch. Declared as <c>async Task&lt;T&gt;</c> the method
+    /// still allocated a <c>Task&lt;ValueTuple&lt;...&gt;&gt;</c> per call even
+    /// though it never suspended, and <see cref="AppendManyAsync"/> awaits it
+    /// once per entry, so a batch of N paid N such allocations on the
+    /// foreground commit path. The split fast/slow shape below mirrors
+    /// <c>ShardRootGrain.GetRoutingTableSnapshotAsync</c> and
+    /// <c>LatticeGrain.GetRoutingAsync</c>: the synchronous path allocates
+    /// neither a task nor an async state-machine box, and the cold-tree
+    /// first-hit path keeps the awaiting shape unchanged. The method is
+    /// private, so this is not a public-surface change.
+    /// </para>
     /// </summary>
-    private async Task<(WalRecord Entry, int Partition, int WalPartitions, LatticeOptions PerTree)> RouteAsync(WalRecord entry)
+    private ValueTask<(WalRecord Entry, int Partition, int WalPartitions, LatticeOptions PerTree)> RouteAsync(WalRecord entry)
     {
         // Resolve WalPartitions through the resolver's per-tree fast-path
         // cache so the foreground commit path does not pay a
@@ -1128,12 +1145,35 @@ internal sealed class WalCommitLogWriter(
         // GetWalPartitionsAsync returns a synchronously-completed
         // ValueTask on a cache hit and falls back to the registry only
         // on a cold tree's first hit.
-        //
-        // Other per-tree options not covered by the registry pin
+        var partitionsTask = optionsResolver.GetWalPartitionsAsync(entry.TreeId);
+        if (partitionsTask.IsCompletedSuccessfully)
+        {
+            return new ValueTask<(WalRecord, int, int, LatticeOptions)>(
+                RouteCore(entry, partitionsTask.Result));
+        }
+
+        return RouteSlowAsync(entry, partitionsTask);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private async ValueTask<(WalRecord Entry, int Partition, int WalPartitions, LatticeOptions PerTree)> RouteSlowAsync(
+        WalRecord entry,
+        ValueTask<int> partitionsTask)
+    {
+        return RouteCore(entry, await partitionsTask);
+    }
+
+    /// <summary>
+    /// Synchronous body of <see cref="RouteAsync"/>, sharing one implementation
+    /// between its fast and slow paths so the routing semantics cannot diverge.
+    /// </summary>
+    private (WalRecord Entry, int Partition, int WalPartitions, LatticeOptions PerTree) RouteCore(
+        WalRecord entry, int partitions)
+    {
+        // Per-tree options not covered by the registry pin
         // (WalMaxPendingBatches and friends used by the dispatch
         // histogram below) are still read from the live IOptionsMonitor
         // here - they are dynamic-tunable by design.
-        var partitions = await optionsResolver.GetWalPartitionsAsync(entry.TreeId);
         var perTree = options.Get(entry.TreeId);
 
         // Prefer the mode the producer already stamped onto the record.
