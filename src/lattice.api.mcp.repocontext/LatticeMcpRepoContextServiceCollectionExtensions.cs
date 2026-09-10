@@ -357,6 +357,22 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<RepoContextTtlOptions>, RepoContextTtlOptionsValidator>());
 
+        // The durable-memory archive. Agent memory is the one plane of this store that
+        // does not rebuild from anything, and it cannot be given its own volume (the
+        // write-ahead log has one root per provider and every B+ tree grain persists
+        // through one storage provider), so the only way to put it beyond the reach of
+        // a volume wipe is to copy it out. Registered only when a directory is
+        // configured, so a host that does not opt in gains no background work.
+        var archiveOptions = RepoContextMemoryArchiveOptions.FromEnvironment();
+        services.TryAddSingleton(archiveOptions);
+        services.TryAddSingleton(sp => new RepoContextMemoryArchive(
+            sp.GetRequiredService<RepoContextMemoryArchiveOptions>()));
+
+        if (archiveOptions.IsEnabled)
+        {
+            services.AddHostedService<RepoContextMemoryArchiveService>();
+        }
+
         return services;
     }
 }

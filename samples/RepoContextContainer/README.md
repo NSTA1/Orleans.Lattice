@@ -252,6 +252,95 @@ docker compose down          # keeps the data + model-cache volumes
 docker compose down -v       # also deletes durable state (start clean)
 ```
 
+`down -v` deletes the index **and the authored agent memory**, because both live
+on the same `/data` volume. Read
+[Agent memory versus the code index](#agent-memory-versus-the-code-index) before
+using it: `repocontext_reset_index` rebuilds an index with no loss at all, and
+the memory archive that makes `down -v` survivable is bounded by its export
+interval rather than complete.
+
+## Agent memory versus the code index
+
+Two kinds of state share the `/data` volume, and only one of them can be
+recreated.
+
+| | What it is | If it is destroyed | The safe gesture |
+|---|---|---|---|
+| **Code index** | Structural, content, symbol, xref, session and vector planes, derived from files on disk | Re-run `repocontext_add_repo`; back in minutes | `repocontext_reset_index` |
+| **Agent memory** | Every `repocontext_remember` note, decision, gotcha and glossary entry | Gone; it is the store of record and derives from nothing | Keep an archive (below) |
+
+`docker compose down -v` destroys both. That is the defect behind issue #2601:
+the gesture is documented as the ordinary way to start clean, and it silently
+takes the irreplaceable half with it. It has already happened once, to epic
+#2368's own memory.
+
+### Why the two are not simply on separate volumes
+
+Because they cannot be, and because it would not have helped.
+
+They cannot be: a Lattice tree's durable state spans a WAL root that is one
+directory for the whole storage **provider**, and a grain store that is a single
+SQLite file shared by every tree. The `/data/wal/repo-context-*` subdirectories
+look like separable locations but are a naming convention inside one root, and
+the memory tree's pages sit interleaved with every other tree's in
+`/data/repocontext.db`. There is no memory-only path to mount elsewhere.
+
+It would not have helped: `docker compose down -v` removes **every** named volume
+the project declares, not just the one you had in mind. A second declared volume
+dies in the same command as the first.
+
+### What actually protects it
+
+A **bind mount**, `/memory-archive`, which is not a project-declared volume and
+so is not removed by `down -v`. The host exports memory there periodically and,
+when it starts against an empty store, restores from it.
+
+```bash
+# Point the archive at a durable host path (defaults to ./memory-archive).
+REPOCONTEXT_MEMORY_ARCHIVE_PATH=~/repocontext-memory docker compose up -d
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR` | `/memory-archive` in this sample; unset (feature off) otherwise | Container path the archive is written to. Unset disables the whole mechanism. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. This is the size of the window an ungraceful stop loses. Values below 30 are raised to 30. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores only into an empty store, `always` restores on every start, `off` never restores. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_STOP_TIMEOUT_SECONDS` | `20` | Budget for the final export during a graceful stop, clamped to 1-60. |
+
+Restore this way by hand at any time - stop the box, put the archive files in
+place, start it against an empty store:
+
+```bash
+docker compose down -v
+ls memory-archive/            # repo-context-memory.snapshot (+ .previous.snapshot)
+docker compose up -d
+docker compose logs repocontext | grep -i 'memory durability'
+```
+
+### What this does not do
+
+It is **not a backup**, and it does not make `down -v` safe.
+
+* Everything written since the last export is lost. The exposure is the export
+  interval, plus whatever a non-graceful stop discards. A graceful stop
+  (`down`, `down -v`, `stop`) exports once more on the way out and closes most
+  of that window; a `kill -9` or a host crash does not.
+* It archives **memory only**. The index is not in the archive, by design - it
+  rebuilds from source.
+* It does not remove the co-location. Memory still shares a volume with
+  rebuildable state, and the host says so at startup, at warning level, every
+  time. `repocontext_reset_index` remains the correct way to rebuild an index:
+  it drops the derived planes and preserves memory outright, with no window at
+  all.
+* It is not the scheduled whole-store backup being wired up in issue #2602.
+  That one owns manifests, retention and operator-driven restore of everything;
+  this one owns automatic restore-on-empty for memory alone. Only this
+  mechanism restores automatically at startup.
+
+See
+[docs/lattice.api.mcp.repocontext/memory-durability.md](../../docs/lattice.api.mcp.repocontext/memory-durability.md)
+for the full model.
+
 ## Health probing
 
 The runtime image is distroless and shell-less, so probing is HTTP-only - there is

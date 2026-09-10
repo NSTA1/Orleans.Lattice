@@ -53,6 +53,7 @@ For a ready-to-run, restart-durable local deployment - "codebase memory in a box
 - [Tools](tools.md) - the full `repocontext_*` tool catalogue and each tool's contract.
 - [Retrieval and token economics](retrieval-economics.md) - explainable search, the graph-navigation tools, the budgeted context bundle, reuse economics, usage accounting, and the shared token counter.
 - [Memory and TTL](memory-and-ttl.md) - agent memory, topics, and per-repository time-to-live policy.
+- [Memory durability](memory-durability.md) - what survives destroying a deployment's state, why memory and the index cannot be split across volumes, and the memory archive that makes `docker compose down -v` survivable.
 - [The agent-operated backlog](backlog.md) - leased, fenced claims over memory records, and the backlog they make safe for concurrent agent workers.
 - [Semantic search](semantic-search.md) - the embedding seam, the exact-kNN index and its warm vector cache, keyword search over file content, and fail-closed degradation.
 - [Container quickstart](container.md) - running the module as a single durable local container.

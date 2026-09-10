@@ -163,7 +163,45 @@ public sealed class RepoContextEffectiveConfigurationReporter(
             logger.LogWarning("Repository-context effective configuration: {Setting}", line);
         }
 
+        ReportMemoryDurability();
+
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// States where this host's durable agent memory lives and what does and does not
+    /// protect it (issue #2601).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Emitted at <b>warning</b> level unconditionally, because the condition it reports
+    /// holds unconditionally: agent memory always shares a volume with rebuildable index
+    /// state, and no configuration separates them. Downgrading the line once an archive is
+    /// configured would say the risk had been removed, when what an archive removes is one
+    /// consequence of it and only as far back as its last export.
+    /// </para>
+    /// <para>
+    /// It sits in this report rather than in its own because this is where an operator
+    /// asking what a deployment runs is already looking - the same reasoning that moved
+    /// the collector hazards here in issue #2596.
+    /// </para>
+    /// </remarks>
+    private void ReportMemoryDurability()
+    {
+        var statement = RepoContextMemoryDurabilityReport.Describe(
+            resolved.DataRoot, resolved.WalDirectory, resolved.SqlitePath);
+
+        foreach (var line in statement.Lines)
+        {
+            if (statement.IsWarning)
+            {
+                logger.LogWarning("Repository-context memory durability: {Statement}", line);
+            }
+            else
+            {
+                logger.LogInformation("Repository-context memory durability: {Statement}", line);
+            }
+        }
     }
 
     /// <summary>

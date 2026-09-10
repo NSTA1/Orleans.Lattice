@@ -75,9 +75,22 @@ public static class RepoContextEnvironmentVariables
     ];
 
     /// <summary>
+    /// The durable-memory archive variables, resolved by
+    /// <c>RepoContextMemoryArchiveOptions</c> and consumed by the archive service and
+    /// the startup memory-durability statement.
+    /// </summary>
+    public static IReadOnlyList<string> MemoryArchiveKeys { get; } =
+    [
+        RepoContextMemoryArchiveOptions.DirectoryKey,
+        RepoContextMemoryArchiveOptions.IntervalSecondsKey,
+        RepoContextMemoryArchiveOptions.RestoreKey,
+        RepoContextMemoryArchiveOptions.StopTimeoutSecondsKey,
+    ];
+
+    /// <summary>
     /// Every exactly-named environment variable this package resolves.
     /// </summary>
-    public static IReadOnlyList<string> All { get; } = [.. IndexingKeys, .. GitSourceKeys];
+    public static IReadOnlyList<string> All { get; } = [.. IndexingKeys, .. GitSourceKeys, .. MemoryArchiveKeys];
 
     /// <summary>
     /// Every prefix under which this package resolves a family of variables whose full
@@ -101,6 +114,8 @@ public static class RepoContextEnvironmentVariables
         var resolved = RepoContextIndexingOptions.FromEnvironment();
         var defaults = new RepoContextIndexingOptions();
         var gitResolved = RepoContextGitSourceRegistry.FromEnvironment();
+        var archiveResolved = RepoContextMemoryArchiveOptions.FromEnvironment();
+        var archiveDefaults = new RepoContextMemoryArchiveOptions();
 
         return
         [
@@ -181,6 +196,32 @@ public static class RepoContextEnvironmentVariables
                 RepoContextGitSourceRegistry.StagingRootVariable,
                 gitResolved.StagingRoot,
                 RepoContextGitSourceRegistry.Empty.StagingRoot),
+
+            // The archive directory decides whether the feature exists at all, so it is
+            // reported as enabled/disabled rather than as a path: the path is stated in
+            // full by the memory-durability statement, which is also the only place that
+            // can say whether it is outside the data root, and a bare path here would
+            // read as a guarantee that it is.
+            Snapshot(
+                RepoContextMemoryArchiveOptions.DirectoryKey,
+                archiveResolved.IsEnabled ? archiveResolved.Directory! : "(no archive)",
+                "(no archive)"),
+
+            // Reported as the effective cadence and budget, floors and ceilings applied,
+            // because those are what run. An operator shown the value they supplied would
+            // take that as confirmation it applied.
+            Snapshot(
+                RepoContextMemoryArchiveOptions.IntervalSecondsKey,
+                Seconds(archiveResolved.EffectiveInterval),
+                Seconds(archiveDefaults.EffectiveInterval)),
+            Snapshot(
+                RepoContextMemoryArchiveOptions.RestoreKey,
+                archiveResolved.RestoreMode.ToString(),
+                archiveDefaults.RestoreMode.ToString()),
+            Snapshot(
+                RepoContextMemoryArchiveOptions.StopTimeoutSecondsKey,
+                Seconds(archiveResolved.EffectiveStopTimeout),
+                Seconds(archiveDefaults.EffectiveStopTimeout)),
         ];
 
         static RepoContextSettingSnapshot Snapshot(string name, string resolved, string @default)

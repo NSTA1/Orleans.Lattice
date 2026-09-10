@@ -42,9 +42,15 @@ public sealed class RepoContextEnvironmentVariablesTests
     [Test]
     public void Every_LATTICE_constant_this_package_declares_is_published()
     {
-        var declared = new[] { typeof(RepoContextIndexingOptions), typeof(RepoContextGitSourceRegistry) }
+        var declared = new[]
+            {
+                typeof(RepoContextIndexingOptions),
+                typeof(RepoContextGitSourceRegistry),
+                typeof(RepoContextMemoryArchiveOptions),
+            }
             .SelectMany(t => t.GetFields(
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static
+                | System.Reflection.BindingFlags.NonPublic))
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
             .Select(f => (string?)f.GetRawConstantValue())
             .Where(v => v is not null && v.StartsWith("LATTICE_", StringComparison.Ordinal))
@@ -76,9 +82,10 @@ public sealed class RepoContextEnvironmentVariablesTests
         => Assert.That(
             RepoContextEnvironmentVariables.All,
             Is.EqualTo(RepoContextEnvironmentVariables.IndexingKeys
-                .Concat(RepoContextEnvironmentVariables.GitSourceKeys)),
-            "All is what a host consumes, so it must not be a third hand-maintained list "
-            + "that can disagree with the two it is built from");
+                .Concat(RepoContextEnvironmentVariables.GitSourceKeys)
+                .Concat(RepoContextEnvironmentVariables.MemoryArchiveKeys)),
+            "All is what a host consumes, so it must not be a separate hand-maintained list "
+            + "that can disagree with the groups it is built from");
 
     [Test]
     public void No_published_key_is_duplicated()

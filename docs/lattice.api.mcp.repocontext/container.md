@@ -52,6 +52,8 @@ Every profile applies finite per-tree tombstone compaction to the churn trees (s
 
 All durable local state - the file WAL directory and, in the `local` profile, the SQLite database - lives under `LATTICE_DATA_ROOT` (default `/data`), which must be a bind mount or named volume. The host fails fast at startup if that path is missing or not writable by its non-root UID, so a misconfigured mount surfaces immediately instead of silently losing durability.
 
+That includes the **agent memory tree**, which sits under the same root as the rebuildable index and cannot be moved off it - so a gesture that destroys the data volume, `docker compose down -v` above all, destroys authored memory alongside a code index that would have rebuilt itself in minutes. `repocontext_reset_index` exists for the index case and loses nothing. See [Memory durability](memory-durability.md) for why the two cannot be split across volumes, and for the opt-in memory archive that makes the destructive gesture survivable.
+
 ## Configuration
 
 The host is configured entirely by environment variables. The common ones:
@@ -66,6 +68,10 @@ The host is configured entirely by environment variables. The common ones:
 | `LATTICE_WAL_DIR` / `LATTICE_SQLITE_PATH` | under the data root | Override the WAL directory or SQLite file path individually. |
 | `LATTICE_WAL_PIN_BUCKETS` | `8` | How many persisted slots the WAL materialiser retention-floor pin state is split across, so an advancing floor rewrites a fraction of the pin blob rather than all of it. Accepts 1-256; `1` is the library's legacy single-slot write path. Widening self-migrates on activation and leaves the legacy slot intact, so reverting to `1` is a safe rollback that over-retains WAL rather than over-trimming it. |
 | `LATTICE_POSTGRES_CONNECTION_STRING` / `LATTICE_AZURE_STORAGE_CONNECTION_STRING` | (unset) | Required by the `postgres` / `azure` profiles. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR` | (unset, feature off) | Directory the agent-memory archive is exported to and restored from. Point it at a path **outside** the data volume - a bind mount rather than a named volume - or it dies with the state it exists to outlive. See [Memory durability](memory-durability.md). |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence; the size of the window an ungraceful stop loses. Values below 30 are raised to 30. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores only into a store holding no memory, `always` restores every start, `off` never restores. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_STOP_TIMEOUT_SECONDS` | `20` | Budget for the final export during a graceful stop, clamped to 1-60. It shares the stop grace period with the drain, so it is deliberately a fraction of it. |
 
 A profile is a preset, not a straitjacket: each store it selects can be overridden on its own, and the remaining variables name the cluster and the embedding space. An unrecognised value for any of the four provider variables fails startup rather than falling back silently:
 
