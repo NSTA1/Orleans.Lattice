@@ -7,17 +7,6 @@ namespace Orleans.Lattice;
 /// clusters to converge - a remove cancels exactly the dots it observed,
 /// so a concurrent add on another replica with a different dot survives
 /// the merge.
-/// <para>
-/// <strong>Equality caveat.</strong> The synthesized record-struct equality
-/// operator delegates to the default comparer for each field, and the
-/// default comparer for <see cref="byte"/><c>[]</c> is <em>reference</em>
-/// equality. Two structurally-identical <c>OrSetDeltaDot</c> instances built
-/// from independently-allocated <see cref="Element"/> arrays therefore
-/// compare unequal. Consumers comparing dots across deltas (e.g. matching
-/// an entry in <see cref="OrSetDelta.Removes"/> against the local set)
-/// must compare <see cref="Element"/> by content, not via record equality
-/// or <see cref="System.Linq.Enumerable.Contains{T}(System.Collections.Generic.IEnumerable{T},T)"/>.
-/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.OrSetDeltaDot)]
@@ -40,4 +29,38 @@ public readonly record struct OrSetDeltaDot
     /// replica.
     /// </summary>
     [Id(2)] public long Counter { get; init; }
+
+    /// <summary>
+    /// Compares two dots by value, with <see cref="Element"/> compared by
+    /// content. The compiler-generated record-struct equality compares the
+    /// <see cref="Element"/> byte array with <see cref="EqualityComparer{T}.Default"/> -
+    /// reference equality for a <see cref="byte"/> array - so two dots built
+    /// from independently allocated but byte-identical elements (including a
+    /// dot and its post-serialization self) would otherwise never compare
+    /// equal, silently breaking any dedup or membership check framed as
+    /// record equality over these dots.
+    /// </summary>
+    /// <param name="other">The dot to compare against.</param>
+    public bool Equals(OrSetDeltaDot other) =>
+        BytesEqual(Element, other.Element)
+        && string.Equals(ReplicaId, other.ReplicaId, StringComparison.Ordinal)
+        && Counter == other.Counter;
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        if (Element is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        hash.Add(ReplicaId, StringComparer.Ordinal);
+        hash.Add(Counter);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
