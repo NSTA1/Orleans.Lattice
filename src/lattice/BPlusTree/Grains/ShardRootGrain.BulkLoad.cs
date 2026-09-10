@@ -25,42 +25,33 @@ internal sealed partial class ShardRootGrain
         var options = await GetOptionsAsync();
         var maxLeafKeys = options.MaxLeafKeys;
         var maxChildren = options.MaxInternalChildren;
+
+        var (leafIds, separators) = PlanBulkLoadLeaves(
+            shardKey, operationId, "bulk", maxLeafKeys, sortedEntries.Count, i => sortedEntries[i].Key);
+
+        // Stamp every entry's version in one sequential pass up front. The
+        // clock is a strictly increasing sequence, so it cannot be ticked from
+        // inside the overlapped wave below; ticking it here yields exactly the
+        // versions the serial loop assigned, entry for entry.
+        var clocks = new HybridLogicalClock[sortedEntries.Count];
         var clock = HybridLogicalClock.Zero;
-
-        var leafIds = new List<GrainId>();
-        var separators = new List<string?>();
-        GrainId? prevLeafId = null;
-        int leafIndex = 0;
-
-        for (int i = 0; i < sortedEntries.Count; i += maxLeafKeys)
+        for (int i = 0; i < clocks.Length; i++)
         {
-            int count = Math.Min(maxLeafKeys, sortedEntries.Count - i);
+            clock = HybridLogicalClock.Tick(clock);
+            clocks[i] = clock;
+        }
+
+        await SeedBulkLoadLeavesAsync(leafIds, maxLeafKeys, sortedEntries.Count, (start, count) =>
+        {
             var batch = new Dictionary<string, LwwValue<byte[]>>(count);
             for (int j = 0; j < count; j++)
             {
-                clock = HybridLogicalClock.Tick(clock);
-                var kv = sortedEntries[i + j];
-                batch[kv.Key] = LwwValue<byte[]>.Create(kv.Value, clock);
+                var kv = sortedEntries[start + j];
+                batch[kv.Key] = LwwValue<byte[]>.Create(kv.Value, clocks[start + j]);
             }
 
-            var deterministicId = DeterministicGuid($"{shardKey}/bulk/{operationId}/leaf/{leafIndex++}");
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
-            var leafId = leaf.GetGrainId();
-            await leaf.SetTreeIdAsync(TreeId);
-            await leaf.SetShardIndexAsync(MyShardIndex);
-            await leaf.MergeEntriesAsync(batch);
-
-            if (prevLeafId is not null)
-            {
-                var prevLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(prevLeafId.Value);
-                await prevLeaf.SetNextSiblingAsync(leafId);
-                await leaf.SetPrevSiblingAsync(prevLeafId.Value);
-            }
-
-            separators.Add(leafIds.Count == 0 ? null : sortedEntries[i].Key);
-            leafIds.Add(leafId);
-            prevLeafId = leafId;
-        }
+            return batch;
+        });
 
         await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
     }
@@ -86,46 +77,136 @@ internal sealed partial class ShardRootGrain
         var maxLeafKeys = options.MaxLeafKeys;
         var maxChildren = options.MaxInternalChildren;
 
-        var leafIds = new List<GrainId>();
-        var separators = new List<string?>();
-        GrainId? prevLeafId = null;
-        int leafIndex = 0;
-
         // Identical B+ tree assembly to BulkLoadAsync - the only difference is
         // that every entry's LwwValue (HLC version AND ExpiresAtTicks /
         // TTL) flows through verbatim instead of being re-stamped with a fresh
         // zero-based clock. Used by snapshot / restore (TreeSnapshotGrain) so
         // TTL metadata survives the transfer end-to-end.
-        for (int i = 0; i < sortedEntries.Count; i += maxLeafKeys)
+        var (leafIds, separators) = PlanBulkLoadLeaves(
+            shardKey, operationId, "bulkraw", maxLeafKeys, sortedEntries.Count, i => sortedEntries[i].Key);
+
+        await SeedBulkLoadLeavesAsync(leafIds, maxLeafKeys, sortedEntries.Count, (start, count) =>
         {
-            int count = Math.Min(maxLeafKeys, sortedEntries.Count - i);
             var batch = new Dictionary<string, LwwValue<byte[]>>(count);
             for (int j = 0; j < count; j++)
             {
-                var e = sortedEntries[i + j];
+                var e = sortedEntries[start + j];
                 batch[e.Key] = e.ToLwwValue();
             }
 
-            var deterministicId = DeterministicGuid($"{shardKey}/bulkraw/{operationId}/leaf/{leafIndex++}");
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
-            var leafId = leaf.GetGrainId();
-            await leaf.SetTreeIdAsync(TreeId);
-            await leaf.SetShardIndexAsync(MyShardIndex);
-            await leaf.MergeEntriesAsync(batch);
-
-            if (prevLeafId is not null)
-            {
-                var prevLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(prevLeafId.Value);
-                await prevLeaf.SetNextSiblingAsync(leafId);
-                await leaf.SetPrevSiblingAsync(prevLeafId.Value);
-            }
-
-            separators.Add(leafIds.Count == 0 ? null : sortedEntries[i].Key);
-            leafIds.Add(leafId);
-            prevLeafId = leafId;
-        }
+            return batch;
+        });
 
         await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
+    }
+
+    /// <summary>
+    /// Computes every bulk-load leaf's deterministic identity and promoted
+    /// separator up front, without issuing a single grain call.
+    /// </summary>
+    /// <remarks>
+    /// Materialising the whole chain first is what makes
+    /// <see cref="SeedBulkLoadLeavesAsync"/> safe to overlap: a leaf's sibling
+    /// pointers are then known before any leaf is touched, so each leaf can
+    /// stamp both of its own links at birth instead of the chain being wired up
+    /// one leaf behind the loop. The ids are a pure function of the shard key,
+    /// the operation id and the leaf ordinal, exactly as before, so a resumed
+    /// bulk load addresses the same grains.
+    /// </remarks>
+    private (List<GrainId> LeafIds, List<string?> Separators) PlanBulkLoadLeaves(
+        string shardKey,
+        string operationId,
+        string segment,
+        int maxLeafKeys,
+        int entryCount,
+        Func<int, string> keyAt)
+    {
+        var leafCount = (entryCount + maxLeafKeys - 1) / maxLeafKeys;
+        var leafIds = new List<GrainId>(leafCount);
+        var separators = new List<string?>(leafCount);
+
+        for (int i = 0, leafIndex = 0; i < entryCount; i += maxLeafKeys, leafIndex++)
+        {
+            var deterministicId = DeterministicGuid($"{shardKey}/{segment}/{operationId}/leaf/{leafIndex}");
+            leafIds.Add(grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId).GetGrainId());
+            separators.Add(leafIndex == 0 ? null : keyAt(i));
+        }
+
+        return (leafIds, separators);
+    }
+
+    /// <summary>
+    /// Seeds and fills every planned bulk-load leaf in bounded overlapped waves.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Two calls per leaf, not five.</b> The serial version issued
+    /// <c>SetTreeIdAsync</c>, <c>SetShardIndexAsync</c>, <c>MergeEntriesAsync</c>
+    /// and then wired the sibling chain with a <c>SetNextSiblingAsync</c> on the
+    /// previous leaf and a <c>SetPrevSiblingAsync</c> on this one - five gated,
+    /// separately-persisted round trips per leaf, awaited one at a time. The
+    /// first four collapse into the single <see cref="SiblingInitialization"/>
+    /// batch that the leaf-split donor already uses, which acquires the split
+    /// gate once and persists once for the whole batch. Because
+    /// <see cref="PlanBulkLoadLeaves"/> has already computed the chain, each leaf
+    /// stamps <i>both</i> of its links itself, so no leaf is touched by another
+    /// leaf's unit of work.
+    /// </para>
+    /// <para>
+    /// <b>Why the waves are safe.</b> Every leaf is a distinct, freshly created
+    /// grain, and after the collapse no unit writes to a leaf other than its own,
+    /// so the units are mutually independent and their completion order is
+    /// immaterial. Nothing can observe an intermediate state either: the shard's
+    /// root is published only by <see cref="FinalizeBulkLoadTreeAsync"/>, after
+    /// this method has returned, and <c>BulkLoadAsync</c> refuses to run against
+    /// a shard that already has a root. Within a unit the two calls stay ordered,
+    /// because the birth seam must seed the durable materialiser block pin before
+    /// <c>MergeEntriesAsync</c> makes the leaf's data reachable in the WAL - the
+    /// same ordering the serial version had.
+    /// </para>
+    /// <para>
+    /// The batch for a leaf is built inside its unit rather than up front, so the
+    /// live batch set stays O(<see cref="BoundedFanOut.DefaultWidth"/>) instead of
+    /// holding one dictionary per leaf for the whole load.
+    /// </para>
+    /// </remarks>
+    private Task SeedBulkLoadLeavesAsync(
+        List<GrainId> leafIds,
+        int maxLeafKeys,
+        int entryCount,
+        Func<int, int, Dictionary<string, LwwValue<byte[]>>> buildBatch)
+    {
+        var slots = new int[leafIds.Count];
+        for (int i = 0; i < slots.Length; i++)
+        {
+            slots[i] = i;
+        }
+
+        var treeId = TreeId;
+        var shardIndex = MyShardIndex;
+
+        return BoundedFanOut.ForEachAsync(
+            slots,
+            BoundedFanOut.DefaultWidth,
+            async slot =>
+            {
+                var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[slot]);
+                await leaf.InitializeSiblingAsync(new SiblingInitialization
+                {
+                    TreeId = treeId,
+                    ShardIndex = shardIndex,
+                    // Bulk-load leaves carry no ownership range, exactly as the
+                    // serial version left them - it never called SetKeyRangeAsync.
+                    LowKeyInclusive = null,
+                    HighKeyExclusive = null,
+                    PrevSibling = slot > 0 ? leafIds[slot - 1] : null,
+                    NextSibling = slot + 1 < leafIds.Count ? leafIds[slot + 1] : null,
+                });
+
+                var start = slot * maxLeafKeys;
+                var count = Math.Min(maxLeafKeys, entryCount - start);
+                await leaf.MergeEntriesAsync(buildBatch(start, count));
+            });
     }
 
     /// <summary>
@@ -159,7 +240,9 @@ internal sealed partial class ShardRootGrain
 
         while (currentLevel.Count > 1)
         {
-            var nextLevel = new List<(string? separator, GrainId id)>();
+            var nodeCount = (currentLevel.Count + maxChildren - 1) / maxChildren;
+            var nextLevel = new List<(string? separator, GrainId id)>(nodeCount);
+            var plans = new List<(GrainId Id, List<string?> Seps, List<GrainId> Ids)>(nodeCount);
             int nodeIndex = 0;
 
             for (int i = 0; i < currentLevel.Count; i += maxChildren)
@@ -178,12 +261,32 @@ internal sealed partial class ShardRootGrain
                 }
 
                 var deterministicId = DeterministicGuid($"{shardKey}/bulk/{operationId}/internal/{level}/{nodeIndex++}");
-                var node = grainFactory.GetGrain<IBPlusInternalGrain>(deterministicId);
-                await node.SetTreeIdAsync(TreeId);
-                await node.InitializeWithChildrenAsync(seps, ids, childrenAreLeaves);
+                var nodeId = grainFactory.GetGrain<IBPlusInternalGrain>(deterministicId).GetGrainId();
 
-                nextLevel.Add((promotedSeparator, node.GetGrainId()));
+                plans.Add((nodeId, seps, ids));
+                nextLevel.Add((promotedSeparator, nodeId));
             }
+
+            // One level's nodes are siblings: each is a distinct, freshly created
+            // grain initialised from a disjoint slice of the level below, and none
+            // reads another, so the two calls that build a node are independent of
+            // every other node's. Issued one node at a time a level cost N
+            // sequential round trips; issued in bounded waves it costs
+            // ceil(N / BoundedFanOut.DefaultWidth). The levels themselves stay
+            // strictly ordered - a level's ids must exist before the level above
+            // can name them as children - and the tree is unreachable until the
+            // root is published below, so nothing observes a half-built level.
+            var levelChildrenAreLeaves = childrenAreLeaves;
+            var levelTreeId = TreeId;
+            await BoundedFanOut.ForEachAsync(
+                plans,
+                BoundedFanOut.DefaultWidth,
+                async plan =>
+                {
+                    var node = grainFactory.GetGrain<IBPlusInternalGrain>(plan.Id);
+                    await node.SetTreeIdAsync(levelTreeId);
+                    await node.InitializeWithChildrenAsync(plan.Seps, plan.Ids, levelChildrenAreLeaves);
+                });
 
             currentLevel = nextLevel;
             childrenAreLeaves = false;
