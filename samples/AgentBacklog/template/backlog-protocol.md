@@ -858,19 +858,27 @@ whereas a genuinely dead holder never does, and the item is released to others
 only after that window closes. The cost is bounded latency on genuine failures;
 the benefit is that the common case stops being a race.
 
-**One full lease is the wrong quarantine while the clamp stands, and elapsed time
-is the wrong evidence.** The working default above assumes the lease
-approximates the work. It does not: the cluster clamps to 300 seconds against
-turns that routinely run for hours, so a live worker's claim spends almost all of
-its life presenting as lapsed. This was observed on the first real run - a
-productive worker sat at fence 12, mid-implementation, while `claim_status`
-reported `isHeld: false` and the item showed no unmet blockers. To any agent
-computing a ready set it was indistinguishable from abandoned work, and the lock
-would have granted it on request. A quarantine measured in lease multiples is
-therefore no protection at all here, because the window it names has already
-elapsed in the ordinary case.
+**One full lease can be the wrong quarantine, and elapsed time is the wrong
+evidence.** The working default above assumes the lease approximates the work.
+It often does not, and the gap depends on a value you must **measure rather than
+assume**. `MaxLockLeaseDuration` is a configured ceiling whose shipped default is
+300 seconds, against turns that routinely run for hours; where it stands at that
+default, a live worker's claim spends almost all of its life presenting as
+lapsed. This was observed on the first real run - a productive worker sat at
+fence 12, mid-implementation, while `claim_status` reported `isHeld: false` and
+the item showed no unmet blockers. To any agent computing a ready set it was
+indistinguishable from abandoned work, and the lock would have granted it on
+request.
 
-Until the clamp is raised, quarantine on **evidence of work, not elapsed time**.
+Do not read the 300-second figure as the value in force. It is a default, not a
+constant, and a deployment may raise it: on the reference deployment a claim
+requesting 1800 seconds was measured being **granted** 1800 seconds, so the
+ceiling there is at least that. Read the `leaseSeconds` your own grant returns
+and reason from it. A quarantine measured in lease multiples is no protection
+wherever the clamp is short, because the window it names has already elapsed in
+the ordinary case.
+
+Whatever the clamp, quarantine on **evidence of work, not elapsed time**.
 An item whose previous claimant shows a branch pushed, an issue comment, or a
 fencing token that has moved within the last hour is a **live holder**, whatever
 the lease says, and must not be taken over. Only the sustained absence of all
