@@ -47,21 +47,84 @@ public sealed class RepoContextMetricsCollector : IDisposable
     public const string MeterNamePrefix = "orleans.lattice";
 
     /// <summary>
-    /// The default ceiling on distinct exposed series. A tag value the collector
-    /// did not anticipate could otherwise grow the exposition without bound, so the
-    /// cap fails closed: measurements beyond it are dropped and counted rather than
-    /// retained.
+    /// The default ceiling on distinct series within a single metric family. A tag
+    /// value the collector did not anticipate could otherwise grow the exposition
+    /// without bound, so the cap fails closed: measurements beyond it are dropped
+    /// and counted rather than retained.
     /// </summary>
-    public const int DefaultMaxSeries = 10_000;
+    /// <remarks>
+    /// The ceiling is deliberately PER FAMILY rather than global. The hazard it
+    /// guards against - one instrument acquiring an unanticipated high-cardinality
+    /// tag such as a repository id, a path, or a key - belongs to that instrument,
+    /// and a global ceiling lets the offending family consume the entire budget and
+    /// then permanently block every OTHER family from ever creating a series.
+    /// <para>
+    /// That failure is silent, which is what makes it worth this note. A series
+    /// that already exists keeps updating, because the lookup precedes the ceiling
+    /// check, so a saturated exposition still looks busy and complete. Only a
+    /// series whose FIRST occurrence falls after saturation is missing, and it is
+    /// missing permanently. Issue #2480 is exactly that: the ANN search counter's
+    /// <c>bootstrapping</c> and <c>exhaustive</c> arms are created within seconds of
+    /// start-up and publish forever, while its <c>approximate</c> arm cannot occur
+    /// until a plane has trained - hours later, past saturation - so a trained plane
+    /// was unobservable and indistinguishable from one that never armed.
+    /// </para>
+    /// </remarks>
+    public const int DefaultMaxSeriesPerFamily = 10_000;
+
+    /// <summary>
+    /// The default ceiling on distinct exposed series across every family. This is
+    /// a memory backstop, not the cardinality control: families are created only
+    /// from published instruments, so their number is fixed by code and cannot grow
+    /// from tag cardinality. It is set far above any healthy estate deliberately,
+    /// because a global ceiling that binds in normal operation reintroduces the
+    /// cross-family starvation that <see cref="DefaultMaxSeriesPerFamily"/> exists
+    /// to prevent. Reaching it means the process is misconfigured.
+    /// </summary>
+    public const int DefaultMaxSeries = 250_000;
 
     /// <summary>The gauge reporting how many series the collector currently holds.</summary>
     public const string SeriesGaugeName = "lattice_metrics_series";
 
-    /// <summary>The counter reporting measurements dropped because the series cap was reached.</summary>
+    /// <summary>The counter reporting measurements dropped because a series ceiling was reached.</summary>
     public const string DroppedCounterName = "lattice_metrics_dropped_measurements_total";
 
+    /// <summary>
+    /// The counter attributing dropped measurements to the family that was refused
+    /// and the ceiling that refused it (<c>family</c> or <c>global</c>).
+    /// </summary>
+    /// <remarks>
+    /// A ceiling that drops silently is the same defect class as the one the
+    /// per-family ceiling exists to fix: it makes an absent series ambiguous between
+    /// "never recorded" and "recorded and refused", which is precisely the ambiguity
+    /// that left issue #2480 undiagnosed. Attribution resolves it directly, and
+    /// naming the ceiling separates a single exploding instrument from an estate
+    /// that has reached the memory backstop.
+    /// <para>
+    /// These samples are rendered straight from the collector's own state rather
+    /// than routed through the family and series machinery, so the diagnostic can
+    /// never be suppressed by the ceilings it reports on. Its cardinality is bounded
+    /// by the number of published instruments, which is fixed by code.
+    /// </para>
+    /// </remarks>
+    public const string DroppedByFamilyCounterName = "lattice_metrics_dropped_measurements_by_family_total";
+
+    /// <summary>The label naming the refused family on <see cref="DroppedByFamilyCounterName"/>.</summary>
+    public const string FamilyLabelName = "family";
+
+    /// <summary>The label naming the ceiling that refused a measurement.</summary>
+    public const string CeilingLabelName = "ceiling";
+
+    /// <summary>The <see cref="CeilingLabelName"/> value for the per-family ceiling.</summary>
+    public const string FamilyCeilingLabel = "family";
+
+    /// <summary>The <see cref="CeilingLabelName"/> value for the global backstop.</summary>
+    public const string GlobalCeilingLabel = "global";
+
     private readonly ConcurrentDictionary<string, MetricFamily> _families = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<(string Family, string Ceiling), DropCount> _dropsByFamily = new();
     private readonly MeterListener _listener = new();
+    private readonly int _maxSeriesPerFamily;
     private readonly int _maxSeries;
     private long _seriesCount;
     private long _dropped;
@@ -72,14 +135,24 @@ public sealed class RepoContextMetricsCollector : IDisposable
     /// the process are replayed by <see cref="MeterListener.Start"/>, so
     /// construction order relative to the metrics classes does not matter.
     /// </summary>
+    /// <param name="maxSeriesPerFamily">
+    /// The ceiling on distinct series within one family; defaults to
+    /// <see cref="DefaultMaxSeriesPerFamily"/>. Must be positive.
+    /// </param>
     /// <param name="maxSeries">
-    /// The ceiling on distinct exposed series; defaults to
+    /// The backstop ceiling on distinct series across every family; defaults to
     /// <see cref="DefaultMaxSeries"/>. Must be positive.
     /// </param>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxSeries"/> is not positive.</exception>
-    public RepoContextMetricsCollector(int maxSeries = DefaultMaxSeries)
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="maxSeriesPerFamily"/> or <paramref name="maxSeries"/> is not positive.
+    /// </exception>
+    public RepoContextMetricsCollector(
+        int maxSeriesPerFamily = DefaultMaxSeriesPerFamily,
+        int maxSeries = DefaultMaxSeries)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxSeriesPerFamily);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxSeries);
+        _maxSeriesPerFamily = maxSeriesPerFamily;
         _maxSeries = maxSeries;
 
         _listener.InstrumentPublished = OnInstrumentPublished;
@@ -159,10 +232,36 @@ public sealed class RepoContextMetricsCollector : IDisposable
             "Distinct metric series currently held by the container's collector.",
             Interlocked.Read(ref _seriesCount));
         AppendMeta(builder, DroppedCounterName, "counter",
-            "Measurements dropped because the container's collector reached its series ceiling.",
+            "Measurements dropped because the container's collector reached a series ceiling, per family or overall.",
             Interlocked.Read(ref _dropped));
+        AppendDropAttribution(builder);
 
         return builder.ToString();
+    }
+
+    private void AppendDropAttribution(StringBuilder builder)
+    {
+        if (_dropsByFamily.IsEmpty)
+        {
+            return;
+        }
+
+        builder.Append("# HELP ").Append(DroppedByFamilyCounterName)
+            .Append(" Measurements dropped, attributed to the refused family and the ceiling that refused it.\n");
+        builder.Append("# TYPE ").Append(DroppedByFamilyCounterName).Append(" counter\n");
+
+        foreach (var entry in _dropsByFamily
+                     .OrderBy(e => e.Key.Family, StringComparer.Ordinal)
+                     .ThenBy(e => e.Key.Ceiling, StringComparer.Ordinal))
+        {
+            builder.Append(DroppedByFamilyCounterName)
+                .Append('{').Append(FamilyLabelName).Append("=\"")
+                .Append(RepoContextPrometheusExposition.EscapeLabelValue(entry.Key.Family)).Append("\",")
+                .Append(CeilingLabelName).Append("=\"")
+                .Append(RepoContextPrometheusExposition.EscapeLabelValue(entry.Key.Ceiling)).Append("\"} ")
+                .Append(entry.Value.Read().ToString(CultureInfo.InvariantCulture))
+                .Append('\n');
+        }
     }
 
     private static void AppendMeta(StringBuilder builder, string name, string type, string help, long value)
@@ -226,9 +325,21 @@ public sealed class RepoContextMetricsCollector : IDisposable
             return;
         }
 
+        // A series this family has not seen before. The per-family ceiling is the
+        // real cardinality control; the global one is only a memory backstop. Both
+        // are checked before creation and never on the update path above, so a
+        // series that already exists keeps reporting even while a ceiling is
+        // refusing new ones. See the remarks on DefaultMaxSeriesPerFamily for why
+        // the per-family ceiling has to come first.
+        if (family.SeriesCount >= _maxSeriesPerFamily)
+        {
+            RecordDrop(family.Name, FamilyCeilingLabel);
+            return;
+        }
+
         if (Interlocked.Read(ref _seriesCount) >= _maxSeries)
         {
-            Interlocked.Increment(ref _dropped);
+            RecordDrop(family.Name, GlobalCeilingLabel);
             return;
         }
 
@@ -238,6 +349,13 @@ public sealed class RepoContextMetricsCollector : IDisposable
         }
 
         series.Record(instrument, family.Kind, value);
+    }
+
+    private void RecordDrop(string family, string ceiling)
+    {
+        Interlocked.Increment(ref _dropped);
+        var count = _dropsByFamily.GetOrAdd((family, ceiling), static _ => new DropCount());
+        Interlocked.Increment(ref count.Value);
     }
 
     /// <summary>
@@ -314,14 +432,32 @@ public sealed class RepoContextMetricsCollector : IDisposable
         _listener.Dispose();
     }
 
+    /// <summary>A mutable drop tally for one (family, ceiling) pair.</summary>
+    private sealed class DropCount
+    {
+        public long Value;
+
+        public long Read() => Interlocked.Read(ref Value);
+    }
+
     /// <summary>One exposed metric family: a name, a Prometheus type, and its series.</summary>
     private sealed class MetricFamily(string name, RepoContextMetricKind kind, string help)
     {
         private readonly ConcurrentDictionary<string, Series> _series = new(StringComparer.Ordinal);
+        private long _seriesCount;
 
         public string Name { get; } = name;
 
         public RepoContextMetricKind Kind { get; } = kind;
+
+        /// <summary>
+        /// The number of series this family holds. Tracked explicitly rather than
+        /// read from the dictionary, because it is consulted on every measurement
+        /// that misses the series lookup - which is precisely the hot path when a
+        /// family is exploding - and <see cref="ConcurrentDictionary{TKey,TValue}.Count"/>
+        /// acquires every bucket lock to answer.
+        /// </summary>
+        public long SeriesCount => Interlocked.Read(ref _seriesCount);
 
         public bool TryGetSeries(string labels, out Series series) => _series.TryGetValue(labels, out series!);
 
@@ -329,7 +465,13 @@ public sealed class RepoContextMetricsCollector : IDisposable
         {
             var created = new Series(labels);
             series = _series.GetOrAdd(labels, created);
-            return ReferenceEquals(series, created);
+            if (!ReferenceEquals(series, created))
+            {
+                return false;
+            }
+
+            Interlocked.Increment(ref _seriesCount);
+            return true;
         }
 
         public void Render(StringBuilder builder)
