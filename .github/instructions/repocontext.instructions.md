@@ -838,8 +838,37 @@ while `filesEmbedded` / `filesScanned` is the slower **embedding** phase that
 follows it, so chunks reaching completion while `filesEmbedded` still climbs is
 normal, not a contradiction (embeddings also require a healthy vector projection
 - see "Health and degraded mode"). A still-`Running` job whose `filesEmbedded` or
-`updatedAt` keeps advancing is healthy; only a stalled `updatedAt` or
-`status: Failed` warrants giving up on it.
+`updatedAt` keeps advancing is healthy.
+
+**A stalled `updatedAt` is NOT on its own grounds to give up, and treating it as
+such prescribes a destructive action against a healthy index.** An earlier
+revision of this file said a stalled `updatedAt` or `status: Failed` warranted
+giving up on a run. Half of that is wrong. `updatedAt` advances only when some
+arm of the ingest reports progress, and until this was fixed only the **file**
+arm reported at all: the symbol and memory arms embedded in complete silence. On
+a steady-state repository whose file coverage is already complete the file arm
+legitimately embeds **zero** and finishes early, after which the symbol arm can
+run for an hour or more with `updatedAt` frozen and `filesEmbedded: 0` - the
+exact reading of a dead job, produced by a job converging at hundreds of vectors
+a minute.
+
+So before concluding a run is stuck, **check the one counter that is independent
+of the progress channel**: `embeddedVectorCount` on `repocontext_list_repos`. It
+counts landed embeddings for **sources** - files *and* captured symbols - so it
+rises while the symbol arm works whether or not anything is reporting. Two
+readings a few minutes apart settle it:
+
+- `embeddedVectorCount` rising, `updatedAt` frozen -> the job is **alive** and
+  working an arm that is not the file arm. Wait; do not re-onboard.
+- `embeddedVectorCount` flat AND `updatedAt` frozen across several minutes ->
+  genuinely stalled.
+- `status: Failed` -> give up on the run regardless of the counters.
+
+Newer builds also report `symbolsEmbedded` alongside `filesEmbedded`, and the
+symbol arm now reports progress, so `updatedAt` advances through it. Where that
+counter is present the three read as one picture: `embeddedVectorCount` is the
+**sum** over sources, and `filesEmbedded` is only one of its terms. Reading the
+sum against a single term is what made a working index look dead.
 
 ## Health and degraded mode
 
@@ -865,6 +894,12 @@ normal, not a contradiction (embeddings also require a healthy vector projection
     not-yet-embedded files. For **completeness** while an ingest runs, do not
     trust a single `search` - also `scan` the relevant `pathPrefix` (or `grep`),
     and re-run the `search` once `filesEmbedded` reaches `filesScanned`.
+  - **Live but silent (a non-file arm is working):** `status: Running`,
+    `updatedAt` frozen, and `filesEmbedded` static - often at `0` - while
+    `embeddedVectorCount` on `list_repos` keeps rising. The job is **healthy**
+    and embedding symbols or memory, not files. Do not re-onboard on this
+    reading; see "Freshness and re-ingest" above for the two-reading check that
+    distinguishes it from a real stall.
   - **Stale content projection (body-text ranking only):** the per-file content
     projection is a separate, rebuildable tree from the vector index. If it is
     terminally stale (its leaf checkpoint fell off the write-ahead log awaiting an

@@ -54,4 +54,13 @@ public readonly record struct RepoIndexProgressUpdate
     /// </summary>
     [Id(9)]
     public int? FilesContentProjected { get; init; }
+
+    /// <summary>
+    /// Symbol passages whose vectors have been stored this run, or null. Distinct
+    /// from <see cref="FilesEmbedded"/>: the symbol arm can run long after file
+    /// coverage is complete, and reporting its progress is what keeps
+    /// <c>updatedAt</c> advancing across that window instead of freezing.
+    /// </summary>
+    [Id(10)]
+    public int? SymbolsEmbedded { get; init; }
 }

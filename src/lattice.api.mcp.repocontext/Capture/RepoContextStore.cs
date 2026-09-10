@@ -1076,11 +1076,70 @@ internal sealed partial class RepoContextStore
     {
         RequireNonEmpty(repoId, "repoId");
 
+        var resetStopwatch = System.Diagnostics.Stopwatch.StartNew();
         await TearDownIndexingControlAsync(repoId).ConfigureAwait(false);
 
         var scanPrefix = RepoContextKeys.RepoScanPrefix(repoId);
         var end = RepoContextPortability.PrefixUpperBound(scanPrefix)
             ?? throw new McpException("The repository id produced an unbounded delete range.");
+
+        var structural = Tree(RepoContextTrees.Structural);
+        var markerKey = RepoContextKeys.Repo(repoId);
+
+        // Clear the marker's index-derived registers BEFORE the sweep, not after.
+        //
+        // The sweep below can run for minutes on a large corpus, and for the whole
+        // of that window list_repos is the surface an operator consults to ask
+        // "did the reset work?". Clearing afterwards meant it answered that
+        // question with the complete PRE-reset census - a stale lastIngested, a
+        // stale fileCount, a stale indexedCommit - stated with full confidence and
+        // indistinguishable from a healthy index. That does not read as "no
+        // information yet"; it reads as "the reset did nothing", which is the one
+        // conclusion that prompts an operator to run a destructive operation
+        // AGAIN. The documented post-reset signature (three nulls) was implemented
+        // correctly and simply could not be observed during the only window in
+        // which anyone looks for it, so the documentation described an outcome
+        // that never appeared - worse than describing none, because it licenses
+        // trusting a field that is stale.
+        //
+        // Moving it is safe, and the ordering constraint that kept it here was
+        // never real for THIS write. The marker sits at repo/{repoId} with no
+        // trailing separator; the sweep is a range delete over repo/{repoId}/ and
+        // its start bound sorts strictly after the marker key. The marker is
+        // outside the swept range, so writing it first cannot be re-deleted. (The
+        // re-derive branch after the sweep is a different case and genuinely must
+        // stay there: it is conditioned on the deletion count, which is not known
+        // until the sweep finishes.)
+        //
+        // Under a mid-sweep failure this also fails in the safer direction. The
+        // marker then reports "registered, no index" while some index records
+        // survive - understating coverage for a partially deleted index, which is
+        // true and prompts a retry. The old order overstated it, claiming a full
+        // census for an index that was being deleted underneath the claim.
+        var markerBytes = await structural.GetAsync(markerKey, cancellationToken).ConfigureAwait(false);
+        var censusCleared = false;
+        if (markerBytes is not null)
+        {
+            // The three index-derived fields are cleared rather than carried across.
+            // Keeping them would have list_repos report a file count and an ingest
+            // timestamp for an index that no longer exists - a confident, precise
+            // lie, which is worse than the absence it replaces. BuildRepoSummaryAsync
+            // already tolerates unset registers and renders them as nulls, which is
+            // exactly the "registered, no index" state a caller needs to distinguish
+            // a just-reset repository from a never-onboarded one. Authored metadata
+            // (display name, default branch, tags) is not index-derived, so it is
+            // carried across untouched.
+            var node = _serializer.Deserialize<RepoNode>(markerBytes) with
+            {
+                LastIngested = new BoundedRegister(),
+                FileCount = new BoundedRegister(),
+                IndexedCommit = new BoundedRegister(),
+            };
+
+            await structural.SetAsync(markerKey, _serializer.SerializeToArray(node), cancellationToken)
+                .ConfigureAwait(false);
+            censusCleared = true;
+        }
 
         long deleted = 0;
         foreach (var treeName in RepoContextTrees.CodeIndexTrees)
@@ -1112,20 +1171,6 @@ internal sealed partial class RepoContextStore
         // underneath, reachable only by an agent that already knows the id -
         // which defeats the reason this verb exists.
         //
-        // Rewriting it must happen AFTER the sweep above, not before: the sweep
-        // is a range delete over repo/{repoId}/ and would otherwise simply
-        // re-delete anything written first.
-        //
-        // The three index-derived fields are cleared rather than carried across.
-        // Keeping them would have list_repos report a file count and an ingest
-        // timestamp for an index that no longer exists - a confident, precise
-        // lie, which is worse than the absence it replaces. BuildRepoSummaryAsync
-        // already tolerates unset registers and renders them as nulls, which is
-        // exactly the "registered, no index" state a caller needs to distinguish
-        // a just-reset repository from a never-onboarded one. Authored metadata
-        // (display name, default branch, tags) is not index-derived, so it is
-        // carried across untouched.
-        //
         // A reset must not invent a registration for a repository that was never
         // onboarded. The condition that establishes "never onboarded" is that the
         // sweep above found NOTHING - not that the marker happens to be absent.
@@ -1143,22 +1188,7 @@ internal sealed partial class RepoContextStore
         // two: it is direct evidence this repository had a code index a moment
         // ago. A zero-deletion reset still writes nothing, which keeps the
         // never-onboarded guarantee exactly as strong as it was.
-        var structural = Tree(RepoContextTrees.Structural);
-        var markerKey = RepoContextKeys.Repo(repoId);
-        var markerBytes = await structural.GetAsync(markerKey, cancellationToken).ConfigureAwait(false);
-        if (markerBytes is not null)
-        {
-            var node = _serializer.Deserialize<RepoNode>(markerBytes) with
-            {
-                LastIngested = new BoundedRegister(),
-                FileCount = new BoundedRegister(),
-                IndexedCommit = new BoundedRegister(),
-            };
-
-            await structural.SetAsync(markerKey, _serializer.SerializeToArray(node), cancellationToken)
-                .ConfigureAwait(false);
-        }
-        else if (deleted > 0)
+        if (markerBytes is null && deleted > 0)
         {
             // Re-derived, not invented: every index-derived register is left unset,
             // which is the same "registered, no index" shape the preserve branch
@@ -1170,7 +1200,16 @@ internal sealed partial class RepoContextStore
                 .ConfigureAwait(false);
         }
 
-        return new RepoContextIndexResetResult { RepoId = repoId, EntriesDeleted = checked((int)deleted) };
+        resetStopwatch.Stop();
+        return new RepoContextIndexResetResult
+        {
+            RepoId = repoId,
+            EntriesDeleted = checked((int)deleted),
+            ElapsedMilliseconds = resetStopwatch.ElapsedMilliseconds,
+            TreesSwept = RepoContextTrees.CodeIndexTrees,
+            MemoryPreserved = true,
+            CensusCleared = censusCleared,
+        };
     }
 
     /// <summary>

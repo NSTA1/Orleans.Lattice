@@ -673,7 +673,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         string repoId,
         IReadOnlyCollection<string> changedSymbolKeys,
         IReadOnlyCollection<string> prunedSymbolKeys,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<int, CancellationToken, ValueTask>? onProgress = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(changedSymbolKeys);
@@ -845,7 +846,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         EmbedOutcome outcome;
         try
         {
-            outcome = await EmbedAndStoreReportingLandedAsync(repoId, SymbolArm, sources, onProgress: null, cancellationToken)
+            outcome = await EmbedAndStoreReportingLandedAsync(repoId, SymbolArm, sources, onProgress, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
