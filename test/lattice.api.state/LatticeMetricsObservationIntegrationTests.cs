@@ -164,8 +164,11 @@ public class LatticeMetricsObservationIntegrationTests
         var (pump, snapshots, cts) = _fixture.ObserveInBackground(
             new TreeMetricsRequest { TreeIds = new[] { treeId } });
 
-        await MetricsObservationClusterFixture.WaitUntilAsync(
-            () => { lock (snapshots) { return snapshots.Count >= 1; } }, Timeout);
+        Assert.That(
+            await MetricsObservationClusterFixture.WaitUntilAsync(
+                () => { lock (snapshots) { return snapshots.Count >= 1; } }, Timeout),
+            Is.True,
+            "the initial full snapshot must arrive; without it Skip(1) below discards the mutation tick rather than the baseline");
 
         for (var i = 5; i < 12; i++)
         {
@@ -199,8 +202,11 @@ public class LatticeMetricsObservationIntegrationTests
         var (pump, snapshots, cts) = _fixture.ObserveInBackground(
             new TreeMetricsRequest { TreeIds = new[] { treeA, treeB } });
 
-        await MetricsObservationClusterFixture.WaitUntilAsync(
-            () => { lock (snapshots) { return snapshots.Count >= 1; } }, Timeout);
+        Assert.That(
+            await MetricsObservationClusterFixture.WaitUntilAsync(
+                () => { lock (snapshots) { return snapshots.Count >= 1; } }, Timeout),
+            Is.True,
+            "the initial full snapshot must arrive; without it Skip(1) below discards the delta tick rather than the baseline");
 
         for (var i = 4; i < 10; i++)
         {
@@ -236,8 +242,11 @@ public class LatticeMetricsObservationIntegrationTests
         var (pump, snapshots, cts) = _fixture.ObserveInBackground(
             new TreeMetricsRequest { TreeIds = new[] { treeId }, IncludeShardHotness = true });
 
-        await MetricsObservationClusterFixture.WaitUntilAsync(
-            () => { lock (snapshots) { return snapshots.Count >= 1; } }, Timeout);
+        Assert.That(
+            await MetricsObservationClusterFixture.WaitUntilAsync(
+                () => { lock (snapshots) { return snapshots.Count >= 1; } }, Timeout),
+            Is.True,
+            "the feed must be provably active before the writes are timed, or this measures writes against no feed at all");
 
         var start = DateTime.UtcNow;
         for (var i = 0; i < 50; i++)
@@ -262,8 +271,11 @@ public class LatticeMetricsObservationIntegrationTests
         var (pump, snapshots, cts) = _fixture.ObserveInBackground(
             new TreeMetricsRequest { TreeIds = new[] { treeId } });
 
-        await MetricsObservationClusterFixture.WaitUntilAsync(
-            () => { lock (snapshots) { return snapshots.Count >= 1; } }, Timeout);
+        Assert.That(
+            await MetricsObservationClusterFixture.WaitUntilAsync(
+                () => { lock (snapshots) { return snapshots.Count >= 1; } }, Timeout),
+            Is.True,
+            "the stream must be provably producing before it is cancelled, or this asserts completion of a stream that never started");
 
         await cts.CancelAsync();
         await pump.WaitAsync(Timeout);
@@ -283,8 +295,11 @@ public class LatticeMetricsObservationIntegrationTests
             new TreeMetricsRequest { TreeIds = new[] { keptTree, droppedTree } });
 
         // Wait for the initial full snapshot that carries both trees.
-        await MetricsObservationClusterFixture.WaitUntilAsync(
-            () => { lock (snapshots) { return snapshots.Count >= 1 && snapshots[0].Trees.Count == 2; } }, Timeout);
+        Assert.That(
+            await MetricsObservationClusterFixture.WaitUntilAsync(
+                () => { lock (snapshots) { return snapshots.Count >= 1 && snapshots[0].Trees.Count == 2; } }, Timeout),
+            Is.True,
+            "both trees must be present in the baseline snapshot, or a later 'removal' is indistinguishable from a tree that was never sampled");
 
         // Drop one tree: it now vanishes from the sampled set and must surface as
         // a removal (not merely absent) on the next delta tick.

@@ -34,7 +34,24 @@ public class WalCommitLogWriterThrottledPaceTests
 
     // An upper bound a Healthy / disabled-pace dispatch must beat so a
     // regression that paces unconditionally lights up here.
-    private static readonly TimeSpan FastUpperBound = TimeSpan.FromMilliseconds(120);
+    //
+    // Deliberately generous. The dispatch under test is fully in-memory
+    // (an NSubstitute shard), so it completes in microseconds; the only
+    // way to spend a second here is a GC pause or thread-pool starvation
+    // on a loaded CI worker, which is noise rather than a regression.
+    // The bound stays falsifiable because the "must not pace" tests
+    // configure UnappliedPace below, which is an order of magnitude
+    // larger - so a writer that paces when it must not still blows
+    // straight through this budget. Do not tighten it back towards the
+    // pace: the margin is the whole point.
+    private static readonly TimeSpan FastUpperBound = TimeSpan.FromSeconds(3);
+
+    // The pace configured by the tests that assert pacing is *not*
+    // applied. A correct writer never sleeps for it, so inflating it
+    // costs the suite nothing while widening the gap between "paced" and
+    // "not paced" from 180 ms to ~27 s - which is what lets
+    // FastUpperBound be generous without going vacuous.
+    private static readonly TimeSpan UnappliedPace = TimeSpan.FromSeconds(30);
 
     [SetUp]
     public void SetUp()
@@ -131,7 +148,7 @@ public class WalCommitLogWriterThrottledPaceTests
 
         var writer = CreateWriter(shard, signal, options: new LatticeOptions
         {
-            WalThrottledAdmissionPace = Pace,
+            WalThrottledAdmissionPace = UnappliedPace,
         });
 
         var sw = Stopwatch.StartNew();
@@ -173,7 +190,7 @@ public class WalCommitLogWriterThrottledPaceTests
 
         var writer = CreateWriter(shard, signal: null, options: new LatticeOptions
         {
-            WalThrottledAdmissionPace = Pace,
+            WalThrottledAdmissionPace = UnappliedPace,
         });
 
         var sw = Stopwatch.StartNew();
