@@ -42,7 +42,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </list>
 /// </summary>
 [TestFixture]
-public class ShardRootGrainSplitShadowForwardTests
+public partial class ShardRootGrainSplitShadowForwardTests
 {
     private const string TreeId = "split-tree";
     private const int SourceShardIndex = 0;
