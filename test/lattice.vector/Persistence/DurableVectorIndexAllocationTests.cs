@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Vector.Persistence;
 using Orleans.Lattice.Vector.Tests.Fakes;
 
@@ -23,6 +24,22 @@ namespace Orleans.Lattice.Vector.Tests.Persistence;
 /// measured with the process-wide precise counter instead, because a
 /// continuation may resume on a different thread and a per-thread figure would
 /// then be meaningless rather than merely noisy.
+/// </para>
+/// <para>
+/// Every assertion here about an <b>asynchronous</b> path presupposes an
+/// <b>optimized</b> build. Roslyn emits an async state machine as a struct
+/// under <c>&lt;Optimize&gt;</c> and as a class without it, so a Debug build
+/// heap-allocates one per call regardless of whether the method suspends. That
+/// cost is deterministic and per-iteration, so it defeats every defence above:
+/// it scales with the loop and so survives the differential, it occurs on every
+/// attempt and so survives the minimum, and it is a compilation decision and so
+/// survives the warm-up. It then presents as a clean bimodal split - one
+/// developer measuring zero, another a large constant, CI green throughout -
+/// which reads as a hardware difference and invites a hunt through the SIMD
+/// paths for an allocating fallback that does not exist. That hunt is what
+/// issue #2540 actually was, so the precondition is now asserted with
+/// <see cref="AllocationContract.RequireOptimizedBuild"/> rather than left
+/// implicit here.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -345,6 +362,14 @@ public sealed class DurableVectorIndexAllocationTests
     [Test]
     public async Task A_lazy_search_over_resident_cells_allocates_a_bounded_amount()
     {
+        // The only measurement in this fixture whose budget is tighter than the
+        // cost of a Debug build's heap-allocated async state machines, so the
+        // only one that has to state the precondition. Every other test here is
+        // either synchronous - and so has no state machine at all - or carries a
+        // budget large enough to absorb one.
+        AllocationContract.RequireOptimizedBuild(
+            typeof(DurableVectorIndex).Assembly, typeof(DurableVectorIndexAllocationTests).Assembly);
+
         const int Iterations = 500;
         var store = new InMemoryVectorIndexStore();
         var source = DurableIndexHarness.Source(Corpus);
@@ -365,7 +390,9 @@ public sealed class DurableVectorIndexAllocationTests
 
         // With a full-size warm-up and the minimum taken across attempts this
         // measures zero: the probe scratch is pooled, and an asynchronous method
-        // that completes without ever suspending does not box its state machine.
+        // that completes without ever suspending does not box its state machine
+        // - which is true of an OPTIMIZED build, and is why this test asserts
+        // that precondition above rather than assuming it.
         // The budget is kept small rather than zero only because the
         // process-wide counter this path must use can see unrelated threads.
         AssertBoundedPerIterationAllocation(delta, Iterations, budget: 64, "A warm lazy search");
