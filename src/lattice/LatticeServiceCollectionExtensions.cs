@@ -57,6 +57,17 @@ public static class LatticeServiceCollectionExtensions
         Internal.GrainIdTypeConverterRegistration.EnsureRegistered();
 
         configureStorage(builder, LatticeOptions.StorageProviderName);
+
+        // Install the Lattice grain-storage serializer after the storage
+        // provider is registered, so it displaces the Orleans JSON default
+        // that a provider would otherwise be post-configured with. It writes
+        // only the state types marked ILatticeBinaryPersistedState through
+        // the Orleans binary serializer and delegates everything else to the
+        // serializer registered before it, so no other state type changes
+        // format. See LatticeGrainStorageSerializer for why the JSON path
+        // cannot write a large leaf snapshot without exhausting the heap.
+        builder.Services.AddLatticeGrainStorageSerializer();
+
         builder.Services.AddSingleton<IValidateOptions<LatticeOptions>, LatticeOptionsValidator>();
         builder.Services.AddSingleton<IValidateOptions<LatticeTagIndexReconciliationOptions>, LatticeTagIndexReconciliationOptionsValidator>();
         builder.Services.AddSingleton<LatticeOptionsResolver>();
