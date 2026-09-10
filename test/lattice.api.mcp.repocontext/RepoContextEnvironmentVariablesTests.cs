@@ -171,6 +171,38 @@ public sealed class RepoContextEnvironmentVariablesTests
     }
 
     [Test]
+    public void The_sweep_cadence_snapshot_states_the_floored_value_the_sweep_actually_runs_at()
+    {
+        // Distinct from the malformed-value case above, and a stronger claim: this
+        // value parses, is in range, and is still not what runs. A report echoing 10s
+        // would confirm the operator's setting took effect at the exact moment they
+        // were looking for the reason it had not.
+        Environment.SetEnvironmentVariable(
+            RepoContextIndexingOptions.AnnSweepIntervalSecondsKey, "10");
+        try
+        {
+            var snapshot = RepoContextEnvironmentVariables.DescribeResolvedSettings()
+                .Single(s => s.Name == RepoContextIndexingOptions.AnnSweepIntervalSecondsKey);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(snapshot.Resolved, Is.EqualTo("60s"),
+                    "the one-minute floor is what the sweep loop waits, so it is what the "
+                    + "report must state");
+                Assert.That(snapshot.Default, Is.EqualTo("900s"),
+                    "the sweep default deliberately equals the reconcile default, so that "
+                    + "decoupling the two (issue #2459) changed nothing for a host that "
+                    + "configures neither");
+            });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                RepoContextIndexingOptions.AnnSweepIntervalSecondsKey, null);
+        }
+    }
+
+    [Test]
     public void An_override_is_visible_as_a_difference_from_the_default()
     {
         Environment.SetEnvironmentVariable(
