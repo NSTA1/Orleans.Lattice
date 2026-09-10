@@ -210,12 +210,14 @@ It does **not** control the leaf state row size and does **not** control the WAL
 | Field | Approximate size |
 |---|---|
 | `Children` (`List<ChildEntry>`) | `MaxInternalChildren * (60-80 bytes GrainId + 4 bytes + separator key UTF-8 + ~10-15 bytes framing)` |
+| `ChildrenAreLeaves` | 1 byte |
 | `Clock` (HLC) | 12 bytes |
 | `ParentId` | ~80 bytes when present |
 | Split metadata (`SplitState`, `SplitKey`, `SplitSiblingId`, `SplitRightChildren`) | ~80 bytes idle; up to `MaxInternalChildren * 90 bytes` during a split |
 | `SubtreeProjectionHash` | ~20 bytes when present |
 | `SubtreeEntryCount` / `SubtreeHighestCheckpointOffset` | 16 bytes |
 | `ChildDigests` (per-child snapshot table) | ~80 bytes per child (`GrainId` + 16-byte hash + entry count + offset + framing) |
+| `DigestPublishSequence` | 8 bytes |
 | `TreeId` | 4 bytes + UTF-8 bytes |
 | Orleans state envelope | ~100-200 bytes |
 
