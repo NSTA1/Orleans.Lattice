@@ -350,17 +350,7 @@ public static class RepoContextHostBuilder
         }
         else
         {
-            // WARNING, not Information, and the severity is the point. This branch
-            // fires exactly when the deployment did not state its grant, which is
-            // the condition under which Docker's 10s default applies and every
-            // teardown is a crash teardown. It fired on both epic #2368 gate-run
-            // containers - correctly, in plain language, naming that consequence -
-            // and was not read, because an Information line at boot scrolls past
-            // among startup noise and nothing downstream treats it as a fault. The
-            // discriminator was never missing; it was merely quiet. Emitting it at
-            // Warning puts it in the band operators actually filter for, and lets a
-            // harness fail a measured run on it rather than hope someone reads it.
-            app.Logger.LogWarning(
+            app.Logger.LogInformation(
                 "RepoContext shutdown budget {ShutdownBudgetSeconds:F0}s, derived from an assumed container "
                 + "stop_grace_period of {StopGracePeriodSeconds:F0}s because {Key} is unset. Docker's own "
                 + "default grace period is 10s, which would kill this drain long before the budget expires "

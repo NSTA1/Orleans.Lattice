@@ -37,6 +37,22 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// that one is Docker-gated and cannot run in the ordinary lane, so something
 /// has to hold the invariant continuously.
 /// </para>
+/// <para>
+/// <b>What a green run here does NOT establish.</b> This fixture reads the
+/// tracked compose files and compares them to each other and to the host's own
+/// budget. It therefore says the repository is self-consistent, and nothing at
+/// all about the deployment. Across both failed epic #2368 gate runs these
+/// files were correct and in agreement the entire time: the container that
+/// could not be reaped had been composed from a different checkout, whose
+/// compose declared none of this. A fixture of this shape would have been green
+/// throughout. Do not read it as evidence that a running container is
+/// configured correctly - only an assertion against a live container can say
+/// that, which is why the runtime checks live in the behavioural fixture, and
+/// why the cold-start rig enforces the same invariant in
+/// <c>Assert-RigComposeIsolation</c> against the document
+/// <c>docker compose config</c> actually resolves rather than against these
+/// files.
+/// </para>
 /// </summary>
 [TestFixture]
 public sealed class RepoContextComposeInitProcessTests

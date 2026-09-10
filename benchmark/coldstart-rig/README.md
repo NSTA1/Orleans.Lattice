@@ -296,6 +296,20 @@ unbanked WAL into the master, and every later cohort restores from it, so the
 cost is copied forward into the baseline rather than expiring with the run. The
 measured stop being correct is exactly what kept that invisible.
 
+**The isolation guard now refuses a stack that is not shutdown-ready.**
+`Assert-RigComposeIsolation` checks `init: true` on every service, a
+`stop_grace_period` at least as long as the host's own 90s shutdown budget, and
+a `LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD` that agrees with it - so a cohort
+cannot start against a stack whose teardown would crash. It runs where
+`Assert-RigDockerIsolation` already ran, on the document `docker compose config`
+resolved, which matters more than it sounds: that document is what Docker will
+really run, after interpolation and after every override file is merged. The
+equivalent NUnit fixtures compare the tracked compose files to each other, and
+both were correct throughout the epic #2368 gate runs - the container that
+failed had simply been composed from a different checkout. A file-to-file check
+would have been green the whole time, so the check has to sit at the point the
+deployment is resolved rather than at the point the repository is read.
+
 Useful flags:
 
 - `-Runs <n>` repeats the whole cohort from a freshly cloned master. Two or more
