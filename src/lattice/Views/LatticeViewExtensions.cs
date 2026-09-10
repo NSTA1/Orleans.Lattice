@@ -123,7 +123,7 @@ public static class LatticeViewExtensions
                         {
                             stallAttempt++;
                             stallTotal++;
-                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
+                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallTotal);
                             LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeResumed);
                             shouldReopen = true;
                             break;
@@ -140,8 +140,10 @@ public static class LatticeViewExtensions
                     }
 
                     // Progress replenishes the consecutive stall budget only;
-                    // `attempt` is deliberately not reset (issue 2539). See
-                    // LatticeExtensions.ScanKeysAsyncCore's yield site.
+                    // stallTotal stays monotonic because it feeds both the
+                    // ceiling and the backoff, and `attempt` is deliberately not
+                    // reset and is not an unfixed instance of this defect (issue
+                    // 2539). See LatticeExtensions.ScanKeysAsyncCore's yield site.
                     stallAttempt = 0;
                     lastKey = enumerator.Current;
                     yield return enumerator.Current;
@@ -255,7 +257,7 @@ public static class LatticeViewExtensions
                         {
                             stallAttempt++;
                             stallTotal++;
-                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
+                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallTotal);
                             LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeResumed);
                             shouldReopen = true;
                             break;
@@ -272,8 +274,10 @@ public static class LatticeViewExtensions
                     }
 
                     // Progress replenishes the consecutive stall budget only;
-                    // `attempt` is deliberately not reset (issue 2539). See
-                    // LatticeExtensions.ScanKeysAsyncCore's yield site.
+                    // stallTotal stays monotonic because it feeds both the
+                    // ceiling and the backoff, and `attempt` is deliberately not
+                    // reset and is not an unfixed instance of this defect (issue
+                    // 2539). See LatticeExtensions.ScanKeysAsyncCore's yield site.
                     stallAttempt = 0;
                     lastKey = enumerator.Current.Key;
                     yield return enumerator.Current;

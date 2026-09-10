@@ -150,4 +150,85 @@ public partial class ResilientScanExtensionsTests
 
         Assert.That(calls, Is.EqualTo(1 + LatticeExtensions.DefaultScanStallResumeAttempts));
     }
+
+    [Test]
+    public async Task ScanKeysAsync_stall_backoff_still_escalates_across_a_progressing_walk()
+    {
+        // Regression guard for a defect that the progress replenishment itself
+        // introduced, and which no other test in this suite could see.
+        //
+        // Two counters govern a stall. stallAttempt is FUTILITY accounting and
+        // is replenished by progress, because progress is proof the walk is not
+        // futile. stallTotal is CONGESTION accounting - it feeds the ceiling and
+        // the backoff - and must stay monotonic, because a server failing to
+        // answer is not asking to be pressed harder and progress is not evidence
+        // that it is.
+        //
+        // Feeding the replenished counter to the backoff pins the delay at its
+        // first rung forever for exactly the population the replenishment
+        // serves: a walk progressing between almost every pair of stalls. That
+        // silently converts an escalating backoff into a permanent minimum aimed
+        // at a server whose defining symptom is timeouts. It is invisible to
+        // every other assertion here, because the walk still converges and still
+        // yields every key - only the pacing degrades.
+        //
+        // The backoff is 0.25 * T * n capped at T. The shared 20 ms test ceiling
+        // is unusable here: its rungs are 5 ms, and Task.Delay on Windows has a
+        // ~15.6 ms timer granularity, so a flattened schedule of ten 5 ms waits
+        // still costs ~156 ms of real time and clears any floor an escalating
+        // schedule would clear. The granularity swamps the very difference under
+        // test. A 200 ms ceiling puts every rung an order of magnitude above the
+        // timer quantum, so across five stalls the monotonic counter spends
+        // 50+100+150+200+200 = 700 ms against the replenished counter's
+        // 5*50 = 250 ms, and the floor sits between them with slack on both
+        // sides.
+        const int pages = 5;
+        var lattice = Substitute.For<ILattice>();
+        var callIndex = 0;
+        lattice.KeysAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var index = callIndex++;
+                return index < pages
+                    ? SlowStalledKeys(new[] { $"k{index:D2}" }, stallAfter: 1)
+                    : ScriptedKeys(Array.Empty<string>(), abortAfter: int.MaxValue);
+            });
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var keys = await CollectAsync(lattice.ScanKeysAsync());
+        sw.Stop();
+
+        Assert.That(keys, Has.Count.EqualTo(pages), "the walk must still converge");
+        Assert.That(sw.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(480),
+            "the stall backoff must escalate on the monotonic total, not restart at its "
+            + "first rung every time the walk makes progress (480 ms floor sits between "
+            + "the escalating 700 ms and the flattened 250 ms).");
+    }
+
+    private const double SlowStallCeilingSeconds = 0.2;
+
+    private static ScanPageStalledException NewSlowStall() => new("scripted slow stall")
+    {
+        TreeId = "t",
+        ShardIndex = 0,
+        Operation = "GetSortedKeysBatchAsync",
+        Phase = "leaf-walk",
+        TimeoutSeconds = SlowStallCeilingSeconds,
+    };
+
+    private static async IAsyncEnumerable<string> SlowStalledKeys(string[] keys, int stallAfter)
+    {
+        var yielded = 0;
+        foreach (var k in keys)
+        {
+            if (yielded >= stallAfter) throw NewSlowStall();
+            yielded++;
+            yield return k;
+            await Task.Yield();
+        }
+
+        if (yielded < stallAfter) yield break;
+        throw NewSlowStall();
+    }
 }

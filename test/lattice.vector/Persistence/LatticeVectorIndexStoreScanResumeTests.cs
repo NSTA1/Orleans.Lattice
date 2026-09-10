@@ -176,4 +176,46 @@ public sealed class LatticeVectorIndexStoreScanResumeTests
 
         Assert.That(tree.StartBounds, Has.Count.EqualTo(1), "no resume should have been attempted");
     }
+
+    [Test]
+    public void A_typed_scan_page_stall_is_left_to_the_core_budget_rather_than_absorbed_here()
+    {
+        // ScanPageStalledException DERIVES FROM TimeoutException, so this
+        // wrapper's `catch (TimeoutException)` would silently swallow the typed
+        // stall unless it excludes it explicitly. That is not a theoretical
+        // hazard: the first draft of this wrapper did exactly that.
+        //
+        // The consequence is not a lost exception - it is a MULTIPLIED one. The
+        // core scan helpers already resume a typed stall on their own budget, so
+        // absorbing it here restarts a walk core had ALREADY resumed to
+        // exhaustion, and the two budgets multiply instead of composing. A
+        // bounded recovery becomes a retry storm against a shard root whose
+        // defining symptom is that it is already too slow to answer.
+        //
+        // Note what this test is really guarding, because the usual rule does
+        // not cover it. The guidance for a derived-exception trap is "keep the
+        // try narrow - a single-await try can only catch what that one call can
+        // raise". This wrapper's try IS a single await. It is unsafe anyway,
+        // because the await is MoveNextAsync on a composed enumerator, whose
+        // raise-surface is the whole pipeline beneath it. Syntactic narrowness
+        // is not the property that makes a catch safe; the raise-surface of the
+        // awaited call is, and an enumerator hides an arbitrarily large one.
+        //
+        // The assertion is the call count rather than merely the exception type,
+        // because absorbing the stall still ends in a ScanPageStalledException -
+        // just many walks later. Only the count distinguishes composing from
+        // multiplying.
+        var keys = Keys();
+        var tree = TimeoutingLatticeTree.Create(
+            keys, entriesBeforeTimeout: 0, timeouts: int.MaxValue, typedStall: true);
+        var store = new LatticeVectorIndexStore(tree.Tree);
+
+        Assert.That(async () => await DrainAsync(store), Throws.TypeOf<ScanPageStalledException>());
+
+        Assert.That(
+            tree.StartBounds,
+            Has.Count.EqualTo(1 + LatticeExtensions.DefaultScanStallResumeAttempts),
+            "the typed stall must be governed by core's resume budget alone; a larger "
+            + "count means this wrapper absorbed it and stacked a second budget on top.");
+    }
 }

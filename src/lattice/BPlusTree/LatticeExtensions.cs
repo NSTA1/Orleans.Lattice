@@ -76,11 +76,56 @@ public static class LatticeExtensions
     /// This ceiling restores that bound without restoring the length cap. It can
     /// only be reached by a walk that <em>is</em> progressing - a stuck walk
     /// spends its consecutive budget first, at two - so it binds exactly the
-    /// pathological case of real but unusably slow progress. A stall costs
-    /// roughly one <see cref="LatticeOptions.MaxScanPageStallDuration"/> ceiling
-    /// plus its backoff, so on the derived default this is tens of minutes of
-    /// worst-case recovery before a walk gives up, against a status quo in which
-    /// the affected reload never completed at all.
+    /// pathological case of real but unusably slow progress.
+    /// </para>
+    /// <para>
+    /// The value is grounded in wall-clock, which is the property the original
+    /// budget was protecting. A resumption costs one reported stall ceiling
+    /// <c>T</c> plus its backoff, and the backoff is driven by the monotonic
+    /// total rather than the replenished budget, so it escalates as
+    /// <c>0.25T, 0.5T, 0.75T</c> and then saturates at <c>T</c> from the fourth
+    /// resumption on. At this ceiling a walk therefore spends at most roughly
+    /// <c>64T</c> stalling plus <c>62.5T</c> waiting - about 10 minutes on the
+    /// 5-second <see cref="LatticeOptions.DefaultMaxScanPageDuration"/> - before
+    /// it gives up, against a status quo in which the affected reload never
+    /// completed at all.
+    /// </para>
+    /// <para>
+    /// The value is calibrated against the measured workload rather than fitted
+    /// to a unit test. Run 1 recorded 16,794 completed leaf scans against 8,094
+    /// stalls on the affected tree - about one stall per two leaves - so at that
+    /// rate this ceiling grants a walk roughly 130 leaves of progress, spread
+    /// over the wall-clock above, before it bites. Against the previous
+    /// behaviour, which surrendered after two stalls and therefore about four
+    /// leaves, that is a factor of roughly thirty.
+    /// </para>
+    /// <para>
+    /// It is stated plainly that this is <em>necessary but not sufficient</em>
+    /// for a corpus-sized reload. A walk longer than about 130 leaves still
+    /// reaches the ceiling, and raising the constant does not fix that: the
+    /// binding constraint is wall-clock, not the count, so a ceiling large
+    /// enough for an arbitrary corpus would licence an unbounded stall. The
+    /// count and the clock cannot both be satisfied by this constant, which is
+    /// precisely why the durable remedy is for the <em>caller</em> to bank
+    /// partial progress, so that a walk terminated here resumes instead of
+    /// restarting. This ceiling makes that termination bounded and observable;
+    /// it does not by itself make a corpus-sized reload converge.
+    /// </para>
+    /// <para>
+    /// Note that the client-side resumption counters cannot supply a per-walk
+    /// stall distribution to calibrate against directly: every walk in run 1 was
+    /// terminated at the old budget of two, so that sample is right-censored at
+    /// exactly the limit under test. The leaf-per-stall rate above is used
+    /// instead because it is censoring-free - both of its terms are server-side
+    /// and neither is bounded by the client budget.
+    /// </para>
+    /// <para>
+    /// Reaching it is reported exactly as exhausting the consecutive budget is -
+    /// the same <see cref="ScanPageStalledException"/> rethrown verbatim, and the
+    /// same <c>budget-exhausted</c> outcome on
+    /// <c>scan_stall_resumptions_total</c> - so counters stay comparable across
+    /// the change and a walk that gives up here is never mistaken for one that
+    /// finished.
     /// </para>
     /// <para>
     /// It is deliberately <em>not</em> presented as removing the cliff. Any
@@ -619,7 +664,7 @@ public static class LatticeExtensions
                         {
                             stallAttempt++;
                             stallTotal++;
-                            stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
+                            stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallTotal);
                             RecordScanStallOutcome(stall, StallOutcomeResumed);
                             shouldReopen = true;
                             break;
@@ -645,11 +690,28 @@ public static class LatticeExtensions
                     // the inverse of the gate that was refused, and not a
                     // re-introduction of it.
                     //
-                    // `attempt` is deliberately NOT reset. It governs a different
-                    // fault, and its value also drives an escalating reconnect
-                    // backoff, so resetting it on progress would silently flatten
-                    // that escalation. It is structurally monotonic in the same
-                    // way, but that is a separate and so far unmeasured concern.
+                    // NOTE THE TWO COUNTERS ARE DELIBERATELY SPLIT BY PURPOSE,
+                    // and collapsing them back together reintroduces a defect in
+                    // whichever direction it is done. stallAttempt is FUTILITY
+                    // accounting - how many faults we have absorbed without
+                    // getting anywhere - so progress is exactly the right thing
+                    // to reset it, because progress is proof the walk is not
+                    // futile. stallTotal is CONGESTION accounting, and it feeds
+                    // both the ceiling and ComputeScanStallResumeDelayMs, so it
+                    // must stay monotonic: a server that is failing to answer is
+                    // not asking to be pressed harder, and progress is not
+                    // evidence that it is. Feeding the replenished counter to the
+                    // backoff would pin the delay at its first rung forever for
+                    // exactly the population this fix serves - walks that
+                    // progress between almost every pair of stalls - silently
+                    // flattening an escalating backoff into a permanent minimum
+                    // aimed at a server whose defining symptom is timeouts.
+                    //
+                    // `attempt` is deliberately NOT reset, and is NOT an unfixed
+                    // instance of this defect. It governs a different fault and
+                    // drives the reconnect backoff, so it is congestion
+                    // accounting like stallTotal and CORRECTLY has monotonic
+                    // semantics. Do not "finish the job" by resetting it.
                     stallAttempt = 0;
                     lastKey = enumerator.Current;
                     yield return enumerator.Current;
@@ -808,7 +870,7 @@ public static class LatticeExtensions
                         {
                             stallAttempt++;
                             stallTotal++;
-                            stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
+                            stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallTotal);
                             RecordScanStallOutcome(stall, StallOutcomeResumed);
                             shouldReopen = true;
                             break;
@@ -825,8 +887,10 @@ public static class LatticeExtensions
                     }
 
                     // Progress replenishes the consecutive stall budget only;
-                    // `attempt` is deliberately not reset (issue 2539). See
-                    // ScanKeysAsyncCore's yield site for both halves of that.
+                    // stallTotal stays monotonic because it feeds both the
+                    // ceiling and the backoff, and `attempt` is deliberately not
+                    // reset and is not an unfixed instance of this defect (issue
+                    // 2539). See ScanKeysAsyncCore's yield site for all three.
                     stallAttempt = 0;
                     lastKey = enumerator.Current.Key;
                     yield return enumerator.Current;

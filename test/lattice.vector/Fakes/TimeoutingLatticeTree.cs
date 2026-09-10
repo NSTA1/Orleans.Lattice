@@ -26,13 +26,15 @@ internal sealed class TimeoutingLatticeTree
     private readonly SortedDictionary<string, byte[]> _records = new(StringComparer.Ordinal);
     private readonly int _entriesBeforeTimeout;
     private readonly int _deliverBeforeWedging;
+    private readonly bool _typedStall;
     private int _remainingTimeouts;
 
-    private TimeoutingLatticeTree(int entriesBeforeTimeout, int timeouts, int deliverBeforeWedging)
+    private TimeoutingLatticeTree(int entriesBeforeTimeout, int timeouts, int deliverBeforeWedging, bool typedStall)
     {
         _entriesBeforeTimeout = entriesBeforeTimeout;
         _remainingTimeouts = timeouts;
         _deliverBeforeWedging = deliverBeforeWedging;
+        _typedStall = typedStall;
         Tree = Build();
     }
 
@@ -61,14 +63,23 @@ internal sealed class TimeoutingLatticeTree
     /// while and only then start abandoning, which is how a walk that banked real
     /// progress before the tree became unavailable is modelled.
     /// </para>
+    /// <para>
+    /// <paramref name="typedStall"/> raises the typed, resumable
+    /// <c>ScanPageStalledException</c> instead of the runtime's bare
+    /// <see cref="TimeoutException"/>. Because the typed stall <i>derives from</i>
+    /// <see cref="TimeoutException"/>, this is what distinguishes a wrapper that
+    /// correctly lets core's own resume budget govern it from one that absorbs it
+    /// and stacks a second budget on top.
+    /// </para>
     /// </summary>
     internal static TimeoutingLatticeTree Create(
         IEnumerable<string> keys,
         int entriesBeforeTimeout,
         int timeouts,
-        int deliverBeforeWedging = 0)
+        int deliverBeforeWedging = 0,
+        bool typedStall = false)
     {
-        var tree = new TimeoutingLatticeTree(entriesBeforeTimeout, timeouts, deliverBeforeWedging);
+        var tree = new TimeoutingLatticeTree(entriesBeforeTimeout, timeouts, deliverBeforeWedging, typedStall);
         var ordinal = 0;
         foreach (var key in keys)
         {
@@ -123,7 +134,16 @@ internal sealed class TimeoutingLatticeTree
             {
                 // The message is the runtime's own, so a reader of a failing test
                 // sees the string the field logs actually carried.
-                throw new TimeoutException("Response did not arrive on time in 00:00:30.");
+                throw _typedStall
+                    ? new ScanPageStalledException("scripted scan page stall")
+                    {
+                        TreeId = "vector-index",
+                        ShardIndex = 0,
+                        Operation = "GetSortedEntriesBatchAsync",
+                        Phase = "leaf-walk",
+                        TimeoutSeconds = 0.02,
+                    }
+                    : new TimeoutException("Response did not arrive on time in 00:00:30.");
             }
 
             RecordsDelivered++;
