@@ -29,7 +29,7 @@ public sealed class SagaCoordinatorCoyoteTests
     [Test]
     public void All_participants_acking_always_commits()
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new SagaCoordinatorModel(AllAcked(4), useBrokenDecision: false));
     }
 
@@ -49,7 +49,7 @@ public sealed class SagaCoordinatorCoyoteTests
             SagaParticipantOutcome.PreparedAck,
         };
 
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new SagaCoordinatorModel(assignment, useBrokenDecision: false));
     }
 
@@ -69,7 +69,7 @@ public sealed class SagaCoordinatorCoyoteTests
             SagaParticipantOutcome.PreparedAck,
         };
 
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new SagaCoordinatorModel(assignment, useBrokenDecision: false));
     }
 
@@ -91,7 +91,7 @@ public sealed class SagaCoordinatorCoyoteTests
             SagaParticipantOutcome.PreparedAck,
         };
 
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new SagaCoordinatorModel(assignment, useBrokenDecision: true));
     }
 }

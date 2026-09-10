@@ -40,9 +40,12 @@ interleaving of the protocol's decision and broadcast steps.
 - **Coordinator** (`PrepareTx`, `DecideTx`, `BroadcastStep`) - the saga:
   prepare fan-out into hidden per-leaf pending buckets, a single terminal
   decision, then the per-leaf terminal broadcast one leaf at a time.
-- **Transaction registry** (`decision`, `revision`) - the single tree-wide
-  commit / abort decision and its monotonic revision. Recording the decision
-  *before* the broadcast is the linearization point.
+- **Transaction registry** (`decision`, `forgotten`, `revision`) - the single
+  tree-wide commit / abort decision, whether its row has since been retired,
+  and the monotonic revision. Recording the decision *before* the broadcast is
+  the linearization point. `ForgetDecision` models the saga's post-fan-out
+  cleanup: it retires the row (so `RegistryView` reverts to in-flight) without
+  changing the outcome, and only once every participant has drained.
 - **Reader visibility** (`ObservedPrepared`, `SurfaceViaGate`) - the per-key
   gate that resolves how a read of a key carrying a pending mutation is
   answered, resolved against one decision snapshot so a saga is all-or-nothing
@@ -71,7 +74,7 @@ Liveness / temporal properties:
 
 | Property | Meaning |
 |----------|---------|
-| `DecisionDurability` | Once terminal, the registry decision never flips. |
+| `DecisionDurability` | Once terminal, the registry decision never flips to the other terminal, and its row is never retired while a participant still holds an undrained prepared bucket. |
 | `MonotonicVisibility` | Once a key is post-saga-visible it stays visible (even across a reshard). |
 | `RevisionMonotonic` | The registry revision counter never decreases. |
 | `Termination` | Every saga terminates (under weak fairness of saga progress). |
@@ -87,6 +90,40 @@ Liveness / temporal properties:
   overlapping on `k2`,
 - a bounded reshard orphan step per key (used-once budget).
 
+**What the `k2` overlap does and does not buy.** The two sagas do share a key,
+so the state space genuinely interleaves two concurrent lifecycles over it. What
+the overlap does *not* do is exercise any *cross-saga* claim, because every
+property above is stated per-saga: each quantifies `\A t \in Txns` and then
+resolves that saga's keys against that saga's own `decision[t]`, `terminal[t]`
+and `pend[t]`. No property relates `t1`'s state to `t2`'s. Read the overlap as
+extra schedule pressure on the per-saga properties, not as evidence that
+concurrent sagas contending for one key have been checked.
+
+Such a property is *unexpressed here*, not inexpressible, and the price is
+worth stating rather than hand-waving. The natural one is
+`NoConcurrentPreparedWriters`: at most one saga holds a pending bucket on a key
+at a time, mirroring the admission lock the implementation takes (and which the
+Coyote tier covers separately in `LockAdmissionModel`). As an invariant alone it
+is false here, because `PrepareTx` has no cross-saga precondition and both sagas
+may hold a bucket on `k2`; making it true costs one conjunct on `PrepareTx`
+requiring no other saga's bucket on any key it writes.
+
+That one conjunct is not free, and the reason is specific rather than general
+caution: `ShadowForwardOrphan` may re-install a bucket on `k2` after `t1` is
+done, `OrphanDrain` is **deliberately not fair** (see the fairness note in
+`AtomicCommit.tla`), so a behaviour exists in which that orphan is never drained
+and the gated `PrepareTx(t2)` is never enabled - which would break `Termination`.
+Adding the property therefore also means deciding whether `OrphanDrain` becomes
+fair, which weakens the "every safety property holds whether or not the orphan
+fires" guarantee that its unfairness currently buys. Two coupled changes and a
+re-run of TLC, not one conjunct.
+
+The deeper limit is that the model abstracts values away entirely: even with the
+lock in place, "which of two committed writers does a reader of `k2` observe" is
+not a question this instance can ask, because `ObservedPrepared` returns a
+boolean rather than a value. A cross-saga *visibility* property needs a value
+domain, which is a larger change than the lock conjunct.
+
 To widen the instance, edit `TxWrites`, `Txns`, and `Keys` in
 `AtomicCommit.tla` and add the matching model-value constants to
 `AtomicCommit.cfg`. The state space stays small (a few thousand states) for
@@ -94,22 +131,28 @@ To widen the instance, edit `TxWrites`, `Txns`, and `Keys` in
 
 ## Claims in this directory that open issues own
 
-Two open issues own claims made in this directory, and both are out of scope for
-the refinement note's own work.
+Two issues that are still **open** own claims made in this directory.
 
-- **#2325** owns three documentation and API overclaims in the atomicity
-  surface, one of which is the two-saga overlap advertised just above: the two
-  sagas do overlap on `k2`, but no property relates them, so the overlap
-  exercises nothing.
-- **#2333** owns the `DecisionDurability` property's prose and its refinement
-  seam, including the "never flips" wording in the property table above. That
-  wording is strictly weaker than the formula it describes, which also forbids
-  the decision being unset.
+- **#2320** owns the *unguarded* decision-masking action. `ForgetDecision`
+  models the saga's ordered post-fan-out cleanup and passes every property
+  precisely because its guards make every observation independent of the
+  decision before it fires. A retention window masking a row while a prepared
+  bucket is still live has no such ordering behind it, violates
+  `MonotonicVisibility` and `VisibilityMatchesDecision`, and is deliberately not
+  modelled here. **`ForgetDecision` does not discharge #2320.**
+- **#2319** owns raising the Coyote harness's concurrency degree above zero.
+  #2325 corrected the two member names that promised schedule exploration the
+  harness does not perform; making the exploration real is #2319's.
+
+The two that used to appear here - **#2325** (documentation and API overclaims
+in the atomicity surface, including the `k2` overlap discussed above) and
+**#2333** (the `DecisionDurability` prose and its refinement seam) - are both
+resolved.
 
 The boundary is recorded in full under
 [territory owned by other open issues](Refinement.md#territory-owned-by-other-open-issues)
 in the refinement note, which is where a census of that note's Detector column
-meets it. Read it before filing either finding as new.
+meets it. Read it before filing any of these findings as new.
 
 ## How to run TLC
 

@@ -33,6 +33,7 @@ production seam it will be extracted from is named instead.
 | `terminal[t][k]` | Per-leaf applied terminal + orphan-guard flag | The leaf's `_recentlyTerminal` / applied-terminal state after `AppendTxTerminalAsync`; `terminal # "none"` is `AtomicVisibilityGate.ResolveKey`'s `alreadyTerminal` input. |
 | `pend[t][k]` | Hidden pending bucket on a leaf | The leaf `_pendingTx[txid]` bucket installed by a prepared mutation (`BPlusLeafGrain.PendingTx`). |
 | `orphanDone[t][k]` | Bounded reshard-orphan budget | Modelling device only (keeps the state space finite): it bounds how many times `ShadowForwardOrphan` / `OrphanDrain` may cycle on one key. It has no production counterpart - nothing in the code drains or discards an orphan bucket "at most once per key", and the discard the model's drain abstracts (see `OrphanDrain` below) is idempotent rather than budgeted. |
+| `forgotten[t]` | Registry row retired after cleanup | Whether the saga's row has left the registry **view**: `ITxRegistryGrain.ForgetAsync` dropping it, the lazy `PruneExpired` purge behind it, or the `TxDecisionRetention = 0` branch that never tombstones at all. Kept as a variable of its own rather than writing `"inflight"` back over `decision[t]`, so the outcome the saga recorded stays available to every property that needs it and only `RegistryView(t)` - what a reader actually resolves - reverts. |
 | `revision` | Monotonic registry revision | `TxRegistryState.DecisionsRevision`, bumped on every `Decisions` mutation. The token reader fast paths actually probe is a composite that adds the count of tombstones currently past their retention boundary plus two persisted compensating epochs (`TombstoneRetirementEpoch`, `TombstonePinUnmaskEpoch`), so the probe also announces the surface changes that happen with no write: a tombstone ageing out, a batch prune retiring several at once, and a snapshot pin un-masking rows. The spec models only the abstract monotonicity the composite provides. |
 
 ## Action mapping
@@ -44,6 +45,7 @@ production seam it will be extracted from is named instead.
 | `BroadcastStep(t,k)` | Per-leaf terminal fan-out (one leaf at a time) | `AtomicWriteGrain.BroadcastTerminalsAsync` -> per-shard / per-leaf `AppendTxTerminalAsync`. Modelling it one leaf per step is what lets TLC explore the post-decision window in which some leaves have flipped and others have not. | Yes: `CompensationContinuousReaderTests.Successful_saga_broadcasts_TxCommit_to_every_touched_shard` and `ShardRootGrainTxTerminalTests.AppendTxTerminalAsync_fans_out_terminal_to_every_leaf`. |
 | `ShadowForwardOrphan(t,k)` | Reshard shadow-forward of a stale prepared write | A prepared write reaching a destination leaf that has already applied the saga's terminal, re-installing a pending bucket. Two production paths do this: the hot-path shadow-forward on an active split (`ShardRootGrain.Split`, prepared branch) and the retroactive sweep `TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync`, which replays the source's prepared mutations onto the destination. `ShardRootGrain.TxTerminal` is the terminal fan-out that races them, not a forwarder. | Yes: `TreeShardSplitGrainTests.RetroactiveSweep_replays_prepare_when_saga_in_flight` covers the retroactive sweep, and `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_installs_orphan_pending_bucket_on_destination_leaf_that_already_applied_the_terminal` covers the hot-path shadow-forward on an active split. The hot path was already asserted as a forwarder; what that second test adds is the ordering this row actually models, applying the terminal to the destination first so the forward produces the orphan bucket rather than merely arriving. |
 | `OrphanDrain(t,k)` | Discard of a late orphan bucket, terminal already applied | `MigrationTerminalCore.DecideBucketAction` returning `DiscardOrphan` - the leaf holds a pending bucket for a saga whose terminal has already landed here, so `BPlusLeafGrain.ApplyTxTerminalAsync` discards the bucket instead of draining it. The guards correspond exactly: the action's `terminal[t][k] # "none"` is the core's `alreadyTerminal`, and `pend' = "none"` with everything else `UNCHANGED` is the discard. **This action does not model the split coordinator's post-sweep cleanup pass, and no rewording of this row can make it do so**: that pass acts on a bucket whose terminal has *not* reached the leaf, which is the complement of this action's guard. See the decision-record retention window under [abstraction gaps](#deliberate-abstraction-gaps). | Yes: `MigrationTerminalCoreTests.Pending_already_terminal_discards_orphan_regardless_of_verdict` and `BPlusLeafGrainTests.ApplyTxTerminalAsync_with_already_terminalled_txid_discards_orphan_pending_bucket`. |
+| `ForgetDecision(t)` | Post-fan-out cleanup retires the registry row | The saga's cleanup once the terminal fan-out is finished: `ITxRegistryGrain.ForgetAsync`, plus the lazy `PruneExpired` purge behind it and the zero-retention branch that skips tombstoning. Its enabling conditions are production's ordering guarantee rather than a modelling convenience - every written key has applied its terminal and holds no pending bucket, which is what the late-pickup loop in `BroadcastTerminalsAsync` establishes before the saga completes. **Only the ordered path is modelled.** An unordered retention window masking a row while a bucket is still live is a different event with no such guarantee, and is #2320's: see [territory owned by other open issues](#territory-owned-by-other-open-issues). | Yes: `TxRegistryGrainTests.ForgetAsync_drops_recorded_decision` pins the retirement itself and `AtomicWriteGrainTests.BroadcastTerminals_late_arrival_fires_second_terminal` pins the drain-before-cleanup ordering the guard abstracts. That retiring the row *early* is a property violation rather than merely untidy is pinned by `AtomicCommitInvariantCoyoteTests.Forgetting_the_decision_before_every_leaf_drained_violates_decision_durability`. |
 | `Stutter` | Natural termination | Not a protocol step; a stuttering successor at full quiescence so TLC does not report ordinary termination as a deadlock. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
 
 ## Property mapping
@@ -54,7 +56,7 @@ production seam it will be extracted from is named instead.
 | `StrictIsolation` | `AtomicVisibilityGate.ResolveKey` never returning `SurfacePrepared` unless `status = Committed` - the strict-isolation default that an in-flight or aborted saga stays invisible. | Yes: `AtomicVisibilityGateTests.InFlight_always_falls_through`, `AtomicVisibilityGateTests.Aborted_always_falls_through` and `AtomicVisibilityGateTests.Indeterminate_always_hides_key`. |
 | `LinearizedTerminals` | The decision-before-broadcast ordering in `RunSagaAsync`: `RecordTerminalDecisionAsync` precedes `BroadcastTerminalsAsync`, so no leaf surfaces a committed value before the tree-wide decision exists. | Yes: `AtomicWriteGrainTests.RunSagaAsync_commit_records_the_decision_before_broadcasting_terminals`, `AtomicWriteGrainTests.RunSagaAsync_abort_records_the_decision_before_broadcasting_terminals` and `AtomicWriteGrainTests.FinalizeAsync_records_the_decision_before_broadcasting_terminals` - one per ordering site, so a reversal at any of the three is independently falsifiable. |
 | `NoMixedTerminals` | A saga records exactly one `TxStatus`, so its per-leaf terminals are uniformly commit or uniformly abort. | Yes: `AtomicWriteGrainTests.Aborting_saga_broadcasts_its_single_recorded_abort_verdict_to_every_touched_shard` and `AtomicWriteGrainTests.Committing_saga_broadcasts_its_single_recorded_commit_verdict_to_every_touched_shard`, which pin the recorded decision and the whole terminal fan-out together, over a batch routed to three distinct shards. One correction to the census while closing this: it recorded the uniform-abort outcome as unasserted, which was too strong - `CompensationContinuousReaderTests.Compensation_broadcasts_TxAbort_to_every_touched_shard` already pinned it, and a perturbation that hands one shard the opposite verdict reds that test too. What was genuinely undetected was the antecedent this row names, that the verdict every terminal carries is the single `TxStatus` the saga recorded: flipping `RecordTerminalDecisionAsync` to record the opposite outcome leaves every fan-out-only test green, because none of them wires the registry. |
-| `DecisionDurability` | `TxStatus` transitions are terminal: `MarkCommittedAsync` / `MarkAbortedAsync` never flip a recorded decision, and treat a repeat of the same outcome as an idempotent no-op for as long as the decision is still recorded - including while it is merely tombstoned, since classification runs before the tombstone is cleared. Once a tombstone has been physically purged the registry has no row to recognise, so a late same-outcome terminal records afresh rather than being absorbed; the recorded outcome is unchanged either way, which is what the spec property asserts. | Yes: `TxRegistryGrainTests.MarkCommittedAsync_throws_when_previously_aborted` and `TxRegistryGrainTests.MarkAbortedAsync_throws_when_previously_committed`. |
+| `DecisionDurability` | `TxStatus` transitions are terminal **and** the decision outlives every participant that depends on it. *No flip*: `MarkCommittedAsync` / `MarkAbortedAsync` never turn a recorded decision into the other terminal, and treat a repeat of the same outcome as an idempotent no-op for as long as the decision is still recorded - including while it is merely tombstoned, since classification runs before the tombstone is cleared. Once a tombstone has been physically purged the registry has no row to recognise, so a late same-outcome terminal records afresh rather than being absorbed; the recorded outcome is unchanged either way. *No premature unset*: the formula forbids a committed decision becoming **absent** exactly as firmly as it forbids it becoming aborted, because absent is not `"committed"` either, and an absent row hides a committed value from a reader just as a flip does. Three production paths retire a row - `ITxRegistryGrain.ForgetAsync`, `PruneExpired`, and the zero-retention branch that skips tombstoning altogether - and each is safe only because it runs after the terminal fan-out has drained every participant's pending bucket. That safety is an *ordering* guarantee rather than an idempotence one: `AtomicWriteGrain` reaches `ForgetAsync` only from post-fan-out cleanup, and the interface contract states the precondition in as many words ("by which point no leaf has the txid in its pending bucket anymore"). Retire a row earlier than that and a committed key goes invisible. | Yes, for both halves. Flip: `TxRegistryGrainTests.MarkCommittedAsync_throws_when_previously_aborted` and `TxRegistryGrainTests.MarkAbortedAsync_throws_when_previously_committed`. Unset: `AtomicCommitInvariantCoyoteTests.Forgetting_the_decision_before_every_leaf_drained_violates_decision_durability`, whose model action retires the row under production's real precondition and whose guard arm retires it while a leaf is still undrained. The two registry tests do not cover the unset - an absent row is not a flip, so both pass unchanged when it happens - which is how an earlier census graded this row against prose narrower than the formula it abstracts. |
 | `MonotonicVisibility` | A committed value never reverts to pre-saga - protected in code by the terminal-stable decision plus the orphan guard (`alreadyTerminal`) that stops a late shadow-forward bucket from re-hiding an applied value. The protection is conditional on the registry still holding the saga's decision row; a prepared write that is still resident when that row is physically purged reverts, which the spec does not express (see the decision-record retention window under [abstraction gaps](#deliberate-abstraction-gaps)). | Yes: `AtomicVisibilityGateTests.Committed_but_already_terminal_orphan_falls_through`. |
 | `RevisionMonotonic` | The composite comparison token is monotonically non-decreasing. `DecisionsRevision` on its own only ever increments, but it is not the whole token, and the live-expired-tombstone term it is summed with falls when a batch prune retires several tombstones at once or when a snapshot pin un-masks already-masked rows; `TombstoneRetirementEpoch` and `TombstonePinUnmaskEpoch` compensate for exactly those two drops, so the sum never revisits a value it previously carried under a different readable surface. | Yes: `TxRegistryGrainTests.GetDecisionsRevisionAsync_never_decreases_across_a_batch_prune` and `TxRegistryGrainTests.GetDecisionsRevisionAsync_does_not_fall_when_a_pin_covers_an_expired_tombstone`. |
 | `Termination` / `EveryCommittedKeyReadable` | The saga always drives to `Completed` / `Compensate` (reminder-driven resume after a crash), and a committed saga's terminal fan-out reaches every leaf recorded as a participant. It is not unconditionally every leaf holding a bucket: an online split can install a prepared bucket on a destination that the coordinator's participant query had already passed over, which is the orphan window `RetroactiveSweepPreparedMutationsAsync` documents and its post-sweep cleanup pass narrows but does not close. | Yes: `AtomicWriteGrainTests.BroadcastTerminals_late_arrival_fires_second_terminal` and `AtomicWriteGrainTests.ReceiveReminder_resumes_execute_from_persisted_progress`. |
@@ -133,98 +135,84 @@ because only the first can be closed.
 
 ## Territory owned by other open issues
 
-Two issues that are still **open** own claims made in this directory. Neither is
-in scope for the refinement note's own work - epic #2556 states both exclusions
-explicitly - and neither should be re-filed as a fresh finding by a later census
-of the Detector column.
+Some claims made in this directory are owned by an issue that is still **open**,
+and are not in scope for the refinement note's own work. This section records
+that boundary, so that a later census of the Detector column does not re-file
+a finding that already has an owner.
 
-Read this before grading a row or filing a gap. A finding that lands inside one
-of the boundaries below belongs to that issue, and opening a second issue for it
+Read it before grading a row or filing a gap. A finding that lands inside one of
+the boundaries below belongs to that issue, and opening a second issue for it
 splits one fix across two changes whose authors cannot see each other. That is
 not hypothetical: the census that produced the Detector column above ran without
 this boundary written down anywhere, because the acceptance criterion that asked
-for it (#2525's third) was never discharged. #2562 discharges it here, in the
+for it (#2525's third) was never discharged. #2562 discharged it here, in the
 document the census actually reads, rather than in an issue comment.
 
-This section records the boundary and nothing else. It does not fix either
-issue, and nothing here asserts that the claims they own are currently correct.
+This section records the boundary and nothing else. It does not fix any of the
+issues below, and nothing here asserts that the claims they own are currently
+correct. **Re-populate it rather than deleting it** when its entries close: the
+job it does outlives any particular set of issues, and an empty section still
+tells a reader the question was asked.
 
-### #2325 owns documentation and API overclaims in the atomicity surface
+### #2320 owns the unguarded decision-masking action
 
-#2325 is about explanations that do not match the mechanism they name. In each
-case the behaviour users depend on is present; what is wrong is the account of
-*why*, which is worse than it sounds, because a change that removed the real
-mechanism would leave the wrong account standing and looking like cover. It owns
-three findings:
+`ForgetDecision(t)` in [`AtomicCommit.tla`](AtomicCommit.tla) retires a registry
+row, so the specification now has *an* action that unsets a decision. It is the
+**ordered** one: the saga's post-fan-out cleanup, enabled only once every written
+key has applied its terminal and holds no pending bucket, which is the ordering
+`ITxRegistryGrain.ForgetAsync` states as its own precondition. It was added to
+make `DecisionDurability` falsifiable, and it is, by the guard arm the row's
+Detector cell names.
 
-- **The `SnapshotPin` guarantee is attributed to the wrong mechanism.** The
-  guarantee the documentation attributes to the pin is delivered in practice by
-  an unrelated fast path. The remedy is to name the mechanism that actually
-  delivers it and pin that mechanism with a test.
-- **The advertised two-saga overlap is nominal.** The bounded instance in
-  [`README.md`](README.md) advertises two sagas overlapping on a shared key, but
-  state is per-saga private and **no property relates two sagas**, so the
-  overlap exercises nothing. The remedy is to add a property that relates two
-  sagas, or to rename the scenario. #2325 is explicit that the model can carry
-  such a property: the finding is to be worded as "unexpressed", with its price
-  stated, never as "cannot express".
-- **The Coyote model harness claims schedule exploration it does not perform.**
-  Two members of `CoyoteModelHarness` are named for interleaving and schedule
-  exploration while the measured concurrency degree is zero, and a user-facing
-  sample source header and the assurance document repeat the claim. Raising the
-  concurrency degree, as opposed to correcting the names, is #2319's rather than
-  #2325's.
+What it deliberately does **not** model is the **unordered** path: a retention
+window aging out and masking a decision row while a prepared bucket is still
+live. That event has no ordering guarantee behind it, and #2320 records that
+adding it violates `MonotonicVisibility` and `VisibilityMatchesDecision` at depth
+4 - the production hazard, not a modelling artefact.
 
-The test to apply: a finding that an artefact in the atomicity surface describes
-a guarantee some other mechanism delivers, or advertises an interaction or an
-exploration it does not perform, is #2325's.
+The distinction is easy to lose and expensive to lose. The guarded action passes
+every property precisely because its conjuncts make every observation independent
+of the decision before it fires; reading that pass as evidence about the
+unguarded hazard inverts #2320's finding. **`ForgetDecision` does not discharge
+#2320.** The test to apply: a finding that the specification cannot reach a state
+where a reader sees a decision the registry still holds is #2320's.
 
-### #2333 owns `DecisionDurability`'s prose and its refinement seam
+### #2319 owns verification artefacts named for what they cannot exercise
 
-#2333 owns the `DecisionDurability` row of the property mapping table above **by
-name**, together with the same property's prose wherever else it is stated. It
-reverses the remedy an earlier reading was converging on, so its direction
-matters as much as its scope:
+Two members of `CoyoteModelHarness` were renamed by #2325 to describe the
+single-operation determinism they actually establish, because their previous
+names promised interleaving and schedule exploration at a measured concurrency
+degree of zero. Renaming was the correction available to a documentation issue.
 
-- **The TLA+ formula is correct as written, and must not be weakened or
-  scoped.** `DecisionDurability` in [`AtomicCommit.tla`](AtomicCommit.tla)
-  already forbids a committed decision going absent as well as going aborted,
-  because absent is not `"committed"`.
-- **Every site that states the property in prose is strictly weaker than the
-  formula.** All of them narrow it to a *flip*: the comment above the formula in
-  [`AtomicCommit.tla`](AtomicCommit.tla), the property table in
-  [`README.md`](README.md), and the `DecisionDurability` row here. The same
-  wording appears in `docs/lattice/verified-atomic-commit.md`, which is the same
-  claim and belongs to the same issue. The remedy is to say the decision never
-  flips **or is unset**, not to narrow the formula to match the prose.
-- **The seam points at a path that cannot violate the property.** The row maps
-  the property onto the repeat same-outcome registry call, where the removal and
-  the re-apply both precede a single state write, so the property holds there by
-  construction. The paths that can reach a violation - `ForgetAsync`,
-  `PruneExpired`, and the zero-retention branch - are named nowhere in the
-  mapping. Re-pointing the seam at those is #2333's. Note that the row's
-  same-outcome clause has already been qualified once since #2333 was filed, by
-  the #2299 fix wave: it now says a purged tombstone makes a late terminal record
-  afresh. That narrows the clause #2333 called false; it does not discharge the
-  issue, because the seam still names no mechanism that can unset a decision, and
-  the row still concludes that the recorded outcome is unchanged either way.
-- **Adding the model action that can unset a decision is #2320's.** #2333 relies
-  on it to exercise the property but does not own it.
+**Raising the concurrency degree above zero, so that names promising exploration
+would be honest, is #2319's and remains open.** A finding that a verification
+artefact in the atomicity surface explores fewer schedules than its purpose
+implies is #2319's; a finding that its *name or documentation* overstates what it
+does was #2325's and is closed.
 
-Two consequences for grading the Detector column:
+### Closed: #2325 and #2333
 
-- The `DecisionDurability` row's Detector cell is graded against the row's claim
-  **as it stands**, which is the narrowed flip reading, and the two registry
-  tests it names do detect a flip. That a flip-detecting test does not detect an
-  *unset* is not a new detector gap to file: it restates #2333, and it resolves
-  when #2333 corrects the claim. Re-grade the row after #2333 lands, not before.
-- Do not correct any part of `DecisionDurability` here piecemeal. #2333's finding
-  is that the formula, the prose sites and the seam **compose** into the defect,
-  each step being locally defensible, so changing one of them alone can leave the
-  artefact more inconsistent rather than less.
+Both are resolved, and both are recorded here rather than deleted because a
+census that predates their fixes will still turn their findings up.
 
-The test to apply: a finding that this note or the specification understates
-`DecisionDurability`, or maps it onto a path that cannot violate it, is #2333's.
+- **#2333** owned `DecisionDurability`'s prose and its refinement seam. Its
+  finding was that the TLA+ formula is correct and every prose site was strictly
+  weaker, narrowing it to a *flip*, while the row's seam pointed at the one path
+  that cannot violate it. Prose, seam, model action and detector were corrected
+  together, which was the issue's own instruction: because the three layers
+  *compose* into the defect, fixing prose alone would have converted an honest
+  narrow claim into a false broad one.
+- **#2325** owned three documentation and API overclaims in the atomicity
+  surface - the `SnapshotPin` guarantee attributed to the wrong mechanism, the
+  nominal two-saga overlap advertised in [`README.md`](README.md), and the
+  harness members above. In each case the behaviour users depend on was present
+  and the account of *why* was wrong, which is worse than it sounds: a change
+  removing the real mechanism would leave the wrong account standing and looking
+  like cover.
+
+Do not re-file either as a fresh detector gap. If a census finds one of these
+claims still stated somewhere this note does not reach, that is a missed site of
+a closed fix, and belongs on a new issue naming the site.
 
 ## Deliberate abstraction gaps
 

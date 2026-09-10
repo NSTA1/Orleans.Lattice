@@ -4,12 +4,38 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// Per-pin tombstone-retention record persisted by
 /// <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/> against a point-in-time cursor's
 /// saga-decision snapshot. Keeps every txid the snapshot referenced
-/// queryable for the lifetime of the pin even as concurrent sagas call
-/// <c>ForgetAsync</c>, so a cursor's <c>Next*Async</c> step under
-/// <see cref="LatticeRegistrySnapshotContext"/> never observes a
-/// tombstoned-then-pruned saga as <see cref="TxStatus.InFlight"/> when
-/// the snapshot captured it as <see cref="TxStatus.Committed"/> /
-/// <see cref="TxStatus.Aborted"/>.
+/// exempt from tombstone expiry for the lifetime of the pin even as
+/// concurrent sagas call <c>ForgetAsync</c>, so the registry's own
+/// <c>GetStatusAsync</c> keeps answering with the recorded
+/// <see cref="TxStatus.Committed"/> / <see cref="TxStatus.Aborted"/>
+/// outcome instead of degrading to <see cref="TxStatus.InFlight"/>,
+/// and so a reading that had aged out to
+/// <see cref="TxStatus.Indeterminate"/> - a stored decision row whose
+/// tombstone has expired - is restored while pinned, because the
+/// retention mask is pin-aware.
+/// <para>
+/// WHAT THIS PIN DOES NOT DO, because the distinction has already been
+/// got wrong once (issue #2325). It is <b>not</b> what makes a cursor's
+/// own <c>Next*Async</c> step snapshot-consistent, and it could not be.
+/// That step runs inside a
+/// <see cref="LatticeRegistrySnapshotContext"/> scope carrying the
+/// dictionary the cursor materialised at open, and
+/// <c>BPlusLeafGrain.ResolvePendingStatusAsync</c> answers from that
+/// dictionary and returns <b>without contacting the registry at all</b>.
+/// There is therefore no registry lookup on that path for a pin to
+/// influence: delete every pin and a scoped step takes exactly the same
+/// readings. What the pin protects is every read that really does reach
+/// the registry - an unscoped read of the same keys, a re-derived view,
+/// and the cursor's own reading of an entry the snapshot captured as
+/// <see cref="TxStatus.Indeterminate"/>. The precedence rule the cursor
+/// guarantee actually rests on is pinned by
+/// <c>BPlusLeafGrainTests.GetAsync_under_a_snapshot_scope_answers_from_the_snapshot_without_consulting_the_registry</c>
+/// and its <c>GetManyAsync</c> counterpart - one per short-circuit
+/// site, because the single-key and batched resolutions are separate
+/// code - so removing either short-circuit fails the build rather than silently
+/// removing the guarantee while this type stays in place and appears to
+/// cover it.
+/// </para>
 /// <para>
 /// One <see cref="SnapshotPin"/> entry lives in the registry's
 /// <c>SnapshotPins</c> map per active <see cref="LatticeCursorSpec.PointInTime"/>

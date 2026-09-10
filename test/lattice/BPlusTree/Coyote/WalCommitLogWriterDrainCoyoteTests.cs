@@ -31,7 +31,7 @@ public sealed class WalCommitLogWriterDrainCoyoteTests
     [Test]
     public void Observing_the_drain_token_releases_every_parked_caller([Values(1, 2, 3)] int callerCount)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new WalCommitLogWriterDrainModel(callerCount, WalCommitLogWriterDrainMode.ObserveDrainTokenInWait));
     }
 
@@ -44,7 +44,7 @@ public sealed class WalCommitLogWriterDrainCoyoteTests
     [Test]
     public void Checking_the_token_before_parking_loses_a_wakeup([Values(1, 2)] int callerCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new WalCommitLogWriterDrainModel(callerCount, WalCommitLogWriterDrainMode.CheckTokenThenWait));
     }
 }

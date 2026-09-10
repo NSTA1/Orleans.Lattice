@@ -31,7 +31,7 @@ public sealed class WalBlockedFloorLifecycleCoyoteTests
     [Test]
     public void Min_pin_meet_never_trims_past_a_live_buffer_pin([Values(2, 3)] int consumerCount)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new WalBlockedFloorLifecycleModel(consumerCount, WalBlockedFloorMode.MinPinMeet));
     }
 
@@ -46,7 +46,7 @@ public sealed class WalBlockedFloorLifecycleCoyoteTests
     [Test]
     public void Max_pin_join_trims_past_a_lagging_buffer_pin([Values(2, 3)] int consumerCount)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new WalBlockedFloorLifecycleModel(consumerCount, WalBlockedFloorMode.MaxPinJoinNoLaggard));
     }
 }

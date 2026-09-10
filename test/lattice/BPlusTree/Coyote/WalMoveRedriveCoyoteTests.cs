@@ -31,7 +31,7 @@ public sealed class WalMoveRedriveCoyoteTests
     [Test]
     public void Resume_past_target_copies_each_offset_exactly_once([Values(1, 2, 3)] int tailLength)
     {
-        CoyoteModelHarness.AssertNoInterleavingViolation(
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new WalMoveRedriveModel(tailLength, WalMoveRedriveMode.ResumePastTarget));
     }
 
@@ -45,7 +45,7 @@ public sealed class WalMoveRedriveCoyoteTests
     [Test]
     public void Resume_from_floor_always_duplicates_an_offset([Values(2, 3)] int tailLength)
     {
-        CoyoteModelHarness.AssertInterleavingViolationFound(
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new WalMoveRedriveModel(tailLength, WalMoveRedriveMode.ResumeFromFloorAlways));
     }
 }
