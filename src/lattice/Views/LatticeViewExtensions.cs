@@ -129,7 +129,11 @@ public static class LatticeViewExtensions
                             break;
                         }
 
-                        LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeBudgetExhausted);
+                        LatticeExtensions.RecordScanStallOutcome(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? LatticeExtensions.StallOutcomeCeilingExhausted
+                                : LatticeExtensions.StallOutcomeBudgetExhausted);
                         throw;
                     }
 
@@ -263,7 +267,11 @@ public static class LatticeViewExtensions
                             break;
                         }
 
-                        LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeBudgetExhausted);
+                        LatticeExtensions.RecordScanStallOutcome(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? LatticeExtensions.StallOutcomeCeilingExhausted
+                                : LatticeExtensions.StallOutcomeBudgetExhausted);
                         throw;
                     }
 

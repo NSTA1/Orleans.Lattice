@@ -91,17 +91,45 @@ public static class LatticeExtensions
     /// completed at all.
     /// </para>
     /// <para>
-    /// The value is calibrated against the measured workload rather than fitted
-    /// to a unit test. Run 1 recorded 16,794 completed leaf scans against 8,094
-    /// stalls on the affected tree - about one stall per two leaves - so at that
-    /// rate this ceiling grants a walk roughly 130 leaves of progress, spread
-    /// over the wall-clock above, before it bites. Against the previous
+    /// The value itself is <em>structural, not measured</em>, and it must not be
+    /// read as measured merely because it sits among measurements. It matches
+    /// <see cref="LatticeConstants.DefaultShardCount"/>, so it lets a walk
+    /// absorb about one stall per shard on a single pass across the default
+    /// fan-out; it is deliberately generous rather than fitted. It could not
+    /// have been derived from the run that motivated it. With a consecutive
+    /// budget of two, a walk that dies takes two
+    /// resumptions and then a terminal outcome - three decisions - and the
+    /// deployed build recorded almost exactly three decisions per dying walk.
+    /// The sample is therefore right-censored at precisely the bound under test:
+    /// no walk in it was ever permitted a fourth stall, so the data cannot say
+    /// how many stalls a <em>completed</em> walk needs, only that every observed
+    /// walk wanted more than two.
+    /// </para>
+    /// <para>
+    /// What the measurement does support is the <em>consequence</em> of the
+    /// value. On the deployed build the affected tree stalled at a rate of
+    /// roughly one stall per two completed leaf scans, so at that rate this
+    /// ceiling grants a walk on the order of a hundred leaves of progress,
+    /// spread over the wall-clock above, before it bites - against the previous
     /// behaviour, which surrendered after two stalls and therefore about four
-    /// leaves, that is a factor of roughly thirty.
+    /// leaves. What will size the constant properly is
+    /// <see cref="StallOutcomeCeilingExhausted"/> on the next run, which is
+    /// recorded as a distinct outcome for exactly that purpose: a non-zero count
+    /// says this figure is too small, and says so without being confusable with
+    /// a source that is not yielding at all.
+    /// </para>
+    /// <para>
+    /// The calibration is deliberately expressed as a <em>rate</em> and not as
+    /// counter totals. The field counters are monotonic and were still climbing
+    /// on a running container, so any absolute value is true only at the instant
+    /// it was sampled and would be wrong - visibly, to anyone who re-queried -
+    /// by the time this is next read. A rate survives re-measurement; a total
+    /// does not, and a total that has silently gone stale discredits the
+    /// mechanism it was cited to support.
     /// </para>
     /// <para>
     /// It is stated plainly that this is <em>necessary but not sufficient</em>
-    /// for a corpus-sized reload. A walk longer than about 130 leaves still
+    /// for a corpus-sized reload. A walk longer than the figure above still
     /// reaches the ceiling, and raising the constant does not fix that: the
     /// binding constraint is wall-clock, not the count, so a ceiling large
     /// enough for an arbitrary corpus would licence an unbounded stall. The
@@ -113,19 +141,24 @@ public static class LatticeExtensions
     /// </para>
     /// <para>
     /// Note that the client-side resumption counters cannot supply a per-walk
-    /// stall distribution to calibrate against directly: every walk in run 1 was
-    /// terminated at the old budget of two, so that sample is right-censored at
-    /// exactly the limit under test. The leaf-per-stall rate above is used
-    /// instead because it is censoring-free - both of its terms are server-side
-    /// and neither is bounded by the client budget.
+    /// stall distribution to calibrate against directly, for the censoring
+    /// reason above. The leaf-per-stall rate is used instead because it is
+    /// censoring-free - both of its terms are server-side and neither is
+    /// bounded by the client budget.
     /// </para>
     /// <para>
-    /// Reaching it is reported exactly as exhausting the consecutive budget is -
-    /// the same <see cref="ScanPageStalledException"/> rethrown verbatim, and the
-    /// same <c>budget-exhausted</c> outcome on
-    /// <c>scan_stall_resumptions_total</c> - so counters stay comparable across
-    /// the change and a walk that gives up here is never mistaken for one that
-    /// finished.
+    /// Reaching it rethrows the same <see cref="ScanPageStalledException"/>
+    /// verbatim, exactly as exhausting the consecutive budget does, so a walk
+    /// that gives up here is never mistaken for one that finished. It is
+    /// reported under its own <c>ceiling-exhausted</c> outcome on
+    /// <c>scan_stall_resumptions_total</c> rather than under
+    /// <c>budget-exhausted</c>, because the two terminations call for opposite
+    /// responses: this one says the walk was progressing and <em>this constant
+    /// is too small</em>, the other says the source is not yielding and no
+    /// constant helps. <c>budget-exhausted</c> keeps its pre-2539 meaning
+    /// unchanged, so a series recorded before this change stays comparable with
+    /// one recorded after; the new value partitions what was previously a lump
+    /// rather than redefining it.
     /// </para>
     /// <para>
     /// It is deliberately <em>not</em> presented as removing the cliff. Any
@@ -165,9 +198,18 @@ public static class LatticeExtensions
     internal const string StallOutcomeResumed = "resumed";
 
     /// <summary>
-    /// The terminal stall outcome. It is the only one, because the resume is
-    /// bounded by budget alone: see the resume site in
+    /// A terminal stall outcome: the walk burnt its <em>consecutive</em>
+    /// non-progressing budget without banking a record. See the resume site in
     /// <c>ScanKeysAsyncCore</c>.
+    /// <para>
+    /// Its meaning is deliberately unchanged by the lifetime ceiling added in
+    /// issue 2539, so that a series recorded before that change stays
+    /// comparable with one recorded after. The ceiling records
+    /// <see cref="StallOutcomeCeilingExhausted"/> instead. That split is not
+    /// cosmetic: the two terminations call for opposite responses, so a single
+    /// label covering both would be populated, plausible, and blind to the only
+    /// distinction an operator needs. See that constant for the argument.
+    /// </para>
     /// <para>
     /// There was a second terminal outcome, <c>no-progress</c>, recorded when a
     /// progress gate refused a stall that still had budget. That gate is gone
@@ -180,6 +222,30 @@ public static class LatticeExtensions
     /// </para>
     /// </summary>
     internal const string StallOutcomeBudgetExhausted = "budget-exhausted";
+
+    /// <summary>
+    /// A terminal stall outcome: the walk was <em>progressing</em> but exceeded
+    /// <see cref="DefaultScanStallResumeCeiling"/> stalls over its lifetime.
+    /// <para>
+    /// This is reported separately from <see cref="StallOutcomeBudgetExhausted"/>
+    /// because the two demand opposite responses, and collapsing them would make
+    /// the metric unable to answer the question it is read to answer.
+    /// <c>budget-exhausted</c> says the source is genuinely not yielding: the
+    /// walk banked nothing across its consecutive budget, and no larger constant
+    /// helps it. <c>ceiling-exhausted</c> says the opposite - the walk was
+    /// banking records and was cut off by a bound chosen here, so it reports a
+    /// fact about <em>this constant</em> rather than about the source, and the
+    /// remedy is to raise the ceiling or, better, for the caller to bank partial
+    /// progress so a terminated walk resumes rather than restarts.
+    /// </para>
+    /// <para>
+    /// Adding a value to an existing tag partitions what was previously a lump;
+    /// it does not invalidate the existing series, because every stall that
+    /// would have been tagged <c>budget-exhausted</c> before the ceiling existed
+    /// still is.
+    /// </para>
+    /// </summary>
+    internal const string StallOutcomeCeilingExhausted = "ceiling-exhausted";
 
     /// <summary>
     /// The stall resume budget in force for a scan whose reconnect budget is
@@ -652,14 +718,32 @@ public static class LatticeExtensions
                         //
                         // The population this serves was measured on the durable
                         // vector index's reload walk, which is NOT the origin-
-                        // parked shape 2278 describes: 16,794 completed leaf scans
-                        // against 8,094 page stalls on that tree, roughly two
-                        // leaves per stall, with 98 resumptions actually taken and
-                        // 45 walks still dying of budget exhaustion. Those walks
-                        // advance between stalls and then die at the second one
-                        // having covered a trivial fraction of the corpus, which
-                        // is exactly what replenishment addresses and exactly what
-                        // the refused gate could not have.
+                        // parked shape 2278 describes. Stated as ratios, because
+                        // the field counters are monotonic and a raw total is
+                        // true only at the instant it was sampled: over 90% of
+                        // all scan-page stalls in the deployment fell on that one
+                        // tree; they arrived at roughly one stall per two
+                        // completed leaf scans; and the resumptions taken ran at
+                        // roughly three per terminal outcome against a budget of
+                        // two. Those walks advance between stalls and then die at
+                        // their third one having covered a trivial fraction of
+                        // the corpus, which is exactly what replenishment
+                        // addresses and exactly what the refused gate could not
+                        // have.
+                        //
+                        // THAT LAST RATIO IS ALSO WHY 64 IS NOT A MEASURED
+                        // NUMBER, and it must not be read as one merely because
+                        // it sits beside measurements. Three decisions per walk
+                        // IS the budget of two plus its terminal: the defect
+                        // censors every observation at exactly the bound under
+                        // test, so no walk in the sample was ever permitted a
+                        // fourth stall and the data cannot say how many a
+                        // completed walk needs. 64 is chosen structurally and
+                        // generously - it matches LatticeConstants.DefaultShardCount,
+                        // so it lets a walk absorb about one stall per shard on a
+                        // single pass - and it is the run after this change,
+                        // where ceiling-exhausted is recorded separately, that
+                        // will size it for real.
                         if (stallAttempt < stallBudget && stallTotal < DefaultScanStallResumeCeiling)
                         {
                             stallAttempt++;
@@ -673,7 +757,24 @@ public static class LatticeExtensions
                         // Out of budget: rethrow the stall verbatim. A scan that
                         // cannot be finished must never look finished, so there is
                         // no path here that ends the enumeration normally.
-                        RecordScanStallOutcome(stall, StallOutcomeBudgetExhausted);
+                        //
+                        // The two terminations are tagged apart because they call
+                        // for OPPOSITE responses and a single label would be
+                        // populated, plausible, and blind to the only distinction
+                        // an operator needs. Reaching here means the guard failed,
+                        // so a consecutive budget still in hand identifies the
+                        // lifetime ceiling as the term that failed: the walk was
+                        // BANKING RECORDS and this constant cut it off, which is a
+                        // fact about the constant, not about the source. The other
+                        // arm is the source genuinely not yielding, which no
+                        // larger constant repairs. budget-exhausted keeps exactly
+                        // its pre-2539 meaning so a series recorded before this
+                        // change stays comparable with one recorded after.
+                        RecordScanStallOutcome(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? StallOutcomeCeilingExhausted
+                                : StallOutcomeBudgetExhausted);
                         throw;
                     }
 
@@ -876,7 +977,11 @@ public static class LatticeExtensions
                             break;
                         }
 
-                        RecordScanStallOutcome(stall, StallOutcomeBudgetExhausted);
+                        RecordScanStallOutcome(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? StallOutcomeCeilingExhausted
+                                : StallOutcomeBudgetExhausted);
                         throw;
                     }
 

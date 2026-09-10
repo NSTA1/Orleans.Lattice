@@ -340,7 +340,7 @@ public partial class ResilientScanExtensionsTests
     // ── observability ──────────────────────────────────────────
 
     [Test]
-    public void ScanKeysAsync_records_each_stall_decision_with_its_outcome()
+    public void ScanKeysAsync_records_a_progressing_walk_terminating_as_ceiling_exhausted()
     {
         var outcomes = new List<string>();
         using var listener = MeterListening.StartForInstrument(
@@ -374,7 +374,21 @@ public partial class ResilientScanExtensionsTests
             Is.EqualTo(LatticeExtensions.DefaultScanStallResumeCeiling),
             "this source progresses one key per stall, so every resume is replenished " +
             "and the walk is bounded by the total ceiling instead (issue 2539)");
-        Assert.That(outcomes, Has.Exactly(1).EqualTo("budget-exhausted"));
+        Assert.That(
+            outcomes,
+            Has.Exactly(1).EqualTo("ceiling-exhausted"),
+            "this walk banked a key between every stall, so it was stopped by the lifetime "
+            + "ceiling, not by the consecutive budget. The two terminations rethrow the same "
+            + "exception and are indistinguishable to a caller, so the outcome tag is the only "
+            + "thing that separates 'the source is not yielding' from 'our own ceiling is too "
+            + "small' - and they call for opposite remedies. Read this against its sibling "
+            + "ScanKeysAsync_records_a_repeated_origin_stall_as_budget_exhausted, which drives "
+            + "the other arm: together they are what stops the two collapsing back onto one tag.");
+        Assert.That(
+            outcomes,
+            Has.None.EqualTo("budget-exhausted"),
+            "budget-exhausted keeps its pre-2539 meaning so a field series spanning the change "
+            + "stays comparable; a progressing walk must never be recorded under it");
     }
 
     [Test]

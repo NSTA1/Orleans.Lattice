@@ -2466,15 +2466,31 @@ public static class LatticeMetrics
     /// would be indistinguishable from one that never stalled, and a worsening
     /// contention trend would be hidden by its own recovery.</description></item>
     /// <item><description><c>budget-exhausted</c> - the scan had already
-    /// resumed its permitted number of times
+    /// resumed its permitted number of <em>consecutive</em> non-progressing
+    /// times
     /// (<see cref="Orleans.Lattice.LatticeExtensions.DefaultScanStallResumeAttempts"/>,
-    /// or a lower caller <c>maxAttempts</c>) and rethrew. It is the only
-    /// terminal outcome and the strongest single contention signal here.
+    /// or a lower caller <c>maxAttempts</c>) without banking a record, and
+    /// rethrew. It says the source is genuinely not yielding, so no larger
+    /// bound would have helped it. Its meaning is unchanged from builds
+    /// predating the lifetime ceiling, so a series spanning that change stays
+    /// comparable.
+    /// </description></item>
+    /// <item><description><c>ceiling-exhausted</c> - the scan was
+    /// <em>progressing</em>, banking records between stalls, and exceeded
+    /// <see cref="Orleans.Lattice.LatticeExtensions.DefaultScanStallResumeCeiling"/>
+    /// stalls over its lifetime. This is the opposite diagnosis to
+    /// <c>budget-exhausted</c> despite the identical symptom: it is a statement
+    /// about that constant being too small for the workload, not about the
+    /// source being dead, and the remedy is to raise it or for the caller to
+    /// bank partial progress so a terminated walk resumes rather than restarts.
+    /// The two are tagged apart precisely because a single label covering both
+    /// would be populated, plausible, and blind to the only distinction an
+    /// operator needs to choose between those remedies.
     /// </description></item>
     /// </list>
     /// <para>
-    /// A <c>resumed</c> rate that climbs while <c>budget-exhausted</c> stays at
-    /// zero is recovery working. Every <c>budget-exhausted</c> is a scan that
+    /// A <c>resumed</c> rate that climbs while both terminal outcomes stay at
+    /// zero is recovery working. Every terminal outcome is a scan that
     /// failed, and the caller saw the stall: a resumption never truncates, so
     /// the scan either yields its full range or rethrows the last stall
     /// verbatim.
@@ -2491,7 +2507,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> ScanStallResumptions =
         Meter.CreateCounter<long>("orleans.lattice.scan.stall_resumptions", unit: "{resumption}",
-            description: "Count of resilient client scans that met a scan-page stall, tagged by the decision taken (resumed, budget-exhausted).");
+            description: "Count of resilient client scans that met a scan-page stall, tagged by the decision taken (resumed, budget-exhausted, ceiling-exhausted).");
 
     /// <summary>
     /// Count of internal-node digest publishes (the upward
