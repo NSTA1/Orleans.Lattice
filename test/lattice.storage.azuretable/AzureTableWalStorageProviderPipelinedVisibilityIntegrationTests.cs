@@ -163,12 +163,17 @@ public class AzureTableWalStorageProviderPipelinedVisibilityIntegrationTests
     [Test]
     public async Task Pipelined_append_returns_before_its_own_batch_is_readable()
     {
-        // Characterisation of the documented lag, and the exact
+        // Characterisation of the documented read lag, and the exact
         // mechanism behind the flaky chaos failure. The batch is
         // durable when the append returns (phase 0+1 committed), but
-        // its manifest row has not been written yet, so neither the
-        // manifest scan behind ReadAsync nor the TAIL point-read
-        // behind GetHighestOffsetAsync can see it.
+        // its manifest row has not been written yet, so the manifest
+        // scan behind ReadAsync cannot see it.
+        //
+        // GetHighestOffsetAsync deliberately does *not* share that
+        // lag: it folds the worker's accepted range over TAIL so a
+        // completed append is never reported back as an offset lower
+        // than the one it returned (issue #2528). The two assertions
+        // together pin the intended asymmetry.
         await using var sut = CreateProvider();
 
         await sut.AppendBatchAsync(TreeId, 0, Batch(0, 0L), CancellationToken.None);
@@ -180,13 +185,103 @@ public class AzureTableWalStorageProviderPipelinedVisibilityIntegrationTests
         {
             Assert.That(offsets, Is.Empty,
                 "the trailing batch has no manifest row until its phase-2 commit lands, so a manifest scan must not see it");
-            Assert.That(highest, Is.EqualTo(-1L),
-                "TAIL is upserted by the phase-2 commit, so it must still read as the empty-log sentinel");
+            Assert.That(highest, Is.EqualTo((long)EntriesPerBatch - 1L),
+                "the batch is phase-1 durable and contiguous with TAIL, so the highest offset must already cover it");
         });
 
         // Leave the shard quiesced so teardown does not race the
         // worker's still-pending commit.
         await sut.FlushPhaseTwoAsync(CancellationToken.None);
+    }
+
+    [Test]
+    public async Task GetHighestOffsetAsync_does_not_lag_behind_a_completed_pipelined_append()
+    {
+        // Regression assertion for issue #2528. Before the fix,
+        // GetHighestOffsetAsync read TAIL alone, so with pipelining on
+        // it returned 3 immediately after an append that had itself
+        // returned offset 7 - an offset going *backwards* relative to
+        // a completed write, which is a monotonicity break rather than
+        // merely a lag.
+        //
+        // The first batch is flushed so the shard's worker is at rest
+        // before the second batch is appended; the second batch is
+        // then a fresh arrival that must sit out the whole coalescing
+        // window, which makes the un-committed state deterministic
+        // rather than racy.
+        await using var sut = CreateProvider();
+
+        await sut.AppendBatchAsync(TreeId, 0, Batch(0, 0L), CancellationToken.None);
+        await sut.FlushPhaseTwoAsync(CancellationToken.None);
+
+        await sut.AppendBatchAsync(TreeId, 0, Batch(0, EntriesPerBatch), CancellationToken.None);
+
+        var highest = await sut.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None);
+        var offsets = await ReadOffsetsAsync(sut, 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(highest, Is.EqualTo((long)(2 * EntriesPerBatch) - 1L),
+                "the highest offset must cover the just-completed append, not the lagging TAIL row");
+            Assert.That(offsets, Is.EqualTo(new[] { 0L, 1L, 2L, 3L }),
+                "ReadAsync is manifest-derived and still lags; only GetHighestOffsetAsync folds the accepted range");
+        });
+
+        await sut.FlushPhaseTwoAsync(CancellationToken.None);
+
+        var afterBarrier = await sut.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None);
+        Assert.That(afterBarrier, Is.EqualTo((long)(2 * EntriesPerBatch) - 1L),
+            "the answer must not change once the commit it already accounted for actually lands");
+    }
+
+    [Test]
+    public async Task GetHighestOffsetAsync_is_monotonic_across_a_run_of_pipelined_appends()
+    {
+        // The property the fold exists to guarantee: whatever a
+        // completed AppendBatchAsync made durable, a subsequent
+        // GetHighestOffsetAsync covers - on every batch, not just the
+        // trailing one, and never regressing between observations.
+        const int batchCount = 6;
+        await using var sut = CreateProvider();
+
+        var observed = new long[batchCount];
+        for (var i = 0; i < batchCount; i++)
+        {
+            await sut.AppendBatchAsync(
+                TreeId, 1, Batch(1, (long)i * EntriesPerBatch), CancellationToken.None);
+            observed[i] = await sut.GetHighestOffsetAsync(TreeId, 1, CancellationToken.None);
+        }
+
+        var expected = Enumerable.Range(0, batchCount)
+            .Select(i => ((long)(i + 1) * EntriesPerBatch) - 1L)
+            .ToArray();
+
+        Assert.That(observed, Is.EqualTo(expected),
+            "each observation must cover the append that immediately preceded it");
+
+        await sut.FlushPhaseTwoAsync(CancellationToken.None);
+    }
+
+    [Test]
+    public async Task GetHighestOffsetAsync_reports_the_persisted_tail_when_pipelining_is_disabled()
+    {
+        // Control: with pipelining off the append already awaits its
+        // own phase 2, so TAIL alone is up to date and the fold has
+        // nothing to add. Guards against the fold quietly becoming
+        // load-bearing for the synchronous mode too.
+        await using var sut = CreateProvider(pipeline: false);
+
+        await sut.AppendBatchAsync(TreeId, 2, Batch(2, 0L), CancellationToken.None);
+
+        var highest = await sut.GetHighestOffsetAsync(TreeId, 2, CancellationToken.None);
+        var offsets = await ReadOffsetsAsync(sut, 2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(highest, Is.EqualTo((long)EntriesPerBatch - 1L));
+            Assert.That(offsets, Is.EqualTo(new[] { 0L, 1L, 2L, 3L }),
+                "the synchronous mode commits phase 2 inline, so reads are immediately consistent");
+        });
     }
 
     [Test]
