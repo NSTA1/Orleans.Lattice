@@ -113,6 +113,47 @@ internal sealed partial class ShardRootGrain
         internal GrainId? LeafInFlight =>
             LeafInFlightId is { } id && LeafInFlightOrdinal == Budget.LeavesVisited ? id : null;
 
+        /// <summary>
+        /// The rows the walk has collected so far - a
+        /// <c>List&lt;KeyValuePair&lt;string, byte[]&gt;&gt;</c> or a
+        /// <c>List&lt;string&gt;</c> - published by the core method so that a
+        /// ceiling fire can bank them rather than discard them (issue 2585).
+        /// <para>
+        /// It is the walk's own live list rather than a copy, so the guard must
+        /// copy before handing it out: the abandoned walk keeps appending until
+        /// its next stand-down, and Orleans would otherwise serialise a list
+        /// that is being mutated. Reading it is nonetheless safe without a
+        /// lock, and for a structural reason rather than a timing one - the
+        /// activation scheduler is single-threaded, so the guard's continuation
+        /// can only run while the walk is parked at an <c>await</c>, and no
+        /// leaf-walk site awaits anything inside its append loop. The list a
+        /// ceiling fire observes is therefore always at a leaf boundary, never
+        /// mid-leaf.
+        /// </para>
+        /// <para>
+        /// Typed as <see cref="object"/> because the two page shapes collect
+        /// different element types through the same pooled walk; the guard
+        /// discriminates on the page type it was asked for, which is a
+        /// once-per-stall cost on a path that has already lost a wall-clock
+        /// ceiling.
+        /// </para>
+        /// </summary>
+        internal object? Accumulated;
+
+        /// <summary>
+        /// The moved-away virtual slots the walk has filtered out so far, or
+        /// <see langword="null"/> when it has filtered none.
+        /// <para>
+        /// A banked page has to carry these or it loses rows silently. A
+        /// strongly consistent scan reads
+        /// <see cref="EntriesPage.MovedAwaySlots"/> to re-ask the split's new
+        /// owner for the keys the old owner filtered; a page that banks the
+        /// rows but drops the slots reports success, raises nothing, and simply
+        /// omits every key in those slots from the caller's result.
+        /// </para>
+        /// </summary>
+        internal HashSet<int>? MovedAwaySlots;
+
         private CancellationTokenSource? _deadline;
 
         /// <summary>Whether the hard stall ceiling is armed for this call.</summary>
@@ -139,6 +180,8 @@ internal sealed partial class ShardRootGrain
             StallDuration = bounds.StallDuration;
             LeafInFlightId = null;
             LeafInFlightOrdinal = 0;
+            Accumulated = null;
+            MovedAwaySlots = null;
             if (!bounds.IsStallGuarded)
             {
                 return;
@@ -168,6 +211,8 @@ internal sealed partial class ShardRootGrain
             StallDuration = Timeout.InfiniteTimeSpan;
             LeafInFlightId = null;
             LeafInFlightOrdinal = 0;
+            Accumulated = null;
+            MovedAwaySlots = null;
             return true;
         }
     }
@@ -229,6 +274,16 @@ internal sealed partial class ShardRootGrain
     /// reusing it would corrupt a later call's diagnostics.
     /// </para>
     /// <para>
+    /// What abandoning must not mean is that the work is thrown away
+    /// (issue 2585). The rows the walk had already read are banked as an
+    /// ordinary short page by <see cref="TryBankPartialScanPage{T}"/> whenever
+    /// there is at least one of them, and only a fire that caught the walk with
+    /// nothing to show still faults. Without that, the ceiling is a livelock
+    /// rather than a bound: the retry it invites re-walks the same leaves, hits
+    /// the same ceiling and discards the same work, so a page that cannot fill
+    /// in one attempt cannot fill in any number of them.
+    /// </para>
+    /// <para>
     /// What abandoning must <em>not</em> mean is that the walk carries on
     /// working (issue 2233). <see cref="Task.WaitAsync(CancellationToken)"/>
     /// ends the wait, never the task: left alone, the core walk keeps its
@@ -273,6 +328,27 @@ internal sealed partial class ShardRootGrain
         catch (OperationCanceledException oce) when (walk.DeadlineFired)
         {
             ObserveAbandonedScanPage(page);
+
+            // Issue 2585: bank what the walk had already read. Without this the
+            // ceiling is not a bound but a livelock - the retry it invites
+            // re-walks the same leaves, hits the same ceiling and discards the
+            // same work, so a page that cannot fill in one attempt cannot fill
+            // in any number of them.
+            var banked = TryBankPartialScanPage<T>(walk, out var partial);
+            LatticeMetrics.ScanPageCeilingOutcomes.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
+                banked
+                    ? LatticeMetrics.OutcomeScanPageBankedTag
+                    : LatticeMetrics.OutcomeScanPageDiscardedTag,
+                LatticeTenantLabel.ForTree(TreeId));
+
+            if (banked)
+            {
+                return partial;
+            }
+
             throw ScanPageStalled(walk, oce);
         }
         catch
@@ -301,6 +377,109 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
+    /// Turns the rows an abandoned walk had already collected into an ordinary
+    /// short page, so that a ceiling fire costs the caller a page boundary
+    /// rather than the whole attempt (issue 2585).
+    /// <para>
+    /// The banked page is not a new shape. A page carrying rows,
+    /// <c>HasMore = true</c> and no <c>ResumeFromKey</c> is exactly what the
+    /// cooperative <see cref="LatticeOptions.MaxScanPageDuration"/> budget
+    /// already emits when a leaf declares no usable boundary, and every cursor
+    /// in <c>LatticeGrain</c> already advances past it by taking the last row's
+    /// key as its next continuation token. That is why the fix needs no wire
+    /// format change and no caller change: it reuses a contract the callers
+    /// have always had to honour.
+    /// </para>
+    /// <para>
+    /// No <c>ResumeFromKey</c> is computed, deliberately. The resume key is a
+    /// leaf <em>boundary</em>, obtained from a further
+    /// <c>GetKeyRangeAsync</c> call - another await, on the very shard whose
+    /// unresponsiveness is the reason we are here - and it is an inclusive
+    /// lower bound, so handing back the last banked key as one would re-serve
+    /// that row. The caller's exclusive last-key continuation is both correct
+    /// and already implemented.
+    /// </para>
+    /// <para>
+    /// <b>Returning <see langword="false"/> for an empty accumulator is
+    /// load-bearing, not an optimisation.</b> A page with no rows and no resume
+    /// key carries nothing a caller can advance past, and every cursor reads
+    /// that combination as the end of the scan. Banking one would convert a
+    /// loud, retriable <see cref="ScanPageStalledException"/> into a silently
+    /// truncated result set - a strictly worse failure, and one no test of the
+    /// caller would catch. It is also what keeps the fix from trading one
+    /// livelock for another: because a banked page always carries at least one
+    /// row, the caller's continuation token strictly advances on every
+    /// attempt, so a finite tree still terminates.
+    /// </para>
+    /// <para>
+    /// Copying the accumulator is likewise required. The abandoned walk keeps
+    /// appending until its own stand-down observes the same deadline, so
+    /// handing out the live list would let Orleans serialise a collection while
+    /// it is being mutated.
+    /// </para>
+    /// </summary>
+    private bool TryBankPartialScanPage<T>(ScanPageWalk walk, out T banked)
+    {
+        banked = default!;
+        if (walk.Accumulated is null)
+        {
+            return false;
+        }
+
+        if (typeof(T) == typeof(EntriesPage)
+            && walk.Accumulated is List<KeyValuePair<string, byte[]>> { Count: > 0 } entries)
+        {
+            banked = (T)(object)new EntriesPage
+            {
+                Entries = new List<KeyValuePair<string, byte[]>>(entries),
+                HasMore = true,
+                MovedAwaySlots = BankedMovedAwaySlots(walk),
+            };
+            return true;
+        }
+
+        if (typeof(T) == typeof(KeysPage)
+            && walk.Accumulated is List<string> { Count: > 0 } keys)
+        {
+            banked = (T)(object)new KeysPage
+            {
+                Keys = new List<string>(keys),
+                HasMore = true,
+                MovedAwaySlots = BankedMovedAwaySlots(walk),
+            };
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int[]? BankedMovedAwaySlots(ScanPageWalk walk) =>
+        walk.MovedAwaySlots is { Count: > 0 } moved ? SortedSlotsArray(moved) : null;
+
+    /// <summary>
+    /// Publishes the list a page fill is about to collect into, so a ceiling
+    /// fire can bank it (issue 2585). Call it in place of allocating the list
+    /// directly; a core method that allocates its own list without publishing
+    /// it reverts to discarding its work, silently and only under stall.
+    /// </summary>
+    private static List<TRow> BeginScanPageRows<TRow>(ScanPageWalk scan, int pageSize)
+    {
+        var rows = new List<TRow>(pageSize);
+        scan.Accumulated = rows;
+        return rows;
+    }
+
+    /// <summary>
+    /// Records a virtual slot the walk filtered out as moved away, into both
+    /// the core method's own set and the walk, so a banked page reports it.
+    /// </summary>
+    private static void RecordMovedAwaySlot(ScanPageWalk scan, ref HashSet<int>? movedSet, int slot)
+    {
+        scan.MovedAwaySlots = movedSet ??= [];
+        movedSet.Add(slot);
+    }
+
+    /// <summary>
     /// The stand-down every bounded leaf walk takes at the top of each
     /// iteration, so that the hard page-fill ceiling stops the walk and not
     /// merely the wait on it (issue 2233).
@@ -314,17 +493,20 @@ internal sealed partial class ShardRootGrain
     /// than to how much work a stalled page fill costs the silo.
     /// </para>
     /// <para>
-    /// It throws rather than returning a truncated page on purpose. The page
-    /// this walk would build is discarded either way - the guard has already
-    /// answered the caller - so returning one would only oblige all sixteen
-    /// core methods to name a resume key they have no caller for. Throwing
-    /// unwinds each of them identically, and the
+    /// It throws rather than returning a truncated page on purpose, and that
+    /// stays true after issue 2585 made the <em>outer</em> guard bank the rows
+    /// this walk had already collected. The two are not in tension: the guard
+    /// has already answered the caller by the time this fires, so a page built
+    /// here would have nobody to return it to, and the rows it would have
+    /// carried are precisely the ones the guard read out of
+    /// <see cref="ScanPageWalk.Accumulated"/> before abandoning the walk.
+    /// Throwing unwinds all sixteen core methods identically without obliging
+    /// any of them to name a resume key, and the
     /// <see cref="OperationCanceledException"/> it raises is the same fault
-    /// the guard already converts to a
-    /// <see cref="ScanPageStalledException"/> when the cancellation beats the
-    /// walk to it, so the caller cannot tell which of the two raced. When the
-    /// guard has already answered, the throw lands on an abandoned task and is
-    /// observed by <see cref="ObserveAbandonedScanPage"/>.
+    /// the guard already handles when the cancellation beats the walk to it,
+    /// so the caller cannot tell which of the two raced. When the guard has
+    /// already answered, the throw lands on an abandoned task and is observed
+    /// by <see cref="ObserveAbandonedScanPage"/>.
     /// </para>
     /// <para>
     /// Deliberately <em>not</em> a work or volume predicate. The walk this

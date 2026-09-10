@@ -2932,7 +2932,7 @@ internal sealed partial class ShardRootGrain(
         // flag could have steered the traversal onto an internal node; if so
         // re-descend to the leftmost leaf rather than blind-casting it.
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
-        var keys = new List<string>(pageSize);
+        var keys = BeginScanPageRows<string>(scan, pageSize);
         HashSet<int>? movedSet = null;
         scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
@@ -2950,7 +2950,7 @@ internal sealed partial class ShardRootGrain(
             {
                 if (TryGetMovedAwaySlot(key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 keys.Add(key);
@@ -3079,7 +3079,7 @@ internal sealed partial class ShardRootGrain(
         // flag steered the traversal onto an internal node, re-descend to the
         // rightmost leaf rather than blind-casting it (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: true);
-        var keys = new List<string>(pageSize);
+        var keys = BeginScanPageRows<string>(scan, pageSize);
         HashSet<int>? movedSet = null;
         scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
@@ -3098,7 +3098,7 @@ internal sealed partial class ShardRootGrain(
                 var key = leafKeys[i];
                 if (TryGetMovedAwaySlot(key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 keys.Add(key);
@@ -3208,7 +3208,7 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToLeftmostLeafAsync();
         }
 
-        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
         HashSet<int>? movedSet = null;
         // Guard: the start node must be a leaf; re-descend to the leftmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
@@ -3229,7 +3229,7 @@ internal sealed partial class ShardRootGrain(
             {
                 if (TryGetMovedAwaySlot(entry.Key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 entries.Add(entry);
@@ -3343,7 +3343,7 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToRightmostLeafAsync();
         }
 
-        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
         HashSet<int>? movedSet = null;
         // Guard: the start node must be a leaf; re-descend to the rightmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
@@ -3365,7 +3365,7 @@ internal sealed partial class ShardRootGrain(
                 var entry = leafEntries[i];
                 if (TryGetMovedAwaySlot(entry.Key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 entries.Add(entry);
@@ -3487,7 +3487,7 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToLeftmostLeafAsync();
         }
 
-        var keys = new List<string>(pageSize);
+        var keys = BeginScanPageRows<string>(scan, pageSize);
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
@@ -3603,7 +3603,7 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToLeftmostLeafAsync();
         }
 
-        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);

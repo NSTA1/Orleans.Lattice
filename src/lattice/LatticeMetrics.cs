@@ -2459,6 +2459,54 @@ public static class LatticeMetrics
             description: "Count of shard-root range-scan page fills abandoned after exceeding MaxScanPageStallDuration.");
 
     /// <summary>
+    /// Count of <c>ShardRootGrain</c> page-fill ceiling fires, tagged with what
+    /// the ceiling did with the work the walk had already done:
+    /// <see cref="TagOutcome"/> = <c>banked</c> (rows had been read, so they
+    /// were returned as a short page with <c>HasMore</c> set and the caller
+    /// resumes from the last one) or <c>discarded</c> (the fire caught the walk
+    /// with no rows to bank, so the call faulted with
+    /// <see cref="Orleans.Lattice.ScanPageStalledException"/>). Also tagged
+    /// with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// <para>
+    /// <b>Reading a zero.</b> Both arms are emitted from the one site a ceiling
+    /// fire passes through, so their sum is the ceiling-fire count and neither
+    /// arm needs a denominator supplied from elsewhere. That is what makes a
+    /// zero on the <c>banked</c> arm interpretable: beside a non-zero
+    /// <c>discarded</c> arm it is a measured negative - ceilings fired and none
+    /// of them found bankable work, which points at a prologue or descent that
+    /// parks rather than at a slow leaf chain. The reading it is designed to
+    /// close off is the one where a series carries no points at all: if this
+    /// counter is absent while
+    /// <see cref="ScanPageStalls"/> is climbing, the banking path is not wired
+    /// up, and that is a broken measurement rather than a clean shard.
+    /// <c>banked</c> being zero and <c>discarded</c> also being zero means only
+    /// that no ceiling fired, which is the healthy steady state.
+    /// </para>
+    /// <para>
+    /// <c>discarded</c> equals <see cref="ScanPageStalls"/> by construction -
+    /// the same fire raises both - so a divergence between them is itself a
+    /// wiring fault worth alerting on.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanPageCeilingOutcomes =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.ceiling_outcomes", unit: "{fire}",
+            description: "Count of shard-root page-fill stall-ceiling fires by whether the partial page was banked or discarded.");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>banked</c> (a ceiling fire returned the
+    /// rows the walk had already read, as a short page).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageBankedTag =
+        new(TagOutcome, "banked");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>discarded</c> (a ceiling fire found no
+    /// rows to bank, so the call faulted).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageDiscardedTag =
+        new(TagOutcome, "discarded");
+
+    /// <summary>
     /// Count of client-side resilient scans
     /// (<see cref="Orleans.Lattice.LatticeExtensions.ScanKeysAsync"/> and its
     /// siblings) that met a
