@@ -149,6 +149,16 @@ public sealed partial class DurableVectorIndex
         var consumed = 0;
         var chunkSize = _options.MaxItemsPerChunk;
 
+        // The wall-clock half of the bound. A step is capped by work count AND by
+        // elapsed time, because those two are only interchangeable while the
+        // per-item cost is small and predictable - which a source that streams
+        // over a remote store of record does not guarantee. See
+        // DurableVectorIndexOptions.IngestSliceBudget.
+        var sliceBudget = _options.IngestSliceBudget;
+        var timeProvider = _options.TimeProvider;
+        var timeBounded = sliceBudget > TimeSpan.Zero;
+        var startedAt = timeBounded ? timeProvider.GetTimestamp() : 0L;
+
         // Exhaustion is recorded where it is OBSERVED rather than inferred once
         // the loop is over, and the distinction is load-bearing. Running the loop
         // to its end is the source signalling that the corpus is finished, and it
@@ -184,6 +194,20 @@ public sealed partial class DurableVectorIndex
 
             _cursor = entry.Id;
             if (++consumed >= budget)
+            {
+                exhausted = false;
+                break;
+            }
+
+            // Checked AFTER an item has been consumed, so a budget too small for
+            // even one item degrades to one item per step rather than to a step
+            // that consumes nothing and spins forever making no progress.
+            //
+            // The bound is carried by its own flag rather than by a sentinel
+            // timestamp: zero is a perfectly ordinary reading of a clock, so a
+            // "0 means disabled" sentinel silently disables the bound on any
+            // provider whose epoch the step happens to start at.
+            if (timeBounded && timeProvider.GetElapsedTime(startedAt) >= sliceBudget)
             {
                 exhausted = false;
                 break;

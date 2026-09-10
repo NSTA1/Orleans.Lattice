@@ -154,9 +154,16 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
     /// <summary>
     /// Drives <see cref="AdvanceAsync(CancellationToken)"/> until the index is
-    /// serving. Each step is bounded and the turn is released between steps, so a
-    /// query issued while this runs is answered by the fall-back path immediately
-    /// rather than queueing behind the build.
+    /// serving. Each step is bounded by both a vector count and a wall-clock
+    /// budget, and the turn is released between steps.
+    /// <para>
+    /// A concurrent <see cref="SearchAsync"/> does not wait on either: it reads
+    /// <see cref="IsServing"/> without taking the turn and falls back to the
+    /// exact scan while a build runs. What a long step does block is every other
+    /// caller of this handle - the coordinator's own pump, and the arming path -
+    /// which is why the step is bounded in time and not only in work. See
+    /// <see cref="RepoContextAnnOptions.IngestSliceBudget"/> and issue #2483.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the build between steps.</param>
     /// <exception cref="ObjectDisposedException">The handle has been disposed.</exception>

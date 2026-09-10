@@ -27,11 +27,23 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </para>
 /// <para>
 /// <b>One bounded step per tick.</b>
-/// <see cref="RepoContextAnnIndexRegistry.BuildStepAsync"/> already does exactly
-/// one bounded slice and reports where it got to, so the phase pump needs nothing
-/// but to call it; the turn is released between slices, so a query arriving
-/// mid-build is answered by the exact scan immediately rather than queueing behind
-/// the build.
+/// <see cref="RepoContextAnnIndexRegistry.BuildStepAsync"/> does exactly one
+/// bounded slice and reports where it got to, so the phase pump needs nothing but
+/// to call it, and the turn is released between slices.
+/// </para>
+/// <para>
+/// <b>What "bounded" has to mean here.</b> A slice used to be bounded only by a
+/// vector count, and issue #2483 measured what that is worth against a source
+/// that streams over grain calls: a 4,096-vector slice ran for twenty minutes
+/// thirteen seconds, and the keep-alive reminder and every arming call queued
+/// behind it for the whole of it. Releasing the turn between slices buys the
+/// caller nothing when a slice is unbounded in time, so the slice now carries a
+/// wall-clock budget as well
+/// (<see cref="RepoContextAnnOptions.IngestSliceBudget"/>) and yields on
+/// whichever bound it reaches first. The lesson generalises past this grain: a
+/// work-count bound is a time bound only where the per-item cost is small and
+/// predictable, which is precisely what a remote store of record does not
+/// promise.
 /// </para>
 /// </summary>
 internal sealed class RepoContextAnnIndexBuildGrain(

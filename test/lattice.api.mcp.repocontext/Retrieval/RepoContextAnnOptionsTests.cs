@@ -55,6 +55,34 @@ public sealed class RepoContextAnnOptionsTests
     }
 
     [Test]
+    public void The_durable_projection_carries_the_wall_clock_slice_budget_through()
+    {
+        var options = new RepoContextAnnOptions { IngestSliceBudget = TimeSpan.FromSeconds(3) };
+
+        var durable = options.ToDurableOptions(Space, "repo/acme/vidx/abc/");
+
+        Assert.That(durable.IngestSliceBudget, Is.EqualTo(TimeSpan.FromSeconds(3)),
+            "A budget the projection dropped would leave the build unbounded in time while the "
+            + "configuration said otherwise, which is issue #2483 with a knob that reads as set.");
+    }
+
+    [Test]
+    public void The_slice_budget_defaults_to_a_value_a_grain_turn_can_afford()
+    {
+        var options = new RepoContextAnnOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.IngestSliceBudget, Is.GreaterThan(TimeSpan.Zero),
+                "The deployment that spent twenty minutes in one slice had configured nothing, so the "
+                + "bound has to be on by default to have helped it.");
+            Assert.That(options.IngestSliceBudget, Is.LessThan(TimeSpan.FromSeconds(30)),
+                "A slice must fit inside the call timeout a reminder tick is delivered under, or the "
+                + "keep-alive still times out behind it.");
+        });
+    }
+
+    [Test]
     public void The_durable_projection_rejects_a_null_key_prefix()
     {
         Assert.That(() => new RepoContextAnnOptions().ToDurableOptions(Space, null!),
