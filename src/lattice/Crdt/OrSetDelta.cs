@@ -50,4 +50,65 @@ public readonly record struct OrSetDelta
         Adds = Array.Empty<OrSetDeltaDot>(),
         Removes = Array.Empty<OrSetDeltaDot>(),
     };
+
+    /// <summary>
+    /// Compares two deltas by value, with <see cref="Adds"/> and
+    /// <see cref="Removes"/> compared element-by-element using the
+    /// value equality of <see cref="OrSetDeltaDot"/>. The compiler-generated
+    /// record-struct equality compares the collection references with
+    /// <see cref="EqualityComparer{T}.Default"/>, so two structurally
+    /// identical deltas built from independently allocated collections - and,
+    /// in particular, a delta and its post-serialization self - would
+    /// otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The delta to compare against.</param>
+    public bool Equals(OrSetDelta other) =>
+        ListEqual(Adds, other.Adds) && ListEqual(Removes, other.Removes);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        AddList(ref hash, Adds);
+        AddList(ref hash, Removes);
+        return hash.ToHashCode();
+    }
+
+    private static bool ListEqual(IReadOnlyList<OrSetDeltaDot>? left, IReadOnlyList<OrSetDeltaDot>? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is null || right is null || left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!left[i].Equals(right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void AddList(ref HashCode hash, IReadOnlyList<OrSetDeltaDot>? list)
+    {
+        if (list is null)
+        {
+            hash.Add(0);
+            return;
+        }
+
+        hash.Add(list.Count);
+        foreach (var element in list)
+        {
+            hash.Add(element);
+        }
+    }
 }
