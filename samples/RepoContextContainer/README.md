@@ -359,6 +359,22 @@ curl -fsS http://localhost:8080/metrics | head -n 20
 - On `SIGTERM` (a `docker stop` / `restart`) the host flips readiness to not-ready
   first, then drains: the silo deactivates and the WAL commit-log flushes buffered
   records before exit, so an in-flight write is durable after restart.
+- **PID 1 is an init process, and that is what makes the `SIGTERM` land at all.**
+  `init: true` in `docker-compose.yml` has Docker bind-mount its own static
+  `docker-init` binary and run it as PID 1, with the host as its child. It needs
+  nothing in the distroless runtime image and changes no application code. Two
+  kernel behaviours make it necessary, and both attach to PID 1 rather than to
+  the application: no default action is taken for a signal delivered to PID 1
+  that PID 1 has installed no handler for, so a well-behaved process can be
+  unkillable by `SIGTERM` purely by being PID 1; and PID 1 inherits every
+  orphaned descendant and must `wait()` on it, which the .NET host does not do.
+  In the epic #2368 gate runs a container reached a state where neither
+  `docker kill` nor `docker rm -f` would reap PID 1 and it had to be
+  `SIGKILL`ed, costing that run its drain and leaving the next one unbanked
+  state to replay (issue #2576). This is **independent of the grace period
+  below**: `init` decides whether the drain starts, the grace period decides how
+  long it may take, and setting one without the other leaves half the failure in
+  place.
 - **That drain's budget is 90 seconds and it belongs to the host, not to Docker.**
   The host sets `HostOptions.ShutdownTimeout` to 90s
   (`RepoContextHostBuilder.ShutdownBudget`); Docker's `stop_grace_period` defaults

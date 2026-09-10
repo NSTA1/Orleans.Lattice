@@ -60,6 +60,17 @@ services:
       EMBED_PROVIDER: cpu
     expose:
       - "9000"
+    # Run PID 1 as an init process (issue #2576). Docker bind-mounts its own
+    # static `docker-init` binary and runs it as PID 1, so this works unchanged
+    # on the distroless, shell-less runtime image - nothing has to be baked in.
+    #
+    # This is a SEPARATE defect from the stop_grace_period below, and neither
+    # substitutes for the other: the grace period governs how long the drain is
+    # given, while init governs whether PID 1 behaves like a process supervisor
+    # at all. Without it the server itself is PID 1, which reaps no orphaned
+    # children and is subject to the kernel's rule that PID 1 takes no default
+    # action for a signal it has installed no handler for.
+    init: true
     # The embedder holds NO durable state: its weights are baked into an image
     # layer and the base file mounts it no volume, so there is nothing to flush
     # and Docker's 10s default would in fact be adequate here. It is set
@@ -230,6 +241,34 @@ services:
       # (the repo root's parent), NOT the repo root itself.
       - ${REPO_PATH:-../../..}:/workspace:ro
     restart: unless-stopped
+    # Run PID 1 as an init process (issue #2576). Docker bind-mounts its own
+    # static `docker-init` binary in and runs it as PID 1, so this needs nothing
+    # in the distroless, shell-less runtime image and changes no application
+    # code: the host becomes a CHILD of PID 1 rather than PID 1 itself.
+    #
+    # Two things follow, and both were observed to matter during the epic #2368
+    # gate runs, where a container reached a state in which neither
+    # `docker kill` nor `docker rm -f` would reap PID 1 and it had to be
+    # SIGKILLed - taking the run's time-to-ready measurement with it:
+    #
+    #   * ORPHAN REAPING. PID 1 inherits every orphaned descendant and must
+    #     wait() on it. The .NET host installs no such reaper, so anything it
+    #     orphans accumulates as a zombie for the life of the container.
+    #   * SIGNAL SEMANTICS. The kernel applies NO default action to a signal
+    #     delivered to PID 1 that PID 1 has installed no handler for. A process
+    #     that is merely a well-behaved application when run as a child can
+    #     therefore become unkillable-by-SIGTERM purely by being PID 1. tini
+    #     always installs handlers and forwards, so signalling is never a
+    #     property of the application's own handler registration.
+    #
+    # This is INDEPENDENT of stop_grace_period below. The grace period decides
+    # how long the drain is allowed; init decides whether the SIGTERM that
+    # starts the drain is honoured at all, and whether the container's process
+    # table stays clean while it runs. Setting one and not the other leaves the
+    # other half of the failure in place - which is exactly the state this file
+    # was in when #2576 was raised, with a fully considered 120s grace period
+    # sitting above a PID 1 that was not an init process.
+    init: true
     # How long Docker waits between SIGTERM and SIGKILL. This MUST exceed the
     # host's own shutdown budget (RepoContextHostBuilder.ShutdownBudget, 90s) or
     # that budget is dead configuration: the host asks for 90s to deactivate the

@@ -277,6 +277,25 @@ mislead:
 | `graceful-restart` | `compose stop` (SIGTERM plus a drain window), then `start` | A planned restart, where shutdown captured a snapshot |
 | `sigkill-restart` | `docker kill -s KILL`, then `start` | Container recreation and out-of-memory: no drain, so the snapshot is whatever the last periodic capture left |
 
+Those three are only distinguishable because a drain window exists.
+`docker-compose.rig.yml` sets `init: true` so PID 1 is an init process that
+forwards `SIGTERM` and reaps orphans, and `stop_grace_period: 120s` so a drain
+is allowed to finish; the same pair carried by the live sample, for the same
+reasons (issues #2576 and #2389). A `graceful-restart` that got no drain would
+be a second, slower spelling of `sigkill-restart`, which is the one comparison
+in this table that must not collapse.
+
+**Note which teardown that actually repaired, because the measured one was never
+broken.** `graceful-restart` passes an explicit `stop -t` of
+`GracefulStopTimeoutSec` (180s), so it always had its drain window. Every other
+teardown took Docker's 10s default: the warm-up `down` before a cohort, the
+`down` after it, and - the one whose damage persists - the `down` that
+`generate-corpus.ps1` performs immediately before **promoting** the working
+volume to a scale master. A promote whose teardown was a `SIGKILL` bakes an
+unbanked WAL into the master, and every later cohort restores from it, so the
+cost is copied forward into the baseline rather than expiring with the run. The
+measured stop being correct is exactly what kept that invisible.
+
 Useful flags:
 
 - `-Runs <n>` repeats the whole cohort from a freshly cloned master. Two or more
