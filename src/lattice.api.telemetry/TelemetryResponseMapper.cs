@@ -207,17 +207,14 @@ internal static class TelemetryResponseMapper
             return false;
         }
 
-        var text = element.GetString();
-        if (text is null)
-        {
-            value = 0d;
-            return false;
-        }
+        // Only a Null-kind element yields null here, and that kind was rejected above.
+        var text = element.GetString()!;
 
-        // A backend renders the special forms as bare tokens, which the invariant
-        // parser accepts, so a gap or an overflow is carried through as itself.
-        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
-            || TryReadSpecial(text, out value);
+        // A backend renders the special forms as bare tokens, so they are decided
+        // first and TryReadSpecial is the single authority for them; anything else
+        // is an ordinary invariant-culture number.
+        return TryReadSpecial(text, out value)
+            || double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
     }
 
     private static bool TryReadSpecial(string text, out double value)
