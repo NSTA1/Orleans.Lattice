@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.BPlusTree;
 using Orleans.TestingHost;
 using System.Collections.Concurrent;
@@ -179,17 +180,34 @@ public partial class ShardConsolidationIntegrationTests
                 }
                 catch (Exception ex)
                 {
-                    failures.Add($"Reader faulted on '{key}': {ex.GetType().Name}: {ex.Message}");
                 }
             }
         })).ToArray();
 
+        // Nothing previously guaranteed the readers had even been scheduled
+        // before the fold began, so the closing "must have run during the fold"
+        // assertion could be satisfied entirely by reads issued after the fold
+        // finished. Wait for an observed read, then measure the delta across
+        // the fold rather than a running total.
+        await TestPoll.UntilAsync(
+            () => Volatile.Read(ref reads) > 0,
+            "the reader workers to be in flight before the fold begins");
+
+        var readsBeforeFold = Volatile.Read(ref reads);
+
         await RunFoldAsync(treeId, donor: 3, survivor: 2);
+
+        // The post-fold shard map must be exercised too: "no missing key at any
+        // instant of a fold" includes the instant after the slot re-point.
+        await TestPoll.UntilAsync(
+            () => Volatile.Read(ref reads) > readsBeforeFold,
+            "a read to complete against the post-fold shard map");
 
         await cts.CancelAsync();
         await Task.WhenAll(readers);
 
-        Assert.That(reads, Is.GreaterThan(0), "The reader workers must actually have run during the fold.");
+        Assert.That(reads, Is.GreaterThan(readsBeforeFold),
+            "The reader workers must actually have run during the fold.");
         Assert.That(failures, Is.Empty, string.Join(Environment.NewLine, failures.Take(10)));
         await AssertAllReadableAsync(tree, expected, "after the fold");
     }
@@ -228,13 +246,28 @@ public partial class ShardConsolidationIntegrationTests
             }
         })).ToArray();
 
+        // Same reason as the reader test: without this barrier the fold could
+        // run against writers that had not started, and the closing assertion
+        // would still pass on writes made only after the fold completed.
+        await TestPoll.UntilAsync(
+            () => !written.IsEmpty,
+            "the writer workers to be in flight before the fold begins");
+
+        var writesBeforeFold = written.Count;
+
         await RunFoldAsync(treeId, donor: 3, survivor: 2);
+
+        // Cover the post-re-point write path deterministically.
+        await TestPoll.UntilAsync(
+            () => written.Count > writesBeforeFold,
+            "a write to complete against the post-fold shard map");
 
         await cts.CancelAsync();
         await Task.WhenAll(writers);
 
         Assert.That(failures, Is.Empty, string.Join(Environment.NewLine, failures.Take(10)));
-        Assert.That(written, Is.Not.Empty, "The writer workers must actually have run during the fold.");
+        Assert.That(written.Count, Is.GreaterThan(writesBeforeFold),
+            "The writer workers must actually have run during the fold.");
 
         // Every write acknowledged during the fold - including any that raced
         // the slot re-point - must still be readable afterwards, exactly once.
