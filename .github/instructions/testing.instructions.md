@@ -110,7 +110,7 @@ Run only the project that owns the code you touched, excluding the slow categori
 
 ```powershell
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj `
-  --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator&TestCategory!=Coyote&TestCategory!=UI"
+  --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator&TestCategory!=Coyote&TestCategory!=UI&TestCategory!=Tlc"
 ```
 
 The five test projects (`Orleans.Lattice.Tests`, `Orleans.Lattice.Replication.Tests`, `Orleans.Lattice.Replication.Grpc.Tests`, `Orleans.Lattice.Storage.AzureTable.Tests`, `Orleans.Lattice.Dashboards.Tests`) are independent - if you only touched `src/lattice.replication`, run only `Orleans.Lattice.Replication.Tests.csproj`.
@@ -187,6 +187,7 @@ The tier filters above only get sharper over time if tests are correctly categor
 - Tag tests that require an external service (Azurite, a real Azure resource, a gRPC server bound to a port, etc.) with the service name, e.g. `[Category("AzureStorageEmulator")]`.
 - Tag fixtures whose sole job is to verify documentation or sample code (e.g. `DocsSnippetCompilationTests`) with `[Category("Docs")]`.
 - Tag Coyote systematic-concurrency models (fixtures that drive a shared correctness core through `CoyoteModelHarness`) with `[Category("Coyote")]`. See "Coyote concurrency tier" below.
+- Tag fixtures that shell out to the TLA+ model checker with `[Category("Tlc")]`. They need a JVM and `tla2tools.jar`, which is the same reason `AzureStorageEmulator` exists as a category, and the Tier 1 filter excludes them so a contributor without that toolchain is not blocked. CI provisions the toolchain and the fixtures run there in the `deterministic` tier, which is the complement of `Chaos` and `Coyote` and therefore needs no matrix-planner change. Such a fixture must handle a missing toolchain asymmetrically: `Assert.Ignore` locally (a *visible* `Skipped` count - never `Assert.Inconclusive`, per the false-green trap above) but `Assert.Fail` when `GITHUB_ACTIONS` is set, because in CI a missing toolchain is a broken pipeline and a verification gate that quietly evaporates still reads as coverage. See `test/lattice/Formal/TlcModelCheckTests.cs` and [`spec/README.md`](../../spec/README.md).
 - Tag browser-driven Playwright tests with `[Category("UI")]`. They live in their own project (`test/lattice.explorer.uitests/`), never in a package's test project. See "Browser UI tier" below.
 - Pure in-process unit tests (grains constructed directly with `FakePersistentState<T>`, primitive type tests, options tests) do not need a category.
 - Prefer fixture-level `[Category(...)]` over per-method tagging so the tag stays consistent across partial test files.

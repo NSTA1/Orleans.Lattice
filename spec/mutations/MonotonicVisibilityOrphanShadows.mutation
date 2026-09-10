@@ -1,0 +1,25 @@
+# Pairs with MonotonicVisibility. This is the orphan guard itself: removing the
+# fall-through means a late reshard shadow-forward bucket SHADOWS the
+# authoritative projection instead of deferring to it, so a key that was
+# readable at its post-saga value reverts to the pre-saga value. This is the
+# #1584 defect class at design level, and the reason AlreadyTerminal is an
+# input to the gate at all.
+MODULE: MonotonicVisibilityOrphanShadows
+TARGET: MonotonicVisibility
+CLASS: Action
+SUMMARY: lets a late reshard orphan bucket shadow the committed projection, so a visible key reverts
+
+--- FIND
+ObservedPrepared(t, k) ==
+    IF pend[t][k] = "pending"
+    THEN IF SurfaceViaGate(t, k) THEN TRUE ELSE ProjectedPrepared(t, k)
+    ELSE ProjectedPrepared(t, k)
+--- REPLACE
+\* MUTATION: the pending branch no longer falls through to the authoritative
+\* projection when the gate refuses it. A shadow-forward orphan arriving after
+\* the leaf applied its commit terminal therefore hides the committed value.
+ObservedPrepared(t, k) ==
+    IF pend[t][k] = "pending"
+    THEN SurfaceViaGate(t, k)
+    ELSE ProjectedPrepared(t, k)
+--- END

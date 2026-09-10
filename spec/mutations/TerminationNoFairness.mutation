@@ -1,0 +1,17 @@
+# Pairs with Termination. Dropping the weak-fairness conjunct is the sharpest
+# possible test of a liveness property: the safety structure of the protocol is
+# untouched and every safety invariant still holds, so ONLY a property that
+# genuinely depends on the fairness assumption can notice. A Termination check
+# that survived this mutation would be checking nothing.
+MODULE: TerminationNoFairness
+TARGET: Termination
+CLASS: Temporal
+SUMMARY: drops the weak-fairness conjunct from Spec, so a saga may stall forever
+
+--- FIND
+Spec == Init /\ [][Next]_vars /\ \A t \in Txns : WF_vars(TxProgress(t))
+--- REPLACE
+\* MUTATION: no fairness. Nothing is required to ever take a step, so a saga
+\* can stutter in "init" forever.
+Spec == Init /\ [][Next]_vars
+--- END

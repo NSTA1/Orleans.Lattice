@@ -433,3 +433,8 @@ samples/RepoContextContainer/.env
 # (RepoContextEffectiveConfigurationReporter).
 samples/RepoContextContainer/docker-compose.override.yml
 
+# The TLA+ model checker jar, fetched by CI (and by contributors running the
+# Tlc test category locally) rather than vendored. It is a 2.3 MB binary with
+# a pinned upstream release and a checksum verified at fetch time, so tracking
+# it would add weight to every clone to no benefit. See spec/README.md.
+tools/tla2tools.jar
