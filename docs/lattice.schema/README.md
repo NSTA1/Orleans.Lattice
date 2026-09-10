@@ -6,7 +6,7 @@ core fast and format-agnostic, but it also means the cluster cannot, on its own,
 stop a caller writing a malformed value or tell a v1 value from a v2 one.
 
 The companion **`Orleans.Lattice.Schema`** package closes that gap with two
-independent, composable, strictly opt-in capabilities:
+independent, composable, and strictly opt-in capabilities:
 
 - **Schema enforcement** - per-tree, server-side validation of every write
   against a declarative policy (JSON well-formedness, UTF-8, a maximum byte
