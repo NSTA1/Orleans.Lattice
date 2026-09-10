@@ -22,8 +22,8 @@
 	observation was real and correctly made; the discriminator was in a channel
 	nobody was reading.
 
-	This script reads that channel. It performs four checks and REFUSES unless
-	all four agree:
+	This script reads that channel. It performs five checks and REFUSES unless
+	all five agree:
 
 	  1. COMPOSE provenance. The container's own
 	     `com.docker.compose.project.working_dir` label resolves to the expected
@@ -37,6 +37,8 @@
 	     place across a rebuild is caught.
 	  4. ENVIRONMENT provenance. A candidate-only setting is PRESENT in the
 	     container's own environment with the expected value.
+	  5. ARCHIVE durability. The bind mount holding durable agent memory resolves
+	     to an absolute host path that is OUTSIDE every git worktree and checkout.
 
 	Check 4 is the non-redundant one and the reason the other three are not
 	sufficient. Checks 1 to 3 can all pass while an override file, an edit, or a
@@ -45,6 +47,21 @@
 	repository agreed with itself perfectly throughout both failed runs. Only a
 	reading taken from the running process separates "the source does not carry
 	the fix" from "the source carries it and this container never received it".
+
+	Check 5 is the only one that reads the WRITE path, and it was added because
+	checks 1 to 4 are all about INPUTS - which checkout, which commit, which
+	image, which settings - and durable output flows the other way (issue #2627).
+	The archive's bind source used to default to a relative path, which compose
+	resolves against its INVOCATION directory, and check 2 requires that
+	directory to be a git worktree. So the single fact "this stack was composed
+	from a git worktree" was simultaneously the certified-correct state for the
+	source tree and the cause of the only surviving copy of durable memory
+	landing in a directory `git worktree remove` deletes.
+
+	CHECK 5 THEREFORE KEYS ON THE ARCHIVE PATH ALONE. It is never given the
+	compose directory. Refusing a worktree working directory would contradict
+	check 2 and refuse every legitimate gate run, so the two are kept apart by
+	the adjudicating function's parameter list rather than by a convention.
 
 .PARAMETER ContainerName
 	The running container to interrogate. Defaults to the compose service name
@@ -101,6 +118,9 @@
 	  - That any setting other than those in -ExpectedSetting reached the
 	    process. Check 4 is an existence proof for the settings you name, and
 	    says nothing about the ones you do not.
+	  - That the archive CONTENT is good. Check 5 adjudicates where the archive
+	    landed, not what is in it, and a durable path holding a stale or empty
+	    snapshot passes it.
 	  - Anything about a container other than -ContainerName.
 
 	The rig's `Assert-RigComposeIsolation` (benchmark/coldstart-rig) is a
@@ -132,7 +152,14 @@ param(
 	# still correct, so only the count catches it. Passing 1 here is a
 	# deliberate statement that you meant to run without an override, which is
 	# the point: dropping it should be an act, not an accident.
-	[int] $ExpectedConfigFileCount = 2
+	[int] $ExpectedConfigFileCount = 2,
+
+	# The container path the durable-memory archive is bound at. A parameter
+	# rather than a constant so a host that relocates the mount can still be
+	# adjudicated, but it must name a mount that EXISTS: check 5 refuses a
+	# container with nothing bound here, because an absent archive is the
+	# strongest form of the defect it looks for.
+	[string] $ArchiveDestination = '/memory-archive'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -178,6 +205,37 @@ function Get-DeclaredSetting {
 	}
 
 	throw "cannot read the expected value of $Name because '$ComposeFile' does not declare it; pass -ExpectedSetting explicitly"
+}
+
+# Impure half of check 5. Asks git, on THIS host, whether the archive's bind
+# source lies inside a checkout - and if so, whether that checkout is a linked
+# worktree. The adjudication itself stays pure in _provenance.ps1; this only
+# takes the reading.
+#
+# Only the archive path is passed in. Deliberately: the compose directory is
+# legitimately a worktree and check 2 requires it to be one, so a probe that
+# could see it is a probe that could be keyed on it by a later edit.
+function Get-ArchiveGitReading {
+	param([Parameter(Mandatory)] [AllowEmptyString()] [string] $Path)
+
+	$reading = @{ Exists = $false; Toplevel = ''; IsLinkedWorktree = $false }
+	if ([string]::IsNullOrWhiteSpace($Path)) { return $reading }
+
+	if (-not (Test-Path -LiteralPath $Path)) { return $reading }
+	$reading.Exists = $true
+
+	$toplevel = & git -C $Path rev-parse --show-toplevel 2>$null
+	if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($toplevel)) { return $reading }
+
+	$reading.Toplevel = ("$toplevel").Trim()
+
+	# A LINKED worktree carries a `.git` FILE pointing at the main repository's
+	# admin directory; a primary checkout carries a `.git` DIRECTORY. That is the
+	# distinction, and it decides which remedy the operator is told about.
+	$dotGit = Join-Path $reading.Toplevel '.git'
+	$reading.IsLinkedWorktree = (Test-Path -LiteralPath $dotGit -PathType Leaf)
+
+	return $reading
 }
 
 # The expected checkout defaults to the compose directory this script ships in,
@@ -227,6 +285,15 @@ if ([string]::IsNullOrWhiteSpace($ExpectedImageId)) {
 
 $resolvedCommit = if ([string]::IsNullOrWhiteSpace($workingDirectory)) { '' } else { Get-HeadCommit -Directory $workingDirectory }
 
+# The archive bind, read from the container's own mount table. Docker Desktop
+# reports some sources through its VM view (/run/desktop/mnt/host/c/...), which
+# is the exact form issue #2627 observed, so the source is normalised back to a
+# host path before anything is asked of it.
+$archiveMount = @($container.Mounts) | Where-Object { "$($_.Destination)" -eq $ArchiveDestination } | Select-Object -First 1
+$archiveSource = if ($null -eq $archiveMount) { '' } else { ConvertFrom-DockerDesktopHostPath -Path "$($archiveMount.Source)" }
+$archiveMountType = if ($null -eq $archiveMount) { '' } else { "$($archiveMount.Type)" }
+$archiveGit = Get-ArchiveGitReading -Path $archiveSource
+
 # Existence is resolved here, in the impure half, and adjudicated in the pure
 # one. Deliberately Test-Path and not a git query: the override this stack needs
 # is gitignored, so asking git whether a config file exists would report the
@@ -234,16 +301,22 @@ $resolvedCommit = if ([string]::IsNullOrWhiteSpace($workingDirectory)) { '' } el
 $missingConfigFiles = @($configFiles | Where-Object { -not (Test-Path -LiteralPath $_) })
 
 $readings = @{
-	ContainerName            = $ContainerName
-	ComposeWorkingDirectory  = $workingDirectory
-	ComposeConfigFiles       = $configFiles
-	MissingConfigFiles       = $missingConfigFiles
-	ResolvedCommit           = $resolvedCommit
-	ExpectedCommit           = $ExpectedCommit
-	RunningImageId           = $runningImageId
-	ExpectedImageId          = $ExpectedImageId
-	ImageReference           = $imageReference
-	ContainerEnvironment     = @($container.Config.Env)
+	ContainerName              = $ContainerName
+	ComposeWorkingDirectory    = $workingDirectory
+	ComposeConfigFiles         = $configFiles
+	MissingConfigFiles         = $missingConfigFiles
+	ResolvedCommit             = $resolvedCommit
+	ExpectedCommit             = $ExpectedCommit
+	RunningImageId             = $runningImageId
+	ExpectedImageId            = $ExpectedImageId
+	ImageReference             = $imageReference
+	ContainerEnvironment       = @($container.Config.Env)
+	ArchiveDestination         = $ArchiveDestination
+	ArchiveSource              = $archiveSource
+	ArchiveMountType           = $archiveMountType
+	ArchiveSourceExistsOnHost  = $archiveGit.Exists
+	ArchiveGitToplevel         = $archiveGit.Toplevel
+	ArchiveIsLinkedWorktree    = $archiveGit.IsLinkedWorktree
 }
 
 $report = Get-ContainerProvenanceReport `
@@ -276,6 +349,8 @@ foreach ($name in ($ExpectedSetting.Keys | Sort-Object)) {
 	Write-Host ("      expected              : {0}" -f $ExpectedSetting[$name])
 	Write-Host ("      in container          : {0}" -f $(if ($observed) { $observed.Substring($observed.IndexOf('=') + 1) } else { '<ABSENT>' }))
 }
+Write-Host ("  memory archive mount      : {0}" -f $(if ($archiveSource) { "$archiveSource -> $ArchiveDestination ($archiveMountType)" } else { "<NOTHING BOUND AT $ArchiveDestination>" }))
+Write-Host ("  archive inside git        : {0}" -f $(if ($archiveGit.Toplevel) { "$($archiveGit.Toplevel)$(if ($archiveGit.IsLinkedWorktree) { ' (LINKED WORKTREE)' } else { ' (checkout)' })" } elseif ($archiveGit.Exists) { '<no - outside every checkout>' } else { '<UNEXAMINABLE - source not present on this host>' }))
 Write-Host ''
 
 if (-not $report.IsSatisfied) {
@@ -283,4 +358,4 @@ if (-not $report.IsSatisfied) {
 	throw ("Container provenance REFUSED for '$ContainerName': this container cannot be shown to have been launched from '$ExpectedCheckout'." + [Environment]::NewLine + $detail)
 }
 
-Write-Host ("  OK  all four provenance checks agree for '{0}'" -f $ContainerName) -ForegroundColor Green
+Write-Host ("  OK  all five provenance checks agree for '{0}'" -f $ContainerName) -ForegroundColor Green

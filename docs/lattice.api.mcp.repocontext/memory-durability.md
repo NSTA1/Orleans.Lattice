@@ -108,13 +108,36 @@ An export that would write **zero** records over a non-empty archive is refused.
 A store that is momentarily unreadable must not be allowed to overwrite a good
 archive with an empty one.
 
+### Where the archive lives on the host
+
+`<archive dir>` above is the path **inside** the container. What matters for
+durability is the host directory bound to it, and that is a separate decision
+the container cannot see or check.
+
+Bind it to an absolute host path that is outside every git checkout and every
+git worktree. A path relative to wherever the deployment tooling happened to be
+invoked from is not a location; it is a location nobody chose. In the sample
+container this was measured: the archive defaulted to `./memory-archive`, the
+documented verification procedure deliberately composes from the candidate git
+worktree (so the image is provably built from the tree under test), and so the
+only working backup of durable agent memory was written into a directory that
+`git worktree remove` deletes without warning. Nothing reported this, because
+every export succeeded and the archive was present and populated the whole time
+(issue #2627).
+
+The sample therefore requires the host path explicitly rather than defaulting
+it, and its provenance guard adjudicates the resolved bind destination. Note
+that the guard keys on the **archive path only**: the compose working directory
+being a worktree is the certified-correct state for the source tree, so a check
+keyed on that would refuse every correct run.
+
 ### Restoring by hand
 
 The archive is a plain file. To restore into a fresh container, put it where the
 mount points and start the box against an empty store:
 
 ```bash
-ls memory-archive/                    # repo-context-memory.snapshot
+ls "$REPOCONTEXT_MEMORY_ARCHIVE_PATH"/   # repo-context-memory.snapshot
 docker compose up -d
 docker compose logs repocontext | grep -i 'memory durability'
 ```

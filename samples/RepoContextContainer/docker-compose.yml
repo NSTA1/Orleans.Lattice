@@ -441,14 +441,38 @@ services:
       # takes every declared volume, not the first one.
       #
       # It auto-creates on the host at `up`, so there is no `docker volume
-      # create` step to forget. Point it somewhere durable with
-      # REPOCONTEXT_MEMORY_ARCHIVE_PATH; the default sits next to this compose
-      # file.
+      # create` step to forget - and that auto-creation is precisely why this
+      # variable HAS NO DEFAULT (issue #2627).
+      #
+      # A relative default resolves against the directory `docker compose` was
+      # INVOKED FROM, not against this file, and compose then creates whatever
+      # that produced rather than refusing. The documented gate procedure
+      # composes from the candidate git WORKTREE on purpose, so the previous
+      # default `./memory-archive` put the only surviving copy of durable agent
+      # memory inside a directory that `git worktree remove` deletes. That
+      # deployment is indistinguishable from a correct one by every observable
+      # signal: the archive is written, it rotates, it is current, and it
+      # verifies by decoded content. There is no channel to read better, so
+      # reporting the resolved path would not have been enough on its own.
+      #
+      # Refusing to interpolate is therefore the fix rather than a stricter
+      # default: any default at all is a path nobody chose. `${VAR:?...}` fails
+      # the compose command with the message below - before a container starts
+      # and before a directory is created - so the operator must state where
+      # their last copy of durable memory lives. Copy `.env.example` to `.env`
+      # in this directory and compose loads it on every command, including
+      # `down`, `ps` and `logs`.
+      #
+      # Set it to an ABSOLUTE path outside every git checkout and worktree. The
+      # provenance check verifies that (check 5 of 5 in
+      # scripts/Assert-ContainerProvenance.ps1), keyed on the ARCHIVE path
+      # alone - never on the compose directory, which is legitimately a worktree
+      # and which check 2 of 5 requires to be one.
       #
       # Do NOT point it inside the /data volume or at a path that resolves under
       # it. The host detects that and says so at startup, because an archive
       # there dies with the thing it is meant to survive.
-      - ${REPOCONTEXT_MEMORY_ARCHIVE_PATH:-./memory-archive}:/memory-archive
+      - "${REPOCONTEXT_MEMORY_ARCHIVE_PATH:?set REPOCONTEXT_MEMORY_ARCHIVE_PATH to an ABSOLUTE host path outside every git checkout and worktree - copy .env.example to .env in samples/RepoContextContainer. This variable has no default because a relative one resolves against the compose invocation directory, which silently placed the only working memory backup inside an ephemeral git worktree (issue #2627).}:/memory-archive"
       # The workspace the box can see, mounted READ-ONLY so the box can never
       # mutate the code it ingests. Mount a broad PARENT directory here and let
       # the client register individual repositories under it with

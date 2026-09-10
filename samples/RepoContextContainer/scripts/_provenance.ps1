@@ -434,7 +434,176 @@ function Get-EnvironmentProvenanceViolation {
 
 <#
 .SYNOPSIS
-	Runs all four checks over a set of readings and returns a full report.
+	Rewrites a Docker Desktop host-mount path back into the host path an operator
+	would recognise.
+
+.DESCRIPTION
+	Docker Desktop reports some bind sources through its own Linux VM view, as
+	`/run/desktop/mnt/host/c/dev/x`, rather than as `C:\dev\x`. Both name the same
+	directory, and the first is what `docker inspect` returned for the archive
+	bind in issue #2627 while the very same container reported `C:\dev` for the
+	workspace bind.
+
+	That asymmetry matters here rather than being cosmetic. A check that compared
+	the reported source against a Windows path, or asked whether it was absolute
+	in Windows terms, would silently take the VM form for something else and reach
+	a wrong verdict on the one reading it exists to adjudicate. So the form is
+	normalised once, at the boundary, and everything downstream sees one shape.
+
+	Pure: it rewrites a string and never consults the filesystem. A path that does
+	not carry the prefix is returned unchanged, so a genuine Linux host path is
+	left alone.
+#>
+function ConvertFrom-DockerDesktopHostPath {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $Path
+	)
+
+	if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+
+	$value = $Path.Trim()
+	$prefix = '/run/desktop/mnt/host/'
+	if (-not $value.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $value }
+
+	$remainder = $value.Substring($prefix.Length)
+	if ($remainder.Length -eq 0) { return $value }
+
+	$drive = $remainder.Substring(0, 1)
+	if ($drive -notmatch '^[A-Za-z]$') { return $value }
+
+	$rest = if ($remainder.Length -gt 1) { $remainder.Substring(1) } else { '' }
+	if ($rest.Length -gt 0 -and $rest[0] -ne '/') { return $value }
+
+	return ($drive.ToUpperInvariant() + ':' + $rest).Replace('/', '\')
+}
+
+<#
+.SYNOPSIS
+	Whether a path names a location absolutely, on either platform's rules.
+
+.DESCRIPTION
+	Accepts a drive-rooted Windows path (`C:\x`), a UNC path (`\\server\share`),
+	and a rooted POSIX path (`/x`). Everything else - `./memory-archive`,
+	`memory-archive`, `..\x` - is relative and is exactly the shape whose meaning
+	depends on where the operator happened to be standing.
+
+	Deliberately accepts BOTH platforms' forms rather than branching on the host
+	this script runs from: the value being judged came out of a container's mount
+	table, not out of this process, and it can legitimately be either.
+#>
+function Test-ProvenancePathIsAbsolute {
+	[CmdletBinding()]
+	[OutputType([bool])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $Path
+	)
+
+	if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+
+	$value = $Path.Trim()
+
+	if ($value.StartsWith('\\') -or $value.StartsWith('//')) { return $true }
+	if ($value.StartsWith('/')) { return $true }
+	if ($value -match '^[A-Za-z]:[\\/]') { return $true }
+
+	return $false
+}
+
+<#
+.SYNOPSIS
+	Check 5 of 5. The archive holding durable memory did not land somewhere a
+	routine cleanup deletes.
+
+.DESCRIPTION
+	This is the only check here that reads the WRITE path, and the reason it
+	exists is that the other four read inputs. Checks 1 to 3 establish where the
+	stack was composed from, what revision it carries, and which image it runs.
+	Not one of them looks at a bind DESTINATION, so all four can agree perfectly
+	on a container whose durable output is being written into a directory that
+	`git worktree remove` deletes.
+
+	Worse than not covering it: check 2 REQUIRES the compose directory to be a
+	git worktree, correctly, because a gate run deliberately composes from the
+	candidate worktree and composing from elsewhere is the #2617 defect. Compose
+	resolved the archive's relative default against that same directory. So the
+	single fact "this stack was composed from a git worktree" was simultaneously
+	the certified-correct state for the source tree and the cause of the archive
+	landing somewhere deletable (issue #2627).
+
+	THIS CHECK THEREFORE KEYS ON THE ARCHIVE PATH AND NOTHING ELSE. It is handed
+	no compose directory and no expected checkout, so it cannot be tempted into
+	refusing a worktree working directory - which would contradict check 2 and
+	refuse every legitimate gate run. The parameter list is the guarantee, not a
+	comment about one.
+
+	The readings are supplied by the caller, which is what keeps this pure and
+	testable: `ArchiveSource` and `ArchiveMountType` come from the container's own
+	mount table, and `GitToplevel` / `IsLinkedWorktree` from a git query run
+	against that source on the host. `GitToplevel` empty means the archive is not
+	inside any git checkout, which is the state this check wants.
+
+	A linked worktree and an ordinary checkout are reported as DISTINCT
+	violations. They have different lifetimes and different remedies - a worktree
+	is removed wholesale by a single command, a checkout survives until someone
+	deletes it but still loses the directory to `git clean -xdf` - and an operator
+	who is told only "inside git" will reach for the wrong one.
+#>
+function Get-ArchiveDurabilityViolation {
+	[CmdletBinding()]
+	[OutputType([string[]])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $ArchiveDestination,
+		[AllowNull()] [AllowEmptyString()] [string] $ArchiveSource,
+		[AllowNull()] [AllowEmptyString()] [string] $ArchiveMountType,
+		[AllowNull()] [AllowEmptyString()] [string] $GitToplevel,
+		[bool] $IsLinkedWorktree,
+		[bool] $SourceExistsOnHost = $true
+	)
+
+	$violations = [System.Collections.Generic.List[string]]::new()
+	$destination = if ([string]::IsNullOrWhiteSpace($ArchiveDestination)) { '/memory-archive' } else { $ArchiveDestination.Trim() }
+
+	if ([string]::IsNullOrWhiteSpace($ArchiveSource)) {
+		$violations.Add("nothing is mounted at '$destination', so the only copy of durable agent memory that survives 'docker compose down -v' does not exist; the live tree in the /data volume is all there is")
+		return ,$violations.ToArray()
+	}
+
+	$source = ConvertFrom-DockerDesktopHostPath -Path $ArchiveSource
+
+	if (-not [string]::IsNullOrWhiteSpace($ArchiveMountType) -and $ArchiveMountType.Trim() -ine 'bind') {
+		$violations.Add("'$destination' is a '$($ArchiveMountType.Trim())' mount sourced from '$source', not a bind mount; 'docker compose down -v' removes every volume the project declares, so this archive dies in the same command as the store it exists to outlive")
+		return ,$violations.ToArray()
+	}
+
+	if (-not (Test-ProvenancePathIsAbsolute -Path $source)) {
+		$violations.Add("the archive bound at '$destination' resolved to the relative source '$source'; a relative bind source is resolved against the directory 'docker compose' was invoked from, so the location of the only surviving copy of durable memory is a function of where the operator was standing")
+		return ,$violations.ToArray()
+	}
+
+	if (-not $SourceExistsOnHost) {
+		$violations.Add("the archive bound at '$destination' is at '$source', which does not exist from where this check is running, so whether it sits inside a git worktree CANNOT BE ESTABLISHED; either this is not the docker host, or the directory has already been deleted. This is reported rather than passed over, because a check that cannot look must not report clean")
+		return ,$violations.ToArray()
+	}
+
+	if ([string]::IsNullOrWhiteSpace($GitToplevel)) {
+		return ,$violations.ToArray()
+	}
+	$toplevel = ConvertFrom-DockerDesktopHostPath -Path $GitToplevel
+
+	if ($IsLinkedWorktree) {
+		$violations.Add("the archive bound at '$destination' is at '$source', which is inside the LINKED GIT WORKTREE rooted at '$toplevel'; 'git worktree remove', a session cleanup, or a tidy of a worktree collection deletes that tree and the only surviving copy of durable agent memory with it, without warning. Set REPOCONTEXT_MEMORY_ARCHIVE_PATH to an absolute path outside every checkout")
+		return ,$violations.ToArray()
+	}
+
+	$violations.Add("the archive bound at '$destination' is at '$source', which is inside the GIT CHECKOUT rooted at '$toplevel'; 'git clean -xdf' removes it and deleting the checkout takes it, so the only surviving copy of durable agent memory shares the lifetime of a working tree. Set REPOCONTEXT_MEMORY_ARCHIVE_PATH to an absolute path outside every checkout")
+	return ,$violations.ToArray()
+}
+
+<#
+.SYNOPSIS
+	Runs all five checks over a set of readings and returns a full report.
 
 .DESCRIPTION
 	Returns an object carrying BOTH the violations and every value that was
@@ -476,6 +645,18 @@ function Get-ContainerProvenanceReport {
 	$violations.AddRange([string[]] (Get-EnvironmentProvenanceViolation `
 				-ContainerEnvironment $Readings['ContainerEnvironment'] `
 				-ExpectedSettings $ExpectedSettings))
+
+	# Check 5 is handed ONLY archive readings. Not the compose working directory,
+	# not the expected checkout: the composite is where a guard over the write
+	# path would most easily acquire a dependency on the read path, and check 2
+	# requires the compose directory to be a worktree.
+	$violations.AddRange([string[]] (Get-ArchiveDurabilityViolation `
+				-ArchiveDestination $Readings['ArchiveDestination'] `
+				-ArchiveSource $Readings['ArchiveSource'] `
+				-ArchiveMountType $Readings['ArchiveMountType'] `
+				-GitToplevel $Readings['ArchiveGitToplevel'] `
+				-IsLinkedWorktree ([bool] $Readings['ArchiveIsLinkedWorktree']) `
+				-SourceExistsOnHost ([bool] $Readings['ArchiveSourceExistsOnHost'])))
 
 	return [pscustomobject] @{
 		Readings    = $Readings

@@ -326,8 +326,24 @@ so is not removed by `down -v`. The host exports memory there periodically and,
 when it starts against an empty store, restores from it.
 
 ```bash
-# Point the archive at a durable host path (defaults to ./memory-archive).
-REPOCONTEXT_MEMORY_ARCHIVE_PATH=~/repocontext-memory docker compose up -d
+# The archive path is REQUIRED and has no default. A relative one would resolve
+# against the directory you invoked compose from, which is how the only working
+# backup of durable agent memory ended up inside an ephemeral git worktree
+# (issue #2627). Set it to an absolute path outside every checkout and worktree.
+REPOCONTEXT_MEMORY_ARCHIVE_PATH=/srv/repocontext-memory docker compose up -d
+```
+
+Copying `.env.example` to `.env` sets it for you; compose loads `.env` on every
+command, so `up`, `down`, `ps`, and `logs` all pick it up. Without it, every
+compose command in this directory fails by name rather than quietly choosing a
+directory nobody picked.
+
+Verify where it actually landed, rather than where you meant it to land:
+
+```bash
+docker inspect repocontext-mcp \
+  --format '{{range .Mounts}}{{.Destination}} <- {{.Type}} {{.Source}}{{"\n"}}{{end}}'
+pwsh -File scripts/Assert-ContainerProvenance.ps1   # check 5 of 5 refuses a doomed path
 ```
 
 | Variable | Default | Meaning |
@@ -336,13 +352,14 @@ REPOCONTEXT_MEMORY_ARCHIVE_PATH=~/repocontext-memory docker compose up -d
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. This is the size of the window an ungraceful stop loses. Values below 30 are raised to 30. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores only into an empty store, `always` restores on every start, `off` never restores. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_STOP_TIMEOUT_SECONDS` | `20` | Budget for the final export during a graceful stop, clamped to 1-60. |
+| `REPOCONTEXT_MEMORY_ARCHIVE_PATH` | none - **required** | HOST path bound at `/memory-archive`. Deliberately has no default: a relative one resolves against the compose invocation directory (issue #2627). Must be absolute and outside every checkout and worktree. |
 
 Restore this way by hand at any time - stop the box, put the archive files in
 place, start it against an empty store:
 
 ```bash
 docker compose down -v
-ls memory-archive/            # repo-context-memory.snapshot (+ .previous.snapshot)
+ls "$REPOCONTEXT_MEMORY_ARCHIVE_PATH"/   # repo-context-memory.snapshot (+ .previous.snapshot)
 docker compose up -d
 docker compose logs repocontext | grep -i 'memory durability'
 ```
