@@ -277,14 +277,31 @@ public sealed class AzureTableWalStorageOptions
     /// pending commit" semantics on a phase-2 transaction failure;
     /// the activation-time orphan recovery contract; the
     /// <c>GetHighestOffsetAsync</c> point-read against the
-    /// <c>TAIL</c> row. The only observable change is that
-    /// <c>GetHighestOffsetAsync</c> issued <i>between</i> an
-    /// <c>AppendBatchAsync</c> returning and its phase-2 commit
-    /// landing may return the pre-append <c>TAIL</c> rather than the
-    /// post-append <c>TAIL</c>. <c>WalShardGrain</c> tracks
-    /// <c>_nextOffset</c> in memory and never re-reads <c>TAIL</c>
-    /// outside of activation and post-failure resync, so the lag is
-    /// invisible to the canonical replication path.
+    /// <c>TAIL</c> row.
+    /// </para>
+    /// <para>
+    /// <b>Visibility lag - the one observable change.</b> A batch
+    /// becomes <i>visible</i> when its phase-2 commit lands, not
+    /// when <c>AppendBatchAsync</c> returns, so between those two
+    /// points the batch is durable but not yet readable. This
+    /// affects <b>every manifest-derived read</b>, not only the
+    /// tail: <see cref="IWalStorageProvider.GetHighestOffsetAsync"/>
+    /// may return the pre-append <c>TAIL</c>, and
+    /// <see cref="IWalStorageProvider.ReadAsync"/> /
+    /// <c>ReadEncodedAsync</c> may omit the trailing batch entirely,
+    /// because both scan the shard's manifest partition and a batch
+    /// has no manifest row until phase 2 commits. Nothing is lost:
+    /// phase 0+1 are durable and activation-time
+    /// <see cref="IWalStorageProvider.ReconcileAsync"/> rolls the
+    /// batch forward. <c>WalShardGrain</c> tracks <c>_nextOffset</c>
+    /// in memory and never re-reads <c>TAIL</c> outside of
+    /// activation and post-failure resync, and WAL consumers poll,
+    /// so the lag is invisible to the canonical replication path. A
+    /// caller that genuinely needs read-after-write - a controlled
+    /// hand-off, a consistency probe, or a test - calls
+    /// <see cref="AzureTableWalStorageProvider.FlushPhaseTwoAsync"/>
+    /// to drain the outstanding commits rather than sleeping or
+    /// polling.
     /// </para>
     /// </summary>
     public bool PipelinePhaseTwoCommits { get; set; } = DefaultPipelinePhaseTwoCommits;
