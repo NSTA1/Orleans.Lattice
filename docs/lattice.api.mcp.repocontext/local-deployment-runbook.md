@@ -54,6 +54,144 @@ pwsh -File ./scripts/Assert-ContainerProvenance.ps1
 The same limit applies to this runbook's own guard test, which is discussed under
 [How this runbook is kept honest](#how-this-runbook-is-kept-honest).
 
+## What the box points at
+
+Every other setting in this document describes how the deployment *performs*. This
+one decides what it is *about*, and it is the only setting whose misconfiguration
+leaves every output surface looking healthy while every answer is wrong.
+
+| Setting | Intended value | Resolves to |
+| --- | --- | --- |
+| `REPO_PATH` | `C:\dev` | the host directory bound at `/workspace`, read-only |
+| indexed repository | `/workspace/lattice` | `C:\dev\lattice` |
+| `repoId` | `lattice` | the id every agent session queries |
+
+**Set `REPO_PATH` explicitly. Never let it default in this repository.**
+
+### Where the setting actually lives
+
+`REPO_PATH` is **not** in either compose file and never was. It lives in
+`samples/RepoContextContainer/.env`, which Docker Compose auto-loads from the
+directory it is **invoked from**, on every `up`, regardless of your shell
+environment. That file is gitignored. A tracked
+[`.env.example`](../../samples/RepoContextContainer/.env.example) carries the setting
+and its warning; copy it to `.env` before starting the stack.
+
+This mechanism is the whole of the root cause, and it is worth being precise about,
+because the obvious explanation is wrong. Nobody edited a mount. Nobody removed a
+setting. The deployment was configured by **two** untracked files with different jobs:
+`docker-compose.override.yml`, which pinned the image, and `.env`, which decided what
+the box was about. When the stack was re-composed from a git worktree, the override
+was copied across and the `.env` was not, so `REPO_PATH` silently fell back to the
+compose default.
+
+**The override survived because it is what people think of as "the config."** Its own
+header says it has *"one job only: pin the image"*. It was never a configuration
+capture mechanism, so copying it felt complete while leaving behind the setting that
+mattered most. Note what that means: the setting **was** written down, in a file that
+carried a correct and clearly-worded warning about exactly this failure, a month
+before it happened. It vanished anyway, because it was written in a file whose copying
+was optional.
+
+### The worktree trap
+
+The base compose file declares the mount as:
+
+```yaml
+- ${REPO_PATH:-../../..}:/workspace:ro
+```
+
+and documents the default as *this repo's parent directory, so this repo is one
+registerable child added at `/workspace/<repo>`*. That description is exactly correct
+for an ordinary clone at `C:\dev\lattice`: the grandparent of the compose file is
+`C:\dev` and the registerable child is `lattice`.
+
+It is **wrong for a git worktree**, and the difference is invisible. Composed from
+`C:\dev\copilot-worktrees\lattice\<worktree>\samples\RepoContextContainer`, `../../..`
+resolves to the *worktree collection directory*, so the registerable child is the
+**worktree's generated name** rather than the repository's. The default silently
+changes meaning according to where the compose file is invoked from, and in this
+repository every agent session runs from a worktree.
+
+This is not hypothetical. It is the deployment's observed state: `/workspace` was
+bound to `C:\dev\copilot-worktrees\lattice` and the indexed root was
+`/workspace/bucket4-merge`, a worktree pinned at an older commit. Every structural
+record, every ranked search result, and every `repocontext_context` bundle filed under
+repoId `lattice` was about that stale worktree rather than about `C:\dev\lattice`.
+
+**The symptom is silence.** `repocontext_list_repos` reports the expected `repoId`, a
+plausible file count, and a healthy converging index; searches return `mode: semantic`
+with sensibly ranked hits. Nothing in any output surface distinguishes *indexing the
+repository* from *indexing a stale worktree under the repository's name*. It also
+makes a documented instruction false against such a deployment:
+`.github/instructions/repocontext.instructions.md` tells every agent that in a
+worktree the repo id is still the base repository's and the base repository is what is
+indexed. Where this trap has fired, a worktree is indexed under the base repository's
+id, and an agent following the documented rule gets confidently wrong answers with no
+signal available to it that anything is amiss.
+
+### None of this prevents recurrence
+
+Stated plainly, because "documented and guarded" reads as "fixed" and it is not:
+
+- **`.env.example` is not prevention.** Compose does not load it. Someone still has to
+  copy it to `.env`, and a person who forgets the `.env` will equally forget to copy
+  the example. It makes the omission *discoverable by a reader who is already
+  looking*, which is precisely the reader this failure does not have.
+- **This runbook is not prevention.** It is a description. Nothing consults it at
+  `up` time.
+- **The guard test is not prevention.** It checks that this document still says these
+  words. See [Why the guard test cannot cover this](#why-the-guard-test-cannot-cover-this).
+
+Prevention requires the running system to make the wrong state *observable*, which is
+issue **#2617**: report the indexed root on every `repocontext_list_repos` row, log the
+resolved workspace root and every registered root at startup, warn when a registered
+root's basename differs from its `repoId`, and assert the indexed root from the
+running store in `Assert-ContainerProvenance.ps1`. Until that lands, the only defence
+is the two commands below, run by someone who already suspects something.
+
+### Verifying it
+
+Neither check reads a tracked file, and that is the point.
+
+```bash
+# 1. What the running container actually has mounted.
+docker inspect repocontextcontainer-repocontext-1 \
+  --format '{{range .Mounts}}{{.Source}} -> {{.Destination}} ro={{.RW}}{{"\n"}}{{end}}'
+```
+
+```text
+# 2. What the running store believes its indexed root is. Must NOT report
+#    "outside the indexed root".
+repocontext_changed(repoId: "lattice", path: "/workspace/lattice")
+```
+
+The second is the stronger of the two, because it reads the indexed root out of the
+running store rather than out of a file. It therefore also catches the case where the
+mount is correct but the *registered* root is still the stale one, which a mount check
+alone passes.
+
+### Why the guard test cannot cover this
+
+The compose-settings guard described under
+[How this runbook is kept honest](#how-this-runbook-is-kept-honest) does **not** check
+`REPO_PATH`, and cannot be made to. This is worth stating plainly rather than leaving
+as a gap, because it is the third instance in this document of the same class:
+
+- `docker compose config` faithfully reports `../../..`, which is **correct as
+  written and wrong in effect**. A parity test over the resolved document would agree
+  with the file and miss the defect entirely.
+- The resolved bind source is an **absolute, machine-dependent path**, so any exact
+  assertion over it fails on every other machine and in CI.
+- There is no machine-independent invariant to assert instead. `../../..` genuinely
+  *is* the parent of the repository root in both the clone and the worktree case; the
+  path arithmetic is correct in both. The defect is that the registerable child is
+  named for a worktree, which is a fact about worktrees that no compose file knows.
+
+This is a **declared-versus-effective** case, the same class as `docker stop -t`
+overriding a configured `stop_grace_period`. Only a reading taken from the running
+container or the running store settles it, which is what the two commands above do.
+
 ## The two compose files
 
 | File | Tracked | Loaded | Carries |
@@ -154,13 +292,20 @@ machine-checked against that document; see
 Values are written as an operator writes them. `mem_limit` resolves to bytes and
 `cpus` to a bare number, and the guard normalises both before comparing.
 
+`REPO_PATH` is deliberately **not** in this table. It is not machine-checkable here,
+for the reasons set out under
+[Why the guard test cannot cover this](#why-the-guard-test-cannot-cover-this), and it
+matters more than anything below: a wrong `cpus` makes the box slow, a wrong
+`REPO_PATH` makes every answer it gives wrong while it looks healthy.
+
 <!-- compose-settings:begin -->
 
 | Service | Setting | Value | Why this value |
 | --- | --- | --- | --- |
 | `embedder` | `EMBED_PROVIDER` | `cpu` | Base default. `cpu`, or `cuda` on an NVIDIA host started with a device reservation. See the [sample README](../../samples/RepoContextContainer/README.md). |
-| `embedder` | `DOTNET_gcServer` | `0` | Workstation GC. Server GC allocates a heap and a dedicated GC thread per core, which on a 16-core host is the main driver of resident set for a latency-insensitive background service. |
-| `embedder` | `cpus` | `4.0` | Reduced from an unlimited grant that measured 1014% CPU (about 10 of 16 cores) and made the host unusable for interactive work. Leaves 12 cores free. The ONNX intra-op thread pool is derived from this grant (#2610), so changing it changes the pool. |
+| `embedder` | `DOTNET_gcServer` | `0` | Workstation GC. Server GC allocates a heap and a dedicated GC thread per core, which on a 16-core host is the main driver of resident set for a latency-insensitive background service. This service also has little managed heap worth collecting in parallel: its footprint is dominated by the resident ONNX model, which is native. |
+| `embedder` | `EMBED_INTRA_THREADS` | `4` | Pins the ONNX intra-op thread pool to the `cpus` grant below. ONNX Runtime sizes that pool from host cores and does not consult the cgroup quota, so under a 4.0-CPU grant on a 16-core host it ran 4x oversubscribed and the kernel throttled it in 296 of 298 consecutive scheduling periods during vectorising. #2610 derives this from the cgroup automatically, but the deployed image predates that change, so the value is pinned by hand. See [The pool-sizing class](#the-pool-sizing-class). |
+| `embedder` | `cpus` | `4.0` | Reduced from an unlimited grant that measured 1014% CPU (about 10 of 16 cores) and made the host unusable for interactive work. Leaves 12 cores free. The ONNX intra-op pool is sized against this grant, so changing it means revisiting `EMBED_INTRA_THREADS` above. |
 | `embedder` | `mem_limit` | `5g` | Measured at 4.08 GiB with no limit, and pinned at 2.486 GiB of a 2560m cap (99.4%) while essentially idle at 0.01% CPU, holding the resident ONNX model at its ceiling with no room to work. 5g clears the measured requirement. |
 | `repocontext` | `image` | `repocontext-mcp:local` | The base file declares `build:` and no `image:`, so `up -d --no-build` cannot resolve an image without this pin. The tag is moved between builds; see [Pin and roll back](#pin-and-roll-back). |
 | `repocontext` | `LATTICE_DURABILITY` | `local` | Base default: SQLite grain storage and reminders plus the file WAL, no external services. See [container.md](container.md). |
@@ -177,7 +322,8 @@ Values are written as an operator writes them. `mem_limit` resolves to bytes and
 | `repocontext` | `LATTICE_RECONCILE_JITTER_SECONDS` | `15` | Tuned from `0`. Non-zero jitter stops passes across repositories phase-locking into simultaneous walks, which is what produced the observed load spikes. |
 | `repocontext` | `LATTICE_FULL_WALK_INTERVAL_SECONDS` | `3600` | Tuned from `120`. The full re-stat of every file, and the single heaviest operation. Counted in passes, not wall clock, so it moves with the reconcile interval and jitter above. |
 | `repocontext` | `LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS` | `3600` | Tuned from `300`. Two membership reads per indexed source, so on a converged repository it dominates a pass. Costs no healing latency: an actual gap forces an immediate in-pass scan regardless. |
-| `repocontext` | `DOTNET_gcServer` | `0` | Workstation GC, for the same reason as the embedder above. Measured resident set before the limits was 5.56 GiB. |
+| `repocontext` | `DOTNET_gcServer` | `1` | Server GC, restored in #2596. It was `0`, to hold down resident set. That trade went unmeasured until gate run 2, which put it at 283 whole-process silence gaps of 5s or more, longest 29.3s, totalling 20.9% of wall-clock against a 30s Orleans request timeout; all 127 timed-out calls began executing within 0.5s of enqueue and then froze, so it was stop-the-world pausing rather than queueing. The footprint concern is now addressed by the explicit heap count below instead of by giving up parallel collection. |
+| `repocontext` | `DOTNET_GCHeapCount` | `6` | Decouples the collector from `DOTNET_PROCESSOR_COUNT` below, which is pinned to 16 for a completely unrelated reason. Server GC would otherwise take its heap count from that pin and allocate 16 heaps. `6` matches the `cpus` cap, not the processor count. See [The pool-sizing class](#the-pool-sizing-class). |
 | `repocontext` | `DOTNET_PROCESSOR_COUNT` | `16` | Pins the reported processor count to the host core count so the WAL replay concurrency gate stays at the value every prior field measurement was taken against. See [The pool-sizing class](#the-pool-sizing-class). |
 | `repocontext` | `cpus` | `6.0` | Bounds a runaway without starving normal operation. This service measured about 92% of one core in steady state before any limit, so 6 is headroom rather than a working limit. |
 | `repocontext` | `mem_limit` | `12g` | Sized above the measured 10.2 to 10.4 GiB steady-state plateau, on a 55.7 GiB host. A 4g cap set earlier was about 40% of the known requirement; see [How an undersized memory cap presents](#how-an-undersized-memory-cap-presents). |
@@ -201,8 +347,13 @@ Three instances in this one deployment:
    adding `cpus: 2.0` silently shrank that gate from 16 permits to 2 - an 8x cut to
    leaf-activation concurrency, invisible in configuration and unattributable from the
    logs. `DOTNET_PROCESSOR_COUNT: "16"` decouples the two.
-2. **The GC heap count.** Server GC allocates a heap and a GC thread per core. Both
-   services set `DOTNET_gcServer: "0"`.
+2. **The GC heap count.** Server GC allocates a heap and a GC thread per core, and
+   takes that count from `DOTNET_PROCESSOR_COUNT` when it is set. On `repocontext`
+   that variable is pinned to 16 for instance 1's reasons, so server GC would
+   allocate 16 heaps against a 6.0-CPU grant. This was originally avoided by turning
+   server GC off entirely, at the cost measured in gate run 2; #2596 instead pins
+   `DOTNET_GCHeapCount: "6"` to the grant, which addresses the footprint directly.
+   The embedder keeps `DOTNET_gcServer: "0"`, having no large managed heap.
 3. **The ONNX intra-op thread pool.** ONNX Runtime sizes its pool from the host core
    count and does **not** consult the cgroup quota. Under the 4.0-CPU grant on this
    16-core host that produced a pool of 16: the kernel throttled 296 of 298
@@ -211,10 +362,23 @@ Three instances in this one deployment:
    synchronises intra-op threads at every operator boundary. Observed embedding rate
    was 1.8 files per minute, projecting about 77 hours for one 8,315-file checkout.
 
-Instance 3 is **fixed** as of #2610: `EMBED_INTRA_THREADS` now defaults to the
-enforced cgroup quota read from `/sys/fs/cgroup/cpu.max` rather than to
+Instance 3 is **fixed in the source** as of #2610: `EMBED_INTRA_THREADS` now defaults
+to the enforced cgroup quota read from `/sys/fs/cgroup/cpu.max` rather than to
 `Environment.ProcessorCount`, and the server logs its provenance (declared, derived
-from the grant, or derived from the processor count) at startup. Note the interaction
+from the grant, or derived from the processor count) at startup.
+
+**It is not yet exercised in this deployment.** The tuning overlay sets
+`EMBED_INTRA_THREADS: "4"` explicitly, and the deployed embedder image predates
+#2610, so the value in force is the declared one and the derived path has never run
+here. The pin reproduces on the old image what the fixed image would choose for
+itself, which is the right call for the running stack and also means a green
+deployment tells you nothing about the fix. Removing the pin, on an image built from
+#2610 or later, and confirming the value still lands at 4 with derived-from-grant
+provenance, is what would establish it. Until then the mechanism's only evidence is
+its unit tests, and what has been verified in production is the manual override it
+was built to replace.
+
+Note the interaction
 with instance 1: `DOTNET_PROCESSOR_COUNT` overrides `Environment.ProcessorCount` and
 wins over the quota, so an embedder that copied the `repocontext` environment block
 would silently restore the 4x oversubscription. That is why the fix reads the quota
@@ -322,6 +486,13 @@ the running configuration always traces to something in the checkout.
 | Delta | Why it is not tracked | Retire when |
 | --- | --- | --- |
 | `Logging__LogLevel__Orleans.Lattice.Api.Mcp.RepoContext.RepoContextVectorWriter: Debug` | A diagnostic for issue #2252 (distinguishing `Disabled` from `NotReturned`, which is reachable only at Debug), not tuning. It ships commented out in `docker-compose.tuning.yml`. | #2252 closes. |
+| `LATTICE_BACKUP_*` on `repocontext` (full/incremental cadence, retention, and a blob connection string pointing at an `azurite-backup-sink` companion) | An in-flight backup experiment, not settled tuning. The companion service it targets is not part of the tracked topology, and the connection string is a credential-shaped value that does not belong in version control even when it is the well-known emulator account. | The experiment concludes and either lands as tracked topology with its credential supplied out of band, or is removed. |
+| `REPO_PATH` | Machine-specific by nature: it names a host path. It is not a delta to be tolerated but a setting to be **set deliberately**, and leaving it to default is the defect described under [The worktree trap](#the-worktree-trap). | Never. Set it explicitly on every host. |
+
+The list above is only as good as the discipline that maintains it, and nothing
+enforces it. A delta that is running and not written down here is indistinguishable
+from one that was never applied, which is the failure this document exists to close.
+`Assert-ContainerProvenance.ps1` is what reads the running truth back.
 
 ## Provenance of the embedder migration
 

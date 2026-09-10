@@ -76,11 +76,29 @@ services:
       LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS: "3600"
 
       # ---- Runtime sizing -----------------------------------------------
-      # Workstation GC: one heap instead of one per core. Server GC allocates a
-      # heap and a dedicated GC thread PER CORE, which on a 16-core host is the
-      # main reason for the resident-set figures the runbook records. These are
-      # latency-insensitive background services on a developer machine.
-      DOTNET_gcServer: "0"
+      # Server GC with an EXPLICIT heap count (issue #2596).
+      #
+      # This was DOTNET_gcServer: "0", commented "one heap instead of sixteen".
+      # That traded away parallel collection to protect the memory limit,
+      # because Server GC would otherwise size its heap count from
+      # DOTNET_PROCESSOR_COUNT below, which is pinned to 16 for a completely
+      # unrelated reason (the WAL replay concurrency gate). One variable, two
+      # jobs, opposite requirements.
+      #
+      # The cost of that trade went unmeasured until gate run 2, whose log
+      # measures it directly: 283 whole-process silence gaps of 5s or more,
+      # longest 29.3s, totalling 20.9% of wall-clock, against a 30s Orleans
+      # request timeout. Every timed-out call (127 of 127) began executing
+      # within 0.5s of enqueue and then froze, so this is a stop-the-world
+      # pause rather than queueing contention. Orleans logged "Silo not running
+      # with ServerGC turned on" at startup throughout.
+      #
+      # GCHeapCount decouples the collector from PROCESSOR_COUNT, so the
+      # footprint concern that motivated "0" is addressed directly instead of
+      # by giving up parallel collection. 6 matches the cpus cap below, NOT the
+      # 16 above.
+      DOTNET_gcServer: "1"
+      DOTNET_GCHeapCount: "6"
       # DO NOT REMOVE. This decouples the WAL replay concurrency gate from the
       # CPU cap below. BPlusLeafGrain sizes that process-wide gate from
       # Environment.ProcessorCount when the option is left non-positive, once,
@@ -114,8 +132,28 @@ services:
 
   embedder:
     environment:
-      # Workstation GC, for the same reason as the sibling service above.
+      # Workstation GC. Unlike the sibling service above, this one has no large
+      # managed heap worth collecting in parallel: its footprint is dominated by
+      # the resident ONNX model, which is native and outside the GC's control.
       DOTNET_gcServer: "0"
+      # Pins the ONNX intra-op thread pool to the cgroup grant below.
+      #
+      # ONNX Runtime sizes that pool from HOST cores (16 here) and does not
+      # consult the cgroup quota, so under the 4.0-CPU grant the pool ran 4x
+      # oversubscribed and the kernel throttled it in 296 of 298 consecutive
+      # scheduling periods during vectorising. This is the third instance in
+      # this one deployment of a runtime sizing a pool from host cores under a
+      # fractional grant; see DOTNET_GCHeapCount and DOTNET_PROCESSOR_COUNT on
+      # the sibling service above.
+      #
+      # Issue #2610 derives this value from the cgroup automatically, so on an
+      # image built from that commit or later the pin only restates what the
+      # server would have chosen for itself. It is tracked anyway, because the
+      # deployment this file describes still runs a pre-#2610 image and because
+      # an explicit value is what the deployed configuration actually carries.
+      # Removing it is precisely how the derived path gets exercised, which has
+      # not happened yet on this box.
+      EMBED_INTRA_THREADS: "4"
     # Leaves 12 of the host's 16 cores for interactive work. The embedder sizes
     # its ONNX intra-op thread pool from this grant, read from the cgroup
     # filesystem (issue #2610), so changing this number changes the pool.

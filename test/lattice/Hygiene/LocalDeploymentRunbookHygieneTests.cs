@@ -69,6 +69,7 @@ public sealed class LocalDeploymentRunbookHygieneTests
     private const string ComposeDirectory = "samples/RepoContextContainer";
     private const string BaseComposeFile = "docker-compose.yml";
     private const string TuningComposeFile = "docker-compose.tuning.yml";
+    private const string EnvExamplePath = "samples/RepoContextContainer/.env.example";
 
     private const string TableBegin = "<!-- compose-settings:begin -->";
     private const string TableEnd = "<!-- compose-settings:end -->";
@@ -200,6 +201,77 @@ public sealed class LocalDeploymentRunbookHygieneTests
                 mismatched,
                 Is.Empty,
                 "these documented values disagree with the resolved compose document.");
+        });
+    }
+
+    /// <summary>
+    /// The workspace root the deployment points at is configured by an untracked
+    /// <c>.env</c> file that Docker Compose auto-loads from the directory it is invoked
+    /// from. It appears in neither compose file, so the parity test above cannot see it,
+    /// and the resolved document reports only the unexpanded default. This test therefore
+    /// guards the one thing that is checkable from the repository: that the runbook still
+    /// explains the setting, the trap, and how to verify it, and that a tracked example
+    /// still carries the value.
+    /// <para>
+    /// IT ESTABLISHES NOTHING ABOUT ANY MOUNT, ANY INDEXED ROOT, OR ANY RUNNING
+    /// CONTAINER. It cannot: the correct value is an absolute host path that differs on
+    /// every machine and does not exist in CI. A green run means the words are present.
+    /// It does not mean a deployment is pointed anywhere in particular, and it does not
+    /// prevent the omission from recurring, because nothing loads
+    /// <c>.env.example</c> at <c>up</c> time. Observability of the wrong state is issue
+    /// #2617; the running check is the indexed-root assertion described in the runbook.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void The_runbook_documents_the_workspace_root_and_its_worktree_trap()
+    {
+        var root = HygieneRepository.FindRepoRoot();
+        var runbook = File.ReadAllText(Path.Combine(
+            root,
+            RunbookPath.Replace('/', Path.DirectorySeparatorChar)));
+
+        // Each entry is a fact the runbook must still carry, paired with why losing it
+        // would matter. Substrings, not prose matching: this guards presence of the
+        // mechanism's name, not the wording around it.
+        var required = new (string Needle, string Why)[]
+        {
+            ("REPO_PATH", "the setting's own name"),
+            (".env", "the mechanism that actually carries it, and the half that was lost"),
+            (EnvExamplePath, "the tracked example a reader is told to copy"),
+            ("${REPO_PATH:-../../..}", "the default whose meaning changes by invocation directory"),
+            ("worktree", "the case in which that default is silently wrong"),
+            ("docker inspect", "the mount verification command"),
+            ("repocontext_changed", "the stronger indexed-root verification command"),
+            ("#2617", "where prevention actually lives"),
+        };
+
+        var missing = required
+            .Where(r => !runbook.Contains(r.Needle, StringComparison.Ordinal))
+            .Select(r => $"{r.Needle} ({r.Why})")
+            .ToList();
+
+        var examplePath = Path.Combine(root, EnvExamplePath.Replace('/', Path.DirectorySeparatorChar));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                missing,
+                Is.Empty,
+                $"{RunbookPath} no longer documents the workspace root. This deployment has "
+                + "already been indexed against the wrong tree once, silently, for the whole "
+                + "life of the container, because this setting lived only in an untracked file.");
+
+            Assert.That(
+                File.Exists(examplePath),
+                Is.True,
+                $"expected {EnvExamplePath} to exist. It is the only copy of REPO_PATH in "
+                + "version control; the live .env is gitignored by design.");
+
+            Assert.That(
+                File.Exists(examplePath) ? File.ReadAllText(examplePath) : string.Empty,
+                Does.Contain("REPO_PATH="),
+                $"expected {EnvExamplePath} to assign REPO_PATH. An example that documents the "
+                + "variable without assigning it cannot be copied to a working .env.");
         });
     }
 
