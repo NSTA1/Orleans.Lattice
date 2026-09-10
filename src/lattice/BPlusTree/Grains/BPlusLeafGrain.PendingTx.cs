@@ -1345,6 +1345,7 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public Task<List<string>> GetPendingKeysAsync()
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         if (_pendingTx is null || _pendingTx.Count == 0)
             return Task.FromResult(new List<string>());
 
@@ -1363,6 +1364,7 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public Task<List<PendingMutationSnapshot>> GetPendingMutationsForSlotsAsync(int[] sortedMovedSlots, int virtualShardCount)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
         ArgumentNullException.ThrowIfNull(sortedMovedSlots);
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
