@@ -106,6 +106,17 @@ public sealed class DurableVectorIndexOptions
     /// step always makes progress. A budget too small for even one item degrades
     /// to one item per step, never to a step that consumes nothing and spins.
     /// </para>
+    /// <para>
+    /// That guarantee is about the BUDGET, and it was once misread as being about
+    /// the step. It is not: a step that faults - because the source reached its
+    /// store of record through a call that timed out, say - takes an exit the
+    /// budget never governs. Such a step used to discard every item it had
+    /// already consumed, so a source that faulted reliably at the same place
+    /// re-read the same range forever and banked nothing (#2536). It now
+    /// checkpoints what it consumed before the fault propagates, which makes the
+    /// step's progress monotone under a repeating fault as well as under a spent
+    /// budget. The fault itself is still raised to the caller.
+    /// </para>
     /// </summary>
     public TimeSpan IngestSliceBudget
     {
