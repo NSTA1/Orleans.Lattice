@@ -59,6 +59,41 @@ public static class LatticeExtensions
     public const int DefaultScanStallResumeAttempts = 2;
 
     /// <summary>
+    /// Ceiling on the <em>total</em> stall resumptions a single walk may take,
+    /// however much progress it makes in between (issue 2539).
+    /// <para>
+    /// <see cref="DefaultScanStallResumeAttempts"/> bounds <em>consecutive
+    /// futile</em> stalls: it is replenished whenever the walk yields a record,
+    /// because a budget that is only ever spent caps how <em>long</em> a walk
+    /// may be rather than how <em>stuck</em> it is, and a walk whose range grows
+    /// with the corpus then dies at its third stall no matter how much it had
+    /// banked. That replenishment is the fix, but on its own it removes the last
+    /// bound on a walk's wall-clock: a source that dribbles one record per stall
+    /// would resume forever, which is worse than failing, since the caller's
+    /// next reminder tick never arrives and the failure is never surfaced.
+    /// </para>
+    /// <para>
+    /// This ceiling restores that bound without restoring the length cap. It can
+    /// only be reached by a walk that <em>is</em> progressing - a stuck walk
+    /// spends its consecutive budget first, at two - so it binds exactly the
+    /// pathological case of real but unusably slow progress. A stall costs
+    /// roughly one <see cref="LatticeOptions.MaxScanPageStallDuration"/> ceiling
+    /// plus its backoff, so on the derived default this is tens of minutes of
+    /// worst-case recovery before a walk gives up, against a status quo in which
+    /// the affected reload never completed at all.
+    /// </para>
+    /// <para>
+    /// It is deliberately <em>not</em> presented as removing the cliff. Any
+    /// fixed total is eventually exceeded by a long enough walk, so this only
+    /// moves it - and it is set where it is because the real removal is for the
+    /// caller to bank partial progress, so that a walk terminated here resumes
+    /// rather than restarts. This ceiling is what makes that termination safe
+    /// and observable in the meantime.
+    /// </para>
+    /// </summary>
+    public const int DefaultScanStallResumeCeiling = 64;
+
+    /// <summary>
     /// Fraction of the ceiling reported by a stall that a resilient scan waits
     /// before resuming, multiplied by the attempt number.
     /// <para>
@@ -441,6 +476,7 @@ public static class LatticeExtensions
         // by that budget alone; see the catch below.
         var stallBudget = ComputeScanStallResumeBudget(budget);
         var stallAttempt = 0;
+        var stallTotal = 0;
         var stallDelayMs = 0;
 
         while (true)
@@ -525,9 +561,64 @@ public static class LatticeExtensions
                         // another ceiling of pure waiting to the case that cannot
                         // benefit from it. The budget stays deliberately small for
                         // the same reason - see DefaultScanStallResumeAttempts.
-                        if (stallAttempt < stallBudget)
+                        // THE BUDGET WAS ALSO MONOTONIC, AND THAT IS A SEPARATE
+                        // DEFECT FROM THE GATE ABOVE (issue 2539). stallAttempt
+                        // was declared once outside the reopen loop and only ever
+                        // incremented - never reset when the walk delivered
+                        // records - so the budget capped the TOTAL faults a walk
+                        // could absorb over its whole life rather than the futile
+                        // ones. A walk whose range grows with the corpus then gets
+                        // a fixed handful of faults for its entire lifetime,
+                        // however much progress it banked in between, and every
+                        // fault after that is terminal. Raising the budget only
+                        // moves that cliff, since any fixed total is eventually
+                        // exceeded by a long enough walk.
+                        //
+                        // RESETTING ON A YIELDED RECORD IS THE INVERSE OF THE
+                        // REFUSED GATE, NOT A RE-INTRODUCTION OF IT, and that
+                        // distinction is the whole reason it survives the history
+                        // above. The gate used progress to REFUSE a resume, so it
+                        // fired first and vetoed the recovery; replenishment uses
+                        // progress to RESTORE budget, so it can only ever permit
+                        // more recovery than before, never less. A walk that never
+                        // advances is governed exactly as it was: the origin-
+                        // parked cold-replay population described above still
+                        // exhausts its budget and still reports budget-exhausted.
+                        // Nothing the 2456 measurement covered is changed.
+                        //
+                        // REPLENISHMENT ALONE WOULD REMOVE THE LAST BOUND ON A
+                        // WALK'S WALL-CLOCK, which the DefaultScanStallResumeAttempts
+                        // doc calls out as that budget's second job. A source that
+                        // dribbles one record per stall would resume forever, and
+                        // a scan that never returns is worse than one that fails:
+                        // the caller's next reminder tick never arrives, so the
+                        // fault is never surfaced anywhere. DefaultScanStallResumeCeiling
+                        // therefore caps TOTAL resumptions. It can only be reached
+                        // by a walk that is progressing, since a stuck one spends
+                        // its consecutive budget first, so it binds exactly the
+                        // pathological case of real but unusably slow progress and
+                        // leaves every other walk governed as before.
+                        //
+                        // Termination for a healthy walk is by construction rather
+                        // than by either ceiling: every yielded record strictly
+                        // advances lastKey and the reopened range is half-open
+                        // above it, so a walk that makes progress is converging,
+                        // while one that makes none spends its budget and rethrows.
+                        //
+                        // The population this serves was measured on the durable
+                        // vector index's reload walk, which is NOT the origin-
+                        // parked shape 2278 describes: 16,794 completed leaf scans
+                        // against 8,094 page stalls on that tree, roughly two
+                        // leaves per stall, with 98 resumptions actually taken and
+                        // 45 walks still dying of budget exhaustion. Those walks
+                        // advance between stalls and then die at the second one
+                        // having covered a trivial fraction of the corpus, which
+                        // is exactly what replenishment addresses and exactly what
+                        // the refused gate could not have.
+                        if (stallAttempt < stallBudget && stallTotal < DefaultScanStallResumeCeiling)
                         {
                             stallAttempt++;
+                            stallTotal++;
                             stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
                             RecordScanStallOutcome(stall, StallOutcomeResumed);
                             shouldReopen = true;
@@ -547,6 +638,19 @@ public static class LatticeExtensions
                         break;
                     }
 
+                    // Progress replenishes the CONSECUTIVE stall budget (issue
+                    // 2539). It exists to stop a walk that is banking NOTHING,
+                    // not to cap how many faults a corpus-sized walk may absorb
+                    // over its life; see the stall catch above for why this is
+                    // the inverse of the gate that was refused, and not a
+                    // re-introduction of it.
+                    //
+                    // `attempt` is deliberately NOT reset. It governs a different
+                    // fault, and its value also drives an escalating reconnect
+                    // backoff, so resetting it on progress would silently flatten
+                    // that escalation. It is structurally monotonic in the same
+                    // way, but that is a separate and so far unmeasured concern.
+                    stallAttempt = 0;
                     lastKey = enumerator.Current;
                     yield return enumerator.Current;
                 }
@@ -663,6 +767,7 @@ public static class LatticeExtensions
         // backoff, gated by that budget alone.
         var stallBudget = ComputeScanStallResumeBudget(budget);
         var stallAttempt = 0;
+        var stallTotal = 0;
         var stallDelayMs = 0;
 
         while (true)
@@ -699,9 +804,10 @@ public static class LatticeExtensions
                         // See ScanKeysAsyncCore for the reasoning, including why
                         // an unchanged continuation position neither refuses the
                         // resume nor lengthens its backoff.
-                        if (stallAttempt < stallBudget)
+                        if (stallAttempt < stallBudget && stallTotal < DefaultScanStallResumeCeiling)
                         {
                             stallAttempt++;
+                            stallTotal++;
                             stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallAttempt);
                             RecordScanStallOutcome(stall, StallOutcomeResumed);
                             shouldReopen = true;
@@ -718,6 +824,10 @@ public static class LatticeExtensions
                         break;
                     }
 
+                    // Progress replenishes the consecutive stall budget only;
+                    // `attempt` is deliberately not reset (issue 2539). See
+                    // ScanKeysAsyncCore's yield site for both halves of that.
+                    stallAttempt = 0;
                     lastKey = enumerator.Current.Key;
                     yield return enumerator.Current;
                 }

@@ -233,7 +233,11 @@ public partial class ResilientScanExtensionsTests
             {
             }
         });
-        Assert.That(calls, Is.EqualTo(1 + LatticeExtensions.DefaultScanStallResumeAttempts));
+        Assert.That(
+            calls,
+            Is.EqualTo(1 + LatticeExtensions.DefaultScanStallResumeCeiling),
+            "this source progresses one key per stall, so it is bounded by the total " +
+            "ceiling rather than by the consecutive-futile budget (issue 2539)");
     }
 
     [Test]
@@ -243,13 +247,18 @@ public partial class ResilientScanExtensionsTests
         // costs a whole ceiling, so it draws on its own much smaller budget and
         // a caller that raises maxAttempts for a long walk does not silently
         // raise its tolerance for stalls with it.
+        //
+        // The source here deliberately makes NO progress. Since issue 2539 a
+        // progressing walk is bounded by DefaultScanStallResumeCeiling instead,
+        // and that bound is the same whatever maxAttempts is - so a progressing
+        // source would terminate at the same count either way and the test would
+        // no longer discriminate the min() clamp it exists to pin.
         var lattice = Substitute.For<ILattice>();
         var calls = 0;
-        var next = 'a';
         StubKeys(lattice, _ =>
         {
             calls++;
-            return StalledKeys(new[] { next++.ToString() }, stallAfter: 1);
+            return StalledKeys(Array.Empty<string>(), stallAfter: 0);
         });
 
         Assert.ThrowsAsync<ScanPageStalledException>(async () =>
@@ -362,7 +371,9 @@ public partial class ResilientScanExtensionsTests
 
         Assert.That(
             outcomes.Count(o => o == "resumed"),
-            Is.EqualTo(LatticeExtensions.DefaultScanStallResumeAttempts));
+            Is.EqualTo(LatticeExtensions.DefaultScanStallResumeCeiling),
+            "this source progresses one key per stall, so every resume is replenished " +
+            "and the walk is bounded by the total ceiling instead (issue 2539)");
         Assert.That(outcomes, Has.Exactly(1).EqualTo("budget-exhausted"));
     }
 
