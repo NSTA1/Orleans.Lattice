@@ -76,6 +76,8 @@ public sealed partial class DurableVectorIndex
     private int _expected;
     private int _updatesSinceTraining;
     private bool _restored;
+    private int _slicesDeadlined;
+    private int _slicesDeadlinedWithoutProgress;
 
     private DurableVectorIndex(
         IVectorIndexStore store,
@@ -186,7 +188,9 @@ public sealed partial class DurableVectorIndex
         _expected,
         _persistedPartitions,
         _index.PartitionCount,
-        _restored);
+        _restored,
+        _slicesDeadlined,
+        _slicesDeadlinedWithoutProgress);
 
     /// <summary>
     /// Searches the resident index, writing hits into the caller's span in

@@ -277,6 +277,39 @@ mislead:
 | `graceful-restart` | `compose stop` (SIGTERM plus a drain window), then `start` | A planned restart, where shutdown captured a snapshot |
 | `sigkill-restart` | `docker kill -s KILL`, then `start` | Container recreation and out-of-memory: no drain, so the snapshot is whatever the last periodic capture left |
 
+Those three are only distinguishable because a drain window exists.
+`docker-compose.rig.yml` sets `init: true` so PID 1 is an init process that
+forwards `SIGTERM` and reaps orphans, and `stop_grace_period: 120s` so a drain
+is allowed to finish; the same pair carried by the live sample, for the same
+reasons (issues #2576 and #2389). A `graceful-restart` that got no drain would
+be a second, slower spelling of `sigkill-restart`, which is the one comparison
+in this table that must not collapse.
+
+**Note which teardown that actually repaired, because the measured one was never
+broken.** `graceful-restart` passes an explicit `stop -t` of
+`GracefulStopTimeoutSec` (180s), so it always had its drain window. Every other
+teardown took Docker's 10s default: the warm-up `down` before a cohort, the
+`down` after it, and - the one whose damage persists - the `down` that
+`generate-corpus.ps1` performs immediately before **promoting** the working
+volume to a scale master. A promote whose teardown was a `SIGKILL` bakes an
+unbanked WAL into the master, and every later cohort restores from it, so the
+cost is copied forward into the baseline rather than expiring with the run. The
+measured stop being correct is exactly what kept that invisible.
+
+**The isolation guard now refuses a stack that is not shutdown-ready.**
+`Assert-RigComposeIsolation` checks `init: true` on every service, a
+`stop_grace_period` at least as long as the host's own 90s shutdown budget, and
+a `LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD` that agrees with it - so a cohort
+cannot start against a stack whose teardown would crash. It runs where
+`Assert-RigDockerIsolation` already ran, on the document `docker compose config`
+resolved, which matters more than it sounds: that document is what Docker will
+really run, after interpolation and after every override file is merged. The
+equivalent NUnit fixtures compare the tracked compose files to each other, and
+both were correct throughout the epic #2368 gate runs - the container that
+failed had simply been composed from a different checkout. A file-to-file check
+would have been green the whole time, so the check has to sit at the point the
+deployment is resolved rather than at the point the repository is read.
+
 Useful flags:
 
 - `-Runs <n>` repeats the whole cohort from a freshly cloned master. Two or more

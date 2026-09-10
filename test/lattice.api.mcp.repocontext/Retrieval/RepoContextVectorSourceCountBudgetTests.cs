@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using System.Runtime.CompilerServices;
 using NSubstitute;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Fakes;
 using Orleans.Runtime;
@@ -188,6 +189,46 @@ public sealed class RepoContextVectorSourceCountBudgetTests
             + "same budget");
     }
 
+    [Test]
+    public void A_walk_whose_source_yields_nothing_is_still_bounded()
+    {
+        // THE PAIRED NEGATIVE (#2536). Every other fixture here drives a source
+        // that ANSWERS, and none of them can see the case that wedged the rig: the
+        // in-loop budget check sits after the key is counted, so a walk that yields
+        // no key never reaches it and is bounded by nothing whatsoever. The field
+        // evidence is the expected value on the other side of this assertion -
+        // across 53,733 log lines of a wedged build, with the corpus reported
+        // uncounted throughout, this exception was constructed exactly ZERO times.
+        // A bound that never fires and an absent bound are the same bound.
+        var tree = Substitute.For<ILattice>();
+        tree.KeysAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(),
+            Arg.Any<CancellationToken>())
+            .Returns(ci => StalledKeys(ci.ArgAt<CancellationToken>(4)));
+
+        // A real budget against the real clock: the deadline is a timer, so a clock
+        // that only advances when it is read would leave it unarmed and this test
+        // would hang against the fixed code as readily as against the broken code.
+        var source = new RepoContextVectorSource(
+            FactoryFor(tree), Serializer, RepoId, Space,
+            countBudget: TimeSpan.FromMilliseconds(500),
+            timeProvider: TimeProvider.System);
+
+        var thrown = Assert.ThrowsAsync<RepoContextCountBudgetExceededException>(
+            async () => await source.CountAsync(Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct),
+            "a walk that never yields must still be ended by its budget; before this change it ran "
+            + "until the caller's own timeout, holding the build's turn for the whole of it");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown!.Counted, Is.Zero,
+                "and it reports honestly that it counted nothing, so a caller cannot mistake the "
+                + "truncation for a small repository");
+            Assert.That(thrown.RepoId, Is.EqualTo(RepoId));
+            Assert.That(thrown.Budget, Is.EqualTo(TimeSpan.FromMilliseconds(500)));
+        });
+    }
+
     private static string[] Keys(int count)
     {
         var keys = new string[count];
@@ -215,8 +256,19 @@ public sealed class RepoContextVectorSourceCountBudgetTests
         return factory;
     }
 
-    private static async IAsyncEnumerable<string> ScriptedKeys(string[] keys, int abortAfter)
+    /// <summary>
+    /// A walk that never yields a key and never ends, which is what a scan of a
+    /// contended shard root does when its leaf chain cannot be read: it is neither
+    /// a fault the loop can catch nor an answer the loop can count.
+    /// </summary>
+    private static async IAsyncEnumerable<string> StalledKeys(
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+        yield break;
+    }
+
+    private static async IAsyncEnumerable<string> ScriptedKeys(string[] keys, int abortAfter)    {
         var yielded = 0;
         foreach (var key in keys)
         {
