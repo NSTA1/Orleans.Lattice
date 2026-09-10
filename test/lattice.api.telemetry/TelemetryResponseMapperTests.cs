@@ -100,6 +100,20 @@ public sealed class TelemetryResponseMapperTests
             "A gap or an overflow must reach the client as itself.");
     }
 
+    [TestCase("NaN", double.NaN)]
+    [TestCase("+Inf", double.PositiveInfinity)]
+    [TestCase("Inf", double.PositiveInfinity)]
+    [TestCase("-Inf", double.NegativeInfinity)]
+    public void Map_decides_every_special_form_in_one_place(string raw, double expected)
+    {
+        var (_, series) = TelemetryResponseMapper.Map(Data($$"""
+            { "resultType": "scalar", "result": [1767182400, "{{raw}}"] }
+            """));
+
+        Assert.That(series[0].Points[0].Value, Is.EqualTo(expected),
+            "Every special token a backend can render must resolve to its own value.");
+    }
+
     [Test]
     public void Map_reports_an_unrecognised_result_type_as_empty()
     {
@@ -124,6 +138,45 @@ public sealed class TelemetryResponseMapperTests
                 Is.EqualTo(TelemetryResultKind.Empty));
             Assert.That(TelemetryResponseMapper.Map(default).Kind, Is.EqualTo(TelemetryResultKind.Empty));
         });
+    }
+
+    [Test]
+    public void Map_reports_a_result_that_is_not_an_array_as_carrying_no_series()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(TelemetryResponseMapper.Map(Data("""{"resultType":"vector","result":{}}""")).Series,
+                Is.Empty);
+            Assert.That(TelemetryResponseMapper.Map(Data("""{"resultType":"matrix","result":{}}""")).Series,
+                Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Map_reports_a_series_without_a_metric_object_as_unlabelled()
+    {
+        var (_, series) = TelemetryResponseMapper.Map(Data("""
+            {
+              "resultType": "vector",
+              "result": [ { "value": [1767182400, "1"] }, { "metric": 3, "value": [1767182400, "1"] } ]
+            }
+            """));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(series[0].Labels, Is.Empty);
+            Assert.That(series[1].Labels, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Map_skips_a_sample_whose_value_is_neither_a_number_nor_a_string()
+    {
+        var (_, series) = TelemetryResponseMapper.Map(Data("""
+            { "resultType": "scalar", "result": [1767182400, true] }
+            """));
+
+        Assert.That(series, Is.Empty, "A value of an unexpected JSON kind is unreadable, so the sample is dropped.");
     }
 
     [Test]
