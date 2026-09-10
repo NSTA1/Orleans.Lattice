@@ -10,7 +10,8 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// <summary>
 /// Asserts that the settings table in
 /// <c>docs/lattice.api.mcp.repocontext/local-deployment-runbook.md</c> enumerates
-/// exactly the settings the tracked compose files actually resolve to.
+/// exactly the settings the tracked compose files actually resolve to, and that the
+/// opt-in CPU pinning added by #2623 stays opt-in.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -81,6 +82,31 @@ public sealed class LocalDeploymentRunbookHygieneTests
     /// rather than restating them.
     /// </summary>
     private static readonly string[] ScalarSettings = ["image", "cpus", "mem_limit"];
+
+    /// <summary>
+    /// The variables that carry the opt-in CPU pinning added by #2623, and the
+    /// service each one pins.
+    /// </summary>
+    private static readonly (string Service, string Variable)[] CpusetVariables =
+    [
+        ("repocontext", "REPOCONTEXT_CPUSET"),
+        ("embedder", "EMBEDDER_CPUSET"),
+    ];
+
+    /// <summary>
+    /// A <c>cpuset:</c> declaration in a compose file, capturing whatever it is set to.
+    /// </summary>
+    private static readonly Regex CpusetDeclaration = new(
+        @"^\s*cpuset\s*:\s*""?(?<value>[^""#]*?)""?\s*$",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// A variable reference supplying an EMPTY default, which is the only form of
+    /// <c>cpuset</c> this deployment permits in a tracked compose file.
+    /// </summary>
+    private static readonly Regex EmptyDefaultedVariable = new(
+        @"^\$\{[A-Z_][A-Z0-9_]*:-\}$",
+        RegexOptions.Compiled);
 
     /// <summary>
     /// The marker a value-redacted row must carry in the Value column, in place of the
@@ -322,8 +348,228 @@ public sealed class LocalDeploymentRunbookHygieneTests
     }
 
     // ---------------------------------------------------------------------
+    // The opt-in guarantee for CPU pinning (#2623).
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// CPU pinning is opt-in, and this is the half of that guarantee which needs no
+    /// Docker: every <c>cpuset</c> a TRACKED compose file declares must be driven by a
+    /// variable with an EMPTY default. A literal range hard-coded here would make
+    /// pinning a default that arrives with a <c>git pull</c> rather than a choice an
+    /// operator made, and it would perturb precisely the measurement window the knob is
+    /// kept unset for: epic #2368 voided a whole gate run to a service configuration
+    /// that changed inside one.
+    /// <para>
+    /// It also fails if the declarations go MISSING, so deleting the knob while the
+    /// runbook still documents it is caught rather than passing vacuously.
+    /// </para>
+    /// <para>
+    /// A machine-local <c>docker-compose.override.yml</c> is deliberately excluded. It
+    /// is gitignored, it is a legitimate personal escape hatch, and a hard-coded cpuset
+    /// in one is the operator's business - the runbook asks only that it be recorded
+    /// under local-only deltas. Scanning it would make this fixture's result depend on
+    /// untracked state, which is the defect #2609 closed rather than one to reopen.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void Every_tracked_cpuset_declaration_is_variable_driven_with_an_empty_default()
+    {
+        var composeFiles = TrackedComposeFiles();
+
+        var declarations = composeFiles
+            .SelectMany(file => File.ReadAllLines(file)
+                .Where(line => !line.TrimStart().StartsWith('#'))
+                .Select(line => CpusetDeclaration.Match(line))
+                .Where(match => match.Success)
+                .Select(match => (File: Path.GetFileName(file), Value: match.Groups["value"].Value.Trim())))
+            .ToList();
+
+        var literal = declarations
+            .Where(d => !EmptyDefaultedVariable.IsMatch(d.Value))
+            .Select(d => $"{d.File}: cpuset: \"{d.Value}\"")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        var declaredVariables = declarations
+            .Select(d => d.Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var missing = CpusetVariables
+            .Where(v => !declaredVariables.Contains($"${{{v.Variable}:-}}"))
+            .Select(v => $"{v.Variable} (pins {v.Service})")
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                composeFiles,
+                Has.Count.GreaterThanOrEqualTo(3),
+                "expected to find the tracked compose files to scan. Finding almost none "
+                + "means this assertion is vacuous rather than satisfied.");
+
+            Assert.That(
+                literal,
+                Is.Empty,
+                "a tracked compose file pins a literal cpuset. Pinning must stay opt-in and "
+                + "unset by default: a literal here changes what every reader of that "
+                + "directory deploys from a plain `docker compose up`, and a configuration "
+                + "change landing mid-measurement is what voided gate run 3 of epic #2368. "
+                + "Drive it from a variable with an empty default instead, as "
+                + "`${NAME:-}`, and put the value in an untracked .env.");
+
+            Assert.That(
+                missing,
+                Is.Empty,
+                "the opt-in CPU pinning variables are no longer declared by any tracked "
+                + "compose file, while the runbook still documents them. Either the knob "
+                + "was removed and its documentation left behind, or it was renamed and "
+                + "this guard was not.");
+        });
+    }
+
+    /// <summary>
+    /// The other half of the opt-in guarantee, and the one that actually matters:
+    /// with the variables unset the RESOLVED document must declare no <c>cpuset</c>
+    /// at all.
+    /// <para>
+    /// This is not the same claim as the textual one above, and neither implies the
+    /// other. Compose could perfectly well render an empty <c>cpuset: ""</c> key from
+    /// an unset variable - that it instead omits the key entirely is a property of the
+    /// merge, observed here rather than assumed, and it is what makes "byte-identical
+    /// to before the knob existed" true rather than merely nearly true.
+    /// </para>
+    /// <para>
+    /// Resolved with an EMPTY <c>--env-file</c> and with the two variables stripped from
+    /// the child process environment, so that a developer who has legitimately enabled
+    /// pinning on their own machine does not see this fixture fail. The question asked
+    /// is what the tracked files resolve to for someone who has set nothing.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void The_resolved_document_declares_no_cpuset_when_the_variables_are_unset()
+    {
+        var workingDirectory = Path.Combine(
+            HygieneRepository.FindRepoRoot(),
+            ComposeDirectory.Replace('/', Path.DirectorySeparatorChar));
+
+        var emptyEnvFile = Path.Combine(Path.GetTempPath(), $"lattice-cpuset-{Guid.NewGuid():N}.env");
+        File.WriteAllText(emptyEnvFile, string.Empty);
+
+        try
+        {
+            var json = RunDockerCompose(workingDirectory, emptyEnvFile);
+
+            using var document = JsonDocument.Parse(json);
+
+            if (!document.RootElement.TryGetProperty("services", out var services))
+            {
+                Assert.Fail("`docker compose config` produced no `services` element.");
+            }
+
+            var pinned = services.EnumerateObject()
+                .Where(service => service.Value.TryGetProperty("cpuset", out var cpuset)
+                    && cpuset.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined
+                    && !string.IsNullOrEmpty(Stringify(cpuset)))
+                .Select(service => $"{service.Name}: {Stringify(service.Value.GetProperty("cpuset"))}")
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    services.EnumerateObject().Count(),
+                    Is.GreaterThanOrEqualTo(2),
+                    "the resolved document yielded almost no services, so the assertion "
+                    + "below would be vacuous.");
+
+                Assert.That(
+                    pinned,
+                    Is.Empty,
+                    "the resolved compose document pins CPUs with no variable set. The "
+                    + "default deployment must be byte-identical to one resolved before "
+                    + "the pinning knob existed (#2623): enabling it has to be an act on "
+                    + "the record, because a service configuration change inside a "
+                    + "measurement window voids the measurement.");
+            });
+        }
+        finally
+        {
+            try { File.Delete(emptyEnvFile); } catch (IOException) { /* best effort */ }
+        }
+    }
+
+    /// <summary>
+    /// The runbook must keep explaining the opt-in pinning knob, and in particular must
+    /// keep carrying the two retractions attached to it. The throttling ratio was once
+    /// quoted in this epic as evidence that a thread-pool sizing fix had taken effect;
+    /// it measures CPU scatter instead, and has a high idle floor, so a residual is a
+    /// FLOOR and not a REMAINDER. Losing that paragraph would leave the figures in the
+    /// pool-sizing section reading as corroboration of something they cannot support.
+    /// <para>
+    /// Substrings, not prose matching: this guards presence of the mechanism's name and
+    /// of each load-bearing caveat, not the wording around them.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void The_runbook_documents_the_opt_in_pinning_knob_and_its_caveats()
+    {
+        var root = HygieneRepository.FindRepoRoot();
+        var runbook = File.ReadAllText(Path.Combine(
+            root,
+            RunbookPath.Replace('/', Path.DirectorySeparatorChar)));
+
+        var required = new (string Needle, string Why)[]
+        {
+            ("REPOCONTEXT_CPUSET", "the variable that pins the host service"),
+            ("EMBEDDER_CPUSET", "the variable that pins the embedder"),
+            ("cpuset", "the mechanism's own name"),
+            ("reservation", "why quota is exhausted below the entitlement"),
+            ("must not overlap", "the hazard of trading throttling for contention"),
+            ("floor, not a remainder", "the retraction that stops a residual ratio being "
+                + "read as remaining oversubscription"),
+            ("T0", "the window in which the knob must not be switched on"),
+        };
+
+        var missing = required
+            .Where(r => !runbook.Contains(r.Needle, StringComparison.Ordinal))
+            .Select(r => $"{r.Needle} ({r.Why})")
+            .ToList();
+
+        Assert.That(
+            missing,
+            Is.Empty,
+            $"{RunbookPath} no longer documents the opt-in CPU pinning knob or one of its "
+            + "caveats. The knob is only safe because the conditions on using it are "
+            + "written down: an operator who enables it mid-measurement voids the "
+            + "measurement, and one who reads a residual throttle ratio as oversubscription "
+            + "repeats a reading this epic has already withdrawn.");
+    }
+
+    // ---------------------------------------------------------------------
     // Helpers.
     // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// The tracked compose files in the sample directory. Excludes
+    /// <c>docker-compose.override.yml</c>, which is gitignored machine-local state.
+    /// </summary>
+    private static List<string> TrackedComposeFiles()
+    {
+        var directory = Path.Combine(
+            HygieneRepository.FindRepoRoot(),
+            ComposeDirectory.Replace('/', Path.DirectorySeparatorChar));
+
+        Assert.That(
+            Directory.Exists(directory),
+            Is.True,
+            $"expected the sample compose directory at {ComposeDirectory}.");
+
+        return Directory.EnumerateFiles(directory, "docker-compose*.yml")
+            .Where(file => !Path.GetFileName(file)
+                .Equals("docker-compose.override.yml", StringComparison.OrdinalIgnoreCase))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+    }
 
     private sealed record Row(string Service, string Setting, string Value, string Why)
     {
@@ -531,7 +777,7 @@ public sealed class LocalDeploymentRunbookHygieneTests
             : -1;
     }
 
-    private static string RunDockerCompose(string workingDirectory)
+    private static string RunDockerCompose(string workingDirectory, string? envFile = null)
     {
         var start = new ProcessStartInfo("docker")
         {
@@ -542,6 +788,21 @@ public sealed class LocalDeploymentRunbookHygieneTests
         };
 
         start.ArgumentList.Add("compose");
+
+        if (envFile is not null)
+        {
+            // Overrides the auto-loaded `.env`, which is gitignored machine-local
+            // state. Paired with stripping the same variables from the child's own
+            // environment below, because a shell variable outranks an env file.
+            start.ArgumentList.Add("--env-file");
+            start.ArgumentList.Add(envFile);
+
+            foreach (var (_, variable) in CpusetVariables)
+            {
+                start.Environment.Remove(variable);
+            }
+        }
+
         start.ArgumentList.Add("-f");
         start.ArgumentList.Add(BaseComposeFile);
         start.ArgumentList.Add("-f");

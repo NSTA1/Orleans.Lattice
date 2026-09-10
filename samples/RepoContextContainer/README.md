@@ -34,6 +34,29 @@ how to rebuild the whole thing from nothing - see the
 and the tracked `docker-compose.tuning.yml` beside this file. The walkthrough below
 uses the untuned defaults and does not need either.
 
+### Optional CPU pinning
+
+Two variables, `REPOCONTEXT_CPUSET` and `EMBEDDER_CPUSET`, pin each service to a
+fixed set of CPUs. Both are **unset by default and should stay that way unless
+you have a reason**; unset, Compose omits the key from the resolved document
+entirely, so ignoring them deploys exactly what this sample deployed before they
+existed.
+
+They matter only once a **CPU quota** is in force, which the tuning overlay
+supplies. A container entitled to 4 CPUs but visible on 16 has its threads
+scattered across 16 run queues, and CFS charges a whole 5 ms slice to each queue
+a thread wakes on, so the quota is exhausted by *reservation* rather than by
+work: measured 5.4% throttled periods at ~17% quota utilisation, against **0.0%
+at ~26%** when pinned, varying nothing else. Sizing the cpuset to the grant
+removes the throttling.
+
+Derive the values from your own grants rather than copying them - one range per
+service, sized to the ceiling of its `cpus`, and the ranges **must not overlap**
+or you trade throttling for contention. See
+[.env.example](.env.example) for the form and the runbook section
+"CPU scatter under a fractional quota" for the evidence, the limits of what it
+claims, and why you must not enable it in the middle of a measurement.
+
 ## Prerequisites
 
 - Docker with Compose v2.
@@ -644,6 +667,9 @@ explicitly also **suppresses** an automatic `docker-compose.override.yml`, which
 is what makes the deployed configuration reproducible from the checkout alone;
 layering a personal override on top of the tuning file makes it three, and you
 say so with `-ExpectedConfigFileCount 3`.
+
+The opt-in CPU pinning described below does **not** move the count: it is two
+variables on the existing services, not a third file.
 
 A machine-local override remains legitimate, and it is why check 1 reads the
 container's label rather than walking the repository: **it has to be able to fail
