@@ -1,0 +1,24 @@
+# Pairs with TypeOK. A revision counter that can be bumped outside a decision
+# write leaves the declared 0..Cardinality(Txns) domain, which is exactly what
+# TypeOK is there to notice.
+MODULE: TypeOkRevisionRunaway
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: bumps the registry revision outside any decision write, so it leaves its declared domain
+
+--- FIND
+Next ==
+    \/ \E t \in Txns : PrepareTx(t)
+--- REPLACE
+\* MUTATION: a revision bump with no decision behind it. Modelled as a real
+\* action rather than by widening TypeOK's domain, because the point is to
+\* prove TypeOK notices an out-of-domain variable, not that TypeOK can be
+\* edited.
+RevisionRunaway ==
+    /\ revision' = revision + 1
+    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone>>
+
+Next ==
+    \/ RevisionRunaway
+    \/ \E t \in Txns : PrepareTx(t)
+--- END

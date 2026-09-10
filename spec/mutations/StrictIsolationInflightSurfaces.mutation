@@ -1,0 +1,16 @@
+# Pairs with StrictIsolation. Weakening the gate from "the registry says
+# committed" to "the registry has not said aborted" is the read-uncommitted
+# default: a saga still in flight surfaces its prepared writes to readers.
+MODULE: StrictIsolationInflightSurfaces
+TARGET: StrictIsolation
+CLASS: Invariant
+SUMMARY: surfaces a prepared bucket unless the saga has aborted, so in-flight writes are readable
+
+--- FIND
+SurfaceViaGate(t, k) == decision[t] = "committed" /\ ~AlreadyTerminal(t, k)
+--- REPLACE
+\* MUTATION: the gate now admits anything not yet known to have aborted, which
+\* includes "inflight". This is the strict-isolation default inverted: absence
+\* of a decision reads as permission rather than as refusal.
+SurfaceViaGate(t, k) == decision[t] # "aborted" /\ ~AlreadyTerminal(t, k)
+--- END

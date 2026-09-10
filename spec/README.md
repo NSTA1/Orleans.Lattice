@@ -15,9 +15,10 @@ protocol cores.
 
 The specification is intentionally **outside** the compiled solution
 (`Orleans.Lattice.slnx`). It is not C#; it is checked by TLC, which needs a
-Java runtime and the TLA+ tools. TLC is **not** wired into the required
-per-PR build - see the "CI decision" section below. This directory contains
-only `.tla`, `.cfg`, and `.md` files; nothing here is built by `dotnet`.
+Java runtime and the TLA+ tools. TLC **is** run per PR, but through an NUnit
+fixture that shells out to it rather than by building anything here - see the
+"CI decision" section below. This directory contains only `.tla`, `.cfg`,
+`.mutation`, and `.md` files; nothing here is built by `dotnet`.
 
 ## Files
 
@@ -25,6 +26,7 @@ only `.tla`, `.cfg`, and `.md` files; nothing here is built by `dotnet`.
 |------|-----------|
 | [`AtomicCommit.tla`](AtomicCommit.tla) | The specification: state, actions, safety invariants, liveness properties. |
 | [`AtomicCommit.cfg`](AtomicCommit.cfg) | The TLC model: the bounded instance and the invariant / property list to check. |
+| [`mutations/`](mutations/) | One deliberate defect per checked property, each of which must make that property fire. See [`mutations/README.md`](mutations/README.md). |
 | [`Refinement.md`](Refinement.md) | The refinement note: each spec variable / action mapped to its protocol counterpart in the code cores. |
 | `README.md` | This file. |
 
@@ -156,6 +158,13 @@ its property fire, by name. That is a claim about the specification's own
 diagnostic power, and unlike the design it tracks, it regresses silently the
 moment somebody weakens a property - which is exactly the failure the atomicity
 audit (epic #2299) found four times over.
+
+Each of the twelve properties is paired with a mutation, and each pairing runs
+as a two-arm experiment: the generated single-property model must be **clean**
+against the unmutated specification and **violated** against the mutant. The
+control arm is what makes a red mutant evidence rather than merely a red run,
+and it is the standing proof that the fixture is not vacuous. See
+[`mutations/README.md`](mutations/README.md).
 
 The local invocation documented above remains supported and is still the fast
 path when iterating on the protocol design.

@@ -1,0 +1,18 @@
+# Pairs with LinearizedTerminals. Letting a participant apply a terminal while
+# the saga is still merely "prepared" removes the decision-before-broadcast
+# ordering, which is the load-bearing linearization of the whole protocol.
+MODULE: LinearizedTerminalsBroadcastBeforeDecision
+TARGET: LinearizedTerminals
+CLASS: Invariant
+SUMMARY: lets a participant apply a commit terminal before the registry records the decision
+
+--- FIND
+    /\ phase[t] \in {"committing", "aborting"}
+    /\ LET kind == IF phase[t] = "committing" THEN "commit" ELSE "abort"
+--- REPLACE
+\* MUTATION: broadcast is enabled one phase early, so a leaf can apply a commit
+\* terminal while the registry decision is still "inflight". The kind now
+\* defaults to commit for any phase that is not an abort.
+    /\ phase[t] \in {"prepared", "committing", "aborting"}
+    /\ LET kind == IF phase[t] = "aborting" THEN "abort" ELSE "commit"
+--- END
