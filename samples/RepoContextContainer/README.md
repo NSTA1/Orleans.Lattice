@@ -460,3 +460,96 @@ curl -fsS http://localhost:8080/metrics | head -n 20
 - None of this bounds the resident set. Raising both values past your own
   observed drain is a legitimate local remedy, but it buys time rather than
   fixing the shape.
+
+## Verifying what you actually deployed
+
+Everything above describes what the tracked compose file declares. Nothing above
+establishes that a container now running received any of it.
+
+`docker compose up` reads the compose files in its **own working directory**,
+whatever branch built the image it starts, and its output names no branch, no
+commit, and no directory. The image and the runtime configuration are therefore
+two independent inputs, and only the first is obviously version-controlled. An
+operator standing in one checkout can deploy a candidate image under a different
+checkout's configuration and see nothing at all to say so.
+
+That is not hypothetical. Two gate runs of epic #2368 did exactly this: the
+candidate image ran under the baseline's runtime config, the container's own
+compose label resolved to the main checkout, and
+`LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD` was absent from the process environment
+while sitting merged on the candidate branch. Both runs observed the absence of
+the fix's effect and concluded the fix was absent. The observation was real and
+correctly made. The discriminator was in a channel nobody was reading.
+
+Note what would **not** have helped. A check comparing tracked files to other
+tracked files would have been green throughout both runs, because the repository
+agreed with itself perfectly. Only a reading taken from the running process
+separates "the source does not carry the fix" from "the source carries it and
+this container never received it".
+
+```bash
+cd samples/RepoContextContainer
+pwsh -File ./scripts/Assert-ContainerProvenance.ps1
+```
+
+It takes four readings from the running container and refuses unless all four
+agree, printing every value it read either way:
+
+1. **Compose provenance.** The container's own
+   `com.docker.compose.project.working_dir` label resolves to the checkout you
+   are standing in, and every file in `com.docker.compose.project.config_files`
+   lies under it. An override file merged in from elsewhere is how a resolved
+   document stops matching the tracked one.
+2. **Git provenance.** That directory is a git worktree and its HEAD is the
+   commit you expect, reported as a value you read rather than an inference you
+   make. The expectation is sourced from *your* checkout, never from the one the
+   container resolved to; defaulting it to the latter would compare a value
+   against itself and pass unconditionally, which is worse than omitting the
+   check because it would report as checked.
+3. **Image provenance.** The image id the container is executing still matches
+   what its image reference resolves to now, which catches a container left in
+   place across a rebuild. Ids, never tags: a tag is a mutable pointer, so
+   comparing tag to tag compares two names for whatever is current.
+4. **Environment provenance.** A candidate-only setting is **present in the
+   container's own environment** with the expected value, expectation read from
+   your checkout's `docker-compose.yml` and actual read from the running
+   process. This is the non-redundant one. Checks 1 to 3 can all pass while an
+   override file, an edit, or a stale container leaves the value unset, and it is
+   the direct executable form of the warning above that the variable declares the
+   grant rather than being it.
+
+**What a green run does not establish.** That the image was built from the
+expected commit (check 3 as defaulted detects a stale container, not a
+mislabelled build; pass `-ExpectedImageId` if you need that). That the checkout
+was clean when `up` ran, since HEAD is a commit and uncommitted compose edits are
+invisible here. That any setting you did not name reached the process. Or
+anything whatever about a container you did not name.
+
+This is an operator check and is deliberately **not** wired into CI. It needs a
+running container, and a fixture that skipped when Docker was absent would
+produce exactly the false green it exists to prevent.
+
+It is also **not** the same instrument as the cold-start rig's
+`Assert-RigComposeIsolation`, and neither subsumes the other. That guard
+validates the *declaration* - what `docker compose config` resolved - before
+anything runs. This validates the *deployment* - what a container already running
+actually received. The rig has never had this failure mode, because
+`Get-RigComposeFile` pins the file it resolves, so the different-checkout drift
+cannot arise there. A green rig guard therefore says nothing about this class,
+and the two must not be collapsed. The boundary was drawn deliberately by issue
+#2576, whose handoff named both the remedy and its location: a post-up
+precondition on the container's own environment.
+
+The adjudication is pure and separated from the acquisition, so the refusing
+direction is exercised against fabricated disagreements rather than assumed:
+
+```bash
+pwsh -File ./scripts/Test-ContainerProvenance.ps1
+```
+
+Every one of the four checks has fixtures it accepts and fixtures it refuses,
+two of them reconstructed from the real gate run readings. A check only ever
+observed passing is indistinguishable from one that cannot fail, which is the
+same reason the suite itself is worth measuring rather than trusting: commit
+first, then make one check return no violations unconditionally, re-run, and
+confirm the assertions that fail are the ones covering that check and no others.
