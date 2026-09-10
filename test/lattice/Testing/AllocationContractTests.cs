@@ -138,9 +138,13 @@ public sealed class AllocationContractTests
         // The branch the guard exists for. It is exercised against a synthesized
         // assembly rather than against this one, so the coverage holds in both
         // Debug and Release instead of evaporating in whichever build the
-        // fixture happens to run under.
+        // fixture happens to run under. The continuous-integration decision is
+        // supplied explicitly for the same reason: asserting the ambient one
+        // would cover the ignore branch locally and the fail branch in CI, so
+        // neither would ever be checked in the environment that runs the other.
         var ignored = Assert.Throws<IgnoreException>(
-            () => AllocationContract.RequireOptimizedBuild(UnoptimizedAssembly()));
+            () => AllocationContract.RequireOptimizedBuild(
+                failInsteadOfIgnore: false, UnoptimizedAssembly()));
 
         Assert.Multiple(() =>
         {
@@ -153,6 +157,50 @@ public sealed class AllocationContractTests
             Assert.That(ignored.Message, Does.Contain("-c Release"),
                 "The message has to name the remedy, or it just relocates the confusion it exists to end.");
         });
+    }
+
+    [Test]
+    public void RequireOptimizedBuild_fails_rather_than_skipping_in_continuous_integration()
+    {
+        // CI builds every project with '--configuration Release', so an
+        // unoptimized assembly there is a pipeline defect. Ignoring it would
+        // leave an allocation gate that quietly skips itself while still
+        // reading as coverage - the failure mode this whole type exists to
+        // prevent, reintroduced one level up.
+        var failure = Assert.Throws<AssertionException>(
+            () => AllocationContract.RequireOptimizedBuild(
+                failInsteadOfIgnore: true, UnoptimizedAssembly()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(failure!.Message, Does.Contain(UnoptimizedAssemblyName));
+            Assert.That(failure.Message, Does.Contain("pipeline is misconfigured"));
+        });
+    }
+
+    [Test]
+    public void RequireOptimizedBuild_passes_in_continuous_integration_when_every_assembly_is_optimized()
+    {
+        Assert.That(
+            () => AllocationContract.RequireOptimizedBuild(
+                failInsteadOfIgnore: true, typeof(object).Assembly),
+            Throws.Nothing);
+    }
+
+    [Test]
+    public void RequireOptimizedBuild_with_an_explicit_decision_rejects_a_null_array()
+    {
+        Assert.That(
+            () => AllocationContract.RequireOptimizedBuild(failInsteadOfIgnore: true, null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void RunningInContinuousIntegration_reflects_the_GITHUB_ACTIONS_variable()
+    {
+        var expected = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"));
+
+        Assert.That(AllocationContract.RunningInContinuousIntegration(), Is.EqualTo(expected));
     }
 
     private const string UnoptimizedAssemblyName = "Orleans.Lattice.Tests.UnoptimizedProbe";

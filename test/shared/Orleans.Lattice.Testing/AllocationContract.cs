@@ -106,7 +106,35 @@ public static class AllocationContract
     /// since an <c>async</c> lambda in the fixture is a state machine too.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="assemblies"/>, or any element, is null.</exception>
-    public static void RequireOptimizedBuild(params Assembly[] assemblies)
+    public static void RequireOptimizedBuild(params Assembly[] assemblies) =>
+        RequireOptimizedBuild(RunningInContinuousIntegration(), assemblies);
+
+    /// <summary>
+    /// Reports whether the process is running under GitHub Actions, where an
+    /// unoptimized assembly is a pipeline defect rather than a local build
+    /// choice.
+    /// </summary>
+    /// <returns><see langword="true"/> when <c>GITHUB_ACTIONS</c> is set to a non-empty value.</returns>
+    public static bool RunningInContinuousIntegration() =>
+        Environment.GetEnvironmentVariable("GITHUB_ACTIONS") is { Length: > 0 };
+
+    /// <summary>
+    /// The behaviour of <see cref="RequireOptimizedBuild(Assembly[])"/> with
+    /// the continuous-integration decision supplied explicitly.
+    /// <para>
+    /// Both outcomes are then reachable from a test regardless of where that
+    /// test runs, so neither branch of a guard whose entire purpose is not to
+    /// disappear silently is itself left to disappear silently in half the
+    /// environments this repository builds in.
+    /// </para>
+    /// </summary>
+    /// <param name="failInsteadOfIgnore">
+    /// When <see langword="true"/>, an unoptimized assembly fails the test
+    /// rather than ignoring it.
+    /// </param>
+    /// <param name="assemblies">The assemblies declaring the async methods on the measured path.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="assemblies"/>, or any element, is null.</exception>
+    public static void RequireOptimizedBuild(bool failInsteadOfIgnore, params Assembly[] assemblies)
     {
         var unoptimized = UnoptimizedAmong(assemblies);
         if (unoptimized.Count == 0)
@@ -122,7 +150,7 @@ public static class AllocationContract
             + "machine whether or not it suspends, and the measurement reports that fixed compiler cost "
             + "instead of the path under test. Re-run with '-c Release'.";
 
-        if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") is { Length: > 0 })
+        if (failInsteadOfIgnore)
         {
             Assert.Fail(
                 message
