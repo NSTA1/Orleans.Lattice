@@ -61,19 +61,36 @@ def discover_trx(trx_name: str) -> list[Path]:
 
 
 def project_of(trx: Path) -> str:
-    # `<project>/bin/.../TestResults/x.trx` or `<project>/TestResults/x.trx`.
-    for part in trx.resolve().parents:
-        if (part / "TestResults") == trx.parent and part.name != "TestResults":
-            return part.name
-    return trx.parent.name
+    # `<project>/TestResults/<name>.trx`.
+    resolved = trx.resolve()
+    return resolved.parent.parent.name
 
 
 def read_results(trx: Path) -> list[tuple[str, str]]:
-    """Return (testName, outcome) for every result the trx recorded."""
+    """Return (fullyQualifiedName, outcome) for every result the trx recorded.
+
+    The `testName` on a result is a display name, which for a parameterised or
+    renamed test need not carry the namespace at all. The fully qualified name
+    lives on the test DEFINITION, so the two are joined by test id. Attributing
+    families from the display name instead would under-count silently, which is
+    the one thing this script must not do.
+    """
     root = ET.parse(trx).getroot()
+
+    full_names: dict[str, str] = {}
+    for definition in root.findall(".//t:TestDefinitions/t:UnitTest", TRX_NS):
+        test_id = definition.get("id")
+        method = definition.find("t:TestMethod", TRX_NS)
+        if test_id is None or method is None:
+            continue
+        class_name = method.get("className") or ""
+        method_name = method.get("name") or ""
+        full_names[test_id] = f"{class_name}.{method_name}"
+
     results = []
     for node in root.findall(".//t:UnitTestResult", TRX_NS):
-        name = node.get("testName") or ""
+        test_id = node.get("testId") or ""
+        name = full_names.get(test_id) or node.get("testName") or ""
         outcome = node.get("outcome") or "Unknown"
         results.append((name, outcome))
     return results
