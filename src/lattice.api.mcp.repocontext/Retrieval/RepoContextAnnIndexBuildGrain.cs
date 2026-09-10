@@ -230,16 +230,23 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         {
             state.State.Converged = true;
             state.State.VectorsIndexed = progress.VectorsIndexed;
+            state.State.PartitionsTotal = progress.PartitionsTotal;
             await state.WriteStateAsync().ConfigureAwait(true);
 
+            // Partitions are reported beside the vector count because the vector
+            // count alone cannot distinguish the two ways of reaching Ready. Zero
+            // partitions is a completed build serving exact exhaustive answers,
+            // not a failure, and saying so here is what keeps a later reader from
+            // inferring an approximate plane that was never trained.
             Logger.LogInformation(
                 "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} reached Ready "
-                + "holding {VectorsIndexed} vectors (restored from durable state: {Restored}); the build "
-                + "coordinator is standing down.",
+                + "holding {VectorsIndexed} vectors across {Partitions} partitions (restored from durable "
+                + "state: {Restored}); the build coordinator is standing down.",
                 repoId,
                 space.ModelId,
                 space.Dimension,
                 progress.VectorsIndexed,
+                progress.PartitionsTotal,
                 progress.RestoredFromDurableState);
         }
 
