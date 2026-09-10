@@ -165,6 +165,17 @@ public static class LatticeMetrics
     public const string TagLeaf = "leaf";
 
     /// <summary>
+    /// Tag key for the Orleans grain type of a call's target, on the grain-call
+    /// observation instruments (<see cref="GrainCallOutstandingDepth"/> and
+    /// <see cref="GrainCallDuration"/>). The value is the runtime grain type
+    /// name (<c>bplusleaf</c>, <c>latticeregistry</c>, and so on), <b>not</b> a
+    /// per-activation key, so cardinality is bounded by the number of grain
+    /// classes the deployed application defines and does not grow with traffic
+    /// or with the size of a tree.
+    /// </summary>
+    public const string TagGrainType = "grain_type";
+
+    /// <summary>
     /// Tag key for the activation temperature of an activation-time leaf
     /// materialiser replay on <see cref="LeafActivationReplays"/>: either
     /// <see cref="ActivationTemperatureCold"/> or
@@ -3768,4 +3779,63 @@ public static class LatticeMetrics
     public static readonly Counter<long> ViewSourceBackpressure =
         Meter.CreateCounter<long>("orleans.lattice.view.source_backpressure", unit: "{pass}",
             description: "View maintainer drain passes that throttled themselves because the source tree was under WAL saturation back-pressure.");
+
+    /// <summary>
+    /// Histogram of the number of calls to a target activation that were already
+    /// outstanding from this silo at the instant a further call was dispatched to
+    /// it. Tagged with <see cref="TagGrainType"/>. Recorded by
+    /// <c>LatticeGrainCallObservationFilter</c>, which a host installs with
+    /// <see cref="LatticeServiceCollectionExtensions.AddLatticeGrainCallObservation(Hosting.ISiloBuilder)"/>.
+    /// <para>
+    /// <b>This instrument exists because the alternative is censored.</b> The
+    /// only out-of-the-box description of Orleans' per-activation non-reentrancy
+    /// queue is the <c>NonReentrancyQueueSize=</c> clause of the
+    /// <c>Response did not arrive on time</c> timeout diagnostic. That clause is
+    /// emitted only for a request already approaching the message timeout and
+    /// describes only the <em>emitting</em> request's own wait, so a grain type
+    /// whose calls are deeply queued but which does not itself trip the timeout
+    /// contributes no rows at all, and the rows that do exist are truncated at
+    /// the timeout threshold. An extraction from that channel can therefore
+    /// report no queueing, be internally consistent, and reproduce exactly - the
+    /// sampling frame excluded the phenomenon rather than biasing the estimate.
+    /// This histogram records at dispatch on <em>every</em> outgoing call, with
+    /// no timeout, fault, or threshold in its emission condition, so its
+    /// population is not truncated.
+    /// </para>
+    /// <para>
+    /// <b>Read it as a floor, not a measurement of the queue.</b> Only calls
+    /// issued from this silo are counted, so calls to the same activation from
+    /// another silo or an external client make the value an under-estimate; and
+    /// for a <c>[Reentrant]</c> grain type or an <c>[AlwaysInterleave]</c>
+    /// method the outstanding calls interleave rather than queue, so a high
+    /// value there means pipelining and not contention. Contrast
+    /// <see cref="LeafCommitInFlight"/>, which is measured after the scheduler
+    /// has dequeued the request and consequently pins at one on a non-reentrant
+    /// grain however deep the real queue is.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<int> GrainCallOutstandingDepth =
+        Meter.CreateHistogram<int>("orleans.lattice.grain.call.outstanding_depth", unit: "{call}",
+            description: "Calls to a target activation already outstanding from this silo when a further call was dispatched, by grain type.");
+
+    /// <summary>
+    /// Histogram of end-to-end outgoing grain call duration, clocked on the
+    /// caller side around the whole call. Tagged with
+    /// <see cref="TagGrainType"/> and <see cref="TagOutcome"/>
+    /// (<c>completed</c> or <c>faulted</c>). Recorded by
+    /// <c>LatticeGrainCallObservationFilter</c>.
+    /// <para>
+    /// The outcome split is load-bearing rather than decorative. A message
+    /// timeout surfaces as a fault after the full timeout has elapsed, so a
+    /// single undifferentiated duration series mixes a completion-latency
+    /// population with a population pinned at the timeout threshold, and the
+    /// second can swamp the first exactly when a cluster is saturated. Selecting
+    /// <c>outcome=completed</c> yields request-completion latency that a healthy
+    /// run populates; selecting <c>outcome=faulted</c> isolates the timeouts
+    /// rather than letting them masquerade as slow completions.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> GrainCallDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.grain.call.duration", unit: "ms",
+            description: "End-to-end outgoing grain call duration observed by the caller, by grain type and outcome.");
 }

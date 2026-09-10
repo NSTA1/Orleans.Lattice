@@ -147,6 +147,19 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// (see U9g).
     /// </para>
     /// <para>
+    /// <b>Note what that citation can and cannot support.</b> The
+    /// <c>NonReentrancyQueueSize=</c> clause comes from Orleans' near-timeout
+    /// diagnostic, which is emitted only for a request already approaching the
+    /// response deadline and reports only that request's own wait. It can show
+    /// that a queue existed once a call was already failing; it cannot measure
+    /// how often or how deeply calls queue, because a grain type that queues
+    /// deeply without tripping the timeout contributes nothing to it. Read
+    /// <see cref="Orleans.Lattice.LatticeMetrics.GrainCallOutstandingDepth"/>
+    /// (enabled by
+    /// <see cref="Orleans.Lattice.LatticeServiceCollectionExtensions.AddLatticeGrainCallObservation"/>)
+    /// for the uncensored per-grain-type distribution.
+    /// </para>
+    /// <para>
     /// Safety relies on three invariants that hold across interleaved
     /// turns on the same activation:
     /// </para>

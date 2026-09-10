@@ -100,6 +100,17 @@ public sealed class TenantMetricDimensionHygieneTests
     ///   was served from, and which arm of an indexing pass faulted, all of which
     ///   are properties of the operator-facing host process rather than of any
     ///   tenant's traffic.</item>
+    ///   <item><b>Grain-call observation</b> - the outstanding-call depth and
+    ///   call duration recorded per target grain type describe contention on a
+    ///   shared activation and on this silo's scheduler. The quantity is the
+    ///   aggregate arrival process against one activation, which no single
+    ///   tenant owns; the filter additionally observes grain types outside the
+    ///   lattice, for which no tree - and therefore no tenant - is derivable at
+    ///   all. Deriving a tenant from the target grain key would attribute a
+    ///   shared queue to whichever tenant's call happened to arrive last, which
+    ///   is not a fact about that tenant. A tenant-scoped consumer asking
+    ///   whether its own tree is slow is served by the tree-tagged data-plane
+    ///   instruments instead.</item>
     /// </list>
     /// Adding an instrument here is a deliberate, reviewable act: it declares the
     /// series invisible to every tenant-scoped telemetry query.
@@ -126,6 +137,8 @@ public sealed class TenantMetricDimensionHygieneTests
         "DirectorySearchHits",
         "DirectorySearchMisses",
         "Entries",
+        "GrainCallDuration",
+        "GrainCallOutstandingDepth",
         "GrainsEnrolled",
         "IncrementalLagAge",
         "IncrementalLagEntries",
