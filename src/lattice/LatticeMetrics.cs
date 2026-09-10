@@ -2562,6 +2562,25 @@ public static class LatticeMetrics
     /// than that terminations went unrecorded.
     /// </para>
     /// <para>
+    /// A LOW READING IS NOT A VERDICT UNLESS THE RUN WAS STRAINED. This
+    /// instrument can only speak about a bound that came under pressure, so
+    /// before reading a small <c>recovered</c> count as "the bound is well
+    /// sized", confirm all three of: a non-zero
+    /// <c>stall_resumptions{outcome="budget-exhausted"}</c> (with no futility
+    /// terminations no watch is ever opened and every arm below reads zero for a
+    /// trivial reason); a non-zero <c>recovered + still-stalled</c> (if
+    /// <c>unobserved</c> and <c>dropped</c> account for the whole total then
+    /// nothing revisited the abandoned sources and the run observed nothing
+    /// either way); and a materially non-zero
+    /// <see cref="ScanPageStalls"/>, which is the upstream condition
+    /// that makes a source look busy at all. Where any of those fails, the
+    /// finding is "the bound was not exercised", not "the bound is correct" - a
+    /// bound that was never strained is untested, exactly as a
+    /// <c>ceiling-exhausted</c> of zero does not validate the lifetime ceiling.
+    /// This reading is recorded here in advance of the data precisely so it
+    /// cannot be chosen after the numbers arrive.
+    /// </para>
+    /// <para>
     /// The observation is passive: it issues no grain call, starts no timer, and
     /// never re-drives the abandoned work, so it changes no termination
     /// decision. See <c>ScanStallFutilityWatch</c> for the mechanism, including
