@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Tests.Formal;
 /// </para>
 /// </summary>
 [TestFixture]
-internal sealed class RefinementDetectorMappingTests
+internal sealed partial class RefinementDetectorMappingTests
 {
     /// <summary>
     /// Rows that assert no production behaviour, and so are outside the
@@ -40,16 +40,7 @@ internal sealed class RefinementDetectorMappingTests
 
     private static (RefinementRow Row, string Detector) DetectorOf(RefinementTable table, RefinementRow row)
     {
-        var column = -1;
-        for (var i = 0; i < table.Headers.Count; i++)
-        {
-            if (string.Equals(table.Headers[i], RefinementCodeSymbols.DetectorHeader, StringComparison.OrdinalIgnoreCase))
-            {
-                column = i;
-                break;
-            }
-        }
-
+        var column = RefinementDetectorRule.DetectorColumnOf(table);
         var cell = column >= 0 && column < row.Cells.Count ? row.Cells[column] : string.Empty;
         return (row, cell);
     }
