@@ -304,6 +304,87 @@ public static class LatticeExtensions
             LatticeTenantLabel.ForTree(treeId));
     }
 
+    private static ScanStallFutilityWatch _futilityWatch = new();
+
+    /// <summary>
+    /// The table observing what became of sources this process gave up on for
+    /// futility. See <see cref="ScanStallFutilityWatch"/>.
+    /// </summary>
+    internal static ScanStallFutilityWatch FutilityWatch => Volatile.Read(ref _futilityWatch);
+
+    /// <summary>
+    /// Swaps the futility watch table for the duration of the returned scope, so
+    /// a fixture can inject a controllable clock and start from an empty table.
+    /// </summary>
+    internal static IDisposable UseFutilityWatch(ScanStallFutilityWatch watch)
+    {
+        ArgumentNullException.ThrowIfNull(watch);
+        return new FutilityWatchScope(Interlocked.Exchange(ref _futilityWatch, watch));
+    }
+
+    private sealed class FutilityWatchScope(ScanStallFutilityWatch previous) : IDisposable
+    {
+        public void Dispose() => Interlocked.Exchange(ref _futilityWatch, previous);
+    }
+
+    /// <summary>
+    /// Records a stall that ended a walk, and - when it ended for futility -
+    /// opens a watch on the source so a later scan can say whether that source
+    /// was merely busy or genuinely not yielding. See
+    /// <see cref="ScanStallFutilityWatch"/> for why the counter this feeds is
+    /// the only thing that can answer that, and why it never re-drives the
+    /// abandoned work.
+    /// </summary>
+    /// <param name="stall">The stall being rethrown.</param>
+    /// <param name="outcome">The terminal outcome tag.</param>
+    /// <param name="source">The scan target the walk was reading.</param>
+    /// <param name="bound">
+    /// The last key yielded by the abandoned walk, or its inclusive start bound
+    /// when it yielded nothing.
+    /// </param>
+    /// <param name="boundExclusive">
+    /// Whether <paramref name="bound"/> is a yielded key rather than a start
+    /// bound.
+    /// </param>
+    /// <param name="reverse">Whether the abandoned walk was descending.</param>
+    internal static void RecordScanStallTermination(
+        ScanPageStalledException stall,
+        string outcome,
+        object source,
+        string? bound,
+        bool boundExclusive,
+        bool reverse)
+    {
+        RecordScanStallOutcome(stall, outcome);
+
+        // Only the futility arm is watched. ceiling-exhausted already reports a
+        // fact about a constant chosen here rather than about the source, so
+        // there is no ambiguity for a follow-up observation to resolve.
+        if (outcome == StallOutcomeBudgetExhausted)
+        {
+            FutilityWatch.OpenWatch(source, stall, bound, boundExclusive, reverse);
+        }
+    }
+
+    /// <summary>
+    /// Reports a record yielded by a resilient scan to the futility watch table.
+    /// <para>
+    /// The <see cref="ScanStallFutilityWatch.HasWatches"/> guard is what makes
+    /// this affordable on the per-record path: it is a single volatile read of a
+    /// counter that is zero unless this process has recently abandoned a source
+    /// for futility, so a healthy deployment pays one field read per record and
+    /// the instrument can stay on permanently.
+    /// </para>
+    /// </summary>
+    internal static void NoteScanProgress(object source, string key)
+    {
+        var watch = FutilityWatch;
+        if (watch.HasWatches)
+        {
+            watch.NoteProgress(source, key);
+        }
+    }
+
     /// <summary>
     /// Streams sorted key-value pairs into the tree, partitioning by physical
     /// shard and flushing chunks in parallel across shards. Each shard receives
@@ -590,6 +671,10 @@ public static class LatticeExtensions
         var stallTotal = 0;
         var stallDelayMs = 0;
 
+        // A scan starting is exactly the event that would resolve an open
+        // futility watch, so expiry is swept here rather than on a timer.
+        FutilityWatch.Sweep();
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -770,11 +855,15 @@ public static class LatticeExtensions
                         // larger constant repairs. budget-exhausted keeps exactly
                         // its pre-2539 meaning so a series recorded before this
                         // change stays comparable with one recorded after.
-                        RecordScanStallOutcome(
+                        RecordScanStallTermination(
                             stall,
                             stallAttempt < stallBudget
                                 ? StallOutcomeCeilingExhausted
-                                : StallOutcomeBudgetExhausted);
+                                : StallOutcomeBudgetExhausted,
+                            lattice,
+                            lastKey ?? startInclusive,
+                            lastKey is not null,
+                            reverse);
                         throw;
                     }
 
@@ -815,6 +904,11 @@ public static class LatticeExtensions
                     // semantics. Do not "finish the job" by resetting it.
                     stallAttempt = 0;
                     lastKey = enumerator.Current;
+
+                    // A record from this source resolves any watch opened when a
+                    // previous walk gave up on it for futility. Guarded by a
+                    // single volatile read; see NoteScanProgress.
+                    NoteScanProgress(lattice, enumerator.Current);
                     yield return enumerator.Current;
                 }
             }
@@ -933,6 +1027,10 @@ public static class LatticeExtensions
         var stallTotal = 0;
         var stallDelayMs = 0;
 
+        // See ScanKeysAsyncCore: expiry is swept at scan start rather than on a
+        // timer.
+        FutilityWatch.Sweep();
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -977,11 +1075,15 @@ public static class LatticeExtensions
                             break;
                         }
 
-                        RecordScanStallOutcome(
+                        RecordScanStallTermination(
                             stall,
                             stallAttempt < stallBudget
                                 ? StallOutcomeCeilingExhausted
-                                : StallOutcomeBudgetExhausted);
+                                : StallOutcomeBudgetExhausted,
+                            lattice,
+                            lastKey ?? startInclusive,
+                            lastKey is not null,
+                            reverse);
                         throw;
                     }
 
@@ -998,6 +1100,7 @@ public static class LatticeExtensions
                     // 2539). See ScanKeysAsyncCore's yield site for all three.
                     stallAttempt = 0;
                     lastKey = enumerator.Current.Key;
+                    NoteScanProgress(lattice, enumerator.Current.Key);
                     yield return enumerator.Current;
                 }
             }

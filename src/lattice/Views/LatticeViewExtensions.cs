@@ -87,6 +87,10 @@ public static class LatticeViewExtensions
         var stallTotal = 0;
         var stallDelayMs = 0;
 
+        // See LatticeExtensions.ScanKeysAsyncCore: expiry is swept at scan start
+        // rather than on a timer.
+        LatticeExtensions.FutilityWatch.Sweep();
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -129,11 +133,15 @@ public static class LatticeViewExtensions
                             break;
                         }
 
-                        LatticeExtensions.RecordScanStallOutcome(
+                        LatticeExtensions.RecordScanStallTermination(
                             stall,
                             stallAttempt < stallBudget
                                 ? LatticeExtensions.StallOutcomeCeilingExhausted
-                                : LatticeExtensions.StallOutcomeBudgetExhausted);
+                                : LatticeExtensions.StallOutcomeBudgetExhausted,
+                            view,
+                            lastKey ?? startInclusive,
+                            lastKey is not null,
+                            reverse: false);
                         throw;
                     }
 
@@ -150,6 +158,7 @@ public static class LatticeViewExtensions
                     // 2539). See LatticeExtensions.ScanKeysAsyncCore's yield site.
                     stallAttempt = 0;
                     lastKey = enumerator.Current;
+                    LatticeExtensions.NoteScanProgress(view, enumerator.Current);
                     yield return enumerator.Current;
                 }
             }
@@ -225,6 +234,10 @@ public static class LatticeViewExtensions
         var stallTotal = 0;
         var stallDelayMs = 0;
 
+        // See LatticeExtensions.ScanKeysAsyncCore: expiry is swept at scan start
+        // rather than on a timer.
+        LatticeExtensions.FutilityWatch.Sweep();
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -267,11 +280,15 @@ public static class LatticeViewExtensions
                             break;
                         }
 
-                        LatticeExtensions.RecordScanStallOutcome(
+                        LatticeExtensions.RecordScanStallTermination(
                             stall,
                             stallAttempt < stallBudget
                                 ? LatticeExtensions.StallOutcomeCeilingExhausted
-                                : LatticeExtensions.StallOutcomeBudgetExhausted);
+                                : LatticeExtensions.StallOutcomeBudgetExhausted,
+                            view,
+                            lastKey ?? startInclusive,
+                            lastKey is not null,
+                            reverse: false);
                         throw;
                     }
 
@@ -288,6 +305,7 @@ public static class LatticeViewExtensions
                     // 2539). See LatticeExtensions.ScanKeysAsyncCore's yield site.
                     stallAttempt = 0;
                     lastKey = enumerator.Current.Key;
+                    LatticeExtensions.NoteScanProgress(view, enumerator.Current.Key);
                     yield return enumerator.Current;
                 }
             }

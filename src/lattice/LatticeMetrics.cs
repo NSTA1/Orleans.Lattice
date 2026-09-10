@@ -2510,6 +2510,73 @@ public static class LatticeMetrics
             description: "Count of resilient client scans that met a scan-page stall, tagged by the decision taken (resumed, budget-exhausted, ceiling-exhausted).");
 
     /// <summary>
+    /// What happened to a scan source <em>after</em> a resilient scan gave up on
+    /// it for futility - that is, after
+    /// <see cref="ScanStallResumptions"/> recorded a
+    /// <c>budget-exhausted</c> termination against it. Tagged with
+    /// <see cref="TagTree"/>, <see cref="TagPhase"/> (both carried through from
+    /// the terminating stall) and <see cref="TagOutcome"/>.
+    /// <para>
+    /// It answers the one question <c>budget-exhausted</c> cannot. Under load,
+    /// "this shard was busy for a while" and "this source is genuinely not
+    /// yielding" are the SAME OBSERVATION at the consecutive bound
+    /// (<see cref="Orleans.Lattice.LatticeExtensions.DefaultScanStallResumeAttempts"/>),
+    /// so a large futility count on its own cannot say whether that bound is
+    /// what stopped a job. This counter records whether the abandoned source
+    /// served records again shortly afterwards.
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><c>recovered</c> - a later scan of the same source
+    /// yielded a record at or beyond the position the futile walk died on. The
+    /// source was recoverable and the consecutive bound cut it off early.
+    /// <b>Any sustained non-zero value is the finding</b>: it says the bound is
+    /// too tight for this workload.</description></item>
+    /// <item><description><c>still-stalled</c> - a later walk reached the same
+    /// source and also terminated for futility there. The source was not merely
+    /// busy, so the bound was right to give up. A later walk that merely stalls
+    /// again and then gets past the abandoned position is deliberately counted
+    /// as <c>recovered</c>, not here: that walk demonstrates recoverability and
+    /// is precisely the premature-bound case.</description></item>
+    /// <item><description><c>unobserved</c> - the observation window closed with
+    /// no later scan reaching the source at all, so this termination says
+    /// nothing either way.</description></item>
+    /// <item><description><c>dropped</c> - the bounded watch table was at
+    /// capacity, so the answer is unknown for a reason internal to this
+    /// instrument rather than anything about the source.</description></item>
+    /// </list>
+    /// <para>
+    /// READ THE LAST TWO BEFORE CONCLUDING ANYTHING FROM THE FIRST. A zero
+    /// <c>recovered</c> is evidence the abandoned sources were dead only when
+    /// <c>still-stalled</c> is populated; against a scrape that is mostly
+    /// <c>unobserved</c> or <c>dropped</c> it means nobody looked, which is a
+    /// fact about the callers or about this table and not about the bound. The
+    /// two non-answer arms exist so that distinction cannot be papered over by
+    /// whichever complement a reader finds convenient.
+    /// </para>
+    /// <para>
+    /// Every futility termination eventually resolves to exactly one of the four
+    /// values, so
+    /// <c>sum(stall_futility_outcomes) &lt;= stall_resumptions{outcome="budget-exhausted"}</c>
+    /// always holds, with equality once every open watch has resolved. A
+    /// persistent shortfall means watches are outliving the scrape window rather
+    /// than that terminations went unrecorded.
+    /// </para>
+    /// <para>
+    /// The observation is passive: it issues no grain call, starts no timer, and
+    /// never re-drives the abandoned work, so it changes no termination
+    /// decision. See <c>ScanStallFutilityWatch</c> for the mechanism, including
+    /// why the window is derived from the stall's own reported ceiling and is
+    /// structural rather than measured. Shard index is deliberately NOT a tag:
+    /// this family must stay small enough to leave on permanently, and the tag
+    /// shape is otherwise identical to <see cref="ScanStallResumptions"/> so the
+    /// two series join.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanStallFutilityOutcomes =
+        Meter.CreateCounter<long>("orleans.lattice.scan.stall_futility_outcomes", unit: "{outcome}",
+            description: "What happened to a scan source after a resilient scan gave up on it for futility (recovered, still-stalled, unobserved, dropped).");
+
+    /// <summary>
     /// Count of internal-node digest publishes (the upward
     /// <c>ChildDigestSnapshot</c> propagation from a <c>BPlusInternalGrain</c>
     /// to its parent) that were abandoned because they exceeded
