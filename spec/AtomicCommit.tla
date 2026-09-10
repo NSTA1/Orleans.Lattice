@@ -159,7 +159,7 @@ DecideTx(t) ==
 BroadcastStep(t, k) ==
     /\ k \in Written(t)
     /\ terminal[t][k] = "none"
-    /\ phase[t] \in {"prepared", "committing", "aborting"}
+    /\ phase[t] \in {"committing", "aborting"}
     /\ LET kind == IF phase[t] = "committing" THEN "commit" ELSE "abort"
            nterm == [terminal[t] EXCEPT ![k] = kind]
            allDone == \A j \in Written(t) : nterm[j] # "none"
