@@ -35,19 +35,58 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
     /// </summary>
     private const int CountReconnectAttempts = 64;
 
+    /// <summary>
+    /// Wall-clock ceiling on the whole-prefix count walk, above which the walk stops
+    /// and reports the count as unknown rather than continuing.
+    /// <para>
+    /// The reconnect budget above bounds RETRIES; it does not bound WORK. A walk that
+    /// never aborts is never retried and so was never bounded at all: it ran until it
+    /// reached the end of the prefix, however many leaves that took (issue #2447).
+    /// This is the missing half.
+    /// </para>
+    /// <para>
+    /// The value is chosen against the call it runs inside, not against the corpus.
+    /// The walk happens on the build's turn-holding path, so every caller of that
+    /// grain waits behind it, and the Orleans call timeout that governs those waiting
+    /// callers is 30 seconds. Ten leaves room for the rest of the phase to complete
+    /// inside one call. Losing the walk is cheap and losing it is bounded: the count
+    /// sizes a capacity reservation and reports progress, and neither consumer needs
+    /// it to be correct - which is exactly why spending unbounded time on it was the
+    /// wrong trade.
+    /// </para>
+    /// </summary>
+    internal static readonly TimeSpan DefaultCountBudget = TimeSpan.FromSeconds(10);
+
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
     private readonly string _repoId;
     private readonly EmbeddingSpaceTag _space;
+    private readonly TimeSpan _countBudget;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>Creates the store-of-record view.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode vector records. Must not be <see langword="null"/>.</param>
     /// <param name="repoId">The repository whose vectors the view covers. Must not be <see langword="null"/>.</param>
     /// <param name="space">The embedding space the view is filtered to.</param>
+    /// <param name="countBudget">
+    /// The wall-clock ceiling on the <see cref="CountAsync"/> walk, or
+    /// <see langword="null"/> for <see cref="DefaultCountBudget"/>. A non-positive
+    /// value disables the bound and restores the unbounded pre-#2447 walk, which is
+    /// offered only so a test can assert the difference.
+    /// </param>
+    /// <param name="timeProvider">
+    /// The clock the count budget is measured against, or <see langword="null"/> for
+    /// <see cref="TimeProvider.System"/>.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public RepoContextVectorSource(
-        IGrainFactory grainFactory, Serializer serializer, string repoId, EmbeddingSpaceTag space)
+        IGrainFactory grainFactory,
+        Serializer serializer,
+        string repoId,
+        EmbeddingSpaceTag space,
+        TimeSpan? countBudget = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -56,6 +95,8 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
         _serializer = serializer;
         _repoId = repoId;
         _space = space;
+        _countBudget = countBudget ?? DefaultCountBudget;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -181,23 +222,64 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
     /// re-walk ground already covered. The caller tolerates exhaustion anyway, so
     /// this only decides how often the cheap path is taken.
     /// </para>
+    /// <para>
+    /// The reconnect budget bounds RETRIES, not WORK, and those are different
+    /// guarantees. A walk that never aborts is never retried, so before #2447 it was
+    /// bounded by nothing at all and ran until it reached the end of the prefix -
+    /// on the turn-holding build path, with every other caller of the grain waiting
+    /// behind it. <see cref="DefaultCountBudget"/> supplies the missing half.
+    /// </para>
+    /// <para>
+    /// Exceeding that budget raises
+    /// <see cref="RepoContextCountBudgetExceededException"/> rather than returning
+    /// what was walked so far. Returning the partial figure would be an UNDER-count,
+    /// and the shortfall probe reads an under-count as "the index is not behind" and
+    /// skips a repair it needed - so the cheap fix would have bought a bounded walk
+    /// at the price of an index that lags the store of record silently. Both callers
+    /// treat the fault as "unknown" and resolve it in their own safe direction, which
+    /// is the same conclusion the reconnect-exhaustion path already reached.
+    /// </para>
     /// </remarks>
+    /// <exception cref="RepoContextCountBudgetExceededException">
+    /// The walk did not reach the end of the prefix within its wall-clock budget, so
+    /// no count can be reported.
+    /// </exception>
     public async Task<int> CountAsync(CancellationToken cancellationToken = default)
     {
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
         var prefix = RepoContextKeys.VectorsPrefix(_repoId);
         var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
 
+        var bounded = _countBudget > TimeSpan.Zero;
+        var startedAt = bounded ? _timeProvider.GetTimestamp() : 0L;
+
         var count = 0;
+        var overBudget = false;
         await foreach (var _ in tree
             .ScanKeysAsync(prefix, endExclusive, maxAttempts: CountReconnectAttempts, cancellationToken: cancellationToken)
             .ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
             count++;
+
+            // Checked AFTER the key is counted, so a budget smaller than the cost of
+            // a single key still makes progress rather than spinning. The walk is
+            // abandoned, not resumed: a count has no checkpoint to resume from, and
+            // the caller does not need one because it only needs to know that the
+            // figure is unavailable.
+            if (bounded && _timeProvider.GetElapsedTime(startedAt) >= _countBudget)
+            {
+                overBudget = true;
+                break;
+            }
         }
 
-        return count;
+        // Raised outside the enumeration so the scan's enumerator is disposed first,
+        // and so the throw cannot be mistaken by the resilient wrapper for a fault of
+        // the underlying stream that it should reconnect around.
+        return overBudget
+            ? throw new RepoContextCountBudgetExceededException(_repoId, count, _countBudget)
+            : count;
     }
 
     /// <inheritdoc />
