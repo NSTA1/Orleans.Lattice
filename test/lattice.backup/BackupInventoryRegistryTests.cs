@@ -117,4 +117,73 @@ public sealed class BackupInventoryRegistryTests
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.Value.LastRunOutcome, Is.EqualTo(BackupScopeRunOutcome.Success));
     }
+
+    // ---- EnsureScopeRegistered (issue #2645) ---------------------------------------------
+
+    [Test]
+    public void EnsureScopeRegistered_makes_a_never_run_scope_enumerable_as_none()
+    {
+        // Before #2645 RecordScopeOutcome was the only insertion point, so a scope
+        // with a schedule but no completed cycle was absent from EnumerateScopes
+        // and BackupScopeRunOutcome.None was unreachable on the status gauge.
+        _registry.EnsureScopeRegistered("scheduled-scope");
+
+        var scopes = _registry.EnumerateScopes();
+
+        Assert.That(scopes.Select(p => p.Key), Does.Contain("scheduled-scope"));
+        var runtime = _registry.TryGetScope("scheduled-scope");
+        Assert.That(runtime, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(runtime!.Value.LastRunOutcome, Is.EqualTo(BackupScopeRunOutcome.None));
+            Assert.That(runtime.Value.LastRunUtc, Is.Null, "registration is not a run");
+            Assert.That(runtime.Value.LastSuccessUtc, Is.Null, "registration is not a success");
+        });
+    }
+
+    [Test]
+    public void EnsureScopeRegistered_does_not_clobber_an_already_recorded_outcome()
+    {
+        // A schedule is re-registered on every EnsureScheduleAsync, so a
+        // destructive registration would reset a recorded failure to None and
+        // report a failing scope as merely pending.
+        var ranAt = DateTimeOffset.UtcNow;
+        _registry.RecordScopeOutcome("busy-scope", BackupScopeRunOutcome.Failure, ranAt);
+
+        _registry.EnsureScopeRegistered("busy-scope");
+
+        var runtime = _registry.TryGetScope("busy-scope");
+        Assert.That(runtime, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(runtime!.Value.LastRunOutcome, Is.EqualTo(BackupScopeRunOutcome.Failure));
+            Assert.That(runtime.Value.LastRunUtc, Is.EqualTo(ranAt));
+        });
+    }
+
+    [Test]
+    public void EnsureScopeRegistered_is_idempotent_and_adds_one_entry()
+    {
+        _registry.EnsureScopeRegistered("repeat-scope");
+        _registry.EnsureScopeRegistered("repeat-scope");
+
+        Assert.That(_registry.EnumerateScopes().Count(p => p.Key == "repeat-scope"), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void EnsureScopeRegistered_with_null_or_empty_scope_key_throws()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => _registry.EnsureScopeRegistered(null!), Throws.InstanceOf<ArgumentException>());
+            Assert.That(() => _registry.EnsureScopeRegistered(""), Throws.InstanceOf<ArgumentException>());
+        });
+    }
+
+    [Test]
+    public void EnumerateScopes_is_empty_for_a_registry_with_no_registered_or_run_scope()
+    {
+        // Pins the other half of the reading: absence means "not scheduled".
+        Assert.That(_registry.EnumerateScopes(), Is.Empty);
+    }
 }
