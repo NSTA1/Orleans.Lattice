@@ -156,6 +156,25 @@ services:
     build:
       context: ../..
       dockerfile: apps/repocontext/Dockerfile
+      args:
+        # The commit being built, stamped into the image as the OCI label
+        # org.opencontainers.image.revision. Export it before building:
+        #
+        #     $env:GIT_COMMIT = (git rev-parse HEAD)   # pwsh
+        #     export GIT_COMMIT=$(git rev-parse HEAD)  # sh
+        #
+        # WHY THIS IS NOT OPTIONAL DECORATION. Without it the only record of
+        # what an image contains is the HEAD of whatever checkout someone
+        # happened to be standing in, and that is a fact about the checkout, not
+        # about the image. Bucket-4 gate run 4 made exactly that inference and
+        # measured eleven hours against an image built 45 commits behind what it
+        # believed (issue #2686).
+        #
+        # Unset resolves to the empty string, which
+        # scripts/Assert-ContainerProvenance.ps1 reads as unresolved: it then
+        # falls back to a `candidate-<sha>` image tag, and REFUSES if neither
+        # channel can name the built commit.
+        GIT_COMMIT: ${GIT_COMMIT:-}
     depends_on:
       embedder:
         condition: service_healthy

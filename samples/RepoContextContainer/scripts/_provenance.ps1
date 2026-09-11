@@ -102,6 +102,83 @@ function Test-ProvenancePathsEqual {
 
 <#
 .SYNOPSIS
+	Decides whether two commit-ish strings name the same commit, tolerating an
+	abbreviation on either side.
+
+.DESCRIPTION
+	Returns $true when they match, $false when they demonstrably do not, and
+	$null when the question CANNOT BE ANSWERED - either side empty, or the
+	shorter side below seven characters, where a prefix starts matching commits
+	it did not mean.
+
+	The tri-state is the point. A bool would have to fold "too short to tell"
+	into one of the two verdicts, and whichever way it folded would be wrong:
+	folding to $true certifies an unverified revision, folding to $false accuses
+	a correct one. The caller decides what "cannot tell" means for its check, and
+	both callers here refuse on it.
+
+	This is the single point of truth for the matching rule, shared by check 2
+	(which compares a checkout HEAD to the expected commit) and check 6 (which
+	compares an image's stamped revision to it). Two checks disagreeing about
+	what "the same commit" means would produce a report that contradicts itself.
+#>
+function Test-ProvenanceCommitsMatch {
+	[CmdletBinding()]
+	[OutputType([object])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $Left,
+		[AllowNull()] [AllowEmptyString()] [string] $Right
+	)
+
+	if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) { return $null }
+
+	$l = $Left.Trim()
+	$r = $Right.Trim()
+
+	$shorter = if ($l.Length -le $r.Length) { $l } else { $r }
+	$longer = if ($l.Length -le $r.Length) { $r } else { $l }
+
+	if ($shorter.Length -lt 7) { return $null }
+
+	return $longer.StartsWith($shorter, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+<#
+.SYNOPSIS
+	Parses an RFC 3339 / ISO 8601 instant to a UTC [datetimeoffset], or $null.
+
+.DESCRIPTION
+	Handles both of the shapes check 6 has to compare, which come from different
+	producers and do not agree on precision: Docker reports an image's `.Created`
+	with nanosecond fraction ("2026-09-10T21:02:55.123456789Z") while git's `%cI`
+	emits whole seconds with a numeric offset ("2026-09-11T07:49:35+01:00").
+
+	Returns $null rather than throwing when the value is absent or unparseable,
+	so a caller can distinguish "no reading" from "a reading of zero". Every
+	result is normalised to UTC, because the two sides are routinely stamped in
+	different zones and a comparison of local wall-clock times between them would
+	invent a discrepancy of exactly the offset.
+
+	Pure: parses a string and consults nothing.
+#>
+function ConvertFrom-ProvenanceTimestamp {
+	[CmdletBinding()]
+	[OutputType([object])]
+	param([AllowNull()] [AllowEmptyString()] [string] $Value)
+
+	if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+
+	$parsed = [datetimeoffset]::MinValue
+	$styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+	if (-not [datetimeoffset]::TryParse($Value.Trim(), [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref] $parsed)) {
+		return $null
+	}
+
+	return $parsed.ToUniversalTime()
+}
+
+<#
+.SYNOPSIS
 	Parses a Compose duration ("120s", "2m", "1m30s") to whole seconds.
 
 .DESCRIPTION
@@ -254,13 +331,22 @@ function Get-ComposeProvenanceViolation {
 
 <#
 .SYNOPSIS
-	Check 2 of 5. That checkout is at the commit the operator means.
+	Check 2 of 6. The checkout the container was composed from is at the commit
+	the operator means.
 
 .DESCRIPTION
-	Reported as a value the operator reads rather than an inference they must
-	make: knowing the container came from a given directory says nothing about
-	which commit that directory was sitting on when `up` ran, and a worktree can
-	move under a running container at any time.
+	WHAT THIS ESTABLISHES, EXACTLY: a fact about a CHECKOUT. It says that the
+	directory named by the container's compose label is a git worktree and that
+	its HEAD is the supplied expected commit. It says NOTHING about the image the
+	container is executing, and must never be worded as though it did.
+
+	That distinction is not pedantry; it is the defect this check was found to
+	have. A worktree's HEAD tells you what would be built NOW. Only the image
+	tells you what WAS built. Bucket-4 gate run 4 read a HEAD, concluded the
+	running container carried a two-commit delta, and measured for eleven hours
+	against an image built 45 commits earlier (issue #2686). Establishing
+	build-from-commit is check 6's job, and check 6 is the one that must be
+	consulted for it.
 
 	NOTE the shape of the comparison. The expected commit must be sourced
 	INDEPENDENTLY of the resolved checkout - if it were defaulted to the HEAD of
@@ -269,6 +355,13 @@ function Get-ComposeProvenanceViolation {
 	omitting it, because it would report as checked. The caller reads the
 	expected commit from the operator's own checkout, which is the thing they
 	believe they deployed.
+
+	WHEN THOSE TWO DIRECTORIES ARE THE SAME DIRECTORY - the ordinary case, since
+	check 1 requires the container to have been composed from the operator's own
+	checkout - the independence is nominal and the comparison IS self-referential
+	in practice: one directory, read twice, compared to itself. It cannot dissent.
+	Callers detect that with Test-GitProvenanceIsSelfReferential and must report
+	the reading as a single checkout fact rather than as two agreeing values.
 
 	A short commit is accepted as a prefix of a long one, which is how operators
 	actually paste them, but never below seven characters: a shorter prefix
@@ -285,12 +378,12 @@ function Get-GitProvenanceViolation {
 	$violations = [System.Collections.Generic.List[string]]::new()
 
 	if ([string]::IsNullOrWhiteSpace($ResolvedCommit)) {
-		$violations.Add('the compose project working directory did not resolve to a git commit, so the deployed source revision is unknown; it may not be a git worktree at all')
+		$violations.Add('the compose project working directory did not resolve to a git commit, so the revision of the checkout the container was composed from is unknown; it may not be a git worktree at all')
 		return ,$violations.ToArray()
 	}
 
 	if ([string]::IsNullOrWhiteSpace($ExpectedCommit)) {
-		$violations.Add('no expected commit was supplied, so the deployed revision cannot be adjudicated')
+		$violations.Add('no expected commit was supplied, so the checkout the container was composed from cannot be adjudicated')
 		return ,$violations.ToArray()
 	}
 
@@ -298,15 +391,15 @@ function Get-GitProvenanceViolation {
 	$expected = $ExpectedCommit.Trim()
 
 	$shorter = if ($resolved.Length -le $expected.Length) { $resolved } else { $expected }
-	$longer = if ($resolved.Length -le $expected.Length) { $expected } else { $resolved }
 
-	if ($shorter.Length -lt 7) {
+	$matched = Test-ProvenanceCommitsMatch -Left $resolved -Right $expected
+	if ($null -eq $matched) {
 		$violations.Add("commit '$shorter' is shorter than seven characters, which is too short to identify a commit; supply a longer revision")
 		return ,$violations.ToArray()
 	}
 
-	if (-not $longer.StartsWith($shorter, [System.StringComparison]::OrdinalIgnoreCase)) {
-		$violations.Add("the deployed checkout is at commit '$resolved' but the expected commit is '$expected'; the running configuration predates or diverges from the revision being verified")
+	if (-not $matched) {
+		$violations.Add("the checkout the container was composed from is at commit '$resolved' but the expected commit is '$expected'; the running configuration predates or diverges from the revision being verified")
 	}
 
 	return ,$violations.ToArray()
@@ -314,7 +407,7 @@ function Get-GitProvenanceViolation {
 
 <#
 .SYNOPSIS
-	Check 3 of 5. The container is running the image its tag currently names.
+	Check 3 of 6. The container is running the image its tag currently names.
 
 .DESCRIPTION
 	Catches the stale container: an image rebuilt from a newer commit moves the
@@ -358,7 +451,7 @@ function Get-ImageProvenanceViolation {
 
 <#
 .SYNOPSIS
-	Check 4 of 5, and the only one that reads the channel the answer lives in.
+	Check 4 of 6, and the only one that reads the channel the answer lives in.
 
 .DESCRIPTION
 	Checks 1 to 3 can ALL pass while the setting under test never reached the
@@ -569,7 +662,7 @@ function Test-GitReadingIsExaminable {
 
 <#
 .SYNOPSIS
-	Check 5 of 5. The archive holding durable memory did not land somewhere a
+	Check 5 of 6. The archive holding durable memory did not land somewhere a
 	routine cleanup deletes.
 
 .DESCRIPTION
@@ -685,7 +778,270 @@ function Get-ArchiveDurabilityViolation {
 
 <#
 .SYNOPSIS
-	Runs all five checks over a set of readings and returns a full report.
+	Reports whether check 2's comparison is a value compared against itself.
+
+.DESCRIPTION
+	Check 2 compares the HEAD of the directory the container's compose label
+	names against an expected commit read from the operator's own checkout. When
+	those are the SAME directory - which check 1 actively requires, so it is the
+	ordinary passing case, not an edge case - both sides are one `git rev-parse`
+	of one directory. The comparison cannot dissent, and printing the two values
+	as though they agreed reports corroboration that was never obtained.
+
+	That is not a hypothetical. It is what a live run of the gate printed while
+	the container under it had been built 45 commits earlier (issue #2686):
+
+	    expected commit           : 2f1eeb1e357cab2fb47b08a226da921fdbe4e01a
+	    deployed checkout commit  : 2f1eeb1e357cab2fb47b08a226da921fdbe4e01a
+	    OK  all five provenance checks agree
+
+	A TAUTOLOGICAL LINE IN A PROVENANCE REPORT IS WORSE THAN AN ABSENT ONE,
+	because it reads as evidence. So this predicate exists to let the caller
+	print the reading once, as the single checkout fact it is, and point the
+	operator at check 6 for the commit-level question.
+
+	It deliberately does NOT produce a violation. Refusing here would refuse
+	every correct default invocation of the script; the remedy for a comparison
+	that carries no information is to stop presenting it as though it did, and
+	to obtain the information from a channel that has it.
+#>
+function Test-GitProvenanceIsSelfReferential {
+	[CmdletBinding()]
+	[OutputType([bool])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $ExpectedCheckout,
+		[AllowNull()] [AllowEmptyString()] [string] $ComposeWorkingDirectory,
+		[bool] $CaseSensitive,
+		# False when the caller sourced the expected commit from somewhere other
+		# than -ExpectedCheckout's HEAD (an operator-supplied -ExpectedCommit),
+		# in which case the two sides are genuinely independent however the
+		# directories compare.
+		[bool] $ExpectedCommitCameFromCheckoutHead = $true
+	)
+
+	if (-not $ExpectedCommitCameFromCheckoutHead) { return $false }
+
+	return (Test-ProvenancePathsEqual -Left $ExpectedCheckout -Right $ComposeWorkingDirectory -CaseSensitive $CaseSensitive)
+}
+
+<#
+.SYNOPSIS
+	Resolves the commit an IMAGE was built from, from the image's own metadata.
+
+.DESCRIPTION
+	Two channels, in order of authority, and the answer names which one spoke:
+
+	  - `label`: the OCI `org.opencontainers.image.revision` label, stamped at
+	    build time from the compose `GIT_COMMIT` build arg. Authoritative,
+	    because it is written by the build that produced the image.
+	  - `tag`: a `candidate-<sha>` repo tag on the same image. A fallback for
+	    images built before the label existed, and weaker - a tag is a mutable
+	    pointer that a human assigns - so it is reported as a fallback rather
+	    than quietly substituted for the label.
+	  - `none`: neither channel answered.
+
+	Ambiguity is an outcome, not an error to paper over: an image carrying two
+	DIFFERENT candidate shas has no single answer, so `Commit` stays empty while
+	`CandidateCommits` names them all and the caller refuses. Two tags naming the
+	same sha are one answer and resolve normally.
+
+	Pure: it reads strings the caller already fetched and runs no docker.
+#>
+function Get-ImageBuildCommitResolution {
+	[CmdletBinding()]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $RevisionLabel,
+		[AllowNull()] [string[]] $ImageTags,
+		[string] $CandidateTagPrefix = 'candidate-'
+	)
+
+	if (-not [string]::IsNullOrWhiteSpace($RevisionLabel)) {
+		return [pscustomobject] @{
+			Source           = 'label'
+			Commit           = $RevisionLabel.Trim()
+			CandidateCommits = @()
+		}
+	}
+
+	$candidates = [System.Collections.Generic.List[string]]::new()
+	foreach ($tag in @($ImageTags)) {
+		if ([string]::IsNullOrWhiteSpace($tag)) { continue }
+
+		# A repo tag is `[registry/]name:tag`, and the name may itself carry
+		# colons in a registry port. The TAG is what follows the last colon that
+		# is not inside a path segment, which for every shape this check sees is
+		# simply the last colon.
+		$text = $tag.Trim()
+		$separator = $text.LastIndexOf(':')
+		if ($separator -lt 0) { continue }
+
+		$tagPart = $text.Substring($separator + 1)
+		if (-not $tagPart.StartsWith($CandidateTagPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+
+		$sha = $tagPart.Substring($CandidateTagPrefix.Length).Trim()
+		# Only a hex string is a commit. Without this, a `candidate-latest` or a
+		# `candidate-rerun` tag would be adopted as a revision and compared, and
+		# the comparison would fail in a way that reads as a provenance
+		# disagreement rather than as a tag that was never a commit.
+		if ($sha.Length -lt 7 -or $sha -notmatch '^[0-9a-fA-F]+$') { continue }
+
+		if (-not ($candidates | Where-Object { $_ -ieq $sha })) { $candidates.Add($sha) }
+	}
+
+	if ($candidates.Count -eq 1) {
+		return [pscustomobject] @{
+			Source           = 'tag'
+			Commit           = $candidates[0]
+			CandidateCommits = $candidates.ToArray()
+		}
+	}
+
+	return [pscustomobject] @{
+		Source           = if ($candidates.Count -gt 1) { 'tag' } else { 'none' }
+		Commit           = ''
+		CandidateCommits = $candidates.ToArray()
+	}
+}
+
+<#
+.SYNOPSIS
+	Check 6 of 6. The IMAGE the container is executing was built from the
+	expected commit.
+
+.DESCRIPTION
+	The check the other five do not make, and the one the script's name implies.
+	Checks 1 and 2 adjudicate a CHECKOUT; check 3 adjudicates whether a container
+	is stale relative to what its own tag resolves to NOW. None of them reads the
+	image's own account of what went into it, so all five were green during
+	bucket-4 gate run 4 while eleven hours of measurement were taken against an
+	image built 45 commits behind the commit the gate named (issue #2686).
+
+	TWO INDEPENDENT ARMS, AND BOTH RUN.
+
+	1. IDENTITY. The commit the image itself names - from the OCI revision label,
+	   or failing that from a `candidate-<sha>` tag - is compared to the expected
+	   commit. FAILS CLOSED: when an expected commit was supplied and neither
+	   channel can name what was built, this REFUSES rather than warning. A
+	   provenance instrument that cannot answer must not return success, because
+	   the caller reads its silence as assurance.
+
+	2. CHRONOLOGY. If the expected commit was authored AFTER the image was
+	   created, the image cannot contain it, whatever any label says. This arm
+	   needs no build-time cooperation at all, so it works retroactively on every
+	   image already on a host - and on the real incident it is decisive on its
+	   own: the image was created 2026-09-10T21:02:55Z and the expected commit
+	   ff1d18a39 was committed 2026-09-11T07:49:35Z, 10h47m later.
+
+	   The arm is independent of arm 1 deliberately. A label that AGREES while
+	   the chronology is impossible is a label that is lying (stamped by hand,
+	   copied from another build, or built from a rewritten history), and that is
+	   precisely the case where the weaker evidence must not be allowed to
+	   overrule the stronger.
+
+	   -ClockSkewToleranceSeconds exists because the two timestamps come from
+	   different clocks - a docker daemon and whichever machine made the commit -
+	   and a check that refused on a few seconds of skew would accuse correct
+	   deployments of the exact defect it exists to find. That failure mode ends
+	   with the check switched off. The default is two minutes, which is four
+	   hundred times smaller than the incident it has to catch, so the tolerance
+	   costs nothing that matters.
+
+	   BUT A TOLERANCE ONLY MEANS ANYTHING WHEN THE TWO CLOCKS ARE RELATED. For
+	   a LOCALLY BUILT image, `.Created` and the commit date come from the same
+	   machine, true skew is near zero, and two minutes is generous. For a PULLED
+	   image, `.Created` is some builder's clock on a machine this host has never
+	   seen, and there is NO BOUND on the disagreement - so any tolerance is
+	   false precision dressed as safety. In that state the arm is declared NOT
+	   ADMISSIBLE and stays silent, rather than producing a number it cannot
+	   justify. Declaring a reading unmeasured beats measuring it badly.
+
+	   -ImageIsLocallyBuilt therefore defaults to TRUE, which is the direction
+	   that fails closed: a caller that forgets to supply the reading gets the
+	   arm ACTIVE. Defaulting it false would let the arm be disabled by omission,
+	   which is the shape of defect this whole script exists to refuse.
+
+	   Silencing the arm never weakens the check's guarantee, because the
+	   guarantee is arm 1's: identity refuses an image whose built commit cannot
+	   be established, whatever chronology does or does not say.
+#>
+function Get-BuildProvenanceViolation {
+	[CmdletBinding()]
+	[OutputType([string[]])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $ExpectedCommit,
+		[AllowNull()] [AllowEmptyString()] [string] $ImageRevisionLabel,
+		[AllowNull()] [string[]] $ImageTags,
+		[AllowNull()] [AllowEmptyString()] [string] $ImageCreated,
+		[AllowNull()] [AllowEmptyString()] [string] $ExpectedCommitDate,
+		[AllowNull()] [AllowEmptyString()] [string] $RunningImageId,
+		[string] $CandidateTagPrefix = 'candidate-',
+		[int] $ClockSkewToleranceSeconds = 120,
+		# TRUE by default so the chronology arm cannot be disabled by omission.
+		# See the description: a pulled image's .Created comes from an unrelated
+		# clock, so the arm is inadmissible rather than merely more tolerant.
+		[bool] $ImageIsLocallyBuilt = $true
+	)
+
+	$violations = [System.Collections.Generic.List[string]]::new()
+
+	# Nothing to adjudicate against. Check 2 already refuses a missing expected
+	# commit, and duplicating that refusal here would report one absence twice
+	# while adding no information the operator can act on.
+	if ([string]::IsNullOrWhiteSpace($ExpectedCommit)) { return ,$violations.ToArray() }
+
+	$expected = $ExpectedCommit.Trim()
+	$imageLabel = if ([string]::IsNullOrWhiteSpace($RunningImageId)) { 'the image the container is executing' } else { "image '$($RunningImageId.Trim())'" }
+
+	# --- arm 2 first: it needs no build-time cooperation, so it is the arm that
+	# works on images built before any of this existed.
+	$created = ConvertFrom-ProvenanceTimestamp -Value $ImageCreated
+	$committed = ConvertFrom-ProvenanceTimestamp -Value $ExpectedCommitDate
+	if ($ImageIsLocallyBuilt -and $null -ne $created -and $null -ne $committed) {
+		$skew = ($committed - $created).TotalSeconds
+		if ($skew -gt $ClockSkewToleranceSeconds) {
+			# Whole hours by FLOOR, not by cast. A [int] cast in PowerShell rounds
+			# to nearest, so a real 10h46m40s delta prints as "11h" and disagrees
+			# with every other record of the same incident. A provenance report
+			# that restates a measured value inaccurately is the last place to
+			# introduce a discrepancy an operator has to reconcile.
+			$lateBy = [timespan]::FromSeconds([math]::Round($skew))
+			$rendered = '{0}h{1:00}m{2:00}s' -f [int] [math]::Floor($lateBy.TotalHours), $lateBy.Minutes, $lateBy.Seconds
+			$violations.Add("$imageLabel was created at $($created.ToString('o')) but the expected commit '$expected' was committed at $($committed.ToString('o')), $rendered LATER; an image cannot contain a commit that did not exist when it was built, so this image was built from an earlier revision whatever else claims otherwise")
+		}
+	}
+
+	# --- arm 1: what the image says about itself.
+	$resolution = Get-ImageBuildCommitResolution `
+		-RevisionLabel $ImageRevisionLabel -ImageTags $ImageTags -CandidateTagPrefix $CandidateTagPrefix
+
+	if ([string]::IsNullOrWhiteSpace($resolution.Commit)) {
+		if ($resolution.CandidateCommits.Count -gt 1) {
+			$violations.Add("$imageLabel carries no '$($CandidateTagPrefix)<sha>' agreement: its candidate tags name $($resolution.CandidateCommits.Count) DIFFERENT commits ($($resolution.CandidateCommits -join ', ')), so which one it was built from cannot be established. Rebuild with the GIT_COMMIT build arg set, which stamps org.opencontainers.image.revision and settles it from the image itself")
+			return ,$violations.ToArray()
+		}
+
+		$violations.Add("$imageLabel carries neither an org.opencontainers.image.revision label nor a '$($CandidateTagPrefix)<sha>' tag, so THE COMMIT IT WAS BUILT FROM CANNOT BE ESTABLISHED and the expected commit '$expected' is unverified. This is REFUSED rather than warned about: the other checks adjudicate a checkout, not an image, and a green report here would be read as commit-level assurance. Rebuild with the GIT_COMMIT build arg set (docker build --build-arg GIT_COMMIT=`$(git rev-parse HEAD)), or tag the image '$($CandidateTagPrefix)<sha>' with the commit it was built from")
+		return ,$violations.ToArray()
+	}
+
+	$matched = Test-ProvenanceCommitsMatch -Left $resolution.Commit -Right $expected
+	$channel = if ($resolution.Source -eq 'label') { 'its org.opencontainers.image.revision label' } else { "its '$($CandidateTagPrefix)<sha>' tag (FALLBACK: the image carries no revision label)" }
+
+	if ($null -eq $matched) {
+		$violations.Add("$imageLabel names commit '$($resolution.Commit)' through $channel, but that value is too short to identify a commit against the expected '$expected'; a prefix below seven characters matches commits it did not mean")
+		return ,$violations.ToArray()
+	}
+
+	if (-not $matched) {
+		$violations.Add("$imageLabel WAS BUILT FROM commit '$($resolution.Commit)' according to $channel, but the expected commit is '$expected'; the running container is executing a different revision from the one being verified")
+	}
+
+	return ,$violations.ToArray()
+}
+
+<#
+.SYNOPSIS
+	Runs all six checks over a set of readings and returns a full report.
 
 .DESCRIPTION
 	Returns an object carrying BOTH the violations and every value that was
@@ -702,7 +1058,12 @@ function Get-ContainerProvenanceReport {
 		[Parameter(Mandatory)] [string] $ExpectedCheckout,
 		[Parameter(Mandatory)] [hashtable] $ExpectedSettings,
 		[int] $ExpectedConfigFileCount = 0,
-		[bool] $CaseSensitive
+		[bool] $CaseSensitive,
+		# Whether the expected commit was taken from -ExpectedCheckout's own
+		# HEAD, which is the script's default. Used only to decide whether check
+		# 2's comparison is self-referential and must therefore be REPORTED as a
+		# single checkout reading rather than as two agreeing values.
+		[bool] $ExpectedCommitCameFromCheckoutHead = $true
 	)
 
 	$violations = [System.Collections.Generic.List[string]]::new()
@@ -741,9 +1102,47 @@ function Get-ContainerProvenanceReport {
 				-SourceExistsOnHost ([bool] $Readings['ArchiveSourceExistsOnHost']) `
 				-GitReadingExaminable ([bool] $Readings['ArchiveGitReadingExaminable'])))
 
+	# Check 6 is handed ONLY readings taken from the IMAGE, plus the expected
+	# commit and its date. It is never given the compose working directory or the
+	# checkout HEAD, for the same reason check 5 is never given them: those are
+	# the values whose accidental reuse produced the tautology this check exists
+	# to replace, and a parameter list that cannot see them cannot be keyed on
+	# them by a later edit.
+	$buildArguments = @{
+		ExpectedCommit     = $Readings['ExpectedCommit']
+		ImageRevisionLabel = $(if ($Readings.ContainsKey('ImageRevisionLabel')) { $Readings['ImageRevisionLabel'] } else { '' })
+		ImageTags          = [string[]] @(if ($Readings.ContainsKey('ImageTags')) { $Readings['ImageTags'] } else { @() })
+		ImageCreated       = $(if ($Readings.ContainsKey('ImageCreated')) { $Readings['ImageCreated'] } else { '' })
+		ExpectedCommitDate = $(if ($Readings.ContainsKey('ExpectedCommitDate')) { $Readings['ExpectedCommitDate'] } else { '' })
+		RunningImageId     = $Readings['RunningImageId']
+	}
+	if ($Readings.ContainsKey('CandidateTagPrefix') -and -not [string]::IsNullOrWhiteSpace($Readings['CandidateTagPrefix'])) {
+		$buildArguments['CandidateTagPrefix'] = $Readings['CandidateTagPrefix']
+	}
+	if ($Readings.ContainsKey('ClockSkewToleranceSeconds') -and $null -ne $Readings['ClockSkewToleranceSeconds']) {
+		$buildArguments['ClockSkewToleranceSeconds'] = [int] $Readings['ClockSkewToleranceSeconds']
+	}
+	# Absent means TRUE, matching the check's own default. The chronology arm
+	# must not be switchable off by leaving a reading out.
+	if ($Readings.ContainsKey('ImageIsLocallyBuilt')) {
+		$buildArguments['ImageIsLocallyBuilt'] = [bool] $Readings['ImageIsLocallyBuilt']
+	}
+	$violations.AddRange([string[]] (Get-BuildProvenanceViolation @buildArguments))
+
+	$isSelfReferential = Test-GitProvenanceIsSelfReferential `
+		-ExpectedCheckout $ExpectedCheckout `
+		-ComposeWorkingDirectory $Readings['ComposeWorkingDirectory'] `
+		-CaseSensitive $CaseSensitive `
+		-ExpectedCommitCameFromCheckoutHead $ExpectedCommitCameFromCheckoutHead
+
 	return [pscustomobject] @{
-		Readings    = $Readings
-		Violations  = $violations.ToArray()
-		IsSatisfied = ($violations.Count -eq 0)
+		Readings                  = $Readings
+		Violations                = $violations.ToArray()
+		IsSatisfied               = ($violations.Count -eq 0)
+		IsGitCheckSelfReferential = $isSelfReferential
+		ImageBuildCommit          = (Get-ImageBuildCommitResolution `
+				-RevisionLabel $buildArguments['ImageRevisionLabel'] `
+				-ImageTags $buildArguments['ImageTags'] `
+				-CandidateTagPrefix $(if ($buildArguments.ContainsKey('CandidateTagPrefix')) { $buildArguments['CandidateTagPrefix'] } else { 'candidate-' }))
 	}
 }

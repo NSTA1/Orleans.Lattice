@@ -232,7 +232,8 @@ document exists to close.
 The host image is built on the host from the repository root:
 
 ```bash
-docker build -f .deploy/Dockerfile -t repocontext-mcp:candidate-<sha> \
+docker build -f .deploy/Dockerfile -t repocontext-mcp:candidate-$(git rev-parse HEAD) \
+  --build-arg GIT_COMMIT=$(git rev-parse HEAD) \
   --secret id=nugetcfg,src=%APPDATA%\NuGet\NuGet.Config .
 ```
 
@@ -241,9 +242,17 @@ fails behind the corporate TLS proxy, so the restore needs the corporate feed fr
 `%APPDATA%\NuGet\NuGet.Config`. A build that omits it fails during restore, which
 reads as a network fault rather than as a missing secret.
 
-Tag with the **commit sha you built**, not a branch name or a date. The sha is the
-only tag that can later be checked against a running container by
-`Assert-ContainerProvenance.ps1`.
+Both arguments matter, and they are not the same thing. `--build-arg GIT_COMMIT`
+stamps the sha **into the image** as `org.opencontainers.image.revision`, which is
+written by the build itself and travels with the image wherever it goes. The
+`candidate-<sha>` **tag** is assigned by a person afterwards and can be moved, so
+it is a fallback rather than the answer. `Assert-ContainerProvenance.ps1` reads the
+label first and falls back to the tag, and if neither resolves it **refuses** -
+supply at least one. Omitting both leaves the built commit unknowable, which is the
+state that cost this gate eleven hours of measurement against the wrong binary
+(issue 2686).
+
+Tag with the **commit sha you built**, not a branch name or a date.
 
 ## Pin and roll back
 
@@ -587,7 +596,8 @@ Assumes only a clone and a Docker daemon.
 
 ```bash
 # 1. Build the host image from the sha you intend to deploy.
-docker build -f .deploy/Dockerfile -t repocontext-mcp:candidate-<sha> \
+docker build -f .deploy/Dockerfile -t repocontext-mcp:candidate-$(git rev-parse HEAD) \
+  --build-arg GIT_COMMIT=$(git rev-parse HEAD) \
   --secret id=nugetcfg,src=%APPDATA%\NuGet\NuGet.Config .
 
 # 2. Pin it. (Nothing to preserve on a clean host; on an existing one, save the
