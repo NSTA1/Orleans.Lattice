@@ -229,6 +229,23 @@ public sealed class TenantMetricDimensionHygieneTests
         // denied arm a measured absence rather than a plane that never ran.
         "_corpusCoverage",
         "_terminalDenials",
+        // repocontext.ann.partitioning - whether each approximate plane holds a
+        // trained partitioning, and repocontext.ann.repartition - the outcome of a
+        // threshold-crossing training, issue #2706. Both are the sentinel for a
+        // DIFFERENT reason from _annSweeps above, and the distinction is worth
+        // keeping: these are emitted per PLANE, not from the host-process sweep
+        // loop, so "one iteration covers every repository" is not the argument.
+        // The argument is that a plane has no tenant to attribute it to. A plane is
+        // keyed by repository and embedding space, and a repo-context repository is
+        // not a lattice tenant; every repository's vectors live in ONE shared tree
+        // (RepoContextTrees.VectorIndex), separated only by key prefix, and
+        // CreateStore ignores its repoId and returns that single constant tree. So
+        // LatticeTenantLabel.ForTree would resolve to the same constant for every
+        // plane on the host - one series, no discrimination - while falsely
+        // implying a tenant attribution for a tree that every repository shares.
+        // The state and outcome tags are the dimensions that carry the signal.
+        "_partitioning",
+        "_repartitions",
         // lattice.repocontext.memory.restore - memory-archive restore attempts
         // partitioned by outcome (restored / partial / nothing_to_restore /
         // not_attempted / failed), issue #2641. The restore runs once per HOST PROCESS

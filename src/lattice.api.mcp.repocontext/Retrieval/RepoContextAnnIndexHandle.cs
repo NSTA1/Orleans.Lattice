@@ -42,6 +42,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     private readonly EmbeddingSpaceTag _space;
     private readonly string _repoId;
     private readonly ILogger _logger;
+    private readonly RepoContextAnnPartitioningReporter? _partitioning;
     private readonly SemaphoreSlim _turn = new(1, 1);
 
     private DurableVectorIndex? _index;
@@ -49,6 +50,32 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     private int _pendingFlush;
     private bool _serving;
     private bool _disposed;
+
+    /// <summary>
+    /// The smallest corpus at which another threshold-crossing training may be
+    /// attempted, or <c>0</c> when none has been declined yet.
+    /// <para>
+    /// This exists only to bound the pathological case, and it is deliberately not
+    /// the trigger. A corpus at or above
+    /// <see cref="RepoContextAnnOptions.MinimumTrainingCount"/> can still resolve
+    /// to fewer than two partitions - an explicit
+    /// <see cref="RepoContextAnnOptions.PartitionCount"/> of one, or a minimum set
+    /// low enough that the automatic count rounds to one - and such a training
+    /// declines again, leaving the trigger condition exactly as it found it. Without
+    /// this, every maintenance turn would retrain and the stuck state would have
+    /// been traded for a hot one. Doubling caps the attempts at one per doubling of
+    /// the corpus, so an activation makes at most a logarithmic number of them, and
+    /// it costs the healthy case nothing because that case succeeds on the first.
+    /// </para>
+    /// <para>
+    /// It is activation-local and is not persisted, and that is correct rather than
+    /// a shortcut: the state it guards against is re-derived from the index on every
+    /// open, so a restart that forgets it costs exactly one training attempt. A
+    /// persisted counter would instead have to be right forever, and this defect
+    /// exists because a trigger was keyed on a counter that could not be.
+    /// </para>
+    /// </summary>
+    private int _nextPartitionAttemptCount;
 
     /// <summary>Creates the handle. Nothing is opened until the first advance.</summary>
     /// <param name="repoId">The repository this index covers. Must not be <see langword="null"/>.</param>
@@ -58,6 +85,12 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     /// <param name="options">The plane's shaping and maintenance options. Must not be <see langword="null"/>.</param>
     /// <param name="keyPrefix">The key prefix this index owns exclusively. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger the build-state report is written to. Must not be <see langword="null"/>.</param>
+    /// <param name="partitioning">
+    /// The reporter the plane's partitioning state is metered on, or
+    /// <see langword="null"/> to publish nothing. Null is for a test driving the
+    /// handle directly; the registry always supplies one, so no deployment runs
+    /// without the instrument.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public RepoContextAnnIndexHandle(
         string repoId,
@@ -66,7 +99,8 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         IVectorIndexStore store,
         RepoContextAnnOptions options,
         string keyPrefix,
-        ILogger logger)
+        ILogger logger,
+        RepoContextAnnPartitioningReporter? partitioning = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(source);
@@ -82,6 +116,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         _options = options;
         _durableOptions = options.ToDurableOptions(space, keyPrefix);
         _logger = logger;
+        _partitioning = partitioning;
     }
 
     /// <summary>
@@ -133,6 +168,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                     // it and only the probe can confirm the join.
                     await CatchUpAsync(index, restoredAtOpen, cancellationToken).ConfigureAwait(false);
                     MarkServing(index);
+                    RecordPartitioningState();
                 }
 
                 return _progress;
@@ -144,6 +180,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             // whether the store of record has moved on since.
             await CatchUpAsync(index, probeSource: true, cancellationToken).ConfigureAwait(false);
             MarkServing(index);
+            RecordPartitioningState();
             return _progress;
         }
         finally
@@ -513,6 +550,63 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
     private async Task MaintainAsync(DurableVectorIndex index, CancellationToken cancellationToken)
     {
+        // THRESHOLD CROSSING FIRST, and it is a different question from drift.
+        // Drift asks "does the partitioning still describe the corpus"; this asks
+        // "is there now enough corpus to partition at all". An index that declined
+        // to partition can only ever be answered by the second, and until issue
+        // #2706 only the first was asked - so a plane that declined on an empty
+        // corpus stayed unpartitioned however large the corpus later grew.
+        if (ShouldPartition(index))
+        {
+            _logger.LogInformation(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is training a "
+                + "partitioning for {Count} vectors: an earlier training declined because the corpus was below "
+                + "the minimum training count of {Minimum}, and the corpus has since crossed it.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension,
+                index.Count,
+                _options.MinimumTrainingCount);
+
+            var attemptedAt = index.Count;
+            await index.RetrainAsync(cancellationToken).ConfigureAwait(false);
+            _pendingFlush = 0;
+            _progress = index.Progress;
+
+            var partitioned = index.Status.PartitionCount > 0;
+            _partitioning?.RecordRepartition(partitioned);
+            if (partitioned)
+            {
+                _logger.LogInformation(
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is serving "
+                    + "{VectorsIndexed} vectors across {Partitions} partitions; semantic retrieval is now "
+                    + "approximate.",
+                    _repoId,
+                    _space.ModelId,
+                    _space.Dimension,
+                    _progress.VectorsIndexed,
+                    _progress.PartitionsTotal);
+                return;
+            }
+
+            // The corpus met the minimum and still resolved to fewer than two
+            // partitions, so repeating the attempt at this size would burn a full
+            // training pass per maintenance turn to reach the same answer. See
+            // _nextPartitionAttemptCount.
+            _nextPartitionAttemptCount = attemptedAt >= int.MaxValue / 2 ? int.MaxValue : Math.Max(1, attemptedAt) * 2;
+            _logger.LogInformation(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} met the minimum "
+                + "training count of {Minimum} with {Count} vectors but still resolves to fewer than two "
+                + "partitions, so it stays exhaustive and exact; the next attempt waits for {Next} vectors.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension,
+                _options.MinimumTrainingCount,
+                attemptedAt,
+                _nextPartitionAttemptCount);
+            return;
+        }
+
         // Retraining first: it rewrites every partition and commits a fresh
         // generation, which subsumes the flush the pending updates would have done.
         // It is synchronous and expensive, and it runs here - on the maintenance turn
@@ -545,11 +639,55 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether the corpus has crossed the training minimum since a training
+    /// declined to partition it, so a partitioning should be trained now.
+    /// <para>
+    /// <b>Every clause is read from the index itself, and that is the point.</b>
+    /// This condition holds no memory of the decline that produced the state, and
+    /// is not allowed to: the deployment issue #2706 measured had been latched for
+    /// hours before the fix existed, so any trigger keyed on something recorded at
+    /// decline time would have been keyed on a value that deployment does not have
+    /// and never will. <c>Ready</c> with no partitioning and a corpus at or above
+    /// the minimum is the whole signature, it is observable from a cold start over
+    /// untouched durable state, and it is what makes the repair self-healing rather
+    /// than something an operator has to trigger.
+    /// </para>
+    /// </summary>
+    /// <param name="index">The index to judge.</param>
+    /// <returns><see langword="true"/> when a partitioning should be trained.</returns>
+    private bool ShouldPartition(DurableVectorIndex index)
+    {
+        // Phase Ready means the build pipeline ran to the end. It does NOT mean the
+        // pipeline produced a partitioning, and the gap between those two is exactly
+        // the state being repaired.
+        if (index.Progress.Phase != VectorIndexBuildPhase.Ready
+            || index.Status.PartitionCount > 0
+            || index.Count < _options.MinimumTrainingCount)
+        {
+            return false;
+        }
+
+        return index.Count >= _nextPartitionAttemptCount;
+    }
+
     private bool ShouldRetrain(DurableVectorIndex index)
     {
-        // Only a trained index can drift: an untrained one has no partitioning for
-        // the corpus to move away from, and retraining it would be a no-op that
-        // rewrote every record for nothing.
+        // Only a PARTITIONED index can drift: drift is the corpus moving away from
+        // a partitioning, so an index that holds none has nothing to move away from
+        // and no fraction of it is meaningful. That is why this guard reads
+        // VectorIndexState.Ready, which is reached only when PartitionCount is
+        // positive.
+        //
+        // What this must not be read as saying - and did say, until issue #2706 -
+        // is that retraining an unpartitioned index would be a no-op. For an index
+        // that declined to partition because the corpus was below the minimum
+        // training count, retraining once the corpus has grown past it is not a
+        // no-op, it is the entire remedy, and asserting otherwise is what kept a
+        // deployment answering every query by brute-force scan for 8.6 hours with a
+        // corpus 7.5x the threshold. That case is a threshold crossing rather than
+        // drift, it is unreachable from this predicate by construction, and it is
+        // ShouldPartition's to answer.
         if (index.Progress.Phase != VectorIndexBuildPhase.Ready
             || index.Status.State != VectorIndexState.Ready
             || index.Count <= 0
@@ -560,6 +698,15 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
         return index.UpdatesSinceTraining >= index.Count * _options.RetrainAfterUpdateFraction;
     }
+
+    /// <summary>
+    /// Meters what the plane's partitioning looks like now that a build has
+    /// finished, so the large-and-unpartitioned state is readable from a series
+    /// instead of from three correlated log lines.
+    /// </summary>
+    private void RecordPartitioningState() => _partitioning?.RecordPartitioning(
+        RepoContextAnnPartitioningReporter.Classify(
+            _progress.PartitionsTotal, _progress.VectorsIndexed, _options.MinimumTrainingCount));
 
     private void MarkServing(DurableVectorIndex index)
     {

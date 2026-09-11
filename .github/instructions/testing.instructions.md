@@ -178,6 +178,21 @@ Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging t
 
 **Catching cross-project breakage is CI's job, not the local dev loop's.** CI runs the full cross-solution non-chaos suite on every PR (plus the `Chaos` and `AzureStorageEmulator` suites), so an `Orleans.Lattice` change that broke `Orleans.Lattice.Replication.Tests` is caught there. Only run the full cross-solution `dotnet test` (no project arg) locally when you have deliberately made a cross-cutting change to the core public surface that you expect to ripple through downstream projects - and even then, prefer running just the specific downstream test projects you expect to be affected.
 
+**Exception: the repository-wide gates live in `test/lattice/` and scan every package.** The scoping rule above is correct for ordinary tests and structurally blind to these. Four fixtures resolve the repository root and scan **all of `src/`** irrespective of which package they sit in, so a per-package pre-PR run passes green while the gate your change actually broke never runs at all:
+
+| fixture | what it enrols, across every package |
+| --- | --- |
+| `TenantMetricDimensionHygieneTests` | each instrument's tenant dimension, including the `PlatformSentinelInstruments` list - which is keyed on the **C# field name**, not the metric name |
+| `MeterDashboardCoverageEnrolmentTests` | each instrument's dashboard panel mapping |
+| `MetricsDocCoverageEnrolmentTests` | each instrument's row in its package reference doc |
+| `MeterFieldDeclarationOrderTests` | the `Meter`-field-declared-above-every-instrument ordering |
+
+So **a change that adds or removes a metric instrument in any package must also run these four from `test/lattice/`**, alongside the six standard content gates, whichever package the instrument itself lives in. Budget for it: adding a single instrument costs at least three edits outside its own package.
+
+**Run each gate as its own `--filter`, never several OR-ed into one.** OR-ing them crashes the vstest host and misattributes the failure to whichever fixture happened to be running. Confirm each run reports a non-zero discovered count, too: a gate fixture that does not exist in the project you ran it against asserts nothing and exits 0, which reads exactly like a pass. Treat such a vacuous green as evidence about *which project the gate lives in*, not merely about that one fixture.
+
+**Every emission site of an instrument must use one attribution rule, and zero-priming arms are emission sites.** An instrument primed with one tag set and recorded with another splits its own series and fails the mixed-attribution assertion, even though every individual call site looks correct on its own.
+
 ### Categorization conventions
 
 The tier filters above only get sharper over time if tests are correctly categorized. When adding or touching tests:
