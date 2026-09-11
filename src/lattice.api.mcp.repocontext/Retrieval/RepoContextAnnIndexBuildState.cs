@@ -49,16 +49,20 @@ internal sealed class RepoContextAnnIndexBuildState
     public bool Reclaimed { get; set; }
 
     /// <summary>
-    /// How many vectors the index reported holding when it converged. Recorded for
-    /// diagnostics only; nothing reads it to make a decision, so a zero (whether
-    /// written or omitted) is never mistaken for a signal.
+    /// How many vectors the index reported holding at its most recent converged
+    /// build. Refreshed whenever that count moves rather than frozen at the first
+    /// convergence, so a plane that healed after converging is described by this
+    /// record rather than by the build that preceded the heal - see issue #2712.
+    /// Recorded for diagnostics only; nothing reads it to make a decision, so a
+    /// zero (whether written or omitted) is never mistaken for a signal.
     /// </summary>
     [Id(3)]
     public long VectorsIndexed { get; set; }
 
     /// <summary>
-    /// How many partitions the index held when it converged, or <c>0</c> when
-    /// training declined to partition the corpus and searches stay exhaustive.
+    /// How many partitions the index held at its most recent converged build, or
+    /// <c>0</c> when training declined to partition the corpus and searches stay
+    /// exhaustive.
     /// <para>
     /// Recorded because <see cref="Converged"/> and <see cref="VectorsIndexed"/>
     /// together cannot distinguish an index that converged with a partitioning
@@ -68,6 +72,12 @@ internal sealed class RepoContextAnnIndexBuildState
     /// deliberately so: nothing reads it to make a decision, and a zero (written
     /// or omitted) reads as "no partitioning", which is the honest reading of an
     /// absent value rather than a claim about one.
+    /// </para>
+    /// <para>
+    /// Like <see cref="VectorsIndexed"/> this tracks the latest converged build
+    /// rather than the first. <see cref="Converged"/> is a scheduling latch and
+    /// stays one-way; these two counters are a record of what the plane holds, and
+    /// a record that cannot follow the plane cannot confirm a heal.
     /// </para>
     /// </summary>
     [Id(4)]

@@ -208,6 +208,16 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
     {
         public RepoContextAnnIndexBuildState State { get; set; } = new();
 
+        /// <summary>
+        /// How many times the coordinator has written durable state. The record is
+        /// held as a live object here and <see cref="WriteStateAsync"/> is a no-op,
+        /// so a field mutation is visible to an assertion whether or not it was
+        /// ever persisted. This counter is therefore the only way to assert that a
+        /// settled coordinator does NOT write on every activation - see issue
+        /// #2712's second acceptance criterion.
+        /// </summary>
+        public int Writes { get; private set; }
+
         public string Etag => string.Empty;
 
         public bool RecordExists => true;
@@ -216,7 +226,11 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
 
         public Task ReadStateAsync() => Task.CompletedTask;
 
-        public Task WriteStateAsync() => Task.CompletedTask;
+        public Task WriteStateAsync()
+        {
+            Writes++;
+            return Task.CompletedTask;
+        }
     }
 
     /// <summary>One activation of the coordinator over a gated store of record.</summary>
@@ -261,6 +275,37 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
             Registry = new RepoContextAnnIndexRegistry(
                 Backing, PlaneOptions(), NullLogger<RepoContextAnnIndexRegistry>.Instance);
 
+            Grain = CreateGrain();
+
+            return this;
+        }
+
+        /// <summary>
+        /// Replaces the coordinator with a fresh one over the same durable state,
+        /// the same registry and the same store of record, which is what a
+        /// reactivation is.
+        /// <para>
+        /// <b>Why a fixture needs this rather than simply ticking again.</b>
+        /// <c>ProcessNextPhaseAsync</c> returns immediately when <c>InProgress</c>
+        /// is false, and <c>InProgress</c> carries the term
+        /// <c>!_advancedThisActivation</c>. Once a build has converged AND taken a
+        /// step in the current activation, both terms of that disjunction are
+        /// false, so every subsequent tick in the same activation is a no-op. A
+        /// converged coordinator therefore performs exactly <b>one</b> build step
+        /// per activation, and any behaviour that follows a second converged build
+        /// is unreachable without a new activation. That is the seam issue #2711's
+        /// self-heal rides on, and it is why no pre-existing fixture could observe
+        /// the durable record being refreshed.
+        /// </para>
+        /// </summary>
+        public Rig Reactivate()
+        {
+            Grain = CreateGrain();
+            return this;
+        }
+
+        private RepoContextAnnIndexBuildGrain CreateGrain()
+        {
             var context = Substitute.For<IGrainContext>();
             context.GrainId.Returns(GrainId.Create(
                 "repoContextAnnIndexBuild", RepoContextAnnIndexKeys.BuildGrainKey(RepoId, Space)));
@@ -268,7 +313,7 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
             services.GetService(typeof(ITimerRegistry)).Returns(Substitute.For<ITimerRegistry>());
             context.ActivationServices.Returns(services);
 
-            Grain = new RepoContextAnnIndexBuildGrain(
+            return new RepoContextAnnIndexBuildGrain(
                 context,
                 Substitute.For<IReminderRegistry>(),
                 Registry,
@@ -279,8 +324,6 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
                 Reporter,
                 NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
                 State);
-
-            return this;
         }
 
         /// <summary>
