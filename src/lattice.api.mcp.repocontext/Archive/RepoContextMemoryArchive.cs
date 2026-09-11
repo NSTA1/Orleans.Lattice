@@ -29,15 +29,31 @@ internal readonly record struct RepoContextMemoryArchiveExport(
     string? Reason);
 
 /// <summary>The result of one archive restore attempt.</summary>
-/// <param name="Restored">Whether any snapshot was imported.</param>
+/// <param name="Outcome">
+/// What the attempt did. This is the discriminator: <see cref="Restored"/> alone
+/// cannot distinguish "the tree is complete" from "the tree holds a partial import
+/// that this attempt refused to touch", and those need different operator responses.
+/// </param>
 /// <param name="RecordsRead">The number of records read from the snapshot.</param>
+/// <param name="RecordsInStore">
+/// The number of memory records the tree holds after the attempt. On a failed import
+/// this is the count that actually landed, which is the number
+/// <paramref name="RecordsRead"/> cannot report: the reader counts records taken off
+/// the wire, and an import that throws mid-stream has already written everything it
+/// read up to that point.
+/// </param>
 /// <param name="SourcePath">The snapshot file that was imported, or <see langword="null"/> when none was.</param>
 /// <param name="Reason">Why no restore happened, or <see langword="null"/> when one did.</param>
 internal readonly record struct RepoContextMemoryArchiveRestore(
-    bool Restored,
+    RepoContextMemoryRestoreOutcome Outcome,
     long RecordsRead,
+    long RecordsInStore,
     string? SourcePath,
-    string? Reason);
+    string? Reason)
+{
+    /// <summary>Whether a snapshot was imported and verified complete.</summary>
+    internal bool Restored => Outcome == RepoContextMemoryRestoreOutcome.Restored;
+}
 
 /// <summary>
 /// Exports the durable agent-memory tree to a snapshot file outside the store's own
@@ -201,7 +217,11 @@ internal sealed class RepoContextMemoryArchive(RepoContextMemoryArchiveOptions o
         if (options.RestoreMode == RepoContextMemoryArchiveRestoreMode.Off)
         {
             return new RepoContextMemoryArchiveRestore(
-                false, 0, null, $"restore is {RepoContextMemoryArchiveRestoreMode.Off}");
+                RepoContextMemoryRestoreOutcome.NotAttempted,
+                0,
+                0,
+                null,
+                $"restore is {RepoContextMemoryArchiveRestoreMode.Off}");
         }
 
         var directory = options.Directory
@@ -216,18 +236,40 @@ internal sealed class RepoContextMemoryArchive(RepoContextMemoryArchiveOptions o
         if (!candidates.Any(File.Exists))
         {
             return new RepoContextMemoryArchiveRestore(
-                false, 0, null, "no archived snapshot exists yet");
-        }
-
-        if (options.RestoreMode == RepoContextMemoryArchiveRestoreMode.Auto
-            && await HasAnyMemoryAsync(tree, cancellationToken).ConfigureAwait(false))
-        {
-            return new RepoContextMemoryArchiveRestore(
-                false,
+                RepoContextMemoryRestoreOutcome.NotAttempted,
+                0,
                 0,
                 null,
-                "the store already holds memory records, so nothing was restored "
-                    + "(restore mode auto only heals an empty store)");
+                "no archived snapshot exists yet");
+        }
+
+        var marker = RepoContextMemoryRestoreState.Decode(
+            await tree.GetAsync(RepoContextMemoryRestoreState.Key, cancellationToken)
+                .ConfigureAwait(false));
+
+        if (options.RestoreMode == RepoContextMemoryArchiveRestoreMode.Auto)
+        {
+            // The marker overrides the emptiness probe in exactly one direction. A
+            // recorded partial means a previous attempt wrote records and never
+            // finished, so the non-empty store it left behind is wreckage rather than
+            // state, and declining because of it would disarm the recovery with the
+            // damage it is recovering from.
+            var healing = marker is { Outcome: RepoContextMemoryRestoreOutcome.Partial };
+            if (!healing && await HasAnyMemoryAsync(tree, cancellationToken).ConfigureAwait(false))
+            {
+                var held = await CountMemoryAsync(tree, cancellationToken).ConfigureAwait(false);
+                return new RepoContextMemoryArchiveRestore(
+                    RepoContextMemoryRestoreOutcome.NothingToRestore,
+                    0,
+                    held,
+                    null,
+                    marker is null
+                        ? $"the store already holds {held} memory record(s) and carries no restore-state "
+                            + "marker, so no restore of this store has ever been recorded as incomplete "
+                            + "(restore mode auto heals an empty store or a recorded partial one)"
+                        : $"the store already holds {held} memory record(s) from a restore recorded as "
+                            + $"{marker.Value.Outcome}, so there is nothing to heal");
+            }
         }
 
         string? lastFailure = null;
@@ -238,15 +280,56 @@ internal sealed class RepoContextMemoryArchive(RepoContextMemoryArchiveOptions o
                 continue;
             }
 
+            // Write-ahead: record the intent to mutate the tree BEFORE the first
+            // record lands. An import that never returns cannot stamp itself, so the
+            // only marker that can describe it is one written in advance.
+            await StampAsync(
+                    tree,
+                    new RepoContextMemoryRestoreState(
+                        RepoContextMemoryRestoreOutcome.Partial,
+                        0,
+                        DateTimeOffset.UtcNow.UtcTicks,
+                        Path.GetFileName(candidate)),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             try
             {
-                await using var source = new FileStream(
-                    candidate, FileMode.Open, FileAccess.Read, FileShare.Read);
-                var result = await RepoContextPortability.ImportAsync(
-                        tree, source, serializer, cancellationToken: cancellationToken)
+                long recordsRead;
+                await using (var source = new FileStream(
+                    candidate, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    var result = await RepoContextPortability.ImportAsync(
+                            tree, source, serializer, cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    recordsRead = result.RecordsRead;
+                }
+
+                // Verify before stamping complete, and stamp from here rather than
+                // from the import: a completion mark applied by the same code path
+                // that writes the records inherits that path's failure modes, and a
+                // partial restore could then present as a complete one.
+                var held = await CountMemoryAsync(tree, cancellationToken).ConfigureAwait(false);
+                if (held < recordsRead)
+                {
+                    lastFailure =
+                        $"{Path.GetFileName(candidate)} imported {recordsRead} record(s) but the tree "
+                        + $"holds {held}, so the restore did not land completely";
+                    continue;
+                }
+
+                await StampAsync(
+                        tree,
+                        new RepoContextMemoryRestoreState(
+                            RepoContextMemoryRestoreOutcome.Restored,
+                            held,
+                            DateTimeOffset.UtcNow.UtcTicks,
+                            Path.GetFileName(candidate)),
+                        cancellationToken)
                     .ConfigureAwait(false);
+
                 return new RepoContextMemoryArchiveRestore(
-                    true, result.RecordsRead, candidate, Reason: null);
+                    RepoContextMemoryRestoreOutcome.Restored, recordsRead, held, candidate, Reason: null);
             }
             catch (OperationCanceledException)
             {
@@ -258,7 +341,81 @@ internal sealed class RepoContextMemoryArchive(RepoContextMemoryArchiveOptions o
             }
         }
 
-        return new RepoContextMemoryArchiveRestore(false, 0, null, lastFailure);
+        // Every candidate failed. Report what actually landed rather than zero: an
+        // import that threw mid-stream has already written everything it read, and a
+        // result claiming nothing was read beside a store holding records is the
+        // specific reading that made this state unrecoverable by inspection.
+        var landed = await CountMemoryAsync(tree, cancellationToken).ConfigureAwait(false);
+        return new RepoContextMemoryArchiveRestore(
+            landed > 0 ? RepoContextMemoryRestoreOutcome.Partial : RepoContextMemoryRestoreOutcome.Failed,
+            0,
+            landed,
+            null,
+            landed > 0
+                ? $"{lastFailure}; the tree now holds {landed} partially imported record(s) and is "
+                    + "marked for healing on the next restore"
+                : lastFailure);
+    }
+
+    /// <summary>
+    /// Writes the restore-state marker. Failures are swallowed deliberately: the
+    /// marker is bookkeeping, and a store that cannot record it is no worse off than
+    /// one that never had it, whereas failing the restore over it would turn a
+    /// recoverable tree into an unrestored one.
+    /// </summary>
+    /// <param name="tree">The memory tree to stamp.</param>
+    /// <param name="state">The state to record.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    private static async Task StampAsync(
+        ILattice tree, RepoContextMemoryRestoreState state, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await tree.SetAsync(RepoContextMemoryRestoreState.Key, state.Encode(), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Intentionally ignored. See the summary.
+        }
+    }
+
+    /// <summary>
+    /// Counts the memory records the tree holds. The emptiness probe answers "any",
+    /// which is what cannot distinguish a healthy tree from a partially imported one;
+    /// this answers "how many", which can.
+    /// </summary>
+    /// <param name="tree">The memory tree to count. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the count.</param>
+    /// <returns>The number of records under the repository prefix.</returns>
+    internal static async Task<long> CountMemoryAsync(
+        ILattice tree, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+
+        long count = 0;
+        string? continuation = null;
+        do
+        {
+            var page = await RepoContextPortability.EnumerateAsync(
+                    tree,
+                    RepoContextKeys.AllReposPrefix(),
+                    continuation,
+                    pageSize: 500,
+                    vectorExport: null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            count += page.Records.Count;
+            continuation = page.ContinuationToken;
+        }
+        while (!string.IsNullOrEmpty(continuation));
+
+        return count;
     }
 
     /// <summary>

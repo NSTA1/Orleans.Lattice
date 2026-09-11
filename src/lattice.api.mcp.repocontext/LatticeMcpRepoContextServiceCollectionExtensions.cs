@@ -377,6 +377,7 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
 
         if (archiveOptions.IsEnabled)
         {
+            services.TryAddSingleton<RepoContextMemoryRestoreReporter>();
             services.AddHostedService<RepoContextMemoryArchiveService>();
         }
 

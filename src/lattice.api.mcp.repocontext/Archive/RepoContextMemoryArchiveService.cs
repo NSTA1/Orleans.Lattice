@@ -33,6 +33,7 @@ internal sealed class RepoContextMemoryArchiveService(
     Serializer serializer,
     RepoContextMemoryArchiveOptions options,
     RepoContextMemoryArchive archive,
+    RepoContextMemoryRestoreReporter restoreReporter,
     IRepoIndexRunAuthority runAuthority,
     TimeProvider timeProvider,
     ILogger<RepoContextMemoryArchiveService> logger) : BackgroundService
@@ -137,21 +138,50 @@ internal sealed class RepoContextMemoryArchiveService(
             using var credentialScope = BeginCredentialScope();
             var result = await archive.RestoreAsync(MemoryTree, serializer, cancellationToken)
                 .ConfigureAwait(false);
+            restoreReporter.Record(result.Outcome);
 
-            if (result.Restored)
+            switch (result.Outcome)
             {
-                logger.LogWarning(
-                    "Durable memory was restored from the archive at {Path}: {Records} record(s) merged "
-                        + "back into the {Tree} tree. The store came up without them, which means its "
-                        + "volume was replaced or wiped.",
-                    result.SourcePath,
-                    result.RecordsRead,
-                    RepoContextTrees.Memory);
-            }
-            else
-            {
-                logger.LogInformation(
-                    "Durable memory was not restored from the archive: {Reason}.", result.Reason);
+                case RepoContextMemoryRestoreOutcome.Restored:
+                    logger.LogWarning(
+                        "Durable memory was restored from the archive at {Path}: {Records} record(s) merged "
+                            + "back into the {Tree} tree, which now holds {Held}. The store came up without "
+                            + "them, which means its volume was replaced or wiped.",
+                        result.SourcePath,
+                        result.RecordsRead,
+                        RepoContextTrees.Memory,
+                        result.RecordsInStore);
+                    break;
+
+                case RepoContextMemoryRestoreOutcome.Partial:
+                    // The state this whole discriminator exists for. A tree left
+                    // holding a partial import presents as a populated store, so
+                    // nothing else will report it and no later boot will heal it
+                    // unless it is told the store is wreckage rather than state.
+                    logger.LogError(
+                        "Durable memory was only PARTIALLY restored into the {Tree} tree: it now holds "
+                            + "{Held} record(s) from an import that did not finish ({Reason}). The tree is "
+                            + "short of the archive and will look like a normally populated store to "
+                            + "everything except the restore-state marker, which is now set so the next "
+                            + "restore heals it instead of declining. Do not export over the archive until "
+                            + "this is resolved.",
+                        RepoContextTrees.Memory,
+                        result.RecordsInStore,
+                        result.Reason);
+                    break;
+
+                case RepoContextMemoryRestoreOutcome.Failed:
+                    logger.LogWarning(
+                        "Durable memory could not be restored from the archive and nothing was written: "
+                            + "{Reason}. The {Tree} tree is exactly as it was.",
+                        result.Reason,
+                        RepoContextTrees.Memory);
+                    break;
+
+                default:
+                    logger.LogInformation(
+                        "Durable memory was not restored from the archive: {Reason}.", result.Reason);
+                    break;
             }
         }
         catch (OperationCanceledException)

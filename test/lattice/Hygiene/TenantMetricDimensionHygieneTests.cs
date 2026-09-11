@@ -229,6 +229,17 @@ public sealed class TenantMetricDimensionHygieneTests
         // denied arm a measured absence rather than a plane that never ran.
         "_corpusCoverage",
         "_terminalDenials",
+        // lattice.repocontext.memory.restore - memory-archive restore attempts
+        // partitioned by outcome (restored / partial / nothing_to_restore /
+        // not_attempted / failed), issue #2641. The restore runs once per HOST PROCESS
+        // at startup against the process-wide repo-context memory tree, which is shared
+        // across every registered repository: one attempt covers them all and reaches
+        // one outcome for all of them together, so a tenant tag would partition a series
+        // that cannot vary by tenant. The outcome tag is the dimension that carries the
+        // signal, and every arm is pre-minted at zero so that a zero on the partial arm
+        // is a measured absence rather than a restore path that never ran - the same
+        // reason the nonempty arm exists on _corpusCoverage.
+        "_restores",
         // repocontext.retrieval.unavailable - vector-plane fault episodes. Same reason:
         // the plane is unavailable for the whole process, not for one tenant.
         "_unavailable",
