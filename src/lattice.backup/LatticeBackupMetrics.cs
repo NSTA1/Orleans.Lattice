@@ -229,10 +229,20 @@ public static class LatticeBackupMetrics
             static () => LatticeTenantLabel.PlatformMeasurement(AgeSeconds(Registry.Snapshot().NewestCreatedAtUtc)), unit: "s",
             description: "Age in seconds of the newest tracked backup (0 when none).");
 
+    /// <summary>
+    /// Per-scope last-run outcome. A scope enters the registry at schedule
+    /// registration, so <c>0</c> is a measured "scheduled, nothing has completed
+    /// yet" rather than an unreachable placeholder, and an absent series means no
+    /// schedule is registered for the scope (issue #2645). The value is the
+    /// <see cref="BackupScopeRunOutcome"/> ordinal, so every member of that enum
+    /// is emittable and the description must enumerate all of them.
+    /// </summary>
     private static readonly ObservableGauge<long> ScopeLastRunStatus =
         BackupMetrics.Meter.CreateObservableGauge("orleans.lattice.backup.scope.last_run_status",
             ObserveScopeLastRunStatus, unit: "{status}",
-            description: "Per-scope last-run outcome (0=none, 1=success, 2=failure), tagged by scope.");
+            description: "Per-scope last-run outcome (0=scheduled with no completed cycle, 1=success, "
+                + "2=failure, 3=denied), tagged by scope. The series appears at schedule registration, so 0 is a "
+                + "measured 'not yet'; an absent series means no schedule is registered for the scope.");
 
     private static readonly ObservableGauge<double> ScopeLastSuccessAge =
         BackupMetrics.Meter.CreateObservableGauge("orleans.lattice.backup.scope.last_success_age",

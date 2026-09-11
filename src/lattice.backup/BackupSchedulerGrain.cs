@@ -526,6 +526,15 @@ internal sealed class BackupSchedulerGrain(
                     dueTime: period,
                     period: period),
                 logger, nameof(reminderRegistry.RegisterOrUpdateReminder), reminderName, ScopeKey);
+
+            // The scope now has a live schedule, so a cycle is expected of it.
+            // Publish it to the inventory registry here, after the reminder is
+            // actually registered, so the per-scope status gauge reports a
+            // measured "scheduled, nothing has completed yet" (0) rather than no
+            // series at all, which an operator cannot tell apart from a scope
+            // nobody ever scheduled. Non-destructive: a scope with a recorded
+            // outcome keeps it (issue #2645).
+            inventory.EnsureScopeRegistered(ScopeKey);
         }
         else
         {
