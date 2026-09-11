@@ -135,8 +135,27 @@ public sealed class DurableVectorIndexSliceBudgetTests
         });
     }
 
+    /// <summary>
+    /// Pins the full-budget rule: a slice that has banked nothing is armed with
+    /// the whole budget rather than with whatever remains of it.
+    /// <para>
+    /// Deliberately NOT a test that any answering source always makes progress,
+    /// and it must not be read as one. Measured on a single clock, an
+    /// asynchronous source whose single read outlasts the whole budget consumes
+    /// nothing even after #2651 - that is designed degradation, reported through
+    /// <c>IsStarvedBySource</c> and pinned by
+    /// <c>DurableVectorIndexStalledSourceTests</c>, not a stall.
+    /// </para>
+    /// <para>
+    /// What this fixture does pin is narrower and real: a clock charged per item
+    /// can read as already past the budget on a slice that has consumed nothing
+    /// at all, which turns the remaining budget negative and cancels the first
+    /// read on the spot. Arming such a slice with the FULL budget is what keeps
+    /// that case alive, and this is the only test that sees it.
+    /// </para>
+    /// </summary>
     [Test]
-    public async Task An_asynchronous_source_still_makes_progress_on_a_budget_already_outrun()
+    public async Task A_slice_that_has_banked_nothing_is_armed_with_the_full_budget()
     {
         var store = new InMemoryVectorIndexStore();
         var corpus = VectorCorpus.Clustered(Corpus, DurableIndexHarness.Dimensions, 8, seed: 11);
@@ -170,8 +189,12 @@ public sealed class DurableVectorIndexSliceBudgetTests
         Assert.Multiple(() =>
         {
             Assert.That(first, Is.EqualTo(1),
-                "a source that answers - even asynchronously - must have its first item consumed, or the "
-                + "slice banks nothing and the cursor never moves");
+                "a slice given the FULL budget because it has banked nothing must consume its first item, "
+                + "or it banks nothing and the cursor never moves. The claim is scoped to the window the "
+                + "slice is armed with and is NOT the universal it reads as: an asynchronous source whose "
+                + "single read outlasts the whole budget consumes nothing even so, which is designed "
+                + "degradation reported through IsStarvedBySource and pinned by "
+                + "DurableVectorIndexStalledSourceTests.");
             Assert.That(second, Is.EqualTo(2), "and the next slice must advance rather than repeat it.");
             Assert.That(index.Progress.SlicesDeadlinedWithoutProgress, Is.Zero,
                 "no slice consumed nothing, so none of them can have been recorded as having consumed "

@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Vector.Tests.Fakes;
 /// That is the case in which the window the deadline is armed with is the only
 /// thing standing between a working build and a stalled one, which is what this
 /// fake exists to expose. See
-/// <c>DurableVectorIndexSliceBudgetTests.An_asynchronous_source_still_makes_progress_on_a_budget_already_outrun</c>.
+/// <c>DurableVectorIndexSliceBudgetTests.A_slice_that_has_banked_nothing_is_armed_with_the_full_budget</c>.
 /// </para>
 /// </summary>
 /// <param name="dimensions">The vector width.</param>
