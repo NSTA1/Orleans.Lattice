@@ -3286,7 +3286,41 @@ internal sealed partial class BPlusLeafGrain
         // moments ago can only be behind the true head, which simply leaves
         // the newest entries for the materialiser or the next replay.
         var head = probedHead ?? await coordinator.GetHeadOffsetAsync(cancellationToken);
-        if (head <= checkpoint)
+
+        // The offset of the NEWEST entry that actually exists on this partition
+        // (issue #2668). These two quantities are measured from different
+        // origins and must be reconciled before they can be compared.
+        // GetHeadOffsetAsync is documented as "the next sequence number that
+        // will be assigned to a future append", so head is EXCLUSIVE and sits
+        // one past the last real entry. checkpoint is the highest offset this
+        // leaf has SCANNED and is INCLUSIVE - it is assigned from entry.Offset
+        // of an entry the loop below actually read, so it can never reach head.
+        // A leaf that has read the whole partition therefore sits at head - 1.
+        //
+        // Comparing them directly (head <= checkpoint) tested an exclusive bound
+        // against an inclusive one, so it was false for EVERY converged leaf.
+        // Each one skipped this return, entered replay, read the empty range
+        // (head - 1, head], applied nothing, correctly did not advance its
+        // checkpoint, and was then reported by the stall detector below as a
+        // leaf for which "writes routed to it are being lost" - 6,632 samples
+        // across four trees on the measured deployment, every one of them at a
+        // reported partition gap of exactly 1, which is the arithmetic signature
+        // of this boundary (head - (head - 1)) rather than of any backlog.
+        //
+        // The condition is self-sustaining, which is what separates it from a
+        // leaf that entered replay because a SIBLING wrote. That leaf reads the
+        // sibling's entry, and the checkpoint advance at the bottom of the scan
+        // loop sits deliberately OUTSIDE the ShouldApplyDuringReplay filter so
+        // that an entry skipped as another leaf's work still moves the
+        // checkpoint; it therefore advances and stops reporting. At this
+        // boundary there is no entry to read at all, so nothing ever moves.
+        //
+        // The guard that should have caught this encoded "fully caught up" as
+        // checkpoint == head, a state the checkpoint cannot occupy, so it passed
+        // against an unreachable input while the reachable neighbour shipped.
+        // BPlusLeafGrainTests.ReplayStallHeadBoundary pins the reachable one.
+        var newestOffset = head - 1;
+        if (newestOffset <= checkpoint)
         {
             // Nothing to replay, so this leaf applied zero entries: the
             // cleanest possible in-budget activation. It ends the run for the
@@ -3336,9 +3370,9 @@ internal sealed partial class BPlusLeafGrain
         // "a frozen checkpoint whose partition gap fits inside the budget is an
         // idle leaf, not a livelock". The second claim is false, and the code a
         // few lines above is what refutes it: an idle leaf returns on the
-        // head <= checkpoint check and never arrives here, so past this point
-        // there is unreplayed work by construction and a frozen checkpoint is a
-        // livelock at ANY gap.
+        // newestOffset <= checkpoint check and never arrives here, so past this
+        // point there is unreplayed work by construction and a frozen checkpoint
+        // is a livelock at ANY gap.
         //
         // The first claim was true but bought the wrong thing. The gap is
         // partition-wide and pre-filter, shared with ~1,350 sibling leaves,
