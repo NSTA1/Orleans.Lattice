@@ -266,7 +266,12 @@ public partial class BPlusLeafGrainTests
         // Seed the leaf as the owner of "k1", then replay a fresh value.
         // The replay's HLC dominates the seeded value's HLC under LWW.
         var entry = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("replayed"), hlcPhysical: 500));
-        var coord = BuildCoordinator(head: 1, entry);
+        // Head is the NEXT sequence to be assigned (WalShardGrain rebuilds it as
+        // `highest + 1`), so an entry at offset 1 implies a head of 2. This
+        // fixture used to pass head: 1, a WAL production cannot produce (issue
+        // #2668); the seeded cache suppresses the cold-path -1 coercion, so the
+        // impossible head was load-bearing for this test reaching replay at all.
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedEntries: e => e["k1"] = new LwwValue<byte[]>
@@ -290,7 +295,8 @@ public partial class BPlusLeafGrainTests
         // Seed three entries; replay a DeleteRange [k2, k4) that should
         // tombstone k2 and k3 but leave k1 and k4 visible.
         var entry = new CommitLogSliceEntry(1, BuildDeleteRange("k2", "k4", hlcPhysical: 500));
-        var coord = BuildCoordinator(head: 1, entry);
+        // head: 2 for an entry at offset 1 - the head is exclusive (issue #2668).
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedEntries: e =>
@@ -1254,7 +1260,8 @@ public partial class BPlusLeafGrainTests
                 Timestamp = new HybridLogicalClock { WallClockTicks = 500 },
                 ShardIndex = 99,
             });
-        var coord = BuildCoordinator(head: 1, entry);
+        // head: 2 for an entry at offset 1 - the head is exclusive (issue #2668).
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedState: s => s.ShardIndex = 1,
