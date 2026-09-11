@@ -239,6 +239,22 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
     /// treat the fault as "unknown" and resolve it in their own safe direction, which
     /// is the same conclusion the reconnect-exhaustion path already reached.
     /// </para>
+    /// <para>
+    /// WHAT A ZERO <see cref="RepoContextCountBudgetExceededException.Counted"/>
+    /// MEANS, AND WHAT IT DOES NOT. Two mechanisms bound this walk and they bound
+    /// different things: the deadline bounds the walk AS A WHOLE, including its
+    /// first page, and the sampled in-loop check bounds the gap BETWEEN keys. Only
+    /// the second is charged after a key is counted, so only the second carries the
+    /// one-key minimum-progress property. A first page slower than the whole budget
+    /// therefore reports <c>Counted = 0</c>, and that reading means precisely "the
+    /// source did not deliver a first page inside the budget" - it is a measured
+    /// absence, not a walk that never started, because the exception is raised only
+    /// on a path that did start one. Do not read a zero as an empty prefix: an empty
+    /// prefix RETURNS <c>0</c> and never throws, and the two are distinguishable for
+    /// exactly that reason. This paragraph exists because the in-loop comment below
+    /// once claimed the minimum-progress guarantee held for the walk rather than for
+    /// the sampled check, which is a guarantee the deadline can and does defeat.
+    /// </para>
     /// </remarks>
     /// <exception cref="RepoContextCountBudgetExceededException">
     /// The walk did not reach the end of the prefix within its wall-clock budget, so
@@ -285,8 +301,18 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
                 cancellationToken.ThrowIfCancellationRequested();
                 count++;
 
-                // Checked AFTER the key is counted, so a budget smaller than the cost of
-                // a single key still makes progress rather than spinning. The walk is
+                // Checked AFTER the key is counted, so that THIS check - the sampled
+                // one, bounding the gap between keys - cannot consume a walk without
+                // advancing it. Read the scope precisely: the one-key minimum belongs
+                // to this check, NOT to the walk. The deadline above bounds the walk
+                // as a whole and is under no such constraint, so a first page slower
+                // than the entire budget still reports zero. An earlier revision of
+                // this comment said "a budget smaller than the cost of a single key
+                // still makes progress", stated of the walk; that is false whenever
+                // the deadline binds first, and the fixture that appeared to prove it
+                // only passed because its fake source answered synchronously, so the
+                // deadline never armed. A guarantee asserted at the wrong scope is
+                // worse than none, because it is believed. The walk is
                 // abandoned, not resumed: a count has no checkpoint to resume from, and
                 // the caller does not need one because it only needs to know that the
                 // figure is unavailable.
