@@ -513,6 +513,62 @@ function Test-ProvenancePathIsAbsolute {
 
 <#
 .SYNOPSIS
+	Did a `git rev-parse --show-toplevel` call actually ANSWER the question, as
+	distinct from answering "no"?
+
+.DESCRIPTION
+	Pure, so that the one line the archive durability check leans on is testable
+	without a git binary or any filesystem state. It is handed only the exit code,
+	the standard error text, and the toplevel; taking the reading stays in the
+	entry point. Note this is NOT coverage of `Get-ArchiveGitReading`, which
+	shells out to git and is tracked separately as issue #2644; nothing here
+	invokes git.
+
+	It promotes to examinable ONLY on positive recognition, because the ways git
+	can fail cannot be enumerated while the one way it succeeds at answering can.
+	An unanticipated failure therefore reports unexaminable, which is the safe
+	direction.
+
+	THE PARENTHETICAL IN THE MESSAGE IS LOAD-BEARING, NOT DECORATION. git emits
+	the BARE form
+
+		fatal: not a git repository: <admin dir>
+
+	for an ORPHANED LINKED WORKTREE - one whose `.git/worktrees` entry has been
+	removed - and that is exactly a state check 5 exists to catch. Recognising the
+	bare phrase would therefore certify as durable the very thing being looked
+	for. Only the parenthetical form
+
+		fatal: not a git repository (or any of the parent directories): .git
+
+	means discovery genuinely walked to the root and found nothing. DO NOT
+	SIMPLIFY THIS PATTERN.
+
+	Verified against git on all three inputs: a genuine miss emits the
+	parenthetical; an orphaned linked worktree emits the bare form only; a corrupt
+	`.git` file emits "invalid gitfile format" and matches neither.
+#>
+function Test-GitReadingIsExaminable {
+	[CmdletBinding()]
+	[OutputType([bool])]
+	param(
+		[AllowNull()] [int] $ExitCode,
+		[AllowNull()] [AllowEmptyString()] [string] $StandardError,
+		[AllowNull()] [AllowEmptyString()] [string] $Toplevel
+	)
+
+	if ($ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($Toplevel)) { return $true }
+
+	if ($ExitCode -eq 128 -and -not [string]::IsNullOrWhiteSpace($StandardError) `
+			-and $StandardError -match 'not a git repository \(or any of the parent directories\)') {
+		return $true
+	}
+
+	return $false
+}
+
+<#
+.SYNOPSIS
 	Check 5 of 5. The archive holding durable memory did not land somewhere a
 	routine cleanup deletes.
 
@@ -683,7 +739,7 @@ function Get-ContainerProvenanceReport {
 				-GitToplevel $Readings['ArchiveGitToplevel'] `
 				-IsLinkedWorktree ([bool] $Readings['ArchiveIsLinkedWorktree']) `
 				-SourceExistsOnHost ([bool] $Readings['ArchiveSourceExistsOnHost']) `
-		-GitReadingExaminable ([bool] $Readings['ArchiveGitReadingExaminable'])))
+				-GitReadingExaminable ([bool] $Readings['ArchiveGitReadingExaminable'])))
 
 	return [pscustomobject] @{
 		Readings    = $Readings

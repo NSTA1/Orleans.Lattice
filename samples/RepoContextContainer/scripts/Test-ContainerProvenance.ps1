@@ -419,6 +419,41 @@ _Assert -Name 'ConvertFrom-ProvenanceDuration handles compound units' `
 _Section 'Check 5 of 5: archive durability'
 # ---------------------------------------------------------------------------
 
+# --- the git reading must distinguish "no" from "no answer" -----------------
+# The three stderr strings below are REAL git output, captured from git on this
+# repository, not paraphrases. The orphaned-worktree case is the one that makes
+# the parenthetical load-bearing: it contains the bare phrase and must NOT be
+# recognised, because an orphaned linked worktree is precisely what check 5
+# exists to catch.
+$_gitMissStderr = 'fatal: not a git repository (or any of the parent directories): .git'
+$_gitOrphanStderr = 'fatal: not a git repository: C:/dev/main/.git/worktrees/gone'
+$_gitCorruptStderr = 'fatal: invalid gitfile format: C:/dev/broken/.git'
+
+_Assert -Name 'a clean toplevel reading is examinable' `
+	-Condition (Test-GitReadingIsExaminable -ExitCode 0 -StandardError '' -Toplevel 'C:\dev\lattice')
+
+_Assert -Name 'a genuine not-a-repository answer is examinable' `
+	-Condition (Test-GitReadingIsExaminable -ExitCode 128 -StandardError $_gitMissStderr -Toplevel '')
+
+_Assert -Name 'an ORPHANED LINKED WORKTREE is NOT examinable, though its stderr carries the bare phrase' `
+	-Condition (-not (Test-GitReadingIsExaminable -ExitCode 128 -StandardError $_gitOrphanStderr -Toplevel ''))
+
+_Assert -Name 'and that is not incidental: the bare phrase IS present in that reading' `
+	-Condition ($_gitOrphanStderr -match 'not a git repository')
+
+_Assert -Name 'a corrupt gitfile is NOT examinable' `
+	-Condition (-not (Test-GitReadingIsExaminable -ExitCode 128 -StandardError $_gitCorruptStderr -Toplevel ''))
+
+_Assert -Name 'a safe.directory refusal is NOT examinable' `
+	-Condition (-not (Test-GitReadingIsExaminable -ExitCode 128 `
+			-StandardError "fatal: detected dubious ownership in repository at 'C:/archive'" -Toplevel ''))
+
+_Assert -Name 'an unrecognised failure is NOT examinable, so an unenumerated fault fails closed' `
+	-Condition (-not (Test-GitReadingIsExaminable -ExitCode 1 -StandardError 'something nobody predicted' -Toplevel ''))
+
+_Assert -Name 'exit 0 with NO toplevel is NOT examinable' `
+	-Condition (-not (Test-GitReadingIsExaminable -ExitCode 0 -StandardError '' -Toplevel ''))
+
 # --- the VM path form must be understood before anything else is asked ------
 _Assert -Name 'a Docker Desktop VM host path is rewritten to the operator path' `
 	-Condition ((ConvertFrom-DockerDesktopHostPath -Path '/run/desktop/mnt/host/c/dev/x') -eq 'C:\dev\x')

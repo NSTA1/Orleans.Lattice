@@ -256,29 +256,14 @@ function Get-ArchiveGitReading {
 
 		$stderr = if (Test-Path -LiteralPath $stderrFile) { [string] (Get-Content -Raw -LiteralPath $stderrFile -ErrorAction SilentlyContinue) } else { '' }
 
+		# The recognition itself lives in the pure half, where the assertion suite
+		# can drive it with real captured git output. This side only takes the
+		# reading; it does not decide what the reading means.
+		$reading.Examinable = Test-GitReadingIsExaminable `
+			-ExitCode ([int] $exitCode) -StandardError $stderr -Toplevel ([string] $toplevel)
+
 		if ($exitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($toplevel)) {
-			$reading.Examinable = $true
 			$reading.Toplevel = ("$toplevel").Trim()
-		}
-		elseif ($exitCode -eq 128 -and $stderr -match 'not a git repository \(or any of the parent directories\)') {
-			# The ONE negative answer that is an answer, and the parenthetical is
-			# load-bearing rather than decorative. git emits the BARE phrase
-			# "fatal: not a git repository: <admin dir>" for an ORPHANED LINKED
-			# WORKTREE - one whose .git/worktrees entry has been removed - which is
-			# precisely a state check 5 exists to catch. Matching the bare phrase
-			# would promote that to durable. Only the parenthetical form, emitted
-			# when discovery genuinely walked to the root and found nothing, means
-			# "outside every checkout". Verified against git on all three inputs:
-			# genuine miss (parenthetical), orphaned worktree (bare only), and a
-			# corrupt gitfile ("invalid gitfile format", neither).
-			#
-			# Every other 128 - a dubious-ownership refusal under safe.directory, a
-			# locked or corrupt repository, an orphaned worktree - leaves this
-			# false, because those are failures to look.
-			$reading.Examinable = $true
-		}
-		else {
-			return $reading
 		}
 	}
 	finally {
