@@ -260,7 +260,7 @@ public sealed class LatticeWalGc(
 
         // Why the cursor branch is in the state it is. A null minCursor is
         // ambiguous between "nobody is consuming this tree" (benign, and the
-        // scheduler should back off) and "an uncheckpointed leaf short-circuited
+        // scheduler should back off) and "an unusable durable pin short-circuited
         // the floor" (a defect state in which the tree cannot reclaim at all and
         // its WAL grows without bound). Collapsing the two is issue #2702; the
         // scheduler reads this to schedule them differently. Purely diagnostic -
@@ -350,8 +350,9 @@ public sealed class LatticeWalGc(
     /// A missing pin at a real frontier lowers the effective floor (more WAL
     /// retained, always safe). A missing pin at
     /// <see cref="HybridLogicalClock.Zero"/> - a leaf whose durable pin carries
-    /// no usable offset, which happens both when it never checkpointed and when
-    /// it is fully checkpointed but holds no durable snapshot - returns a
+    /// no usable offset, most often because it is fully checkpointed but holds
+    /// no durable snapshot, and otherwise because it has no usable checkpoint -
+    /// returns a
     /// <see langword="null"/> floor <b>with
     /// <c>Blocked</c> set</b>, disabling the cursor
     /// branch of the GC predicate entirely so the WAL head is retained for

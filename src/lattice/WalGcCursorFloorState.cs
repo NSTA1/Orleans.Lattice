@@ -40,14 +40,27 @@ public enum WalGcCursorFloorState
     /// so the cursor branch was disabled for the whole tree and no entry can be
     /// trimmed by cursor no matter how far every other consumer has advanced.
     /// <para>
-    /// The cause is deliberately left open here, because there is more than one
-    /// way in and naming only the obvious one would repeat the very defect this
-    /// enum exists to fix. A leaf that activated but never checkpointed is one
-    /// route. A leaf that is <i>fully checkpointed</i> but holds no durable
-    /// snapshot is another, and on a measured deployment it was much the larger
-    /// of the two: the gate reads <c>min(checkpoint, covered)</c>, and
-    /// <c>covered</c> is per-activation in-memory state populated only on
-    /// snapshot capture or load. Read this value as "the pins are unusable",
+    /// The cause is deliberately left open in the name, because there is more
+    /// than one route in and naming only the obvious one would repeat the very
+    /// defect this enum exists to fix. The routes are not equally likely, so
+    /// they are given here in the order a diagnosis should consider them.
+    /// </para>
+    /// <para>
+    /// The route that occurs in practice is a leaf that is <i>fully
+    /// checkpointed</i> but holds no durable snapshot. The gate reads
+    /// <c>min(checkpoint, covered)</c>, and <c>covered</c> is per-activation
+    /// in-memory state populated only on snapshot capture or load, so a leaf
+    /// can have scanned arbitrarily far and still offer nothing usable, and a
+    /// fresh activation starts uncovered regardless of how much it has
+    /// persisted. On the deployments measured for issue #2702 this accounted
+    /// for the blocked population in full: a census of one affected tree found
+    /// no leaf that lacked a checkpoint at all.
+    /// </para>
+    /// <para>
+    /// A leaf carrying no usable checkpoint is the other route. On those same
+    /// deployments it was confined to the admin projection rebuild, which
+    /// resets the checkpoint deliberately before replaying, so it is not where
+    /// a diagnosis should start. Read this value as "the pins are unusable",
     /// not as "the leaf never wrote anything".
     /// </para>
     /// <para>
