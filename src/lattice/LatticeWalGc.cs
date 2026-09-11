@@ -211,7 +211,8 @@ public sealed class LatticeWalGc(
         // cursor eagerly, but dormant leaves re-register only lazily, so
         // without this floor the GC would trim past a leaf's durable
         // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
-        minCursor = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, cancellationToken).ConfigureAwait(false);
+        var (flooredCursor, cursorBlocked) = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, cancellationToken).ConfigureAwait(false);
+        minCursor = flooredCursor;
         // Offset-space retention floor. The HLC floor above cannot protect a
         // low-HLC / high-offset WAL entry (a tombstone-compaction reap re-emits
         // an old timestamp at a new offset, so the WAL is not HLC-monotonic in
@@ -257,6 +258,19 @@ public sealed class LatticeWalGc(
         var hasCursorPredicate = minCursor is { } mc && mc > HybridLogicalClock.Zero;
         var hasTtlPredicate = ttlCeiling is not null;
 
+        // Why the cursor branch is in the state it is. A null minCursor is
+        // ambiguous between "nobody is consuming this tree" (benign, and the
+        // scheduler should back off) and "an unusable durable pin short-circuited
+        // the floor" (a defect state in which the tree cannot reclaim at all and
+        // its WAL grows without bound). Collapsing the two is issue #2702; the
+        // scheduler reads this to schedule them differently. Purely diagnostic -
+        // the trim predicate below is unchanged.
+        var cursorFloorState = cursorBlocked
+            ? WalGcCursorFloorState.BlockedByUnusablePin
+            : hasCursorPredicate
+                ? WalGcCursorFloorState.Available
+                : WalGcCursorFloorState.NoCursorReported;
+
         // Sample retained bytes once up front so a byte-pressure trigger is
         // decided against the pre-trim footprint. Returns null when the
         // policy is disabled or the provider does not support byte accounting.
@@ -289,7 +303,7 @@ public sealed class LatticeWalGc(
             var over0 = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedBefore);
             return new LatticeWalGcReport(
                 treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0,
-                ceiling, retainedBefore, retainedBefore, triggered, over0);
+                ceiling, retainedBefore, retainedBefore, triggered, over0, cursorFloorState);
         }
 
         long totalTrimmed = 0;
@@ -320,7 +334,7 @@ public sealed class LatticeWalGc(
 
         return new LatticeWalGcReport(
             treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed,
-            ceiling, retainedBefore, retainedAfter, triggered, overThreshold);
+            ceiling, retainedBefore, retainedAfter, triggered, overThreshold, cursorFloorState);
     }
 
     /// <summary>
@@ -335,15 +349,26 @@ public sealed class LatticeWalGc(
     /// <para>
     /// A missing pin at a real frontier lowers the effective floor (more WAL
     /// retained, always safe). A missing pin at
-    /// <see cref="HybridLogicalClock.Zero"/> - a leaf that activated but never
-    /// checkpointed - returns <see langword="null"/>, disabling the cursor
+    /// <see cref="HybridLogicalClock.Zero"/> - a leaf whose durable pin carries
+    /// no usable offset, most often because it is fully checkpointed but holds
+    /// no durable snapshot, and otherwise because it has no usable checkpoint -
+    /// returns a
+    /// <see langword="null"/> floor <b>with
+    /// <c>Blocked</c> set</b>, disabling the cursor
     /// branch of the GC predicate entirely so the WAL head is retained for
     /// that leaf (the TTL ceiling still bounds growth). When the grain factory
     /// is unavailable (a bare-IServiceProvider unit-test construction) or no
     /// durable pins exist, the registry minimum is returned unchanged.
     /// </para>
+    /// <para>
+    /// The <c>Blocked</c> flag exists because a <see langword="null"/> floor is
+    /// otherwise ambiguous: it is also what an unconsumed tree yields. Only the
+    /// short-circuit above is a defect state, and only the caller that can tell
+    /// them apart can schedule them differently (issue #2702). The flag is
+    /// diagnostic; it does not participate in the trim predicate.
+    /// </para>
     /// </summary>
-    private async Task<HybridLogicalClock?> ApplyDurableMaterialiserFloorAsync(
+    private async Task<(HybridLogicalClock? Floor, bool Blocked)> ApplyDurableMaterialiserFloorAsync(
         string treeName,
         HybridLogicalClock? registryMin,
         CancellationToken cancellationToken)
@@ -351,7 +376,7 @@ public sealed class LatticeWalGc(
         var factory = GrainFactory;
         if (factory is null)
         {
-            return registryMin;
+            return (registryMin, false);
         }
 
         IReadOnlyDictionary<string, HybridLogicalClock> pins;
@@ -365,12 +390,12 @@ public sealed class LatticeWalGc(
             // the in-memory floor rather than failing the whole GC run. The
             // next pass retries; a missed floor never trims unsafely because
             // the present in-memory consumers still constrain the trim point.
-            return registryMin;
+            return (registryMin, false);
         }
 
         if (pins.Count == 0)
         {
-            return registryMin;
+            return (registryMin, false);
         }
 
         var snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
@@ -393,10 +418,13 @@ public sealed class LatticeWalGc(
 
             if (pin <= HybridLogicalClock.Zero)
             {
-                // Never-checkpointed dormant leaf: block the cursor branch
+                // Pin carries no usable offset: block the cursor branch
                 // entirely so nothing is trimmed by cursor for this tree.
                 // Zero is the strongest possible floor, so short-circuit.
-                return null;
+                // Both a never-checkpointed leaf and a fully-checkpointed leaf
+                // with no durable snapshot land here; the caller reports this
+                // as blocked without asserting which.
+                return (null, true);
             }
 
             floor = floor is { } current
@@ -404,7 +432,7 @@ public sealed class LatticeWalGc(
                 : pin;
         }
 
-        return floor;
+        return (floor, false);
     }
 
     /// <summary>

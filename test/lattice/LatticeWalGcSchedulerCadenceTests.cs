@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Tests;
 /// </summary>
 [TestFixture]
 [Category("Unit")]
-public sealed class LatticeWalGcSchedulerCadenceTests
+public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
     private static readonly TimeSpan Ceiling = TimeSpan.FromHours(1);
     private static readonly TimeSpan Floor = TimeSpan.FromSeconds(30);
@@ -66,16 +66,33 @@ public sealed class LatticeWalGcSchedulerCadenceTests
         IGrainFactory factory,
         ILatticeWalGc gc,
         LatticeOptions options,
-        TimeProvider time)
+        TimeProvider time,
+        Orleans.Lattice.BPlusTree.Grains.SnapshotPinCensus? snapshotPins = null)
         => new(
             factory,
             gc,
             Monitor(options),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeWalGcScheduler>>(),
-            time);
+            time,
+            snapshotPins);
 
-    private static LatticeWalGcReport Report(long entriesTrimmed, long? retainedBytesAfter = null, long? byteCeiling = null) =>
-        new("tree", null, null, null, null, 1, entriesTrimmed, byteCeiling, null, retainedBytesAfter);
+    private static LatticeWalGcReport Report(
+        long entriesTrimmed,
+        long? retainedBytesAfter = null,
+        long? byteCeiling = null,
+        WalGcCursorFloorState cursorFloorState = WalGcCursorFloorState.Available) =>
+        new("tree", null, null, null, null, 1, entriesTrimmed, byteCeiling, null, retainedBytesAfter,
+            false, false, cursorFloorState);
+
+    /// <summary>
+    /// A pass that reclaimed nothing because an unusable durable materialiser
+    /// pin disabled the cursor branch - the defect state of issue #2702. Byte
+    /// for byte the same report a quiescent tree produces, apart from the one
+    /// field that distinguishes them, which is the point: before that field
+    /// existed the scheduler could not tell these two apart.
+    /// </summary>
+    private static LatticeWalGcReport BlockedReport() =>
+        Report(entriesTrimmed: 0, cursorFloorState: WalGcCursorFloorState.BlockedByUnusablePin);
 
     private static Task Parked(Task parked) => parked.WaitAsync(TimeSpan.FromSeconds(30));
 
@@ -509,9 +526,9 @@ public sealed class LatticeWalGcSchedulerCadenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(passes.Measurements, Has.Count.EqualTo(1));
-            Assert.That(passes.Measurements[0].Value, Is.EqualTo(1));
-            Assert.That(passes.Measurements[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("reclaimed"));
+            Assert.That(passes.Counted, Has.Count.EqualTo(1));
+            Assert.That(passes.Counted[0].Value, Is.EqualTo(1));
+            Assert.That(passes.Counted[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("reclaimed"));
             Assert.That(intervals.Measurements, Has.Count.EqualTo(1));
             Assert.That(intervals.Measurements[0].Value, Is.EqualTo(Floor.TotalSeconds));
         });
@@ -534,8 +551,8 @@ public sealed class LatticeWalGcSchedulerCadenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(passes.Measurements, Has.Count.EqualTo(1));
-            Assert.That(passes.Measurements[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("idle"));
+            Assert.That(passes.Counted, Has.Count.EqualTo(1));
+            Assert.That(passes.Counted[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("idle"));
             Assert.That(intervals.Measurements[0].Value, Is.EqualTo(TimeSpan.FromMinutes(1).TotalSeconds));
         });
     }
@@ -558,8 +575,8 @@ public sealed class LatticeWalGcSchedulerCadenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(passes.Measurements, Has.Count.EqualTo(1));
-            Assert.That(passes.Measurements[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("failed"),
+            Assert.That(passes.Counted, Has.Count.EqualTo(1));
+            Assert.That(passes.Counted[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("failed"),
                 "a wedged tree must be visible as a failed pass rather than an idle one.");
             Assert.That(backlog.Measurements, Is.Empty);
         });
@@ -678,22 +695,27 @@ public sealed class LatticeWalGcSchedulerCadenceTests
         var time = new VirtualTimeProvider();
 
         using var shed = new InstrumentRecorder(LatticeMetrics.MaterialiserPinReportsShed, Tree);
-        using var pins = new InstrumentRecorder(LatticeMetrics.SnapshotPinCount, Tree);
+        var census = new Orleans.Lattice.BPlusTree.Grains.SnapshotPinCensus();
+        using var pins = new GaugeRecorder(LatticeMetrics.SnapshotPinsGaugeName, Tree);
 
-        var scheduler = CreateScheduler(FactoryWithTrees(Tree), gc, Adaptive(), time);
+        var scheduler = CreateScheduler(FactoryWithTrees(Tree), gc, Adaptive(), time, census);
         await StartAndRunFirstPassAsync(scheduler, time);
         await scheduler.StopAsync(CancellationToken.None);
 
-        // A Counter exports no series until its first Add, so a tree that has
-        // never shed a pin report and never held a snapshot pin was silent on
-        // both - indistinguishable from a dead subsystem (issue #2694). Adding
-        // zero creates the series without perturbing the value.
+        // A Counter exports no series until its first Add, and an observable
+        // gauge exports none until its callback yields a measurement for the
+        // tree - so a tree that has never shed a pin report and never held a
+        // snapshot pin was silent on both, indistinguishable from a dead
+        // subsystem (issue #2694). The counter is primed with a zero Add; the
+        // gauge is primed by registering the tree, which makes its callback
+        // emit an explicit zero. Neither perturbs the value.
+        var observed = pins.Scrape();
         Assert.Multiple(() =>
         {
             Assert.That(shed.Measurements, Has.Count.EqualTo(1));
             Assert.That(shed.Measurements[0].Value, Is.Zero);
-            Assert.That(pins.Measurements, Has.Count.EqualTo(1));
-            Assert.That(pins.Measurements[0].Value, Is.Zero);
+            Assert.That(observed, Has.Count.EqualTo(1));
+            Assert.That(observed[0].Value, Is.Zero);
         });
     }
 
@@ -875,6 +897,24 @@ public sealed class LatticeWalGcSchedulerCadenceTests
             get { lock (_gate) { return _measurements.ToArray(); } }
         }
 
+        /// <summary>
+        /// The measurements that record a real event, excluding zero-valued
+        /// priming observations.
+        /// <para>
+        /// A Counter publishes no series until its first <c>Add</c>, so several
+        /// WAL-retention series are deliberately primed with a zero so that
+        /// their absence means "not reporting" and a flat zero means "measured,
+        /// never happened" (issues #2694 and #2702). A primed zero is a real
+        /// measurement and a listener sees it, but it is not an occurrence of
+        /// the thing being counted - so a fixture asserting "exactly one idle
+        /// pass" filters it out rather than loosening its count.
+        /// </para>
+        /// </summary>
+        public IReadOnlyList<Captured> Counted
+        {
+            get { lock (_gate) { return _measurements.Where(m => m.Value != 0).ToArray(); } }
+        }
+
         public void Dispose() => _listener.Dispose();
 
         private void Capture(double value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
@@ -886,6 +926,62 @@ public sealed class LatticeWalGcSchedulerCadenceTests
                     && string.Equals(tag.Value as string, _tree, StringComparison.Ordinal))
                 {
                     lock (_gate) { _measurements.Add(new Captured(value, captured)); }
+                    return;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Captures the observations an <see cref="ObservableGauge{T}"/> emits for a
+    /// single tree, on demand.
+    /// <para>
+    /// An observable instrument records nothing until something scrapes it, so
+    /// unlike <see cref="InstrumentRecorder"/> this one exposes
+    /// <see cref="Scrape"/> rather than accumulating passively. Matching is by
+    /// instrument <i>name</i> on the Lattice meter: the gauge is created inside
+    /// <see cref="SnapshotPinCensus"/> and is not reachable as a static field,
+    /// and a name-based match is also what keeps the listener clear of the
+    /// static-initialiser re-entrancy hazard documented on
+    /// <see cref="Orleans.Lattice.Testing.MeterListening"/>.
+    /// </para>
+    /// </summary>
+    private sealed class GaugeRecorder : IDisposable
+    {
+        private readonly List<Captured> _observations = [];
+        private readonly object _gate = new();
+        private readonly MeterListener _listener;
+        private readonly string _tree;
+
+        public GaugeRecorder(string instrumentName, string tree)
+        {
+            _tree = tree;
+            _listener = Orleans.Lattice.Testing.MeterListening.StartForMeter(
+                LatticeMetrics.Meter,
+                [instrumentName],
+                listener => listener.SetMeasurementEventCallback<long>(
+                    (_, value, tags, _) => Capture(value, tags)));
+        }
+
+        /// <summary>Forces one observation round and returns what this tree reported.</summary>
+        public IReadOnlyList<Captured> Scrape()
+        {
+            lock (_gate) { _observations.Clear(); }
+            _listener.RecordObservableInstruments();
+            lock (_gate) { return _observations.ToArray(); }
+        }
+
+        public void Dispose() => _listener.Dispose();
+
+        private void Capture(long value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
+        {
+            var captured = tags.ToArray();
+            foreach (var tag in captured)
+            {
+                if (string.Equals(tag.Key, LatticeMetrics.TagTree, StringComparison.Ordinal)
+                    && string.Equals(tag.Value as string, _tree, StringComparison.Ordinal))
+                {
+                    lock (_gate) { _observations.Add(new Captured(value, captured)); }
                     return;
                 }
             }

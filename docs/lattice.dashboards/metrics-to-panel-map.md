@@ -72,7 +72,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.storage.policy.over_threshold` | observable gauge (0/1) | `tree` | Overview | Trees over advisory threshold |
 | `orleans.lattice.storage.policy.trim_triggered` | counter | `tree`, `reason` | Overview | Byte-pressure trim activity |
 | `orleans.lattice.storage.policy.bytes_reclaimed` | counter (`By`) | `tree` | Overview | Byte-pressure trim activity |
-| `orleans.lattice.wal.gc.passes` | counter (`{pass}`) | `tree`, `outcome` | Replication | WAL GC pass rate by outcome |
+| `orleans.lattice.wal.gc.passes` | counter (`{pass}`) | `tree`, `outcome` | Replication | WAL GC pass rate by outcome; WAL GC blocked passes by tree |
 | `orleans.lattice.wal.gc.interval` | histogram (`s`) | `tree` | Replication | WAL GC adaptive interval |
 | `orleans.lattice.wal.gc.backlog_bytes` | histogram (`By`) | `tree` | Replication | WAL GC retained backlog after pass |
 | `orleans.lattice.wal.gc.backlog_bytes_unavailable` | counter (`{pass}`) | `tree`, `reason` | Replication | WAL GC backlog bytes unavailable by reason |
@@ -140,7 +140,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.materialiser.pin.reports_shed` | counter | `tree` | CommitPath | Steady-state pin reports dropped to protect a pin store that is not keeping up (issue #2014) |
 | `orleans.lattice.snapshot.replay.entries` | counter | `tree` | Overview | Snapshot replay throughput |
 | `orleans.lattice.snapshot.replay.duration` | histogram (ms) | `tree` | Overview | Snapshot replay duration p50/p95/p99 |
-| `orleans.lattice.snapshot.pins` | up/down counter | `tree` | Overview | Snapshot pins (current) |
+| `orleans.lattice.snapshot.pins` | observable gauge | `tree` | Overview | Snapshot pins (current) |
 | `orleans.lattice.split.retroactive_forward.entries` | counter | `tree` | Overview | Retroactive split-forward throughput |
 | `orleans.lattice.split.retroactive_forward.duration` | histogram (ms) | `tree` | Overview | Retroactive split-forward duration p50/p95/p99 |
 | `orleans.lattice.split.in_flight` | histogram (`{split}`) | `tree` | Overview | Autonomic split admission (cluster gate) |
@@ -427,6 +427,8 @@ Every instrument here carries the derived `tenant` label with the reserved `_pla
 | `repocontext.ann.sweep` | counter (`{sweep}`) | `outcome` = `armed`, `empty`, `faulted` | (none) | **not charted** |
 | `repocontext.ann.build.corpus` | counter (`{build}`) | `coverage` = `nonempty`, `unrestricted`, `filtered`, `denied`, `unknown` | (none) | **not charted** |
 | `repocontext.ann.build.denial_terminal` | counter (`{coordinator}`) | (none) | (none) | **not charted** |
+| `repocontext.ann.partitioning` | counter (`{observation}`) | `state` = `partitioned`, `unpartitioned-small`, `unpartitioned-large` | (none) | **not charted** |
+| `repocontext.ann.repartition` | counter (`{training}`) | `outcome` = `partitioned`, `declined` | (none) | **not charted** |
 | `repocontext.retrieval.ann.search` | counter (`{query}`) | `state` = `bootstrapping`, `exhaustive`, `approximate` | (none) | **not charted** |
 | `repocontext.retrieval.ready_seconds` | histogram (`s`) | `phase` = `serving`, `keyword_only`, `nothing_registered` | (none) | **not charted** |
 | `repocontext.retrieval.unavailable` | counter (`{event}`) | `cause` | (none) | **not charted** |

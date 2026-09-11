@@ -137,6 +137,16 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.TryAddSingleton<BPlusTree.Grains.WalSaturationSignal>();
         builder.Services.TryAddSingleton<IWalSaturationSignal>(sp => sp.GetRequiredService<BPlusTree.Grains.WalSaturationSignal>());
         builder.Services.TryAddSingleton<BPlusTree.Grains.WalSaturationObserverDispatcher>();
+        // Per-silo census of the WAL retention pins held by snapshot cursors,
+        // and the source of the orleans.lattice.snapshot.pins observable gauge.
+        // Resolved lazily by the cursor grain and eagerly by the WAL GC
+        // scheduler (a hosted service), so the gauge is registered on the meter
+        // from silo start rather than only once a snapshot cursor is first
+        // opened. The cursor registry is resolved optionally: without one the
+        // census still reports the pins it was told about, it simply cannot
+        // re-derive them.
+        builder.Services.TryAddSingleton(sp => new BPlusTree.Grains.SnapshotPinCensus(
+            sp.GetService<IWalCursorRegistry>()));
         // Always-on in-memory consumer-cursor registry. The WAL is integral to
         // every Lattice deployment, so the registry that the saturation sampler
         // reads to compute materialiser drain lag must never be silently absent:
