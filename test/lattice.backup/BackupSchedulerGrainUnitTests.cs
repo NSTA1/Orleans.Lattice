@@ -351,6 +351,74 @@ public sealed class BackupSchedulerGrainUnitTests
             Throws.Nothing);
     }
 
+    // ---- Schedule publication ordering (issue #2657) ----------------------------
+
+    [Test]
+    public async Task EnsureScheduleAsync_does_not_publish_the_scope_when_reminder_registration_fails()
+    {
+        // Ordering guard for issue #2657. ApplyScheduleAsync registers the
+        // reminder and only then publishes the scope to the inventory registry.
+        // That order is load-bearing and was argued for in a source comment but
+        // never exercised: moving the publish above the awaited registration
+        // passed the entire 537-test backup suite.
+        //
+        // The invariant is semantic, not syntactic - no scope series exists
+        // unless a reminder registration actually succeeded - so this drives a
+        // failing registration and asserts the scope is absent afterwards,
+        // rather than asserting statement position. A publish hoisted into a
+        // helper that runs before registration is the realistic regression and
+        // a positional assertion would miss it.
+        //
+        // The failure is injected as a non-transient exception: the catch in
+        // BackupReminderResilience is filtered `when (IsTransientReminderFailure)`,
+        // so this leaves on the first attempt with no retry and no backoff delay,
+        // which keeps the fixture free of timing. It must not be a
+        // TimeoutException nor carry the "still initializing" marker, either of
+        // which would be classified transient and exercise the retry-budget route
+        // instead.
+        //
+        // Swapped, the scope is published with LastRunOutcome = None and the
+        // registration then throws, so the status gauge reports 0 - "scheduled,
+        // nothing has completed yet" - for a scope that is not scheduled and
+        // never will be, since nothing retries ApplyScheduleAsync. That is worse
+        // than losing the reading: it manufactures a positive claim of health.
+        var reminders = Substitute.For<IReminderRegistry>();
+        reminders
+            .RegisterOrUpdateReminder(
+                Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>())
+            .Returns<Task<IGrainReminder>>(_ =>
+                throw new InvalidOperationException("injected non-transient reminder-registry fault"));
+
+        var inventory = new BackupInventoryRegistry();
+        var options = new LatticeBackupScheduleOptions
+        {
+            FullBackupScheduleEnabled = true,
+            FullBackupInterval = TimeSpan.FromMinutes(1),
+        };
+        var grain = CreateGrain(reminders: reminders, inventory: inventory, options: options);
+
+        // Precondition, asserted rather than assumed. EnsureScopeRegistered is a
+        // non-destructive GetOrAdd, so a scope already present would make both
+        // orderings observationally identical and this fixture would pass against
+        // the swap as well as against the real code - a guard that cannot fail.
+        // The positive control does not discriminate that mistake (deleting the
+        // publish still reddens the happy-path test while the swap stays green),
+        // so the precondition is the only thing that rules it out.
+        Assert.That(
+            inventory.TryGetScope(GrainKey), Is.Null,
+            "precondition: the scope must be absent before the act, or the swap is invisible");
+
+        Assert.That(
+            async () => await grain.EnsureScheduleAsync(TestScope),
+            Throws.InstanceOf<InvalidOperationException>(),
+            "the retry envelope is transparent: it may delay a failure, never swallow it");
+
+        Assert.That(
+            inventory.TryGetScope(GrainKey), Is.Null,
+            "a scope whose reminder registration failed must publish no series at all; a 0 reading here "
+            + "would assert 'scheduled, nothing has completed yet' for a scope that is not scheduled");
+    }
+
     // ---- CancelScheduleAsync (line 109) ----------------------------------------
 
     [Test]
