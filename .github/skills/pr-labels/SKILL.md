@@ -62,6 +62,23 @@ queries slice history by component.
 Relevance is decided by the **changed files**, not by prose. A PR is relevant to
 package `X` if it touches any file under `src/X/`, `test/X/`, or `docs/X/`.
 
+**All three trees count, and this is the single most commonly broken rule here -
+not a pedantic aside.** Across the 107 merged member PRs of one epic bucket, 10
+(9.3%) were missing at least one package label, and the misses were concentrated
+rather than scattered:
+
+| Label missed | On | Reached almost always through |
+| --- | --- | --- |
+| `lattice.dashboards` | 5 of 10 | `docs/lattice.dashboards/metrics-to-panel-map.md` |
+| `lattice` | 5 of 10 | `test/lattice/` (a hygiene-gate fixture) |
+
+Both are the same shape: a PR whose product change lives in one package touches a
+second package's **docs or tests only**. Deriving from `src/` alone misses those
+every single time. That is not ten authors being careless, it is one rule applied
+with the wrong tree set ten times - so treat "or `test/X/` or `docs/X/`" as
+load-bearing, because deriving from `src/` alone is wrong about one PR in ten and
+silently.
+
 Mapping rule: split each changed path on `/`; if the first segment is `src`,
 `test`, or `docs` **and the second segment is in the canonical `$packages` list
 enumerated above**, that package is relevant. Because directory names are exact
@@ -85,11 +102,16 @@ instructions auto-attach.
 
 This is hard to notice because the truncating call is **correct on every pull
 request anyone would spot-check**. A 4-file PR and a 9-file PR both agree with
-`changedFiles` exactly; only large PRs diverge - which is to say the epic or
-bucket integration PR specifically, the one that is raised last and is too large
-to eyeball. But the threshold is not exotic: PR #2360, at **102** changed files,
-truncates too. Two files over the line is enough, so being of reviewable size is
-no protection.
+`changedFiles` exactly. Across 107 merged member PRs of one epic bucket, the
+largest was still under 100, so **not one of them could truncate**.
+
+The hazard is therefore not merely rare, it is **correlated with exactly the pull
+requests that aggregate everyone else's work**: the method gets validated a
+hundred times on PRs where it is incapable of failing, then applied once to the
+integration PR, where it fails - and that is the PR nobody can check by hand.
+
+Nor is the threshold exotic. PR #2360 truncates at **102** changed files, so two
+files over the line is enough and being of reviewable size is no protection.
 
 Use the paginated REST endpoint, which walks every page:
 
@@ -123,10 +145,12 @@ $rows | Where-Object { $_.files.Count -lt $_.changedFiles } | ForEach-Object {
 }
 ```
 
-Do not replace the bulk call with a per-PR paginated loop: across a 200-PR window
-only three rows needed repair, so the loop would pay 200 round trips to fix 3.
-Detecting truncation is also the better property than merely avoiding it, since
-it keeps working if the 100 bound ever changes.
+Do not replace the bulk call with a per-PR paginated loop. Across 107 merged
+member PRs of one epic bucket, **zero** rows needed repair, so the loop would have
+paid 107 round trips for nothing. Detection is also a strictly better property
+than avoidance: a method that merely avoids the 100 bound becomes silently wrong
+the day the bound moves, whereas comparing `files.Count` against the declared
+`changedFiles` keeps working and tells you it moved.
 
 ### Before the PR exists
 
