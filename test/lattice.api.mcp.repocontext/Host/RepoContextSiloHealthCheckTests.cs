@@ -55,6 +55,16 @@ public sealed class RepoContextSiloHealthCheckTests
         }
     }
 
+    /// <summary>A settable clock so the drain-duration bound can be driven deterministically.</summary>
+    private sealed class MutableClock(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
     // State 4: a working silo. Healthy, and stable across consecutive checks.
     [Test]
     public async Task Healthy_when_the_grain_probe_succeeds_after_readiness()
@@ -195,6 +205,62 @@ public sealed class RepoContextSiloHealthCheckTests
         });
     }
 
+    // A drain that stays within its grace window is a container stopping on purpose
+    // and stays Healthy: the probe is not even invoked, and the bound has not fired.
+    [Test]
+    public async Task Healthy_while_a_drain_stays_within_the_grace_window()
+    {
+        var clock = new MutableClock(DateTimeOffset.UnixEpoch);
+        var window = TimeSpan.FromSeconds(120);
+        var probe = FakeSiloProbe.Throws(new InvalidOperationException("should not be called"));
+        var state = new RepoContextReadinessState(clock);
+        state.MarkReady();
+        state.BeginDrain();
+        var check = new RepoContextSiloHealthCheck(probe, state, window, clock);
+
+        clock.Advance(window - TimeSpan.FromSeconds(1));
+        var result = await check.CheckHealthAsync(NewContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(HealthStatus.Healthy));
+            Assert.That(result.Description, Does.Contain("Draining"));
+            Assert.That(probe.Calls, Is.EqualTo(0),
+                "A drain within its window must not be probed.");
+        });
+    }
+
+    // The bound's other leg, and the one that distinguishes a real bound from none: a
+    // self-initiated drain that HANGS past its grace window would otherwise report
+    // Healthy forever (BeginDrain is terminal). Past the window it must report
+    // Unhealthy and name the elapsed time so the hang is visible in docker inspect.
+    [Test]
+    public async Task Unhealthy_when_a_drain_hangs_beyond_the_grace_window()
+    {
+        var clock = new MutableClock(DateTimeOffset.UnixEpoch);
+        var window = TimeSpan.FromSeconds(120);
+        var probe = FakeSiloProbe.Throws(new InvalidOperationException("should not be called"));
+        var state = new RepoContextReadinessState(clock);
+        state.MarkReady();
+        state.BeginDrain();
+        var check = new RepoContextSiloHealthCheck(probe, state, window, clock);
+
+        clock.Advance(window + TimeSpan.FromSeconds(30)); // elapsed 150s, 30s past the window
+
+        var result = await check.CheckHealthAsync(NewContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(HealthStatus.Unhealthy),
+                "A drain that outlives its grace window has hung and must not report healthy forever.");
+            Assert.That(result.Description, Does.Contain("150"),
+                "The description must name the elapsed drain seconds so an operator sees how long it hung.");
+            Assert.That(result.Description, Does.Contain("hung"));
+            Assert.That(probe.Calls, Is.EqualTo(0),
+                "The hang is detected from the drain clock, not by probing a stopping silo.");
+        });
+    }
+
     [Test]
     public void Check_rejects_a_null_probe()
         => Assert.That(
@@ -213,6 +279,20 @@ public sealed class RepoContextSiloHealthCheckTests
             () => new RepoContextSiloHealthCheck(
                 FakeSiloProbe.Succeeds(), new RepoContextReadinessState(), TimeSpan.Zero),
             Throws.TypeOf<ArgumentOutOfRangeException>());
+
+    [Test]
+    public void Check_rejects_a_non_positive_drain_grace_window()
+        => Assert.That(
+            () => new RepoContextSiloHealthCheck(
+                FakeSiloProbe.Succeeds(), new RepoContextReadinessState(), TimeSpan.Zero, TimeProvider.System),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+
+    [Test]
+    public void Check_rejects_a_null_time_provider()
+        => Assert.That(
+            () => new RepoContextSiloHealthCheck(
+                FakeSiloProbe.Succeeds(), new RepoContextReadinessState(), TimeSpan.FromSeconds(1), null!),
+            Throws.ArgumentNullException);
 
     [Test]
     public void Silo_probe_rejects_a_null_policy_store()

@@ -37,16 +37,29 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// </description></item>
 /// </list>
 /// <para>
-/// A drain is reported Healthy without probing: the silo is stopping on purpose,
-/// and grain calls failing as activations deactivate must not mark a gracefully
-/// stopping container unhealthy.
+/// A drain is reported Healthy <b>while it stays within a bounded window</b>: the
+/// silo is stopping on purpose, and grain calls failing as activations deactivate
+/// must not mark a gracefully stopping container unhealthy. But a drain is not
+/// unbounded - <see cref="RepoContextReadinessState.BeginDrain"/> is terminal, so a
+/// host that begins graceful shutdown and then <b>hangs</b> would otherwise report
+/// Healthy forever, which is issue #2401's abandoned drain wearing a health check
+/// and the exact "alive, not serving, reporting green" shape issue #2666 exists to
+/// end. Past the window the check reports Unhealthy and names the elapsed time. The
+/// window is sized off the container's <c>stop_grace_period</c> (see
+/// <see cref="DefaultDrainGraceWindow"/>), because that is the ceiling a
+/// <c>docker stop</c> drain is killed at anyway; only a <i>self-initiated</i>
+/// shutdown (a background failure calling <c>StopApplication</c>) can outlive it,
+/// and that is precisely the case with no other backstop.
+/// </para>
+/// <para>
+/// <b>The drain bound is observability, not remediation.</b> Docker does not
+/// restart a container on an unhealthy result by itself, so reporting Unhealthy for
+/// a hung drain does not recover it. What it buys is that a stuck drain becomes
+/// <b>visible</b> in <c>docker ps</c> and <c>docker inspect</c> instead of having to
+/// be found by eye - which is the whole complaint in issue #2666.
 /// </para>
 /// </remarks>
-/// <param name="probe">The seam that performs the trivial grain call.</param>
-/// <param name="readiness">The shared lifecycle-phase holder.</param>
-public sealed class RepoContextSiloHealthCheck(
-    IRepoContextSiloProbe probe,
-    RepoContextReadinessState readiness) : IHealthCheck
+public sealed class RepoContextSiloHealthCheck : IHealthCheck
 {
     /// <summary>The health-check registration name.</summary>
     public const string Name = "silo";
@@ -59,27 +72,88 @@ public sealed class RepoContextSiloHealthCheck(
     /// </summary>
     public static readonly TimeSpan DefaultProbeTimeout = TimeSpan.FromSeconds(5);
 
-    private readonly IRepoContextSiloProbe _probe = probe
-        ?? throw new ArgumentNullException(nameof(probe));
+    /// <summary>
+    /// The default bound on how long a graceful drain may run before it is reported
+    /// Unhealthy as hung. It tracks <see cref="RepoContextShutdownBudget.DefaultStopGracePeriod"/>
+    /// - the same <c>stop_grace_period</c> the shutdown budget is derived from - so a
+    /// change to the container's grace period is visibly a change to both: a drain in
+    /// the <c>docker stop</c> path is SIGKILLed at that grant regardless, so anything
+    /// still draining past it can only be a self-initiated shutdown that has hung. The
+    /// host wiring passes the <b>resolved</b> grant (which may be operator-overridden)
+    /// through the DI factory; this default is what an unconfigured deployment uses.
+    /// </summary>
+    public static readonly TimeSpan DefaultDrainGraceWindow =
+        RepoContextShutdownBudget.DefaultStopGracePeriod;
 
-    private readonly RepoContextReadinessState _readiness = readiness
-        ?? throw new ArgumentNullException(nameof(readiness));
+    private readonly IRepoContextSiloProbe _probe;
+    private readonly RepoContextReadinessState _readiness;
+    private readonly TimeSpan _drainGraceWindow;
+    private readonly TimeProvider _timeProvider;
+    private readonly TimeSpan _timeout;
 
-    private readonly TimeSpan _timeout = DefaultProbeTimeout;
+    /// <summary>Initializes the check with the default drain window and system clock.</summary>
+    /// <param name="probe">The seam that performs the trivial grain call.</param>
+    /// <param name="readiness">The shared lifecycle-phase holder.</param>
+    public RepoContextSiloHealthCheck(
+        IRepoContextSiloProbe probe,
+        RepoContextReadinessState readiness)
+        : this(probe, readiness, DefaultDrainGraceWindow, TimeProvider.System, DefaultProbeTimeout)
+    {
+    }
+
+    /// <summary>
+    /// Initializes the check with an explicit drain-grace window and clock. The host
+    /// wires this through a health-check factory so the window tracks the resolved
+    /// <c>stop_grace_period</c> grant rather than the compile-time default.
+    /// </summary>
+    /// <param name="probe">The seam that performs the trivial grain call.</param>
+    /// <param name="readiness">The shared lifecycle-phase holder.</param>
+    /// <param name="drainGraceWindow">
+    /// How long a graceful drain may run before it is reported Unhealthy as hung.
+    /// </param>
+    /// <param name="timeProvider">The clock the drain-duration bound is measured on.</param>
+    public RepoContextSiloHealthCheck(
+        IRepoContextSiloProbe probe,
+        RepoContextReadinessState readiness,
+        TimeSpan drainGraceWindow,
+        TimeProvider timeProvider)
+        : this(probe, readiness, drainGraceWindow, timeProvider, DefaultProbeTimeout)
+    {
+    }
 
     /// <summary>Test-only constructor allowing the probe timeout to be shortened.</summary>
     internal RepoContextSiloHealthCheck(
         IRepoContextSiloProbe probe,
         RepoContextReadinessState readiness,
         TimeSpan timeout)
-        : this(probe, readiness)
+        : this(probe, readiness, DefaultDrainGraceWindow, TimeProvider.System, timeout)
     {
+    }
+
+    private RepoContextSiloHealthCheck(
+        IRepoContextSiloProbe probe,
+        RepoContextReadinessState readiness,
+        TimeSpan drainGraceWindow,
+        TimeProvider timeProvider,
+        TimeSpan timeout)
+    {
+        _probe = probe ?? throw new ArgumentNullException(nameof(probe));
+        _readiness = readiness ?? throw new ArgumentNullException(nameof(readiness));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+
+        if (drainGraceWindow <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(drainGraceWindow), drainGraceWindow, "The drain grace window must be positive.");
+        }
+
         if (timeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(timeout), timeout, "The probe timeout must be positive.");
         }
 
+        _drainGraceWindow = drainGraceWindow;
         _timeout = timeout;
     }
 
@@ -93,9 +167,31 @@ public sealed class RepoContextSiloHealthCheck(
         // A draining container is stopping deliberately. Probing now would race the
         // teardown and a failing grain call is expected, not a fault, so report
         // healthy rather than mark a gracefully stopping box unhealthy in its last
-        // seconds.
+        // seconds - BUT only while the drain stays within its grace window. BeginDrain
+        // is terminal, so a self-initiated shutdown that hangs would otherwise report
+        // Healthy forever (issue #2401's abandoned drain as a health check). Past the
+        // window we report Unhealthy naming the elapsed time. This is observability,
+        // not remediation: Docker does not restart on unhealthy, so this only makes a
+        // hung drain visible in `docker ps` / `docker inspect` rather than found by eye.
         if (phase == RepoContextLifecyclePhase.Draining)
         {
+            var startedAt = _readiness.DrainStartedAtUtc;
+
+            // A non-null start time is published before the Draining phase (see
+            // BeginDrain), so a null here can only be a benign observation race with a
+            // drain that has only just begun; treat it as just-started -> Healthy.
+            if (startedAt is { } drainStart)
+            {
+                var elapsed = _timeProvider.GetUtcNow() - drainStart;
+                if (elapsed > _drainGraceWindow)
+                {
+                    return HealthCheckResult.Unhealthy(
+                        $"Draining: graceful shutdown has run {elapsed.TotalSeconds:F0}s, beyond the "
+                        + $"{_drainGraceWindow.TotalSeconds:F0}s stop-grace window, and has not completed - "
+                        + "the drain has hung.");
+                }
+            }
+
             return HealthCheckResult.Healthy(
                 "Draining: graceful shutdown in progress; the silo is stopping on purpose.");
         }
