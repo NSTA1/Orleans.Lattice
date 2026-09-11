@@ -2453,6 +2453,13 @@ public static class LatticeMetrics
     /// that shard (issue 2002). Treat sustained non-zero as a wedge, and read
     /// the phase tag to place it.
     /// </para>
+    /// <para>
+    /// <b>Reading a zero.</b> Because a zero is also the expected value under
+    /// health, it carries no information on its own: it is what a clean shard
+    /// reports and equally what a deployment that never scanned reports. Pair
+    /// it with <see cref="LeafScanDuration"/>'s count before reading zero as
+    /// clean, per the fuller note on <see cref="ScanPageCeilingOutcomes"/>.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> ScanPageStalls =
         Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.stalls", unit: "{stall}",
@@ -2480,7 +2487,20 @@ public static class LatticeMetrics
     /// <see cref="ScanPageStalls"/> is climbing, the banking path is not wired
     /// up, and that is a broken measurement rather than a clean shard.
     /// <c>banked</c> being zero and <c>discarded</c> also being zero means only
-    /// that no ceiling fired, which is the healthy steady state.
+    /// that no ceiling fired. That is the healthy steady state <i>only</i>
+    /// beside independent evidence that scans ran at all: on an idle
+    /// deployment both arms read zero because nothing reached the fire, which
+    /// is an absence of activity and not an absence of defect. This instrument
+    /// cannot tell those two zeros apart, because both arms are emitted only
+    /// by a fire that a scan has to reach. Supply the activity evidence from
+    /// <see cref="LeafScanDuration"/>, whose count series is recorded
+    /// immediately before the single return of each leaf key and entry scan.
+    /// Read the pair, and note which direction is sound: a non-zero scan count
+    /// beside zero on both arms is a measured clean shard, whereas zero on all
+    /// three is no evidence either way. That count is biased low, because a
+    /// scan that faults before returning never records, so a zero count means
+    /// <i>no scan completed</i> rather than <i>no scan was attempted</i> - and
+    /// neither of those licenses a clean bill of health.
     /// </para>
     /// <para>
     /// <c>discarded</c> equals <see cref="ScanPageStalls"/> by construction -
