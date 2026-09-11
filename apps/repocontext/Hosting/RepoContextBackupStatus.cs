@@ -153,6 +153,60 @@ public sealed class RepoContextBackupStatus
     }
 
     /// <summary>
+    /// The one-value summary of everything above, for the surfaces an operator or an
+    /// alert actually reads.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why the derivation lives here.</b> The health endpoint and the metric
+    /// series must never disagree about the same container, and they would drift
+    /// apart the moment each decided for itself what counts as protected. Both read
+    /// this property, so there is exactly one place where the question is answered
+    /// and exactly one place a future condition has to be added.
+    /// </para>
+    /// <para>
+    /// The whole snapshot is read under a single lock, so the returned state is a
+    /// consistent view rather than a composition of separately-observed fields that
+    /// a concurrent capture could have moved underneath it.
+    /// </para>
+    /// </remarks>
+    public RepoContextBackupState State
+    {
+        get
+        {
+            if (!Enabled)
+            {
+                return RepoContextBackupState.Disabled;
+            }
+
+            lock (_gate)
+            {
+                if (_lastFailure is not null)
+                {
+                    // Nothing captured in this process means nothing it produced is
+                    // recoverable, which is a materially worse position than a broken
+                    // cadence over an existing capture. They are reported apart.
+                    return _captureCount == 0
+                        ? RepoContextBackupState.FailingUnprotected
+                        : RepoContextBackupState.FailingAfterCapture;
+                }
+
+                if (_captureCount == 0)
+                {
+                    return RepoContextBackupState.NeverCaptured;
+                }
+
+                // A successful full capture describing zero entries is the
+                // "diligently capturing nothing" case this type's remarks open with.
+                // It reports success everywhere else, so it is separated here.
+                return _lastFullBackupId is not null && _lastFullEntryCount == 0
+                    ? RepoContextBackupState.CapturedNothing
+                    : RepoContextBackupState.Protected;
+            }
+        }
+    }
+
+    /// <summary>
     /// How many backups of the configured tree the external sink already held when
     /// this container enumerated it at startup, or <c>-1</c> when the sink has not
     /// been enumerated (yet, or at all).

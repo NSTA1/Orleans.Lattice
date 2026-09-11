@@ -46,9 +46,10 @@ public sealed class RepoContextDrainForecastService : IHostedService, IDisposabl
     /// <summary>
     /// The meter these gauges are published on. Named under the collector's
     /// <see cref="RepoContextMetricsCollector.MeterNamePrefix"/> so the container's
-    /// existing scrape endpoint picks them up without further wiring.
+    /// existing scrape endpoint picks them up without further wiring. Retained as an
+    /// alias of <see cref="RepoContextHostMeter.Name"/>, which is the owner.
     /// </summary>
-    public const string MeterName = "orleans.lattice.repocontext.host";
+    public const string MeterName = RepoContextHostMeter.Name;
 
     /// <summary>The gauge reporting the budget the host will actually enforce.</summary>
     public const string BudgetGaugeName = "lattice_repocontext_shutdown_budget_seconds";
