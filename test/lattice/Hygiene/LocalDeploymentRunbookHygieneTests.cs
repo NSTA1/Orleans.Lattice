@@ -136,6 +136,55 @@ public sealed class LocalDeploymentRunbookHygieneTests
         @"^\|\s*`(?<service>[^`]+)`\s*\|\s*`(?<setting>[^`]+)`\s*\|\s*`(?<value>[^`]*)`\s*\|(?<why>[^|]*)\|\s*$",
         RegexOptions.Compiled);
 
+    /// <summary>The compose service whose image this repository builds (#2707).</summary>
+    private const string BuiltService = "repocontext";
+
+    /// <summary>
+    /// The OCI label that carries the built commit. It is the only provenance channel
+    /// that travels with the image; the <c>candidate-&lt;sha&gt;</c> tag is assigned by a
+    /// person afterwards and can be moved.
+    /// </summary>
+    private const string ProvenanceLabel = "org.opencontainers.image.revision";
+
+    /// <summary>
+    /// The untracked directory an earlier revision of the runbook told operators to
+    /// build from. Named here so the runbook can be asserted to still warn about it.
+    /// </summary>
+    private const string UntrackedBuildDirectory = ".deploy/";
+
+    /// <summary>
+    /// How far after a <c>docker build</c> to look for its own build-args. Comfortably
+    /// longer than the multi-line command and far shorter than the gap to the next one,
+    /// so the assertion is per-command rather than document-wide.
+    /// </summary>
+    private const int BuildCommandWindow = 400;
+
+    /// <summary>
+    /// A <c>docker build -f &lt;dockerfile&gt;</c> invocation in the runbook, capturing
+    /// the build input it names.
+    /// </summary>
+    private static readonly Regex DockerBuildCommand = new(
+        @"docker build\s+-f\s+(?<dockerfile>\S+)",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// A <c>docker inspect ... --format</c> that reads the provenance label back out of
+    /// an image, in either argument order.
+    /// </summary>
+    private static readonly Regex LabelReadBack = new(
+        @"docker inspect[^\r\n]*(\r?\n[^\r\n]*)?" + Regex.Escape(ProvenanceLabel),
+        RegexOptions.Compiled);
+
+    /// <summary>A top-level service declaration in a compose file.</summary>
+    private static readonly Regex ServiceDeclaration = new(
+        @"^\s{2}(?<name>[A-Za-z0-9_.-]+):\s*$",
+        RegexOptions.Compiled);
+
+    /// <summary>A <c>context:</c> or <c>dockerfile:</c> key inside a compose build stanza.</summary>
+    private static readonly Regex BuildKey = new(
+        @"^\s{4,}(?<key>context|dockerfile)\s*:\s*""?(?<value>[^""#]*?)""?\s*$",
+        RegexOptions.Compiled);
+
     /// <summary>A <c>KEY: "value"</c> or <c>KEY: value</c> line inside a compose file.</summary>
     private static readonly Regex YamlScalar = new(
         @"^\s{6,}(?<key>[A-Za-z_][A-Za-z0-9_.]*)\s*:\s*""?(?<value>[^""#]*?)""?\s*$",
@@ -345,6 +394,237 @@ public sealed class LocalDeploymentRunbookHygieneTests
                 $"expected {EnvExamplePath} to assign REPO_PATH. An example that documents the "
                 + "variable without assigning it cannot be copied to a working .env.");
         });
+    }
+
+    // ---------------------------------------------------------------------
+    // Build-input parity between the runbook and the compose build stanza (#2707).
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Every <c>docker build -f</c> the runbook instructs an operator to run must name
+    /// the same Dockerfile <c>docker-compose.yml</c>'s <c>repocontext</c> build stanza
+    /// declares, and that Dockerfile must exist under the context the stanza resolves
+    /// to.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The drift this catches actually happened.</b> #2690 moved the tracked build
+    /// onto <c>apps/repocontext/Dockerfile</c> and added the <c>GIT_COMMIT</c> arg that
+    /// stamps <c>org.opencontainers.image.revision</c>. The runbook kept pointing at
+    /// <c>.deploy/Dockerfile</c>, which is <b>untracked</b> - <c>git ls-files .deploy</c>
+    /// returns nothing - and which declares no such <c>ARG</c>, so an operator following
+    /// the document built a different image from the one the tracked path produces, and
+    /// one provenance refuses. Nothing detected it: the fix was reachable in source and
+    /// unreachable in practice, which is the recurring shape epic #2368 exists to close
+    /// (#2707).
+    /// </para>
+    /// <para>
+    /// It asserts over the runbook's <i>build commands</i> rather than over every
+    /// mention of the word, on purpose. The runbook now names <c>.deploy/Dockerfile</c>
+    /// in prose, to tell a reader who has one that it is not a build input; a needle
+    /// test for that string would forbid the very warning the fix adds.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Every_runbook_build_command_names_the_dockerfile_the_compose_stanza_declares()
+    {
+        var root = HygieneRepository.FindRepoRoot();
+        var runbook = File.ReadAllText(Path.Combine(
+            root,
+            RunbookPath.Replace('/', Path.DirectorySeparatorChar)));
+
+        var (context, dockerfile) = ComposeBuildStanza();
+
+        var commands = DockerBuildCommand.Matches(runbook)
+            .Select(m => m.Groups["dockerfile"].Value)
+            .ToList();
+
+        var composeDirectory = Path.Combine(
+            root,
+            ComposeDirectory.Replace('/', Path.DirectorySeparatorChar));
+
+        var resolvedContext = Path.GetFullPath(Path.Combine(
+            composeDirectory,
+            context.Replace('/', Path.DirectorySeparatorChar)));
+
+        var resolvedDockerfile = Path.Combine(
+            resolvedContext,
+            dockerfile.Replace('/', Path.DirectorySeparatorChar));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                commands,
+                Is.Not.Empty,
+                $"{RunbookPath} declares no `docker build -f` command at all. This guard "
+                + "compares the runbook's build input against the compose stanza's; with no "
+                + "command to read it would pass vacuously, which is worse than absent.");
+
+            Assert.That(
+                commands,
+                Is.All.EqualTo(dockerfile),
+                $"{RunbookPath} tells an operator to build a Dockerfile that "
+                + $"{ComposeDirectory}/{BaseComposeFile} does not declare. Compose builds "
+                + $"`{dockerfile}`; the runbook names {string.Join(", ", commands.Distinct())}. "
+                + "An operator who follows the document therefore produces a different image "
+                + "from the tracked build path, which is exactly the divergence #2707 found: "
+                + "the runbook still pointed at an UNTRACKED `.deploy/Dockerfile` that cannot "
+                + "stamp `org.opencontainers.image.revision`, so the provenance gate refused "
+                + "the result.");
+
+            Assert.That(
+                Path.GetFullPath(resolvedContext).TrimEnd(Path.DirectorySeparatorChar),
+                Is.EqualTo(Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar)),
+                $"the `context: {context}` in {ComposeDirectory}/{BaseComposeFile} no longer "
+                + "resolves to the repository root. The runbook's build command is written to "
+                + "be run FROM the repository root with `.` as its context, so the two agree "
+                + "only while this holds.");
+
+            Assert.That(
+                File.Exists(resolvedDockerfile),
+                Is.True,
+                $"`{dockerfile}` does not exist under the resolved build context "
+                + $"({resolvedContext}). Both the runbook and compose name a build input that "
+                + "is not there.");
+        });
+    }
+
+    /// <summary>
+    /// The runbook must pass <c>GIT_COMMIT</c> into every build it documents, and must
+    /// tell the operator to read the resulting label back out of the image.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// There are two independent ways to end up with an unprovenanced image, and
+    /// correcting the <c>-f</c> path only closes one of them. <c>ARG GIT_COMMIT=""</c> in
+    /// <c>apps/repocontext/Dockerfile</c> means a build that does not supply the arg
+    /// <b>succeeds</b>, exits 0, and yields an image whose revision label names no
+    /// commit. That is the failure that demonstrably occurred: the image running on the
+    /// deployment host resolves no revision, so
+    /// <c>Assert-ContainerProvenance.ps1</c> falls back to a movable tag.
+    /// </para>
+    /// <para>
+    /// The read-back is the only step that turns that silence into a failure, so this
+    /// asserts the runbook still carries one. It checks for the label name inside a
+    /// <c>docker inspect</c> rather than for any particular script, because what matters
+    /// is that the document instructs the operator to interrogate the artefact.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void The_runbook_stamps_the_commit_into_every_build_and_reads_the_label_back()
+    {
+        var root = HygieneRepository.FindRepoRoot();
+        var runbook = File.ReadAllText(Path.Combine(
+            root,
+            RunbookPath.Replace('/', Path.DirectorySeparatorChar)));
+
+        // Each build command, paired with the text that follows it, so "passes the arg"
+        // is asserted per command rather than anywhere in the document.
+        var unstamped = DockerBuildCommand.Matches(runbook)
+            .Where(m => !runbook
+                .Substring(m.Index, Math.Min(BuildCommandWindow, runbook.Length - m.Index))
+                .Contains("--build-arg GIT_COMMIT=", StringComparison.Ordinal))
+            .Select(m => m.Groups["dockerfile"].Value)
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                unstamped,
+                Is.Empty,
+                $"a `docker build` in {RunbookPath} does not pass `--build-arg GIT_COMMIT=`. "
+                + "The Dockerfile defaults that arg to the empty string, so the build still "
+                + "succeeds and still produces an image - one whose revision label names no "
+                + "commit, which Assert-ContainerProvenance.ps1 treats as unresolved.");
+
+            Assert.That(
+                runbook,
+                Does.Contain(ProvenanceLabel),
+                $"{RunbookPath} no longer names `{ProvenanceLabel}`. Redirecting the build "
+                + "path only closes the case where the label CANNOT be stamped; the label "
+                + "read-back is what closes the case where it simply was not.");
+
+            Assert.That(
+                LabelReadBack.IsMatch(runbook),
+                Is.True,
+                $"{RunbookPath} no longer instructs the operator to read "
+                + $"`{ProvenanceLabel}` back out of the built image with `docker inspect`. "
+                + "Without that step an unstamped build is indistinguishable from a good one "
+                + "until the deployment gate refuses it, which is after it has been tagged, "
+                + "deployed, and measured against (#2686).");
+
+            Assert.That(
+                runbook,
+                Does.Contain(UntrackedBuildDirectory),
+                $"{RunbookPath} no longer states that `{UntrackedBuildDirectory}` is not a "
+                + "build input. The directory is untracked, so it exists on some machines and "
+                + "not others; a reader who has one needs to be told it is not the build "
+                + "input, or this drift simply recurs.");
+        });
+    }
+
+    /// <summary>
+    /// The <c>build.context</c> and <c>build.dockerfile</c> the <c>repocontext</c>
+    /// service declares in the base compose file, read by walking the service block
+    /// rather than by taking the first match: the <c>embedder</c> service declares its
+    /// own, different, pair earlier in the same file.
+    /// </summary>
+    private static (string Context, string Dockerfile) ComposeBuildStanza()
+    {
+        var root = HygieneRepository.FindRepoRoot();
+        var composePath = Path.Combine(
+            root,
+            ComposeDirectory.Replace('/', Path.DirectorySeparatorChar),
+            BaseComposeFile);
+
+        string? service = null;
+        string? context = null;
+        string? dockerfile = null;
+
+        foreach (var line in File.ReadAllLines(composePath))
+        {
+            var serviceMatch = ServiceDeclaration.Match(line);
+            if (serviceMatch.Success)
+            {
+                service = serviceMatch.Groups["name"].Value;
+                continue;
+            }
+
+            if (!string.Equals(service, BuiltService, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var keyMatch = BuildKey.Match(line);
+            if (!keyMatch.Success)
+            {
+                continue;
+            }
+
+            if (keyMatch.Groups["key"].Value == "context")
+            {
+                context ??= keyMatch.Groups["value"].Value;
+            }
+            else
+            {
+                dockerfile ??= keyMatch.Groups["value"].Value;
+            }
+        }
+
+        Assert.That(
+            context,
+            Is.Not.Null,
+            $"the `{BuiltService}` service in {ComposeDirectory}/{BaseComposeFile} declares "
+            + "no `build.context`. This guard reads the build input out of that stanza; with "
+            + "no stanza it would have nothing to compare the runbook against.");
+
+        Assert.That(
+            dockerfile,
+            Is.Not.Null,
+            $"the `{BuiltService}` service in {ComposeDirectory}/{BaseComposeFile} declares "
+            + "no `build.dockerfile`.");
+
+        return (context!, dockerfile!);
     }
 
     // ---------------------------------------------------------------------

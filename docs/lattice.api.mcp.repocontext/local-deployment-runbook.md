@@ -229,13 +229,32 @@ document exists to close.
 
 ## Build and tag from a known sha
 
-The host image is built on the host from the repository root:
+The host image is built on the host from the repository root, from the **tracked**
+Dockerfile `apps/repocontext/Dockerfile`. That is the same build input
+`samples/RepoContextContainer/docker-compose.yml` declares - `context: ../..`, which
+from that directory resolves to the repository root, and
+`dockerfile: apps/repocontext/Dockerfile`, which is relative to that context - so
+building by hand and building through compose consume the same file with the same
+context. Run from the repository root:
 
-```bash
-docker build -f .deploy/Dockerfile -t repocontext-mcp:candidate-$(git rev-parse HEAD) \
-  --build-arg GIT_COMMIT=$(git rev-parse HEAD) \
-  --secret id=nugetcfg,src=%APPDATA%\NuGet\NuGet.Config .
+```powershell
+$env:GIT_COMMIT = (git rev-parse HEAD)
+docker build -f apps/repocontext/Dockerfile `
+  -t "repocontext-mcp:candidate-$env:GIT_COMMIT" `
+  --build-arg GIT_COMMIT=$env:GIT_COMMIT `
+  --secret id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config .
 ```
+
+**`.deploy/` is not a build input.** Nothing under it is tracked - `git ls-files
+.deploy` returns zero files - so a `.deploy/Dockerfile` exists only on whichever
+machine happened to create one, and a second operator, or the same operator in a
+fresh clone, cannot build from it at all. An earlier revision of this section named
+it. It is not the file compose declares, and the copy that exists on this host
+declares no `ARG GIT_COMMIT` and no `LABEL org.opencontainers.image.revision`, so a
+build from it cannot stamp the provenance `Assert-ContainerProvenance.ps1` reads -
+and `--build-arg GIT_COMMIT` against a Dockerfile that declares no such `ARG` is not
+an error, only a non-fatal "one or more build-args were not consumed" warning in the
+build log. If you have a `.deploy/` directory, ignore it.
 
 The build secret is not optional and not incidental: an in-container NuGet restore
 fails behind the corporate TLS proxy, so the restore needs the corporate feed from
@@ -253,6 +272,42 @@ state that cost this gate eleven hours of measurement against the wrong binary
 (issue 2686).
 
 Tag with the **commit sha you built**, not a branch name or a date.
+
+### Read the provenance back before you tag or deploy
+
+The build is not finished until you have read the label out of the image it
+produced. Do it at the machine that built it, before the retag in the next section:
+
+```powershell
+$stamped = docker inspect "repocontext-mcp:candidate-$env:GIT_COMMIT" `
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+if ($stamped -ne $env:GIT_COMMIT) {
+  throw "UNPROVENANCED IMAGE: revision label is '$stamped', expected " +
+        "'$env:GIT_COMMIT'. Re-build with GIT_COMMIT exported. Do not tag or deploy."
+}
+```
+
+**Why this is a step rather than something the build guarantees.**
+`apps/repocontext/Dockerfile` declares `ARG GIT_COMMIT=""`, so a build that forgets
+to export the variable **succeeds**. It exits 0, produces a runnable image, and
+leaves the revision label carrying no commit. The only trace is a line in a build
+log, which is the least likely place for it to be noticed, and the image is then
+indistinguishable by eye from a good one. Redirecting the `-f` path above fixes the
+case where the label *cannot* be stamped; it does nothing about the case where it
+simply *was not*, and that second case is the one this deployment has actually been
+in: the image running on this host resolves no revision at all.
+
+**Test the value, not the exit code.** `docker inspect --format` prints an empty
+line and exits **0** for a label that is present-and-empty and for one that is
+absent entirely. Neither can name the built commit, so the distinction does not
+matter here - but it does mean a check that only inspects `$LASTEXITCODE`, or that
+only looks for a non-zero exit, passes on both. Compare the string.
+
+`Assert-ContainerProvenance.ps1` applies the same rule later, against the running
+container: it reads this label first, falls back to a `candidate-<sha>` tag, and
+refuses when neither channel resolves. Checking here rather than there is what keeps
+an unprovenanced image from being tagged, deployed, and measured against before
+anyone asks the question.
 
 ## Pin and roll back
 
@@ -592,32 +647,47 @@ favour of restarting again, because a restart discards the evidence.
 
 ## Recover the deployment from nothing
 
-Assumes only a clone and a Docker daemon.
+Assumes only a clone and a Docker daemon. Steps 1 and 2 are shell-specific because
+the commit has to survive from the build into the check; the rest is not.
+
+```powershell
+# 1. Build the host image from the sha you intend to deploy, from the repository
+#    root and from the TRACKED Dockerfile compose declares. `.deploy/` is untracked
+#    and is not a build input - see Build and tag from a known sha.
+$env:GIT_COMMIT = (git rev-parse HEAD)
+docker build -f apps/repocontext/Dockerfile `
+  -t "repocontext-mcp:candidate-$env:GIT_COMMIT" `
+  --build-arg GIT_COMMIT=$env:GIT_COMMIT `
+  --secret id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config .
+
+# 2. Verify the build stamped the commit, BEFORE tagging. A missing GIT_COMMIT does
+#    not fail the build; it yields an image the provenance gate cannot resolve.
+$stamped = docker inspect "repocontext-mcp:candidate-$env:GIT_COMMIT" `
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+if ($stamped -ne $env:GIT_COMMIT) {
+  throw "UNPROVENANCED IMAGE: revision label is '$stamped'. Do not tag or deploy."
+}
+```
 
 ```bash
-# 1. Build the host image from the sha you intend to deploy.
-docker build -f .deploy/Dockerfile -t repocontext-mcp:candidate-$(git rev-parse HEAD) \
-  --build-arg GIT_COMMIT=$(git rev-parse HEAD) \
-  --secret id=nugetcfg,src=%APPDATA%\NuGet\NuGet.Config .
-
-# 2. Pin it. (Nothing to preserve on a clean host; on an existing one, save the
+# 3. Pin it. (Nothing to preserve on a clean host; on an existing one, save the
 #    displaced tag first - see Pin and roll back.)
 docker tag repocontext-mcp:candidate-<sha> repocontext-mcp:local
 
-# 3. Bring up the tuned stack. The embedder builds from its own small context;
+# 4. Bring up the tuned stack. The embedder builds from its own small context;
 #    --no-build applies to the pinned host image.
 cd samples/RepoContextContainer
 docker compose -f docker-compose.yml -f docker-compose.tuning.yml up -d
 
-# 4. Wait for readiness.
+# 5. Wait for readiness.
 curl -fsS http://localhost:8080/health/ready
 
-# 5. Register the workspace repositories over MCP (repocontext_add_repo with a path
+# 6. Register the workspace repositories over MCP (repocontext_add_repo with a path
 #    under /workspace), then watch repocontext_index_status until filesEmbedded
 #    reaches filesScanned. Until it does, semantic search answers only over the
 #    already-embedded slice, so a missing hit is not evidence of missing code.
 
-# 6. Confirm what you deployed.
+# 7. Confirm what you deployed.
 pwsh -File ./scripts/Assert-ContainerProvenance.ps1
 ```
 
@@ -680,6 +750,18 @@ fails it too.
 It evaluates the **resolved** document rather than the raw files on purpose: compose
 merge and interpolation decide what a setting resolves to, so a raw-file comparison
 can be green about a value the merge discards.
+
+The same fixture also holds the **build input** to the one compose declares. Every
+`docker build -f` in this document must name the Dockerfile the `repocontext` build
+stanza names, that stanza's context must still resolve to the repository root, every
+documented build must pass `--build-arg GIT_COMMIT=`, and the document must still tell
+the operator to read `org.opencontainers.image.revision` back out of the result. That
+guard exists because those two files drifted apart silently and nothing noticed: #2690
+moved the tracked build onto `apps/repocontext/Dockerfile` and added the arg that
+stamps the label, and this runbook went on pointing at an untracked `.deploy/Dockerfile`
+that could not stamp it at all (#2707). It asserts over build *commands*, not over
+every occurrence of the word, so the warning above that `.deploy/` is not a build input
+is permitted rather than forbidden.
 
 The same fixture holds the **opt-in** guarantee for CPU pinning: it asserts that with
 `REPOCONTEXT_CPUSET` and `EMBEDDER_CPUSET` unset the resolved document declares no
