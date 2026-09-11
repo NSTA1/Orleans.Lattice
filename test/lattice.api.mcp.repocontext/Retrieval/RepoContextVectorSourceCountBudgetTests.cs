@@ -108,22 +108,118 @@ public sealed class RepoContextVectorSourceCountBudgetTests
     }
 
     [Test]
-    public void The_budget_is_charged_after_a_key_is_counted_so_the_walk_always_advances()
+    public void The_sampled_check_is_charged_after_a_key_so_it_cannot_consume_a_walk_without_advancing_it()
     {
         // A bound checked BEFORE the work can consume nothing: with a budget
         // smaller than a single key's cost, a pre-check walk yields zero every time
         // and the build never advances - a livelock dressed as a safety measure.
-        // One key of progress is the minimum that keeps the bound safe.
+        // One key of progress is the minimum that keeps THIS check safe.
+        //
+        // READ THE SCOPE. The guarantee belongs to the sampled check, not to the
+        // walk, and this fixture is deliberately built so that only the sampled
+        // check can fire: the budget is thirty real seconds, which the millisecond
+        // -scale test can never spend, while the FAKE clock steps thirty seconds per
+        // reading so the in-loop comparison trips immediately after the first key.
+        //
+        // It previously used a one-TICK budget, which made it depend on losing a
+        // race against a real timer, because SteppingTimeProvider does not override
+        // CreateTimer and the deadline therefore runs on the system clock. Under
+        // load that race was lost every time: thirty consecutive runs at full CPU
+        // failed with "Expected: 1, But was: 0". Worse than the flake, the passing
+        // version had been read as proof of a walk-wide minimum-progress property it
+        // never tested - it passed only because the fake source answers
+        // synchronously, so the deadline never armed at all. The paired fixture
+        // below drives the case this one cannot.
         var tree = TreeYielding(Keys(4));
         var source = new RepoContextVectorSource(
             FactoryFor(tree), Serializer, RepoId, Space,
-            countBudget: TimeSpan.FromTicks(1),
+            countBudget: TimeSpan.FromSeconds(30),
             timeProvider: new SteppingTimeProvider(TimeSpan.FromSeconds(30)));
 
         var thrown = Assert.ThrowsAsync<RepoContextCountBudgetExceededException>(
             async () => await source.CountAsync(Ct));
 
         Assert.That(thrown!.Counted, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void A_first_page_slower_than_the_budget_counts_nothing_and_zero_still_means_something()
+    {
+        // THE DETECTOR THE FIXTURE ABOVE CANNOT BE. Every other fixture in this file
+        // drives a source whose first read completes synchronously, so the deadline
+        // never arms and the only bound ever exercised is the sampled one. That left
+        // the walk-wide bound - the half that actually fires in production, where
+        // every read is a grain call and none completes synchronously - asserted by
+        // nothing. A detector never observed to fire is indistinguishable from a
+        // detector that cannot fire, so this drives it on one real clock.
+        //
+        // The assertion is the CONTRACT of a zero, not merely the number: a walk
+        // whose first page outruns the budget reports Counted = 0, and that zero is
+        // a measured absence rather than a walk that never started, because it
+        // arrives as a FAULT. The paired half of the claim is the second assertion:
+        // an empty prefix RETURNS zero and never throws. The two zeroes are
+        // therefore distinguishable by their channel, which is the only reason a
+        // caller may act on either.
+        // THE MARGIN IS LOAD-CHOSEN, NOT ARBITRARY. A first draft used a 400ms page
+        // against a 250ms budget and failed 2 runs in 30 at full CPU, reporting
+        // Counted = 1: a timer callback delayed past 400ms lets the page land first,
+        // and the sampled check then charges one key. A 150ms margin is simply not
+        // enough room on a loaded machine. The page is now three seconds against a
+        // 200ms budget, so no plausible scheduling delay can reorder them. It costs
+        // nothing in wall-clock: cancelling the walk token aborts the delay, so the
+        // fixture completes in about 200ms and never waits the three seconds. If the
+        // deadline were removed entirely the delay WOULD elapse, five keys would be
+        // counted, and this fixture reddens - which is the direction that matters.
+        var tree = Substitute.For<ILattice>();
+        tree.KeysAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(ci => SlowFirstPageKeys(ci.ArgAt<CancellationToken>(4)));
+
+        var source = new RepoContextVectorSource(
+            FactoryFor(tree), Serializer, RepoId, Space,
+            countBudget: TimeSpan.FromMilliseconds(200),
+            timeProvider: TimeProvider.System);
+
+        var thrown = Assert.ThrowsAsync<RepoContextCountBudgetExceededException>(
+            async () => await source.CountAsync(Ct));
+
+        var empty = Substitute.For<ILattice>();
+        empty.KeysAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => ScriptedKeys([], abortAfter: int.MaxValue));
+        var emptySource = new RepoContextVectorSource(
+            FactoryFor(empty), Serializer, RepoId, Space,
+            countBudget: TimeSpan.FromSeconds(30),
+            timeProvider: TimeProvider.System);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown!.Counted, Is.Zero,
+                "the walk-wide deadline is under no minimum-progress constraint, so a first page "
+                + "slower than the whole budget legitimately counts nothing");
+            Assert.That(thrown.Budget, Is.EqualTo(TimeSpan.FromMilliseconds(200)));
+            Assert.That(
+                async () => await emptySource.CountAsync(Ct),
+                Throws.Nothing,
+                "an empty prefix must REPORT zero rather than fault, or the caller cannot tell an "
+                + "empty repository from one whose first page was too slow to read");
+        });
+    }
+
+    /// <summary>
+    /// A source whose first page costs more than the entire budget and which then
+    /// yields promptly: the production shape, where every read is a grain call and
+    /// none of them completes synchronously.
+    /// </summary>
+    private static async IAsyncEnumerable<string> SlowFirstPageKeys(
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+
+        for (var i = 0; i < 5; i++)
+        {
+            yield return $"{Prefix}vec-{i:D4}";
+        }
     }
 
     [Test]
