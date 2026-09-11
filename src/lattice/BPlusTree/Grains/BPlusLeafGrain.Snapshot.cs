@@ -425,7 +425,54 @@ internal sealed partial class BPlusLeafGrain
         }
         if (!anyPartitionCheckpointed)
         {
-            return;
+            // ...but a checkpoint of -1 means "no WAL entry has been REPLAYED
+            // into this projection", which is NOT the same proposition as "the
+            // cache is empty". A leaf whose rows arrived as foreground writes,
+            // or via a split sibling's in-memory handoff, holds live committed
+            // data while every per-partition checkpoint sits at the sentinel.
+            // Reading the sentinel as emptiness starved exactly those leaves of
+            // capture forever: their Zero block pins never gained durable
+            // coverage, so the shared-shard WAL GC early-returned idle and the
+            // whole tree's retained WAL grew without bound (issue #2692). The
+            // retention invariant assumes "a block pin always has a bounded
+            // path to coverage", but that cadence is denominated in checkpoints
+            // this leaf never takes, so the path did not merely take a long
+            // time - it did not exist. Decide emptiness from the same signal
+            // the durable-pin half already uses, so both halves of the machine
+            // read the same quantity.
+            //
+            // This widens WHEN a blob is written and nothing else. A partition
+            // holding rows but no checkpoint still makes no offset claim:
+            // BuildCheckpointCoverage derives the coverage stamp FROM the
+            // checkpoint, so it records -1, ResolveDurablePinForPartition still
+            // computes min(checkpoint, covered) < 0 and retains the Zero block
+            // pin, and no WAL becomes trimmable. That separation is deliberate
+            // and load-bearing rather than incidental: durability of this
+            // leaf's rows is earned by writing the blob, whereas authority to
+            // trim is a claim about what OTHER consumers still need, and a blob
+            // containing these rows says nothing about whether the materialiser
+            // has consumed the corresponding WAL entries. Crucially the two
+            // retention planes are coupled by a documented handoff -
+            // ComputeMaterialiserOffsetFloorAsync SKIPS a -1 pin precisely
+            // because "WAL retention is already enforced by the HLC block-pin
+            // branch" - so lifting the block on an un-replayed partition would
+            // drop BOTH protections at once and authorise trimming a prefix no
+            // consumer has read. Do not "complete" this fix by advancing the
+            // pin here.
+            var liveData = ComputePartitionsWithLiveData(partitionCount);
+            var anyPartitionHasLiveData = false;
+            for (var p = 0; p < liveData.Length; p++)
+            {
+                if (liveData[p])
+                {
+                    anyPartitionHasLiveData = true;
+                    break;
+                }
+            }
+            if (!anyPartitionHasLiveData)
+            {
+                return;
+            }
         }
 
         // Single-flight guard. A second capture invocation that arrives
