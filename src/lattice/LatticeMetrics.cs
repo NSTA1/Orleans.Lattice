@@ -952,6 +952,33 @@ public static class LatticeMetrics
             description: "Long-running coordinator-grain completions (snapshot, resize, reshard, merge, compaction).");
 
     /// <summary>
+    /// Counter incremented once per coordinator phase-timer tick whose phase step
+    /// threw. The base coordinator swallows that exception by design so the timer
+    /// survives, which means the tick made no progress and the next tick starts the
+    /// same step over; without this counter that outcome is visible only as a log
+    /// line (issue #2705). Tagged with <see cref="TagKind"/> = the coordinator's
+    /// keepalive reminder name (<c>snapshot-keepalive</c>, <c>reshard-keepalive</c>,
+    /// <c>repo-context-ann-index-build-keepalive</c>, ...), <see cref="TagTree"/> =
+    /// the tree or repository the coordinator serves, and the tenant label.
+    /// <para>
+    /// <b>Zero-primed</b> once per activation, when the coordinator first arms its
+    /// phase timer. A <see cref="Counter{T}"/> exports no series until its first
+    /// <c>Add</c>, so an unprimed instrument answers "has this coordinator failed a
+    /// tick?" with silence, which reads identically to a dead subsystem or a broken
+    /// instrument. Priming at the arm point makes the population exactly the
+    /// coordinators that are actually ticking, so <c>0</c> on a primed series is a
+    /// measurement: this coordinator ran and no tick threw. It does <b>not</b> mean
+    /// the coordinator is making progress - a tick that returns without advancing
+    /// its phase machine is a success here - and the absence of a series still
+    /// means only that no coordinator of that kind has armed a timer in this
+    /// process.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> CoordinatorPhaseTickFailures =
+        Meter.CreateCounter<long>("orleans.lattice.coordinator.phase_tick.failures", unit: "{failure}",
+            description: "Coordinator phase-timer ticks whose phase step threw and was swallowed, tagged by coordinator kind and tree. Zero-primed when a coordinator arms its phase timer, so zero on a live series is a reading rather than an absence.");
+
+    /// <summary>
     /// Counter incremented once per tree-lifecycle transition. Tagged with
     /// <see cref="TagKind"/> = <c>deleted</c>, <c>recovered</c>, or <c>purged</c>.
     /// </summary>

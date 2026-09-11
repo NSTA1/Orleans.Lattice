@@ -54,6 +54,9 @@ internal sealed class TreeShardSplitGrain(
     /// <inheritdoc />
     protected override string LogContext => $"tree {TreeId}";
 
+    /// <inheritdoc />
+    protected override string MetricsTreeId => TreeId;
+
     /// <summary>
     /// Parses the grain key as <c>{treeId}/{sourceShardIndex}</c>. The trailing
     /// integer suffix is the source shard; everything before the final '/' is

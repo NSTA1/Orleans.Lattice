@@ -43,6 +43,21 @@ internal abstract class CoordinatorGrain<TSelf>(
 {
     private IGrainTimer? _phaseTimer;
 
+    /// <summary>
+    /// Consecutive phase ticks whose step threw, reset by the first tick that
+    /// returns normally. Drives the log-severity escalation only; the counter
+    /// records every failure regardless.
+    /// </summary>
+    private int _consecutiveTickFailures;
+
+    /// <summary>
+    /// Consecutive swallowed ticks after which the warning escalates to an
+    /// error. One swallowed tick is a transient the pump absorbs and retries;
+    /// a run of them is a phase loop that has stopped advancing, which nothing
+    /// else in the system reports.
+    /// </summary>
+    private const int PhaseTickFailureEscalationThreshold = 3;
+
     IGrainContext IGrainBase.GrainContext => context;
 
     /// <summary>
@@ -108,7 +123,9 @@ internal abstract class CoordinatorGrain<TSelf>(
     /// Work-pump hook invoked on every grain-timer tick while
     /// <see cref="InProgress"/> is <c>true</c>. Implementations should
     /// advance their phase machine by one step per call and return.
-    /// Exceptions are logged by the base class and do not stop the timer.
+    /// Exceptions are logged by the base class, counted on
+    /// <see cref="LatticeMetrics.CoordinatorPhaseTickFailures"/>, and do not
+    /// stop the timer.
     /// </summary>
     protected internal abstract Task ProcessNextPhaseAsync();
 
@@ -126,6 +143,18 @@ internal abstract class CoordinatorGrain<TSelf>(
     /// phase-tick warning logs. Defaults to the grain key.
     /// </summary>
     protected virtual string LogContext => context.GrainId.Key.ToString() ?? "";
+
+    /// <summary>
+    /// The subject this coordinator serves, used verbatim as the
+    /// <see cref="LatticeMetrics.TagTree"/> tag on
+    /// <see cref="LatticeMetrics.CoordinatorPhaseTickFailures"/>. Defaults to the
+    /// grain key, which is the tree id verbatim for every coordinator addressed
+    /// by tree alone. A coordinator with a composite key (<c>tree/shard</c>, or
+    /// <c>repo/space</c>) MUST override this to return the subject alone:
+    /// tagging the raw key would emit a distinct series per shard, which no
+    /// dashboard can group by tree and which is unbounded in principle.
+    /// </summary>
+    protected virtual string MetricsTreeId => context.GrainId.Key.ToString() ?? "";
 
     /// <summary>
     /// The bounded inter-attempt backoff used when the keepalive reminder
@@ -172,7 +201,17 @@ internal abstract class CoordinatorGrain<TSelf>(
     /// </summary>
     protected void StartPhaseTimer()
     {
-        _phaseTimer ??= this.RegisterGrainTimer(
+        if (_phaseTimer is not null) return;
+
+        // Zero-prime before the pump can fail. A Counter exports no series at all
+        // until its first Add, so without this a coordinator that has never failed
+        // is indistinguishable from one whose instrument was never wired - which is
+        // precisely the defect this counter exists to fix. Adding zero mints the
+        // series with the exact tag set a later failure will carry and cannot
+        // perturb the value.
+        LatticeMetrics.CoordinatorPhaseTickFailures.Add(0, PhaseTickFailureTags());
+
+        _phaseTimer = this.RegisterGrainTimer(
             OnPhaseTimerTickAsync,
             new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: PhaseTimerPeriod));
     }
@@ -215,13 +254,54 @@ internal abstract class CoordinatorGrain<TSelf>(
         try
         {
             await ProcessNextPhaseAsync();
+            _consecutiveTickFailures = 0;
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex,
-                "Coordinator {ReminderName} phase tick failed for {Context}",
-                KeepaliveReminderName, LogContext);
+            // Count BEFORE logging. This tick's work is now discarded, and until
+            // this counter existed that discard was invisible to every exported
+            // series: on the acceptance rig one coordinator swallowed thirty-five
+            // ticks across eight and a half hours while telemetry sat flat at zero.
+            // A log line is not a measurement - nothing aggregates it, nothing
+            // alerts on it, and nothing can answer "how much work did we throw
+            // away" from it.
+            LatticeMetrics.CoordinatorPhaseTickFailures.Add(1, PhaseTickFailureTags());
+
+            _consecutiveTickFailures++;
+            if (_consecutiveTickFailures >= PhaseTickFailureEscalationThreshold)
+            {
+                logger.LogError(ex,
+                    "Coordinator {ReminderName} phase tick failed for {Context} "
+                    + "{ConsecutiveFailures} times in a row; the phase machine has stopped advancing "
+                    + "and every tick's work is being discarded.",
+                    KeepaliveReminderName, LogContext, _consecutiveTickFailures);
+            }
+            else
+            {
+                logger.LogWarning(ex,
+                    "Coordinator {ReminderName} phase tick failed for {Context}; this tick's work was discarded "
+                    + "and the pump will retry on the next tick.",
+                    KeepaliveReminderName, LogContext);
+            }
         }
+    }
+
+    /// <summary>
+    /// The tag set for <see cref="LatticeMetrics.CoordinatorPhaseTickFailures"/>:
+    /// the coordinator kind, the tree it serves, and the tenant that tree belongs
+    /// to. Built per emission rather than cached because
+    /// <see cref="MetricsTreeId"/> is a derived-class hook that may only become
+    /// resolvable after activation.
+    /// </summary>
+    private KeyValuePair<string, object?>[] PhaseTickFailureTags()
+    {
+        var tree = MetricsTreeId;
+        return
+        [
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, KeepaliveReminderName),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, tree),
+            LatticeTenantLabel.ForTree(tree),
+        ];
     }
 
     /// <summary>

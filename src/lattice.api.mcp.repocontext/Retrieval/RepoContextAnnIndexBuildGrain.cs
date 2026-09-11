@@ -159,6 +159,15 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     private string RepoId => _repoId ??=
         RepoContextAnnIndexKeys.TryParseBuildGrainKey(GrainKey, out var parsed, out _) ? parsed : GrainKey;
 
+    /// <summary>
+    /// The subject reported on the phase-tick failure counter. The grain key is
+    /// composite - <c>{repoId}/{spaceFingerprint}</c> - so the base class default
+    /// would tag every embedding space as a distinct "tree", which is both untrue
+    /// and unaggregatable. The repository is the subject an operator asks the
+    /// question about.
+    /// </summary>
+    protected override string MetricsTreeId => RepoId;
+
     /// <inheritdoc />
     public async Task EnsureBuildingAsync(EmbeddingSpaceTag space)
     {

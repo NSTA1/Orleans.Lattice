@@ -48,6 +48,10 @@ public sealed class TenantMetricDimensionHygieneTests
         // sharing the hot path's activation cache.
         ("src/lattice/BPlusTree/Grains/ShardRootGrain.LeafAccessTracking.cs", "LeafAccessMetricTags()", false),
         ("src/lattice/BPlusTree/Grains/ShardRootGrain.LeafAccessTracking.cs", "tags", false),
+        // (kind, tree, tenant) built per emission on the coordinator phase-tick
+        // failure counter. Built per call rather than cached because the tree id is
+        // a derived-class hook that may only become resolvable after activation.
+        ("src/lattice/BPlusTree/Grains/CoordinatorGrain.cs", "PhaseTickFailureTags()", false),
         // (tree, shard, tenant) built once per replay.
         ("src/lattice/BPlusTree/Grains/SnapshotLeafGrain.cs", "tags", false),
         // (tree, state, previous_state, tenant [, partition][, shard]) built per transition.
@@ -202,6 +206,19 @@ public sealed class TenantMetricDimensionHygieneTests
         // sentinel by necessity as well as by doctrine: a stalled scan names a tree but
         // the other faults name none, and an instrument may not mix the two.
         "_passArmFaults",
+        // repocontext.bootstrap.phase_cancelled and
+        // repocontext.bootstrap.phase_cancelled.discarded_time - indexing runs
+        // cancelled mid-phase and the run time that cancellation discarded, tagged
+        // by phase (issue #2705). Same HOST-PROCESS background loop as
+        // _passArmFaults above, and unscopable for the same reason: the pass
+        // reconciles process-wide repocontext trees shared across every registered
+        // repository, so a cancelled run is a property of this host rather than of
+        // any tenant's traffic. The phase tag is the dimension that carries the
+        // signal, and both series are zero-primed per cancellable phase so a zero
+        // is a measured absence of discarded work rather than an instrument that
+        // never fired.
+        "_phaseCancellations",
+        "_phaseCancelledDiscardedMs",
         // repocontext.retrieval.ready_seconds - time from host start to the retrieval
         // plane first serving. Readiness is a property of the HOST PROCESS, not of any
         // tenant's data: the box either can serve semantic retrieval or it cannot, so
