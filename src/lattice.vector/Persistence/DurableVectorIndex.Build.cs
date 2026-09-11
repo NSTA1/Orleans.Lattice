@@ -235,8 +235,20 @@ public sealed partial class DurableVectorIndex
         // and the step runs for as long as the source takes. A deadline is checked
         // while waiting, which is the state the step is actually stuck in. See
         // AwaitSourceMoveAsync and issues #2536 and #2483.
+        //
+        // Created UNARMED, and armed by AwaitSourceMoveAsync when the slice first
+        // has to WAIT. Arming it here instead - at the start of the slice, before
+        // the enumerator even exists - is what regressed #2651: the timer runs on
+        // the clock rather than on consumption, so on a budget too small for one
+        // item it fires before the first read is issued, the source is handed an
+        // already-cancelled token, and the slice consumes nothing and advances no
+        // cursor. That is the exact stall the post-consumption sample below was
+        // written to prevent, reintroduced above it where it cannot be seen.
+        // Arming on the first wait is what keeps the two compatible: the deadline
+        // governs waiting, and a source that answers without waiting never meets
+        // it at all. See SliceDeadline.
         using var sliceDeadline = timeBounded
-            ? new CancellationTokenSource(sliceBudget, timeProvider)
+            ? new SliceDeadline(timeProvider, sliceBudget, startedAt)
             : null;
         using var sliceCancellation = sliceDeadline is null
             ? null
@@ -264,7 +276,7 @@ public sealed partial class DurableVectorIndex
                 while (true)
                 {
                     var (hasNext, pending) = await AwaitSourceMoveAsync(
-                        enumerator, sliceDeadline, timeProvider, startedAt, sliceBudget).ConfigureAwait(false);
+                        enumerator, sliceDeadline, consumed).ConfigureAwait(false);
 
                     if (pending is not null)
                     {
@@ -414,7 +426,7 @@ public sealed partial class DurableVectorIndex
     /// as a budget yield and a cancelled build quietly checkpoints and carries on.
     /// </remarks>
     private static bool SliceDeadlineSpent(
-        CancellationTokenSource? sliceDeadline, CancellationToken cancellationToken) =>
+        SliceDeadline? sliceDeadline, CancellationToken cancellationToken) =>
         sliceDeadline is { IsCancellationRequested: true } && !cancellationToken.IsCancellationRequested;
 
     /// <summary>
@@ -423,9 +435,7 @@ public sealed partial class DurableVectorIndex
     /// </summary>
     /// <param name="enumerator">The source enumerator being walked.</param>
     /// <param name="sliceDeadline">The slice deadline, or <see langword="null"/> when the step is not time-bounded.</param>
-    /// <param name="timeProvider">The clock the budget is measured against.</param>
-    /// <param name="startedAt">The timestamp the slice started at.</param>
-    /// <param name="sliceBudget">The slice's wall-clock ceiling.</param>
+    /// <param name="consumed">How many items the slice has already banked.</param>
     /// <returns>
     /// <c>HasNext</c> is the read's result when the read won; <c>Pending</c> is
     /// non-<see langword="null"/> exactly when the deadline won, and carries the
@@ -444,19 +454,29 @@ public sealed partial class DurableVectorIndex
     /// reminder timeout and missing it.
     /// </para>
     /// <para>
-    /// <b>Why the fast path matters.</b> A source that has already buffered a page
-    /// completes synchronously, which is the overwhelming majority of items in a
-    /// slice. Racing those would allocate a task and a registration per item for
-    /// no benefit, so a completed read is taken directly and the race is built
-    /// only for a read that actually has to wait.
+    /// <b>Why the fast path matters, and what it does NOT carry.</b> A source that
+    /// has already buffered a page completes synchronously, which is the
+    /// overwhelming majority of items in a slice. Racing those would allocate a
+    /// task and a registration per item for no benefit, so a completed read is
+    /// taken directly and the race is built only for a read that actually has to
+    /// wait. It is tempting to promote this to the guarantee - "a synchronous
+    /// source never meets the deadline, so it cannot be preempted" - and that
+    /// reading is true but is not what holds the guarantee up. Perturbing this
+    /// branch away, so that an already-completed read is raced too, leaves the
+    /// fixture green 20 times in 20: an already-completed <c>pending</c> beats a
+    /// <see cref="TaskCompletionSource"/> that still needs a timer callback, and
+    /// <see cref="Task.WhenAny(Task[])"/> resolves in its favour deterministically.
+    /// The guarantee is carried by WHEN the deadline is armed - see
+    /// <see cref="SliceDeadline"/>, whose perturbation is red 20 times in 20 - and
+    /// this branch is the optimisation it has always been. Recorded because the
+    /// overclaim is the more plausible comment to write, and it would have sent the
+    /// next reader to defend the wrong line.
     /// </para>
     /// </remarks>
     private static async ValueTask<(bool HasNext, Task<bool>? Pending)> AwaitSourceMoveAsync(
         IAsyncEnumerator<VectorSourceEntry> enumerator,
-        CancellationTokenSource? sliceDeadline,
-        TimeProvider timeProvider,
-        long startedAt,
-        TimeSpan sliceBudget)
+        SliceDeadline? sliceDeadline,
+        int consumed)
     {
         var move = enumerator.MoveNextAsync();
         if (move.IsCompleted || sliceDeadline is null)
@@ -464,12 +484,10 @@ public sealed partial class DurableVectorIndex
             return (await move.ConfigureAwait(false), null);
         }
 
-        if (timeProvider.GetElapsedTime(startedAt) >= sliceBudget)
-        {
-            // Already over budget before this read could begin. Abandon it rather
-            // than start a wait the step has no time left for.
-            return (false, move.AsTask());
-        }
+        // The step has to wait, which is the only state a deadline can help with,
+        // so this is where the deadline starts running. It is deliberately NOT
+        // started when the slice starts: see the call site.
+        sliceDeadline.Arm(consumed);
 
         var pending = move.AsTask();
         var deadlineReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -481,6 +499,108 @@ public sealed partial class DurableVectorIndex
         return ReferenceEquals(winner, pending)
             ? (await pending.ConfigureAwait(false), null)
             : (false, pending);
+    }
+
+    /// <summary>
+    /// A slice's wall-clock deadline, armed when the slice first has to WAIT for
+    /// its source rather than when the slice begins.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The arming moment is the whole of this type.</b> A deadline created
+    /// already running measures the slice, and a slice is not what needs bounding:
+    /// the step's own post-consumption sample already bounds a source that
+    /// answers, and it does so in a way that cannot stall, because it is evaluated
+    /// only after an item has been banked. What that sample cannot bound is a
+    /// source that never answers, because it is never reached. The deadline exists
+    /// for exactly that gap and for nothing else, so it is started where the gap
+    /// is - at a wait.
+    /// </para>
+    /// <para>
+    /// Starting it a moment earlier reopens the stall it was added to close, from
+    /// the other end. #2584 armed it at the top of the slice, so on a budget too
+    /// small for one item the timer fired before the first read was even issued:
+    /// the source was handed a token that was already cancelled, unwound without
+    /// yielding, and the slice banked nothing and moved no cursor - once per step,
+    /// forever. #2651 measured that as a coin flip in four distinct shapes, at
+    /// rates between 30% and 95% depending on who ran it and under what load, on
+    /// a tree that was byte-identical every time. The absence of a stable rate is
+    /// itself the finding: a real timer racing a source read resolves differently
+    /// on every machine and every run, so no single figure here is "the" rate and
+    /// only a paired before/after contrast means anything. Arming on the wait
+    /// removes the race rather than shortening its odds: a source that answers
+    /// synchronously never reaches <see cref="Arm"/> at all.
+    /// </para>
+    /// <para>
+    /// <b>A slice that has banked nothing gets the full budget.</b> The window is
+    /// measured from the wait, and a slice with nothing banked is given the whole
+    /// budget rather than whatever remains of it. Truncating that window protects
+    /// no progress - there is none to protect - while guaranteeing the stall, so
+    /// the two cases are not symmetric and are not treated as though they were.
+    /// Once the slice has banked something, cutting a later wait short does
+    /// preserve real work, so the remaining budget is the right window and is what
+    /// is used. Either way the slice still returns within about one budget of the
+    /// moment it started waiting, which is the bound #2536 and #2483 need.
+    /// </para>
+    /// <para>
+    /// The timer is created from the <see cref="TimeProvider"/> so a host that
+    /// controls the clock controls the deadline too, and it is armed at most once:
+    /// the first wait is what the bound is measured from, and re-arming on each
+    /// later wait would let a source that answers just often enough extend the
+    /// slice indefinitely, one grudging item at a time. That hazard needs an
+    /// adversarial source to exhibit and no fixture currently drives one, so this
+    /// particular guard rests on the argument rather than on a measurement -
+    /// removing it leaves the suite green. Worth knowing before it is tidied away
+    /// on the strength of that green.
+    /// </para>
+    /// </remarks>
+    private sealed class SliceDeadline(TimeProvider timeProvider, TimeSpan budget, long startedAt) : IDisposable
+    {
+        private readonly CancellationTokenSource _cancellation = new();
+        private ITimer? _timer;
+        private bool _armed;
+
+        /// <summary>The token that is cancelled once the deadline is spent.</summary>
+        internal CancellationToken Token => _cancellation.Token;
+
+        /// <summary>Whether the deadline has been spent.</summary>
+        internal bool IsCancellationRequested => _cancellation.IsCancellationRequested;
+
+        /// <summary>
+        /// Starts the deadline, if it is not already running.
+        /// </summary>
+        /// <param name="consumed">How many items the slice has banked so far.</param>
+        internal void Arm(int consumed)
+        {
+            if (_armed)
+            {
+                return;
+            }
+
+            _armed = true;
+
+            // A slice with nothing banked is bounded from here by the whole
+            // budget; one that has banked is bounded by what is left of it. See
+            // the remarks.
+            var window = consumed == 0 ? budget : budget - timeProvider.GetElapsedTime(startedAt);
+            if (window <= TimeSpan.Zero)
+            {
+                _cancellation.Cancel();
+                return;
+            }
+
+            _timer = timeProvider.CreateTimer(
+                static state => ((CancellationTokenSource)state!).Cancel(),
+                _cancellation,
+                window,
+                Timeout.InfiniteTimeSpan);
+        }
+
+        public void Dispose()
+        {
+            _timer?.Dispose();
+            _cancellation.Dispose();
+        }
     }
 
     /// <summary>

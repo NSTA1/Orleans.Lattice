@@ -136,6 +136,50 @@ public sealed class DurableVectorIndexSliceBudgetTests
     }
 
     [Test]
+    public async Task An_asynchronous_source_still_makes_progress_on_a_budget_already_outrun()
+    {
+        var store = new InMemoryVectorIndexStore();
+        var corpus = VectorCorpus.Clustered(Corpus, DurableIndexHarness.Dimensions, 8, seed: 11);
+        var source = new DeferredVectorSource(DurableIndexHarness.Dimensions);
+        for (var i = 0; i < Corpus; i++)
+        {
+            source.Set(DurableIndexHarness.Id(i), corpus[i]);
+        }
+
+        // The charged clock outruns the budget on its very first reading - ten
+        // seconds against two - while the deadline's own timer runs on real time,
+        // where two seconds is an eternity beside a queued continuation. The two
+        // together isolate the window the deadline is armed with and nothing else.
+        //
+        // The fixture above cannot reach this: its source answers synchronously,
+        // so the slice never waits, never arms, and the window is never chosen.
+        // A real store of record answers asynchronously, so it always waits - and
+        // a slice that has banked NOTHING and is given only the budget that
+        // remains is given a negative one, which cancels on the spot and consumes
+        // zero, forever. Arming a slice with nothing banked for the full budget is
+        // what keeps that case alive, and this is the only test that sees it.
+        var options = Options(TimeSpan.FromSeconds(2), new SteppingTimeProvider(TimeSpan.FromSeconds(10)));
+        var index = await DurableVectorIndex.OpenAsync(store, source, options, VectorIndexLoadMode.Full);
+
+        await index.BuildStepAsync();
+        await index.BuildStepAsync();
+        var first = index.Progress.VectorsIndexed;
+        await index.BuildStepAsync();
+        var second = index.Progress.VectorsIndexed;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(1),
+                "a source that answers - even asynchronously - must have its first item consumed, or the "
+                + "slice banks nothing and the cursor never moves");
+            Assert.That(second, Is.EqualTo(2), "and the next slice must advance rather than repeat it.");
+            Assert.That(index.Progress.SlicesDeadlinedWithoutProgress, Is.Zero,
+                "no slice consumed nothing, so none of them can have been recorded as having consumed "
+                + "nothing - this is what separates a build that is advancing from one that is stalled.");
+        });
+    }
+
+    [Test]
     public async Task A_non_positive_budget_leaves_the_work_count_as_the_only_bound()
     {
         var store = new InMemoryVectorIndexStore();
