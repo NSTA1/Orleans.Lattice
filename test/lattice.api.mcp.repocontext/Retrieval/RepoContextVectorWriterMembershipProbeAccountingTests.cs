@@ -279,15 +279,88 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
         });
     }
 
+    /// <summary>
+    /// Issue #2679. The defect here is an ABSENCE, so the assertion has to be a
+    /// PRESENCE: a probe that ran and asked for nothing must emit a line, because a
+    /// silent zero is byte-identical in the log to a probe that never executed.
+    /// <para>
+    /// This replaces a fixture that asserted the opposite - "a probe with nothing to
+    /// ask must not log" - which was the defect written down as an intention. Three
+    /// states collapsed onto that one empty log: the probe ran and found a clean
+    /// membership, the probe ran and requested zero keys, and the probe never ran at
+    /// all. An operator enabling debug on this category to investigate vector-writer
+    /// dispositions would read the first, which is a pass, from evidence that equally
+    /// supports the third.
+    /// </para>
+    /// <para>
+    /// The path is reachable rather than defensive, which is why it is worth a
+    /// fixture. Both symbol-arm callers in the ingestor build their page keys by
+    /// filtering out null-valued records and hand the result straight to the probe
+    /// with no empty guard, so a page whose rows all read null arrives with an empty
+    /// candidate set. Note that the reachable zero is the empty candidate set, not
+    /// the <c>Requested == 0</c> guard the issue named: a non-empty candidate set
+    /// always yields at least one requested key, so that guard is only ever entered
+    /// from the path this fixture exercises.
+    /// </para>
+    /// <para>
+    /// The contrast arm is load-bearing rather than decorative. The zero case could
+    /// be made to emit by rendering every probe through one uniform message, which
+    /// would satisfy a bare presence assertion while destroying the breakdown the
+    /// non-zero path exists to report. Pinning the two lines as distinguishable, and
+    /// pinning the non-zero line's counts, is what forecloses that repair.
+    /// </para>
+    /// </summary>
     [Test]
-    public async Task An_empty_candidate_set_reports_nothing()
+    public async Task A_probe_that_requested_nothing_still_reports_that_it_ran()
     {
-        var (writer, logs) = Create(_ => []);
+        var (emptyWriter, emptyLogs) = Create(_ => []);
+        var (askedWriter, askedLogs) = Create(requested => Rows(requested, Enabled));
 
-        var covered = (await writer.ProbeEmbeddedMembersAsync(RepoId, [], Ct)).SourceIds;
+        var emptyCovered = (await emptyWriter.ProbeEmbeddedMembersAsync(RepoId, [], Ct)).SourceIds;
+        var askedCovered = (await askedWriter.ProbeEmbeddedMembersAsync(RepoId, SourceKeys("A", "B"), Ct)).SourceIds;
 
-        Assert.That(covered, Is.Empty);
-        Assert.That(logs.Entries, Is.Empty, "a probe with nothing to ask must not log");
+        var emptyLine = Single(emptyLogs);
+        var askedLine = Single(askedLogs);
+        Assert.Multiple(() =>
+        {
+            Assert.That(emptyCovered, Is.Empty, "classification must be unchanged");
+
+            // The presence assertion. Silence here IS the defect, so this is the
+            // clause that fails against the unfixed writer.
+            Assert.That(
+                emptyLine.Message,
+                Does.Contain("Repo-context membership probe"),
+                "the zero must join the population an operator already greps for, or it stays invisible");
+            Assert.That(
+                emptyLine.Message,
+                Does.Contain(": requested=0"),
+                "the zero must be positively identifiable as a zero, not merely present");
+            Assert.That(
+                emptyLine.Level,
+                Is.EqualTo(LogLevel.Debug),
+                "a probe with nothing to ask is ordinary, not an anomaly");
+
+            // The contrast arm: the true-positive path must keep its breakdown, and
+            // must not read as an empty probe.
+            Assert.That(askedCovered, Has.Count.EqualTo(2), "classification must be unchanged");
+            Assert.That(askedLine.Message, Does.Contain(": requested=2"));
+            Assert.That(askedLine.Message, Does.Contain("embedded=2"), "the breakdown must survive");
+            Assert.That(askedLine.Message, Does.Contain("notReturned=0"), "the breakdown must survive");
+
+            // The ": " anchor below is load-bearing rather than tidiness. The
+            // eleven-field template renders "unrequested={Unrequested}", so a bare
+            // Does.Not.Contain("requested=0") also matches "unrequested=0" and would
+            // fail spuriously against a perfectly good probe. Only the colon that
+            // precedes the first field separates the two. Do not simplify it away.
+            Assert.That(
+                askedLine.Message,
+                Does.Not.Contain(": requested=0"),
+                "a probe that really asked must not read as one that did not");
+            Assert.That(
+                emptyLine.Message,
+                Is.Not.EqualTo(askedLine.Message),
+                "the two executions must be distinguishable from each other as well as from silence");
+        });
     }
 
     /// <summary>
