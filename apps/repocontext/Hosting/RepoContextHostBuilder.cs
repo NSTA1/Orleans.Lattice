@@ -53,6 +53,23 @@ public static class RepoContextHostBuilder
     public const string BackupPath = "/health/backup";
 
     /// <summary>
+    /// The grain-liveness probe path: whether the local silo's membership is active
+    /// and the grain layer answers a trivial call. This is the endpoint the
+    /// container's Docker healthcheck targets.
+    /// </summary>
+    /// <remarks>
+    /// Served apart from <see cref="LivenessPath"/> because that probe is always
+    /// green - it proves only that the process is up - and apart from
+    /// <see cref="ReadinessPath"/> because readiness is a latched one-shot that never
+    /// re-checks the silo once it has flipped. Neither can go red for a silo that
+    /// reaches readiness and then dies while the process keeps listening, which is
+    /// the outage recorded by issue #2666. This probe re-exercises the grain layer on
+    /// every call, so it can. It is three-valued (healthy / starting / unhealthy);
+    /// see <see cref="RepoContextSiloHealthCheck"/>.
+    /// </remarks>
+    public const string SiloPath = "/health/silo";
+
+    /// <summary>
     /// The Prometheus scrape path. Serves every instrument published on a
     /// Lattice-owned meter in the process, in the standard text exposition format.
     /// </summary>
@@ -74,6 +91,9 @@ public static class RepoContextHostBuilder
 
     /// <summary>The health-check tag identifying the backup probe.</summary>
     public const string BackupTag = "backup";
+
+    /// <summary>The health-check tag identifying the grain-liveness (silo) probe.</summary>
+    public const string SiloTag = "silo";
 
     /// <summary>
     /// The host's shutdown budget when the deployment declares no container grant:
@@ -154,6 +174,12 @@ public static class RepoContextHostBuilder
 
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton<RepoContextReadinessState>();
+
+        // The seam the grain-liveness health check exercises: a trivial point-read of
+        // the reserved policy tree, which can only complete when silo membership is
+        // active and the grain layer answers. Registered as the production probe; the
+        // tests substitute a fake to pin all four health states deterministically.
+        builder.Services.AddSingleton<IRepoContextSiloProbe, RepoContextSiloProbe>();
 
         // The resident activation count, read from the gauge Orleans already
         // publishes rather than through a grain call. Both moments it is wanted are
@@ -429,6 +455,16 @@ public static class RepoContextHostBuilder
         healthChecks.AddCheck<RepoContextBackupHealthCheck>(
             RepoContextBackupHealthCheck.Name,
             tags: new[] { BackupTag });
+
+        // The grain-liveness check on its own tag. Deliberately carries neither
+        // LivenessTag nor ReadinessTag: it must NOT restart a replaying box (that is
+        // liveness) and it is not part of the readiness conjunction. It exists to be
+        // the one probe that re-checks the silo on every call, so the container's
+        // Docker healthcheck can go red for a silo that died after reaching
+        // readiness - the outage of issue #2666.
+        healthChecks.AddCheck<RepoContextSiloHealthCheck>(
+            RepoContextSiloHealthCheck.Name,
+            tags: new[] { SiloTag });
         if (isAzure)
         {
             healthChecks.AddLatticeScalingHealthCheck(tags: new[] { ReadinessTag });
@@ -449,6 +485,14 @@ public static class RepoContextHostBuilder
         {
             Predicate = registration => registration.Tags.Contains(BackupTag),
         });
+
+        // The grain-liveness endpoint the container's --healthcheck self-probe hits.
+        // Degraded (silo still starting) and Unhealthy both map to 503 so a plain
+        // curl-style success check treats either as failure; the three-way verdict is
+        // carried in the response BODY, which the self-probe classifies and echoes
+        // into the Docker health log for an operator. The options are built by a
+        // shared factory so this mapping and the tests that exercise it cannot drift.
+        app.MapHealthChecks(SiloPath, RepoContextSiloHealthEndpoint.CreateOptions(SiloTag));
 
         app.MapGet(MetricsPath, (RepoContextMetricsCollector collector) =>
             Results.Text(collector.Render(), RepoContextPrometheusExposition.ContentType));
