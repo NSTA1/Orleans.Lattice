@@ -152,6 +152,80 @@ internal sealed class RepoIndexJobGrain(
     }
 
     /// <inheritdoc />
+    public async Task<RepoIndexProgress> BeginResetAsync()
+    {
+        var now = timeProvider.GetUtcNow();
+        // A reset is a teardown, not an index run. It is not resumable from a
+        // persisted request, so Request is left null and no resume reminder is
+        // armed; its lifecycle is nevertheless written into the same job surface
+        // index_status reads, so one status verb answers "is this repository being
+        // built up or torn down right now". Every build counter is zeroed so a
+        // reset never quotes a prior run's file figures, and the reset counters
+        // start at zero to be advanced as trees are swept.
+        state.State.Request = null;
+        state.State.Status = RepoIndexStatus.Running;
+        state.State.Phase = RepoIndexPhase.Resetting;
+        state.State.FilesScanned = 0;
+        state.State.FilesAdded = 0;
+        state.State.FilesUpdated = 0;
+        state.State.FilesRemoved = 0;
+        state.State.FilesUnchanged = 0;
+        state.State.ChunksTotal = 0;
+        state.State.ChunksCommitted = 0;
+        state.State.FilesEmbedded = 0;
+        state.State.FilesContentProjected = 0;
+        state.State.SymbolsEmbedded = 0;
+        state.State.TreesSwept = 0;
+        state.State.EntriesDeleted = 0;
+        state.State.StartedAt = now;
+        state.State.UpdatedAt = now;
+        state.State.CompletedAt = null;
+        state.State.ElapsedMilliseconds = null;
+        state.State.Error = null;
+        await state.WriteStateAsync().ConfigureAwait(true);
+
+        logger.LogInformation("Repo {RepoId}: index reset started; running as an observable teardown.", RepoId);
+        return state.State.ToProgress(RepoId);
+    }
+
+    /// <inheritdoc />
+    public async Task ReportResetProgressAsync(int treesSwept, int entriesDeleted)
+    {
+        // Only a live reset advances. A report for a reset that already settled -
+        // or for a job that is now doing something else - is dropped, mirroring
+        // ReportProgressAsync's guard, so a straggling call can neither revive a
+        // completed teardown nor scribble reset counters onto a running index.
+        if (state.State.Status != RepoIndexStatus.Running || state.State.Phase != RepoIndexPhase.Resetting)
+        {
+            return;
+        }
+
+        state.State.TreesSwept = treesSwept;
+        state.State.EntriesDeleted = entriesDeleted;
+        state.State.UpdatedAt = timeProvider.GetUtcNow();
+        await state.WriteStateAsync().ConfigureAwait(true);
+    }
+
+    /// <inheritdoc />
+    public async Task CompleteResetAsync(long elapsedMilliseconds, int treesSwept, int entriesDeleted)
+    {
+        var now = timeProvider.GetUtcNow();
+        state.State.Status = RepoIndexStatus.Completed;
+        state.State.Phase = RepoIndexPhase.Done;
+        state.State.TreesSwept = treesSwept;
+        state.State.EntriesDeleted = entriesDeleted;
+        state.State.UpdatedAt = now;
+        state.State.CompletedAt = now;
+        state.State.ElapsedMilliseconds = elapsedMilliseconds;
+        state.State.Error = null;
+        await state.WriteStateAsync().ConfigureAwait(true);
+
+        logger.LogInformation(
+            "Repo {RepoId}: index reset completed in {Elapsed} ms ({Trees} trees swept, {Entries} entries dropped).",
+            RepoId, elapsedMilliseconds, treesSwept, entriesDeleted);
+    }
+
+    /// <inheritdoc />
     public async Task CompleteAsync(RepoIndexProgressUpdate finalCounts, long elapsedMilliseconds)
     {
         Merge(finalCounts);

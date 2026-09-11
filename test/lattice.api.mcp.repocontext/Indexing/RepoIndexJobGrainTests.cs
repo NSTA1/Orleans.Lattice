@@ -428,4 +428,179 @@ public sealed class RepoIndexJobGrainTests
         await harness.Reminders.Received(1).UnregisterReminder(Arg.Any<GrainId>(), harness.Reminder);
         harness.Runner.DidNotReceive().Enqueue(Arg.Any<RepoIndexJobRequest>());
     }
+
+    // ---- Observable index-reset lifecycle (#2642) ----
+    //
+    // A reset is a teardown written into the same job surface index_status reads,
+    // so one status verb answers "built up or torn down". The contract these tests
+    // pin is the one the defect turned on: BeginResetAsync records a *running*
+    // teardown and emphatically not a completed one, ReportResetProgressAsync only
+    // advances a live reset, and CompleteResetAsync is the sole call that marks a
+    // reset done - so a reset that never reaches it never reports itself complete.
+
+    [Test]
+    public async Task BeginResetAsync_records_a_running_teardown_with_no_completion_signal()
+    {
+        var harness = new RepoIndexJobGrainHarness();
+
+        var progress = await harness.CreateGrain().BeginResetAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(progress.Status, Is.EqualTo(RepoIndexStatus.Running),
+                "A reset in flight is Running.");
+            Assert.That(progress.Phase, Is.EqualTo(RepoIndexPhase.Resetting),
+                "The Resetting phase is what distinguishes a teardown from a build.");
+            Assert.That(progress.StartedAt, Is.EqualTo(harness.Time.GetUtcNow()));
+            // The load-bearing assertions: a begin must NOT look complete. An
+            // optimistic marker written here is exactly the inversion #2642 exists
+            // to prevent, and it makes these two fire.
+            Assert.That(progress.CompletedAt, Is.Null,
+                "BeginResetAsync must not stamp a completion time before the sweep runs.");
+            Assert.That(progress.ElapsedMilliseconds, Is.Null,
+                "BeginResetAsync must not record an elapsed duration before the sweep runs.");
+            Assert.That(harness.State.State.Status, Is.Not.EqualTo(RepoIndexStatus.Completed),
+                "A begun reset is never in the Completed state.");
+            Assert.That(harness.State.WriteCount, Is.EqualTo(1),
+                "The running-teardown marker is durably written so a lost response can still be polled.");
+        });
+    }
+
+    [Test]
+    public async Task BeginResetAsync_zeroes_any_prior_index_run_counters()
+    {
+        var harness = new RepoIndexJobGrainHarness();
+        // Seed the shape a completed onboarding leaves behind, so a begin that
+        // merely flips the status (and forgets to zero) would quote stale figures.
+        harness.State.State.Status = RepoIndexStatus.Completed;
+        harness.State.State.Phase = RepoIndexPhase.Done;
+        harness.State.State.FilesScanned = 8315;
+        harness.State.State.FilesAdded = 8315;
+        harness.State.State.FilesEmbedded = 8000;
+        harness.State.State.SymbolsEmbedded = 4000;
+        harness.State.State.TreesSwept = 3;
+        harness.State.State.EntriesDeleted = 99;
+
+        await harness.CreateGrain().BeginResetAsync();
+
+        // Additive-sensitive: these check values ARE zero, so a perturbation that
+        // carries a prior counter across (rather than one that drops a call) fires.
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.State.State.FilesScanned, Is.Zero);
+            Assert.That(harness.State.State.FilesAdded, Is.Zero);
+            Assert.That(harness.State.State.FilesEmbedded, Is.Zero);
+            Assert.That(harness.State.State.SymbolsEmbedded, Is.Zero);
+            Assert.That(harness.State.State.TreesSwept, Is.Zero);
+            Assert.That(harness.State.State.EntriesDeleted, Is.Zero);
+            Assert.That(harness.State.State.Request, Is.Null,
+                "A reset carries no resumable request, so no resume reminder is armed.");
+        });
+    }
+
+    [Test]
+    public async Task BeginResetAsync_does_not_arm_a_resume_reminder()
+    {
+        var harness = new RepoIndexJobGrainHarness();
+
+        await harness.CreateGrain().BeginResetAsync();
+
+        await harness.Reminders.DidNotReceive().RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>());
+    }
+
+    [Test]
+    public async Task ReportResetProgressAsync_advances_the_reset_counters_while_a_teardown_runs()
+    {
+        var harness = new RepoIndexJobGrainHarness();
+        await harness.CreateGrain().BeginResetAsync();
+        var writesAfterBegin = harness.State.WriteCount;
+        harness.Time.Advance(TimeSpan.FromSeconds(3));
+
+        await harness.CreateGrain().ReportResetProgressAsync(treesSwept: 4, entriesDeleted: 512);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.State.State.TreesSwept, Is.EqualTo(4));
+            Assert.That(harness.State.State.EntriesDeleted, Is.EqualTo(512));
+            Assert.That(harness.State.State.UpdatedAt, Is.EqualTo(harness.Time.GetUtcNow()),
+                "Advancing progress restamps UpdatedAt, which is the freshness signal a poller watches.");
+            Assert.That(harness.State.State.Status, Is.EqualTo(RepoIndexStatus.Running),
+                "Reporting progress must never itself settle the job.");
+            Assert.That(harness.State.WriteCount, Is.EqualTo(writesAfterBegin + 1));
+        });
+    }
+
+    [Test]
+    public async Task ReportResetProgressAsync_ignores_a_report_for_a_settled_teardown()
+    {
+        var harness = new RepoIndexJobGrainHarness();
+        harness.State.State.Status = RepoIndexStatus.Completed;
+        harness.State.State.Phase = RepoIndexPhase.Done;
+        harness.State.State.TreesSwept = 6;
+        harness.State.State.EntriesDeleted = 100;
+
+        await harness.CreateGrain().ReportResetProgressAsync(treesSwept: 999, entriesDeleted: 999);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.State.State.TreesSwept, Is.EqualTo(6),
+                "A straggling report must not revive a completed teardown.");
+            Assert.That(harness.State.State.EntriesDeleted, Is.EqualTo(100));
+            Assert.That(harness.State.WriteCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task ReportResetProgressAsync_ignores_a_report_while_an_index_build_runs()
+    {
+        var harness = new RepoIndexJobGrainHarness();
+        // A running index build, not a reset: reset counters must not scribble onto it.
+        harness.State.State.Status = RepoIndexStatus.Running;
+        harness.State.State.Phase = RepoIndexPhase.Walking;
+
+        await harness.CreateGrain().ReportResetProgressAsync(treesSwept: 3, entriesDeleted: 42);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.State.State.TreesSwept, Is.Zero,
+                "Only a job in the Resetting phase accepts reset progress.");
+            Assert.That(harness.State.State.EntriesDeleted, Is.Zero);
+            Assert.That(harness.State.State.Phase, Is.EqualTo(RepoIndexPhase.Walking));
+            Assert.That(harness.State.WriteCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task CompleteResetAsync_settles_the_teardown_with_its_final_counters()
+    {
+        var harness = new RepoIndexJobGrainHarness();
+        await harness.CreateGrain().BeginResetAsync();
+        harness.Time.Advance(TimeSpan.FromSeconds(5));
+
+        await harness.CreateGrain().CompleteResetAsync(elapsedMilliseconds: 5000, treesSwept: 6, entriesDeleted: 8315);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.State.State.Status, Is.EqualTo(RepoIndexStatus.Completed));
+            Assert.That(harness.State.State.Phase, Is.EqualTo(RepoIndexPhase.Done));
+            Assert.That(harness.State.State.TreesSwept, Is.EqualTo(6));
+            Assert.That(harness.State.State.EntriesDeleted, Is.EqualTo(8315));
+            Assert.That(harness.State.State.ElapsedMilliseconds, Is.EqualTo(5000));
+            Assert.That(harness.State.State.CompletedAt, Is.EqualTo(harness.Time.GetUtcNow()),
+                "Completion is stamped only now, after the sweep - never at begin.");
+        });
+    }
+
+    [Test]
+    public async Task CompleteResetAsync_does_not_arm_or_leave_a_resume_reminder()
+    {
+        var harness = new RepoIndexJobGrainHarness();
+        await harness.CreateGrain().BeginResetAsync();
+
+        await harness.CreateGrain().CompleteResetAsync(elapsedMilliseconds: 1, treesSwept: 1, entriesDeleted: 1);
+
+        await harness.Reminders.DidNotReceive().RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>());
+    }
 }
