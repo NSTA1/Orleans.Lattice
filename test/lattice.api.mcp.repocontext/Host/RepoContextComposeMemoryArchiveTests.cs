@@ -364,11 +364,17 @@ public sealed class RepoContextComposeMemoryArchiveTests
         // its presence is asserted rather than left to survive a future edit by luck.
         var suite = File.ReadAllText(ProvenanceTestSuitePath);
 
+        // The total is deliberately NOT part of the pattern. Asserting "Check 5 of 5"
+        // coupled this check to how many checks exist, so adding check 6 (the build
+        // provenance check, issue 2686) failed THIS test with a message about archive
+        // durability - an assertion that reports a fault it is not testing sends the
+        // next reader to the wrong file. What is guarded is that the archive section
+        // is still present and still exercised, which its title establishes on its own.
         Assert.Multiple(() =>
         {
             Assert.That(
                 suite,
-                Does.Contain("Check 5 of 5"),
+                Does.Match(@"Check 5 of \d+: archive durability"),
                 "the provenance test suite must exercise the archive durability check");
             Assert.That(
                 suite,
