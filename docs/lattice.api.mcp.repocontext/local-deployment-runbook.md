@@ -239,10 +239,13 @@ context. Run from the repository root:
 
 ```powershell
 $env:GIT_COMMIT = (git rev-parse HEAD)
+# The secret spec MUST be built as a string first - see "Why the secret spec is
+# bound to a variable" below. Inlining it silently breaks the build.
+$secret = "id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config"
 docker build -f apps/repocontext/Dockerfile `
   -t "repocontext-mcp:candidate-$env:GIT_COMMIT" `
   --build-arg GIT_COMMIT=$env:GIT_COMMIT `
-  --secret id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config .
+  --secret $secret .
 ```
 
 **`.deploy/` is not a build input.** Nothing under it is tracked - `git ls-files
@@ -260,6 +263,35 @@ The build secret is not optional and not incidental: an in-container NuGet resto
 fails behind the corporate TLS proxy, so the restore needs the corporate feed from
 `%APPDATA%\NuGet\NuGet.Config`. A build that omits it fails during restore, which
 reads as a network fault rather than as a missing secret.
+
+### Why the secret spec is bound to a variable
+
+`$secret = "id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config"` is load-bearing, not
+style. Do not inline it back into the `docker build` line.
+
+When PowerShell passes a **bare** (unquoted) argument to a **native** command, a
+token containing a **comma** is passed through **literally** - the `$env:...` inside
+it is never expanded. Docker then receives the seven characters `$env:` as part of
+the path, fails to open it, and reports a missing-file error naming a path you can
+see is wrong but whose cause is not in the error. Binding the spec in a
+double-quoted string expands it before the call, so Docker receives a real path.
+
+The comma is the whole trigger, and it is worth being precise because the obvious
+mental model - "a variable expands only when the token starts with `$`" - is wrong
+in both directions, and following it produces a command that is still broken:
+
+| Bare argument token                  | Reaches the native command as |
+| ------------------------------------ | ----------------------------- |
+| `src=$env:VAR`                       | `src=VALUE` (expanded)        |
+| `--build-arg GIT_COMMIT=$env:VAR`    | `GIT_COMMIT=VALUE` (expanded) |
+| `a,src=$env:VAR`                     | `a,src=$env:VAR` (literal)    |
+| `$env:VAR,tail`                      | `$env:VAR,tail` (literal)     |
+| `"a,src=$env:VAR"` (double-quoted)   | `a,src=VALUE` (expanded)      |
+
+Rows 1 and 2 show a leading `$` is not necessary; row 4 shows it is not sufficient.
+Only the comma predicts the failure. This is why `--build-arg
+GIT_COMMIT=$env:GIT_COMMIT` on the line above is correct as written and must not be
+"fixed" to match - it has no comma - while `--secret` must be bound first.
 
 Both arguments matter, and they are not the same thing. `--build-arg GIT_COMMIT`
 stamps the sha **into the image** as `org.opencontainers.image.revision`, which is
@@ -659,10 +691,13 @@ the commit has to survive from the build into the check; the rest is not.
 #    root and from the TRACKED Dockerfile compose declares. `.deploy/` is untracked
 #    and is not a build input - see Build and tag from a known sha.
 $env:GIT_COMMIT = (git rev-parse HEAD)
+# The secret spec MUST be built as a string first - see "Why the secret spec is
+# bound to a variable" below. Inlining it silently breaks the build.
+$secret = "id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config"
 docker build -f apps/repocontext/Dockerfile `
   -t "repocontext-mcp:candidate-$env:GIT_COMMIT" `
   --build-arg GIT_COMMIT=$env:GIT_COMMIT `
-  --secret id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config .
+  --secret $secret .
 
 # 2. Verify the build stamped the commit, BEFORE tagging. A missing GIT_COMMIT does
 #    not fail the build; it yields an image the provenance gate cannot resolve.
