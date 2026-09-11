@@ -340,13 +340,46 @@ internal sealed class RepoContextAnnIndexBuildGrain(
             return;
         }
 
-        if (!state.State.Converged)
+        // THE LATCH AND THE DIAGNOSTICS ARE TWO DIFFERENT RECORDS, AND ONLY ONE OF
+        // THEM LATCHES.
+        //
+        // Converged governs scheduling - see InProgress - and is correctly one-way:
+        // it closes once and never reopens. The two counters beside it are
+        // diagnostics with no reader in this assembly, and their entire purpose is
+        // to be read by a human after the fact. Writing them under the latch froze
+        // them at whatever the FIRST converged build observed, so a plane that
+        // later healed still described the build that preceded the heal - which is
+        // precisely the field an operator would consult to confirm the heal worked.
+        // See issue #2712, and #2711 for the heal this exists to make observable.
+        //
+        // WHY THIS IS NOT SIMPLY UNCONDITIONAL. The refresh sits BELOW the
+        // AdmitsConvergence early return above, and must stay there. A Denied read
+        // did not happen at all and an unterminated Unknown one cannot say whether
+        // it did, so the corpus behind either is unknown rather than empty.
+        // Refreshing on one would overwrite a corroborated count with an
+        // uncorroborated zero - fail-open into silence, which is the hazard #2426
+        // exists to remove and which this fix must not reintroduce by the back
+        // door. Convergence is admitted first; only then does the record move.
+        //
+        // The change test is what keeps a coordinator that has settled from writing
+        // durable state on every activation merely to rewrite the same two numbers.
+        var firstConvergence = !state.State.Converged;
+        var previousVectorsIndexed = state.State.VectorsIndexed;
+        var previousPartitionsTotal = state.State.PartitionsTotal;
+        var diagnosticsChanged =
+            previousVectorsIndexed != progress.VectorsIndexed
+            || previousPartitionsTotal != progress.PartitionsTotal;
+
+        if (firstConvergence || diagnosticsChanged)
         {
             state.State.Converged = true;
             state.State.VectorsIndexed = progress.VectorsIndexed;
             state.State.PartitionsTotal = progress.PartitionsTotal;
             await state.WriteStateAsync().ConfigureAwait(true);
+        }
 
+        if (firstConvergence)
+        {
             // Partitions are reported beside the vector count because the vector
             // count alone cannot distinguish the two ways of reaching Ready. Zero
             // partitions is a completed build serving exact exhaustive answers,
@@ -362,6 +395,27 @@ internal sealed class RepoContextAnnIndexBuildGrain(
                 progress.VectorsIndexed,
                 progress.PartitionsTotal,
                 progress.RestoredFromDurableState);
+        }
+        else if (diagnosticsChanged)
+        {
+            // A record that quietly becomes correct is strictly weaker than one
+            // whose transition is observable: an operator reading a correct value
+            // still cannot tell a plane that healed from one that was never broken.
+            // This names the transition, and only the transition - it is emitted
+            // solely when the counters actually move, so a settled coordinator is
+            // silent however long it runs.
+            Logger.LogInformation(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} has moved since "
+                + "it converged and its durable record has been refreshed: {PreviousVectors} vector(s) across "
+                + "{PreviousPartitions} partition(s) is now {VectorsIndexed} vector(s) across {Partitions} "
+                + "partition(s).",
+                repoId,
+                space.ModelId,
+                space.Dimension,
+                previousVectorsIndexed,
+                previousPartitionsTotal,
+                progress.VectorsIndexed,
+                progress.PartitionsTotal);
         }
 
         // STRICTLY AFTER Ready. Until the replacement index can answer, the space it
