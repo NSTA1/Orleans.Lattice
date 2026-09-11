@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
@@ -49,6 +50,7 @@ internal sealed class RepoContextBundleService
     private readonly Orleans.Serialization.Serializer _serializer;
     private readonly IRepoContextTokenCounter _tokenCounter;
     private readonly IRepoContextUsageRecorder _usage;
+    private readonly RepoContextRetrievalLatencyReporter _latency;
 
     /// <summary>Creates the bundle service.</summary>
     /// <param name="search">The search service used to rank source for the task. Must not be <see langword="null"/>.</param>
@@ -58,6 +60,10 @@ internal sealed class RepoContextBundleService
     /// <param name="serializer">The Orleans serializer used to decode stored records. Must not be <see langword="null"/>.</param>
     /// <param name="tokenCounter">The shared exact-BPE token counter used to measure and budget the bundle. Must not be <see langword="null"/>.</param>
     /// <param name="usage">The recorder that measures the usage figures of each answered call. Must not be <see langword="null"/>.</param>
+    /// <param name="latency">
+    /// The reporter that publishes end-to-end retrieval latency for the <c>context</c>
+    /// tool. Required rather than optional so an unmeasured host is not constructible.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     public RepoContextBundleService(
         RepoContextSearchService search,
@@ -66,7 +72,8 @@ internal sealed class RepoContextBundleService
         IGrainFactory grainFactory,
         Orleans.Serialization.Serializer serializer,
         IRepoContextTokenCounter tokenCounter,
-        IRepoContextUsageRecorder usage)
+        IRepoContextUsageRecorder usage,
+        RepoContextRetrievalLatencyReporter latency)
     {
         ArgumentNullException.ThrowIfNull(search);
         ArgumentNullException.ThrowIfNull(graph);
@@ -75,6 +82,7 @@ internal sealed class RepoContextBundleService
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(tokenCounter);
         ArgumentNullException.ThrowIfNull(usage);
+        ArgumentNullException.ThrowIfNull(latency);
 
         _search = search;
         _graph = graph;
@@ -83,6 +91,7 @@ internal sealed class RepoContextBundleService
         _serializer = serializer;
         _tokenCounter = tokenCounter;
         _usage = usage;
+        _latency = latency;
     }
 
     /// <summary>
@@ -140,6 +149,40 @@ internal sealed class RepoContextBundleService
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(task);
 
+        // Timed from a finally so a cancelled or faulted bundle is still recorded,
+        // under the 'unresolved' path when it terminated before one was settled. This
+        // is the tool's real end-to-end cost: the inner search is told not to record
+        // its own end-to-end row, so a context call is never also counted as a search,
+        // and the packing, rendering, and token-counting this call adds on top of the
+        // search are inside the measurement rather than outside it.
+        var startedAt = Stopwatch.GetTimestamp();
+        string? resolvedPath = null;
+        try
+        {
+            var result = await BuildCoreAsync(
+                repoId, task, top, responseBudgetTokens, detail, seen, known, session, cancellationToken)
+                .ConfigureAwait(false);
+            resolvedPath = result.RetrievalPath;
+            return result;
+        }
+        finally
+        {
+            _latency.RecordCall(
+                RepoContextRetrievalTool.Context, resolvedPath, Stopwatch.GetElapsedTime(startedAt));
+        }
+    }
+
+    private async Task<RepoContextContextResult> BuildCoreAsync(
+        string repoId,
+        string task,
+        int top,
+        int responseBudgetTokens,
+        RepoContextContextDetail detail,
+        IReadOnlyList<string>? seen,
+        IReadOnlyList<string>? known,
+        string? session,
+        CancellationToken cancellationToken)
+    {
         var clampedTop = ClampTop(top);
         var budget = ClampBudget(responseBudgetTokens);
         var floorLevel = detail == RepoContextContextDetail.Auto ? RepoContextContextDetail.Paths : detail;
@@ -150,7 +193,10 @@ internal sealed class RepoContextBundleService
         // When reuse is engaged a fully-reused file must not consume a delivery slot, so
         // fetch a bounded backfill pool to still deliver up to `top` fresh files.
         var poolTop = reuse.Engaged ? MaxTop : clampedTop;
-        var search = await _search.SearchAsync(repoId, task, poolTop, cancellationToken).ConfigureAwait(false);
+        // Null tool: this call is one step of the context bundle, which times itself,
+        // so the search must not also record an end-to-end row of its own. Its per-stage
+        // timings are still published - a stage costs the same whichever tool asked.
+        var search = await _search.SearchAsync(repoId, task, poolTop, endToEndTool: null, cancellationToken).ConfigureAwait(false);
         var pool = ResolveCandidates(search.Hits, poolTop);
 
         if (pool.Count == 0)

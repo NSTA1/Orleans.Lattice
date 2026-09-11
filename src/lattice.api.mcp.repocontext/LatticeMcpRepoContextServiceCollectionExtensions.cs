@@ -191,6 +191,12 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // information-level summary per repository.
         services.TryAddSingleton(
             sp => new RepoContextRetrievalGuardReporter(sp.GetRequiredService<TimeProvider>()));
+
+        // The retrieval latency reporter (issue #2624). Every retrieval tool takes it
+        // as a required dependency rather than an optional one, so a host that answers
+        // queries without measuring them is not constructible - an unmeasured box
+        // cannot masquerade as an idle one.
+        services.TryAddSingleton<RepoContextRetrievalLatencyReporter>();
         services.TryAddSingleton<RepoContextAnnOptions>();
         services.TryAddSingleton<IRepoContextAnnBackingFactory, LatticeRepoContextAnnBackingFactory>();
         services.TryAddSingleton<RepoContextAnnIndexRegistry>();
@@ -265,6 +271,7 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetRequiredService<RepoContextStore>(),
                 sp.GetRequiredService<TimeProvider>(),
                 sp.GetRequiredService<ILogger<RepoContextSearchService>>(),
+                sp.GetRequiredService<RepoContextRetrievalLatencyReporter>(),
                 sp.GetService<IEmbeddingProvider>(),
                 sp.GetRequiredService<RepoContextRetrievalReadinessState>()));
 
