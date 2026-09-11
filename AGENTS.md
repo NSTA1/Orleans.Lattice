@@ -88,12 +88,11 @@ several `Orleans.Lattice.Explorer.*` assemblies.
   cross-solution non-chaos sweep on every PR, so repeating it locally buys only
   wall-clock; widen the local scope only when the blast radius is genuinely
   unpredictable.
-- **Exception, and it is not optional: the repository-wide gates.** Several
-  hygiene and enrolment gates live in `test/lattice/Hygiene/` but scan **all of
-  `src/`** across every package, so a per-package pre-PR scope is structurally
-  blind to them - the package suite passes and the gate your change broke never
-  ran. Any change that adds or removes a **metric instrument**, a **public type
-  name**, or a **serializable exception** in **any** package must also run those
+- **Exception, and it is not optional: the repository-wide gates.** Four metric
+  gates live in `test/lattice/` but scan **all of `src/`** across every package,
+  so a per-package pre-PR scope is structurally blind to them - the package
+  suite passes and the gate your change broke never ran. Any change that adds
+  or removes a **metric instrument** in **any** package must also run those
   fixtures from `test/lattice/`, whichever package it touched. Run them
   individually: OR-ing them into one filter crashes the vstest host and
   misattributes the failure. The fixture list, and the per-instrument cost they
