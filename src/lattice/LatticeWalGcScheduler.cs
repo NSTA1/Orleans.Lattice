@@ -389,10 +389,22 @@ internal sealed class LatticeWalGcScheduler(
             // backlog above the trim floor. Reading it here neither widens nor
             // narrows that predicate.
             var reclaimed = report.EntriesTrimmed > 0;
+
+            // A pass that reclaimed nothing did so for one of two opposite
+            // reasons, and until now both were labelled "idle". Either the tree
+            // was quiet - nothing above the trim floor, which is the healthy
+            // steady state - or the cursor branch was disabled outright by an
+            // unusable durable materialiser pin, in which case the tree cannot
+            // reclaim at all and its WAL is growing without bound (issue #2702).
+            var blocked = !reclaimed
+                && report.CursorFloorState == WalGcCursorFloorState.BlockedByUnusablePin;
+
             LatticeMetrics.WalGcPasses.Add(
                 1,
                 treeTag,
-                reclaimed ? LatticeMetrics.OutcomeReclaimed : LatticeMetrics.OutcomeIdle,
+                reclaimed
+                    ? LatticeMetrics.OutcomeReclaimed
+                    : blocked ? LatticeMetrics.OutcomeBlocked : LatticeMetrics.OutcomeIdle,
                 tenantTag);
 
             // Backlog metering. Byte accounting is a provider capability, so this
@@ -400,7 +412,29 @@ internal sealed class LatticeWalGcScheduler(
             // PublishBacklogBytes for the contract a consumer relies on.
             PublishBacklogBytes(report.RetainedBytesAfter, report.ByteCeiling, treeTag, tenantTag);
 
-            next = reclaimed ? minInterval : Relax(currentInterval, minInterval, interval);
+            // Hold a blocked tree at the floor instead of relaxing it. The same
+            // boolean used to drive both the label and the backoff, so a starved
+            // tree was backed off exactly like a quiet one and drifted toward the
+            // ceiling - fewest passes precisely when it needed the most. The
+            // backoff was therefore self-reinforcing: being unable to reclaim was
+            // itself the evidence used to decide to look less often.
+            //
+            // This matters beyond presentation because a repair is only half the
+            // story. Whatever unblocks the pin, the stranded bytes do not come
+            // back until a GC pass runs and trims them, so this interval is the
+            // time-to-reclaim even when it is not the time-to-unblock. At stock
+            // defaults that is 30s here against up to 1h before, and against the
+            // ~2h ceiling a tuned deployment can reach.
+            //
+            // The floor introduces no new load level: a reclaiming tree already
+            // runs at minInterval indefinitely, so this is a cadence the system
+            // sustains by construction. It is self-limiting - a healed tree stops
+            // being blocked and either reclaims (floor, legitimately) or goes
+            // idle (relaxes as before) - and genuinely quiet trees are untouched.
+            // The residual is deliberate: a tree blocked and unable to heal polls
+            // at the floor indefinitely. That is the alarm state, and its cost is
+            // bounded by the floor while the damage it signals is not.
+            next = reclaimed || blocked ? minInterval : Relax(currentInterval, minInterval, interval);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -493,6 +527,17 @@ internal sealed class LatticeWalGcScheduler(
 
         LatticeMetrics.MaterialiserPinReportsShed.Add(0, treeTag, tenantTag);
         LatticeMetrics.SnapshotPinCount.Add(0, treeTag, tenantTag);
+
+        // The blocked-pass counter is primed for the mirror-image reason. The
+        // others are primed so the series appears before a first event; this one
+        // is primed so it survives a return to zero. A repair that unblocks a
+        // tree makes the counter stop advancing, and an unprimed counter that
+        // never fired on this silo exports nothing at all - so "healthy, never
+        // blocked" and "not reporting" would be identical at exactly the moment
+        // a reader needs to tell them apart, which is when confirming a fix
+        // held. Priming per tree also keeps a single re-stranded tree visible
+        // rather than averaged away across the fleet.
+        LatticeMetrics.WalGcPasses.Add(0, treeTag, LatticeMetrics.OutcomeBlocked, tenantTag);
     }
 
     /// <summary>

@@ -1100,7 +1100,9 @@ public static class LatticeMetrics
     /// Counter of WAL garbage-collection passes the per-silo scheduler drove for a
     /// tree, tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>
     /// (<see cref="OutcomeReclaimed"/> when the pass trimmed at least one entry,
-    /// <see cref="OutcomeIdle"/> when it found nothing above the trim floor, and
+    /// <see cref="OutcomeBlocked"/> when it reclaimed nothing because an unusable
+    /// durable materialiser pin disabled the cursor branch,
+    /// <see cref="OutcomeIdle"/> when it reclaimed nothing and was not blocked, and
     /// <see cref="OutcomeFailed"/> when the pass threw). Pairing the reclaimed rate
     /// against the total pass rate gives the per-tree reclaim rate, and the failed
     /// rate isolates a wedged tree without needing to read the scheduler's logs.
@@ -1219,8 +1221,32 @@ public static class LatticeMetrics
     /// <summary><see cref="TagOutcome"/> = <c>reclaimed</c> (a WAL GC pass that trimmed at least one entry).</summary>
     public static readonly KeyValuePair<string, object?> OutcomeReclaimed = new(TagOutcome, "reclaimed");
 
-    /// <summary><see cref="TagOutcome"/> = <c>idle</c> (a WAL GC pass that found nothing above the trim floor).</summary>
+    /// <summary><see cref="TagOutcome"/> = <c>idle</c> (a WAL GC pass that reclaimed nothing and was <b>not</b> blocked - it had a usable cursor floor, or the tree has no consumer at all, and found nothing above the trim floor). Before <see cref="OutcomeBlocked"/> existed this value also absorbed blocked passes, which is what let a stranded tree and a quiet one present identically (issue #2702).</summary>
     public static readonly KeyValuePair<string, object?> OutcomeIdle = new(TagOutcome, "idle");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>blocked</c> (a WAL GC pass that reclaimed
+    /// nothing because the consumer-cursor branch was disabled by an unusable
+    /// durable materialiser pin - see
+    /// <see cref="WalGcCursorFloorState.BlockedByUnusablePin"/>).
+    /// <para>
+    /// This is a defect state, not a quiet one: the tree cannot reclaim at all
+    /// and its WAL grows without bound. It is separated from
+    /// <see cref="OutcomeIdle"/> because the two demand opposite responses, and
+    /// because the same predicate drives the scheduler's backoff - so before
+    /// this value existed a blocked tree was scheduled <i>least</i> often
+    /// precisely when it needed attention most.
+    /// </para>
+    /// <para>
+    /// The series is primed at zero for every tree the scheduler collects, so
+    /// its absence means "this silo is not reporting" and a flat zero means
+    /// "measured, never blocked". That distinction is load-bearing: a repair
+    /// that unblocks a tree makes the counter stop advancing, and without
+    /// priming the series would instead <i>vanish</i> at exactly the moment a
+    /// reader needs to confirm the tree is healthy rather than silent.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeBlocked = new(TagOutcome, "blocked");
 
     /// <summary><see cref="TagOutcome"/> = <c>failed</c> (a WAL GC pass that threw).</summary>
     public static readonly KeyValuePair<string, object?> OutcomeFailed = new(TagOutcome, "failed");
