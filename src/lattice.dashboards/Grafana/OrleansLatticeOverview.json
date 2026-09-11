@@ -1294,7 +1294,7 @@
     {
       "id": 40,
       "title": "Snapshot pins (current)",
-      "description": "Current number of pinned snapshots (orleans.lattice.snapshot.pins up/down counter). Pins hold a snapshot alive against trimming; a monotonically climbing value can indicate a pin leak.",
+      "description": "Current number of pinned snapshots (orleans.lattice.snapshot.pins observable gauge, derived from the WAL cursor registry). Pins hold a snapshot alive against trimming. The gauge reports only the pins held now, so a value that climbs and does not come back down is a real pin leak rather than accumulated metric drift.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 124 },

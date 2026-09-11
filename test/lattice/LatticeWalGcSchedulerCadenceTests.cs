@@ -66,13 +66,15 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         IGrainFactory factory,
         ILatticeWalGc gc,
         LatticeOptions options,
-        TimeProvider time)
+        TimeProvider time,
+        Orleans.Lattice.BPlusTree.Grains.SnapshotPinCensus? snapshotPins = null)
         => new(
             factory,
             gc,
             Monitor(options),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeWalGcScheduler>>(),
-            time);
+            time,
+            snapshotPins);
 
     private static LatticeWalGcReport Report(
         long entriesTrimmed,
@@ -693,22 +695,27 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         var time = new VirtualTimeProvider();
 
         using var shed = new InstrumentRecorder(LatticeMetrics.MaterialiserPinReportsShed, Tree);
-        using var pins = new InstrumentRecorder(LatticeMetrics.SnapshotPinCount, Tree);
+        var census = new Orleans.Lattice.BPlusTree.Grains.SnapshotPinCensus();
+        using var pins = new GaugeRecorder(LatticeMetrics.SnapshotPinsGaugeName, Tree);
 
-        var scheduler = CreateScheduler(FactoryWithTrees(Tree), gc, Adaptive(), time);
+        var scheduler = CreateScheduler(FactoryWithTrees(Tree), gc, Adaptive(), time, census);
         await StartAndRunFirstPassAsync(scheduler, time);
         await scheduler.StopAsync(CancellationToken.None);
 
-        // A Counter exports no series until its first Add, so a tree that has
-        // never shed a pin report and never held a snapshot pin was silent on
-        // both - indistinguishable from a dead subsystem (issue #2694). Adding
-        // zero creates the series without perturbing the value.
+        // A Counter exports no series until its first Add, and an observable
+        // gauge exports none until its callback yields a measurement for the
+        // tree - so a tree that has never shed a pin report and never held a
+        // snapshot pin was silent on both, indistinguishable from a dead
+        // subsystem (issue #2694). The counter is primed with a zero Add; the
+        // gauge is primed by registering the tree, which makes its callback
+        // emit an explicit zero. Neither perturbs the value.
+        var observed = pins.Scrape();
         Assert.Multiple(() =>
         {
             Assert.That(shed.Measurements, Has.Count.EqualTo(1));
             Assert.That(shed.Measurements[0].Value, Is.Zero);
-            Assert.That(pins.Measurements, Has.Count.EqualTo(1));
-            Assert.That(pins.Measurements[0].Value, Is.Zero);
+            Assert.That(observed, Has.Count.EqualTo(1));
+            Assert.That(observed[0].Value, Is.Zero);
         });
     }
 
@@ -919,6 +926,62 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                     && string.Equals(tag.Value as string, _tree, StringComparison.Ordinal))
                 {
                     lock (_gate) { _measurements.Add(new Captured(value, captured)); }
+                    return;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Captures the observations an <see cref="ObservableGauge{T}"/> emits for a
+    /// single tree, on demand.
+    /// <para>
+    /// An observable instrument records nothing until something scrapes it, so
+    /// unlike <see cref="InstrumentRecorder"/> this one exposes
+    /// <see cref="Scrape"/> rather than accumulating passively. Matching is by
+    /// instrument <i>name</i> on the Lattice meter: the gauge is created inside
+    /// <see cref="SnapshotPinCensus"/> and is not reachable as a static field,
+    /// and a name-based match is also what keeps the listener clear of the
+    /// static-initialiser re-entrancy hazard documented on
+    /// <see cref="Orleans.Lattice.Testing.MeterListening"/>.
+    /// </para>
+    /// </summary>
+    private sealed class GaugeRecorder : IDisposable
+    {
+        private readonly List<Captured> _observations = [];
+        private readonly object _gate = new();
+        private readonly MeterListener _listener;
+        private readonly string _tree;
+
+        public GaugeRecorder(string instrumentName, string tree)
+        {
+            _tree = tree;
+            _listener = Orleans.Lattice.Testing.MeterListening.StartForMeter(
+                LatticeMetrics.Meter,
+                [instrumentName],
+                listener => listener.SetMeasurementEventCallback<long>(
+                    (_, value, tags, _) => Capture(value, tags)));
+        }
+
+        /// <summary>Forces one observation round and returns what this tree reported.</summary>
+        public IReadOnlyList<Captured> Scrape()
+        {
+            lock (_gate) { _observations.Clear(); }
+            _listener.RecordObservableInstruments();
+            lock (_gate) { return _observations.ToArray(); }
+        }
+
+        public void Dispose() => _listener.Dispose();
+
+        private void Capture(long value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
+        {
+            var captured = tags.ToArray();
+            foreach (var tag in captured)
+            {
+                if (string.Equals(tag.Key, LatticeMetrics.TagTree, StringComparison.Ordinal)
+                    && string.Equals(tag.Value as string, _tree, StringComparison.Ordinal))
+                {
+                    lock (_gate) { _observations.Add(new Captured(value, captured)); }
                     return;
                 }
             }

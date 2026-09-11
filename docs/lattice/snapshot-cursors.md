@@ -193,7 +193,7 @@ Over the read-only state API this refusal is mapped to gRPC `ResourceExhausted`;
 |---|---|---|---|
 | `orleans.lattice.snapshot.replay.duration` | Histogram (ms) | `tree`, `shard` | Per-shard wall-clock replay time observed during snapshot-leaf open. |
 | `orleans.lattice.snapshot.replay.entries` | Counter | `tree`, `shard` | WAL entries consumed during snapshot-leaf replay. |
-| `orleans.lattice.snapshot.pins` | UpDownCounter | `tree` | Live WAL retention pins held by snapshot cursors. |
+| `orleans.lattice.snapshot.pins` | ObservableGauge | `tree` | Live WAL retention pins held by snapshot cursors, derived from the WAL cursor registry rather than accumulated. |
 
 ## Examples
 

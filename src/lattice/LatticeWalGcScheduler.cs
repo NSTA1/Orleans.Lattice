@@ -81,7 +81,8 @@ internal sealed class LatticeWalGcScheduler(
     ILatticeWalGc gc,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILogger<LatticeWalGcScheduler> logger,
-    TimeProvider? timeProvider = null) : BackgroundService
+    TimeProvider? timeProvider = null,
+    BPlusTree.Grains.SnapshotPinCensus? snapshotPins = null) : BackgroundService
 {
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
@@ -379,6 +380,35 @@ internal sealed class LatticeWalGcScheduler(
         // question is asked about. Adding zero cannot perturb either value.
         PrimeRetentionSeries(treeId, treeTag, tenantTag);
 
+        // Re-derive the tree's live snapshot-pin set from the cursor registry.
+        // The gauge's membership is asserted at the two sites that mutate a
+        // registry entry, but an assertion can be lost - an activation torn
+        // between the unregister and the mark, a registry shared across silos,
+        // a future consumer that releases a snapshot pin without going through
+        // the cursor grain. Re-deriving here makes the series self-healing: the
+        // registry is the authority on which pins actually hold the trim floor
+        // down, and this is the pass that evaluates that floor. Best-effort, and
+        // deliberately outside the try below: a metering read must not be able
+        // to mark a GC pass failed.
+        if (snapshotPins is not null)
+        {
+            try
+            {
+                await snapshotPins.ReconcileAsync(treeId, stoppingToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return currentInterval;
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(
+                    ex,
+                    "Snapshot pin census reconcile failed for tree {Tree}; the gauge keeps its last derived value.",
+                    treeId);
+            }
+        }
+
         TimeSpan next;
         try
         {
@@ -526,7 +556,12 @@ internal sealed class LatticeWalGcScheduler(
         }
 
         LatticeMetrics.MaterialiserPinReportsShed.Add(0, treeTag, tenantTag);
-        LatticeMetrics.SnapshotPinCount.Add(0, treeTag, tenantTag);
+
+        // The snapshot-pin series is an observable gauge derived from the
+        // cursor registry (issue #2700), so it is primed by registering the
+        // tree rather than by adding zero: the callback then emits an explicit
+        // 0 for a tree holding no pin, instead of no series at all.
+        snapshotPins?.Track(treeId);
 
         // The blocked-pass counter is primed for the mirror-image reason. The
         // others are primed so the series appears before a first event; this one
@@ -605,6 +640,7 @@ internal sealed class LatticeWalGcScheduler(
             {
                 _cadence.Remove(entry.Key);
                 _primedTrees.Remove(entry.Key);
+                snapshotPins?.Forget(entry.Key);
             }
         }
     }

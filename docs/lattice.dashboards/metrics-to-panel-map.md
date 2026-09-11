@@ -139,7 +139,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.materialiser.pin.reports_shed` | counter | `tree` | CommitPath | Steady-state pin reports dropped to protect a pin store that is not keeping up (issue #2014) |
 | `orleans.lattice.snapshot.replay.entries` | counter | `tree` | Overview | Snapshot replay throughput |
 | `orleans.lattice.snapshot.replay.duration` | histogram (ms) | `tree` | Overview | Snapshot replay duration p50/p95/p99 |
-| `orleans.lattice.snapshot.pins` | up/down counter | `tree` | Overview | Snapshot pins (current) |
+| `orleans.lattice.snapshot.pins` | observable gauge | `tree` | Overview | Snapshot pins (current) |
 | `orleans.lattice.split.retroactive_forward.entries` | counter | `tree` | Overview | Retroactive split-forward throughput |
 | `orleans.lattice.split.retroactive_forward.duration` | histogram (ms) | `tree` | Overview | Retroactive split-forward duration p50/p95/p99 |
 | `orleans.lattice.split.in_flight` | histogram (`{split}`) | `tree` | Overview | Autonomic split admission (cluster gate) |
