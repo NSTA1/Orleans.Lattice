@@ -97,11 +97,14 @@ internal sealed partial class RepoContextStore
     /// Fetches the live record at <paramref name="key"/> and projects it, optionally
     /// evaluating the link staleness of a memory entry. When
     /// <paramref name="evaluateStaleness"/> is <see langword="true"/> and the key
-    /// addresses a memory record, each captured structural link digest is compared
-    /// against the target's current digest and the result is surfaced through
+    /// addresses a memory record, every live structural link is checked against its
+    /// target's present state - a target that has drifted, that has no live record
+    /// at all, or for which no digest was ever captured is reported through
     /// <see cref="RepoContextEntryView.Stale"/> and
-    /// <see cref="RepoContextEntryView.StaleLinks"/>; otherwise those fields stay
-    /// <see langword="null"/> ("not evaluated"), the bulk-read convention.
+    /// <see cref="RepoContextEntryView.StaleLinks"/>, with the subset that points at
+    /// nothing also named in <see cref="RepoContextEntryView.DanglingLinks"/>;
+    /// otherwise those fields stay <see langword="null"/> ("not evaluated"), the
+    /// bulk-read convention.
     /// </summary>
     /// <param name="key">The full repository-context key. Must be a well-formed key.</param>
     /// <param name="evaluateStaleness">Whether to evaluate memory link staleness on this read.</param>
@@ -131,58 +134,92 @@ internal sealed partial class RepoContextStore
     }
 
     /// <summary>
-    /// Compares each captured structural link digest of <paramref name="record"/>
-    /// against its target's current digest and returns <paramref name="view"/> with
-    /// <see cref="RepoContextEntryView.Stale"/> and
-    /// <see cref="RepoContextEntryView.StaleLinks"/> populated. Only targets that are
-    /// both currently linked and carry a captured digest are evaluated, so an
-    /// unlinked-but-still-recorded digest never produces a phantom flag.
+    /// Evaluates each live structural link of <paramref name="record"/> against its
+    /// target's present state and returns <paramref name="view"/> with
+    /// <see cref="RepoContextEntryView.Stale"/>,
+    /// <see cref="RepoContextEntryView.StaleLinks"/>, and
+    /// <see cref="RepoContextEntryView.DanglingLinks"/> populated.
+    /// <para>
+    /// The walk is driven by the <em>live link set</em>, not by the captured-digest
+    /// map, so an unlinked-but-still-recorded digest can never produce a phantom
+    /// flag and - the point of issue #2654 - a link whose target was absent when
+    /// the edge was written cannot escape evaluation merely because nothing was
+    /// captured for it. Only file and symbol targets are evaluated, the same set
+    /// <see cref="CaptureLinkDigestsAsync"/> captures for; a package or
+    /// memory-to-memory edge carries no digest by design and is outside the
+    /// measurand.
+    /// </para>
+    /// <para>
+    /// A live structural link is fresh only when a digest was captured for it,
+    /// the target still has a live record, and the two digests are ordinal-equal.
+    /// Every other outcome is reported, so the answer follows the target's present
+    /// state rather than unobservable link-time history: a target that never
+    /// reached the corpus and one deleted after the edge was written now give the
+    /// same answer, where previously only the second was flagged.
+    /// </para>
     /// </summary>
     private async Task<RepoContextEntryView> EvaluateStalenessAsync(
         RepoContextEntryView view, MemoryRecord record, CancellationToken cancellationToken)
     {
-        HashSet<string>? linked = null;
+        List<string>? stale = null;
+        List<string>? dangling = null;
+        HashSet<string>? seen = null;
+
         foreach (var (_, targets) in view.Links)
         {
             foreach (var target in targets)
             {
-                (linked ??= new HashSet<string>(StringComparer.Ordinal)).Add(target);
-            }
-        }
+                if (!(seen ??= new HashSet<string>(StringComparer.Ordinal)).Add(target))
+                {
+                    continue;
+                }
 
-        List<string>? stale = null;
-        foreach (var target in record.LinkDigests.Keys())
-        {
-            if (linked is null || !linked.Contains(target))
-            {
-                continue;
-            }
+                if (!RepoContextKeys.TryParse(target, out var parsedTarget)
+                    || parsedTarget.Kind is not (RepoContextRecordKind.File or RepoContextRecordKind.Symbol))
+                {
+                    continue;
+                }
 
-            var register = record.LinkDigests.Get(target);
-            var captured = register is null ? null : RepoContextValues.ReadString(register);
-            if (captured is null)
-            {
-                continue;
-            }
+                var register = record.LinkDigests.Get(target);
+                var captured = register is null ? null : RepoContextValues.ReadString(register);
 
-            var targetView = await RecallAsync(target, cancellationToken).ConfigureAwait(false);
-            string? current = null;
-            if (targetView.Exists)
-            {
-                targetView.Fields.TryGetValue("digest", out current);
-            }
+                var targetView = await RecallAsync(target, cancellationToken).ConfigureAwait(false);
+                if (!targetView.Exists)
+                {
+                    // The link points at nothing: either the target was deleted, or
+                    // it never reached the indexed corpus at all. Both are reported,
+                    // and the dangling list names them so a caller can tell "re-read
+                    // the file" from "wait for the target to be indexed".
+                    (dangling ??= new List<string>()).Add(target);
+                    (stale ??= new List<string>()).Add(target);
+                    continue;
+                }
 
-            if (!string.Equals(captured, current, StringComparison.Ordinal))
-            {
-                (stale ??= new List<string>()).Add(target);
+                if (captured is null)
+                {
+                    // The target has a live record but no digest was ever captured
+                    // for this edge, so drift is not measurable here. Reporting that
+                    // as fresh would render an absence of evidence as a positive
+                    // finding; the edge becomes evaluable again when it is rewritten.
+                    (stale ??= new List<string>()).Add(target);
+                    continue;
+                }
+
+                targetView.Fields.TryGetValue("digest", out var current);
+                if (!string.Equals(captured, current, StringComparison.Ordinal))
+                {
+                    (stale ??= new List<string>()).Add(target);
+                }
             }
         }
 
         stale?.Sort(StringComparer.Ordinal);
+        dangling?.Sort(StringComparer.Ordinal);
         return view with
         {
             Stale = stale is { Count: > 0 },
             StaleLinks = stale,
+            DanglingLinks = dangling,
         };
     }
 

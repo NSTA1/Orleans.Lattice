@@ -398,7 +398,8 @@ mid-task.
 - **Expiry and link staleness are not evaluated by a bulk read.** A `scan` (and a
   degraded `keyword`-mode `search`) enumerates key+value only, so its expiry
   fields (`expires`, `hasExpired`, `expiresAtUtc`, `remainingSeconds`) and its
-  memory link-staleness fields (`stale`, `staleLinks`) come back `null`
+  memory link-staleness fields (`stale`, `staleLinks`, `danglingLinks`) come
+  back `null`
   ("not evaluated") - this is by design, not a durable claim. A scan still yields
   only live (non-expired, non-tombstoned) entries. To read an entry's authoritative
   TTL or link staleness, `recall` it (or, for TTL, use a `semantic` `search`,
@@ -414,12 +415,22 @@ mid-task.
   and remaining TTL - not live file content; per guardrail 1, `view` the file for
   the current body.
 - **`recall` evaluates memory link staleness.** For a memory entry, `recall`
-  compares each structural link (to a file or symbol) against the target's
-  current content digest, captured when the link was made, and reports drift
-  through `stale` (any linked target changed or was deleted) and `staleLinks`
-  (the specific target keys). A `stale` link is a cue to re-read the target and
-  refresh or retire the note. `neighbors` evaluates the same per walked entry.
-  Bulk reads do not (see below), so `stale`/`staleLinks` come back `null` there.
+  walks the live link set and checks every structural target (a file or symbol)
+  against its present state. A link is fresh only when a digest was captured for
+  it, the target still has a live record, and the two digests match. Every other
+  outcome is reported through `stale` and `staleLinks` (the specific target
+  keys): the target **drifted**, the target has **no live record** (deleted, or
+  never present in the corpus at all), or **no digest was ever captured** so
+  drift was never measurable. The subset whose target has no live record is also
+  named in `danglingLinks` - always a subset of `staleLinks`, never a partition
+  of it, so reading only `staleLinks` still gives full coverage. Mind the
+  difference, because the remedies are opposite: a drifted link is a cue to
+  re-read the target now, whereas a dangling one - typically a note written about
+  code that has not yet reached the indexed branch - is a cue to wait and
+  re-check once the target is indexed, not to go looking for a file that was
+  never there. `neighbors` evaluates the same per walked entry. Bulk reads do
+  not (see below), so `stale`/`staleLinks`/`danglingLinks` come back `null`
+  there.
 - A missing or expired key returns `exists: false`, so you can tell an absent
   entry from an empty one.
 
@@ -439,8 +450,9 @@ mid-task.
   target has no live value is still returned as a neighbor with its own
   `exists: false`, so you can see broken links.
 - Each walked neighbor that is a memory entry is returned with its link staleness
-  evaluated (`stale` / `staleLinks`), exactly as `recall` does, so a graph walk
-  surfaces which linked concepts point at drifted code.
+  evaluated (`stale` / `staleLinks` / `danglingLinks`), exactly as `recall`
+  does, so a graph walk surfaces which linked concepts point at drifted code and
+  which point at nothing.
 
 ### Graph navigation - outline / related / changed
 
