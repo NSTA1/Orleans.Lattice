@@ -104,6 +104,27 @@ VOLUME ["/data"]
 ENV LATTICE_MCP_PORT=8080
 EXPOSE 8080
 
+# The commit this image was built from, stamped INTO THE IMAGE so that what was
+# built is readable from the artefact rather than inferred from a checkout.
+#
+# This exists because the inference is wrong and was believed anyway. A build
+# worktree's HEAD tells you what would be built NOW; only the image tells you
+# what WAS built. During bucket-4 gate run 4 a deployment gate read a worktree
+# HEAD, concluded the running container carried a two-commit delta, and measured
+# for eleven hours against an image built 45 commits earlier (issue #2686).
+#
+# Supplied by the compose `build.args` stanza from a GIT_COMMIT environment
+# variable, so an operator building by hand passes it the same way:
+#
+#     docker build --build-arg GIT_COMMIT=$(git rev-parse HEAD) ...
+#
+# An unset arg leaves the label EMPTY rather than absent, which
+# Assert-ContainerProvenance.ps1 treats as unresolved and refuses on, falling
+# back to a `candidate-<sha>` image tag first. Fail-closed is deliberate: a
+# provenance instrument that cannot answer must not report success.
+ARG GIT_COMMIT=""
+LABEL org.opencontainers.image.revision="$GIT_COMMIT"
+
 # The chiseled ASP.NET image already runs as a non-root user (the base image's
 # $APP_UID). No shell, no package manager, no setuid binaries.
 #

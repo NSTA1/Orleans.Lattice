@@ -29,7 +29,7 @@ public sealed class RepoContextContainerProvenanceScriptTests
     /// and removals do not touch it, while a suite that had been emptied - or reduced to a
     /// token assertion to make a red leg green - still fails.
     /// </summary>
-    private const int MinimumAssertions = 40;
+    private const int MinimumAssertions = 100;
 
     private static string RepoRoot => Path.GetFullPath(
         Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", "..", ".."));

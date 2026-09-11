@@ -103,6 +103,26 @@ $mainCheckout = 'C:\dev\lattice\samples\RepoContextContainer'
 $candidateCommit = '9fcaaa998e1d4b7a2c5f0839ab61de7740c2b1a5'
 $mainCommit = '3ab77c10f4e2d9856bb0143fcae62d99017b4e8a'
 
+# --- the bucket-4 gate run 4 readings, verbatim (issue #2686) --------------
+# These four values are the incident. The gate named ff1d18a39 as deployed and
+# measured for eleven hours; the image under it had in fact been built from
+# 1b061d38a, 45 commits and 36 authored changes earlier. The two timestamps are
+# what settles it WITHOUT any build-time cooperation at all: the image was
+# created 10h47m BEFORE the commit it was said to contain was even written, and
+# an image cannot contain a commit that did not exist when it was built.
+#
+# They are pinned here as literals rather than as round numbers so this suite
+# demonstrates the check against the failure itself, not against a sketch of it.
+$incidentExpectedCommit = 'ff1d18a39c3f4e5a6b7c8d9e0f1a2b3c4d5e6f70'
+$incidentBuiltCommit = '1b061d38a2c3d4e5f60718293a4b5c6d7e8f9012'
+$incidentImageCreated = '2026-09-10T21:02:55Z'
+$incidentExpectedCommitDate = '2026-09-11T07:49:35Z'
+
+# The ordinary, correct arrangement: the image was created after the commit it
+# names. Used by every fixture that is supposed to be accepted.
+$candidateCommitDate = '2026-09-11T08:00:00Z'
+$imageCreatedAfterCandidate = '2026-09-11T09:14:02.123456789Z'
+
 # The archive readings, in both directions. The refusing pair is the mount
 # source `docker inspect` ACTUALLY returned in issue #2627 - note the Docker
 # Desktop VM path form, which is what the same container reported for this bind
@@ -149,6 +169,14 @@ function New-AgreeingReadings {
 		ArchiveGitReadingExaminable = $true
 		ArchiveGitToplevel        = ''
 		ArchiveIsLinkedWorktree   = $false
+		# Check 6's readings. The image names the candidate commit through the
+		# label its own build stamped, and was created AFTER that commit was
+		# authored - the only arrangement in which an image can actually contain
+		# the revision it claims.
+		ImageRevisionLabel        = $candidateCommit
+		ImageTags                 = @('orleans-lattice/repocontext:local', "repocontext-mcp:candidate-$($candidateCommit.Substring(0, 9))")
+		ImageCreated              = $imageCreatedAfterCandidate
+		ExpectedCommitDate        = $candidateCommitDate
 	}
 }
 
@@ -178,7 +206,7 @@ _Assert -Name 'an empty path is never equal to anything, including another empty
 	-Condition (-not (Test-ProvenancePathsEqual -Left '' -Right '' -CaseSensitive $false))
 
 # ---------------------------------------------------------------------------
-_Section 'Check 1 of 5: compose provenance'
+_Section 'Check 1 of 6: compose provenance'
 # ---------------------------------------------------------------------------
 
 $accepted = Get-ComposeProvenanceViolation `
@@ -284,7 +312,7 @@ _Assert -Name 'ACCEPTS one file when running without an override was DECLARED' `
 	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
 
 # ---------------------------------------------------------------------------
-_Section 'Check 2 of 5: git provenance'
+_Section 'Check 2 of 6: git provenance'
 # ---------------------------------------------------------------------------
 
 _Assert -Name 'ACCEPTS a checkout sitting on the expected commit' `
@@ -311,7 +339,7 @@ _Assert -Name 'REFUSES a commit prefix shorter than seven characters' `
 	-Condition ((Get-GitProvenanceViolation -ResolvedCommit $candidateCommit -ExpectedCommit '9fcaa').Count -eq 1)
 
 # ---------------------------------------------------------------------------
-_Section 'Check 3 of 5: image provenance'
+_Section 'Check 3 of 6: image provenance'
 # ---------------------------------------------------------------------------
 
 _Assert -Name 'ACCEPTS a container running the image its reference resolves to' `
@@ -330,7 +358,7 @@ _Assert -Name 'REFUSES a container reporting no image id' `
 	-Condition ((Get-ImageProvenanceViolation -RunningImageId '' -ExpectedImageId 'sha256:bbbb' -ImageReference 'repocontext:local').Count -eq 1)
 
 # ---------------------------------------------------------------------------
-_Section 'Check 4 of 5: environment provenance'
+_Section 'Check 4 of 6: environment provenance'
 # ---------------------------------------------------------------------------
 
 _Assert -Name 'ACCEPTS a setting present in the container with the expected value' `
@@ -416,7 +444,7 @@ _Assert -Name 'ConvertFrom-ProvenanceDuration handles compound units' `
 	-Condition (5400 -eq (ConvertFrom-ProvenanceDuration -Value '1h30m'))
 
 # ---------------------------------------------------------------------------
-_Section 'Check 5 of 5: archive durability'
+_Section 'Check 5 of 6: archive durability'
 # ---------------------------------------------------------------------------
 
 # --- the git reading must distinguish "no" from "no answer" -----------------
@@ -569,6 +597,333 @@ _Assert -Name 'and treats an OMITTED examinability reading as unexaminable, not 
 			-ArchiveDestination '/memory-archive' -ArchiveSource $durableArchiveSource `
 			-ArchiveMountType 'bind' -GitToplevel '' -IsLinkedWorktree $false `
 			-SourceExistsOnHost $true).Count -eq 1)
+
+# ---------------------------------------------------------------------------
+_Section 'Check 6 of 6: build provenance (the image was built from the expected commit)'
+# ---------------------------------------------------------------------------
+
+# --- arm 2: chronology. Tested FIRST because it is the arm that needed no
+# build-time cooperation, works retroactively on every image already on a host,
+# and would have caught the incident on its own.
+
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $incidentExpectedCommit `
+	-ImageRevisionLabel '' `
+	-ImageTags @("repocontext-mcp:candidate-$($incidentBuiltCommit.Substring(0, 9))") `
+	-ImageCreated $incidentImageCreated `
+	-ExpectedCommitDate $incidentExpectedCommitDate `
+	-RunningImageId 'sha256:incident'
+_Assert -Name 'REFUSES the bucket-4 gate run 4 readings, verbatim' -Condition ($refused.Count -ge 1) `
+	-Detail ($refused -join '; ')
+
+# Both arms dissent on the incident, and both must be reported: chronology says
+# the image PREDATES the commit, identity says it names a different one. An
+# operator shown only one would fix only one.
+_Assert -Name 'and reports BOTH the chronology and the identity disagreement' `
+	-Condition ($refused.Count -eq 2) -Detail ($refused -join '; ')
+
+_Assert -Name 'and the chronology violation names the real 10h46m40s delta' `
+	-Condition (@($refused | Where-Object { $_.Contains('10h46m40s LATER') }).Count -eq 1) `
+	-Detail ($refused -join '; ')
+
+_Assert -Name 'and the identity violation names BOTH the built and the expected commit' `
+	-Condition (@($refused | Where-Object { $_.Contains('WAS BUILT FROM') -and $_.Contains($incidentBuiltCommit.Substring(0, 9)) -and $_.Contains($incidentExpectedCommit) }).Count -eq 1) `
+	-Detail ($refused -join '; ')
+
+# The chronology arm ALONE, with the identity arm silenced by a label that
+# agrees. This is the fixture that proves the arm is load-bearing rather than a
+# duplicate of the identity check: a label can agree and still be lying, and the
+# arithmetic of time cannot.
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $incidentExpectedCommit `
+	-ImageRevisionLabel $incidentExpectedCommit `
+	-ImageTags @() `
+	-ImageCreated $incidentImageCreated `
+	-ExpectedCommitDate $incidentExpectedCommitDate `
+	-RunningImageId 'sha256:incident'
+_Assert -Name 'REFUSES an image whose label AGREES but whose creation PREDATES the commit' `
+	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('cannot contain a commit that did not exist')) `
+	-Detail ($refused -join '; ')
+
+# The paired positive. An image created AFTER its commit is the ordinary case
+# and must pass, or the arm refuses every correct deployment and gets removed.
+$accepted = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel $candidateCommit -ImageTags @() `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate `
+	-RunningImageId 'sha256:aaaa'
+_Assert -Name 'ACCEPTS an image created AFTER the commit it names' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+# Clock skew is the false-accusation direction, and a check that accuses correct
+# deployments gets switched off, taking the checks that were working with it.
+$accepted = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel $candidateCommit -ImageTags @() `
+	-ImageCreated '2026-09-11T09:00:00Z' -ExpectedCommitDate '2026-09-11T09:00:30Z' `
+	-RunningImageId 'sha256:aaaa'
+_Assert -Name 'ACCEPTS 30 seconds of clock skew between the docker daemon and the committer' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel $candidateCommit -ImageTags @() `
+	-ImageCreated '2026-09-11T09:00:00Z' -ExpectedCommitDate '2026-09-11T09:00:30Z' `
+	-RunningImageId 'sha256:aaaa' -ClockSkewToleranceSeconds 5
+_Assert -Name 'and REFUSES that same skew when the tolerance is tightened, so the tolerance is real' `
+	-Condition ($refused.Count -eq 1) -Detail ($refused -join '; ')
+
+# Different zones, same instant. The two timestamps come from different
+# producers in different formats, and a comparison of local wall-clock times
+# would invent a discrepancy of exactly the offset.
+$accepted = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel $candidateCommit -ImageTags @() `
+	-ImageCreated '2026-09-11T09:00:00Z' -ExpectedCommitDate '2026-09-11T09:30:00+01:00' `
+	-RunningImageId 'sha256:aaaa'
+_Assert -Name 'ACCEPTS a git +01:00 commit date that is EARLIER than a Z image date in real time' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+# An unreadable or absent timestamp silences the chronology arm but must NOT
+# silence the identity arm, or an image with no .Created would pass unexamined.
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel $mainCommit -ImageTags @() `
+	-ImageCreated '' -ExpectedCommitDate '' -RunningImageId 'sha256:aaaa'
+_Assert -Name 'still REFUSES on identity when neither timestamp could be read' `
+	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('WAS BUILT FROM')) `
+	-Detail ($refused -join '; ')
+
+# --- admissibility: the chronology arm is only meaningful between RELATED
+# clocks. A pulled image's .Created came from a builder this host has never
+# seen, and no tolerance over an unrelated clock means anything, so the arm is
+# declared inadmissible rather than applying a number it cannot justify.
+$accepted = Get-BuildProvenanceViolation `
+	-ExpectedCommit $incidentExpectedCommit -ImageRevisionLabel $incidentExpectedCommit -ImageTags @() `
+	-ImageCreated $incidentImageCreated -ExpectedCommitDate $incidentExpectedCommitDate `
+	-RunningImageId 'sha256:pulled' -ImageIsLocallyBuilt $false
+_Assert -Name 'does NOT apply the chronology arm to a PULLED image (unrelated builder clock)' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+# Silencing chronology never weakens the guarantee, because the guarantee is
+# identity's, and identity still fails closed on a pulled image.
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $incidentExpectedCommit -ImageRevisionLabel '' -ImageTags @() `
+	-ImageCreated $incidentImageCreated -ExpectedCommitDate $incidentExpectedCommitDate `
+	-RunningImageId 'sha256:pulled' -ImageIsLocallyBuilt $false
+_Assert -Name 'but STILL refuses a pulled image whose built commit cannot be established' `
+	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('CANNOT BE ESTABLISHED')) `
+	-Detail ($refused -join '; ')
+
+# The default direction, asserted explicitly. A caller that omits the reading
+# gets the arm ACTIVE; an arm that could be switched off by omission is the
+# exact defect shape this script exists to refuse, and leaving that resting on
+# an unstated PowerShell default would make it an accident rather than a choice.
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $incidentExpectedCommit -ImageRevisionLabel $incidentExpectedCommit -ImageTags @() `
+	-ImageCreated $incidentImageCreated -ExpectedCommitDate $incidentExpectedCommitDate `
+	-RunningImageId 'sha256:incident'
+_Assert -Name 'the chronology arm is ACTIVE when the locally-built reading is OMITTED' `
+	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('cannot contain a commit')) `
+	-Detail ($refused -join '; ')
+
+$report = Get-ContainerProvenanceReport -Readings (New-AgreeingReadings) `
+	-ExpectedCheckout $candidateCheckout -ExpectedSettings $expectedSettings -CaseSensitive $false
+_Assert -Name 'and the COMPOSITE also leaves it active when the reading is omitted' `
+	-Condition ($report.IsSatisfied) -Detail ($report.Violations -join '; ')
+
+# --- arm 1: identity, and the fail-closed rule.
+$accepted = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel $candidateCommit -ImageTags @() `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'ACCEPTS a label PRESENT and MATCHING' -Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+$accepted = Get-BuildProvenanceViolation `
+	-ExpectedCommit '9fcaaa9' -ImageRevisionLabel $candidateCommit -ImageTags @() `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'ACCEPTS a short expected commit that prefixes the label' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel $mainCommit -ImageTags @() `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'REFUSES a label PRESENT and MISMATCHED' -Condition ($refused.Count -eq 1) -Detail ($refused -join '; ')
+_Assert -Name 'and names both the built commit and the expected one' `
+	-Condition ($refused.Count -ge 1 -and $refused[0].Contains($mainCommit) -and $refused[0].Contains($candidateCommit)) `
+	-Detail ($refused -join '; ')
+
+# A prefix short enough to match commits it did not mean is refused rather than
+# quietly accepted, exactly as in check 2. A loose match here would report as a
+# verified build.
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel '9fcaa' -ImageTags @() `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'REFUSES a label too short to identify a commit' `
+	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('too short')) -Detail ($refused -join '; ')
+
+# The fallback: an image built before the label existed is still checkable
+# through the tag the gate assigns it.
+$accepted = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel '' `
+	-ImageTags @('orleans-lattice/repocontext:local', "repocontext-mcp:candidate-$($candidateCommit.Substring(0, 9))") `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'ACCEPTS a label ABSENT with a MATCHING candidate tag' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel '' `
+	-ImageTags @("repocontext-mcp:candidate-$($mainCommit.Substring(0, 9))") `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'REFUSES a label ABSENT with a MISMATCHED candidate tag' `
+	-Condition ($refused.Count -eq 1) -Detail ($refused -join '; ')
+
+# The fallback is REPORTED as a fallback rather than silently substituted. A tag
+# is a name a human assigns; a label is written by the build. An operator not
+# told which one answered cannot weigh the answer.
+_Assert -Name 'and says the answer came from a tag FALLBACK, not from a label' `
+	-Condition ($refused.Count -ge 1 -and $refused[0].Contains('FALLBACK')) -Detail ($refused -join '; ')
+
+# THE FAIL-CLOSED CASE. This is the rule the whole check turns on: a provenance
+# instrument that cannot answer must not return success, because its silence is
+# read as assurance. Every earlier check was green throughout the incident.
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel '' -ImageTags @('orleans-lattice/repocontext:local') `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'REFUSES a label ABSENT with NO candidate tag, rather than warning' `
+	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('CANNOT BE ESTABLISHED')) `
+	-Detail ($refused -join '; ')
+_Assert -Name 'and tells the operator how to make it answerable' `
+	-Condition ($refused.Count -ge 1 -and $refused[0].Contains('GIT_COMMIT')) -Detail ($refused -join '; ')
+
+# An empty label is what an unset --build-arg produces: PRESENT but saying
+# nothing. It must be treated as no answer, not as a mismatch against every
+# possible commit, or the remedy the operator reaches for is the wrong one.
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel '   ' -ImageTags @() `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'treats an EMPTY label (an unset build arg) as no answer, and refuses' `
+	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('CANNOT BE ESTABLISHED')) `
+	-Detail ($refused -join '; ')
+
+# Ambiguity is an outcome, not something to resolve by picking one.
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel '' `
+	-ImageTags @("repocontext-mcp:candidate-$($candidateCommit.Substring(0, 9))", "repocontext-mcp:candidate-$($mainCommit.Substring(0, 9))") `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'REFUSES an image whose candidate tags name two DIFFERENT commits' `
+	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('DIFFERENT commits')) -Detail ($refused -join '; ')
+
+# Two tags naming the SAME commit are one answer, not an ambiguity.
+$accepted = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel '' `
+	-ImageTags @("repocontext-mcp:candidate-$($candidateCommit.Substring(0, 9))", "other/repo:candidate-$($candidateCommit.Substring(0, 9))") `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'ACCEPTS two candidate tags naming the SAME commit' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+# A candidate tag that is not a commit must be ignored rather than adopted. If
+# it were adopted, the comparison would fail and report as a provenance
+# disagreement, sending the operator to look for a build that never existed.
+$refused = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel '' -ImageTags @('repocontext-mcp:candidate-latest') `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'IGNORES a non-hex candidate tag rather than adopting it as a revision' `
+	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('CANNOT BE ESTABLISHED')) `
+	-Detail ($refused -join '; ')
+
+# The label WINS over a disagreeing tag: it is written by the build, the tag by
+# a human. Asserted because the opposite precedence would let a mis-tagged image
+# overrule its own build record.
+$accepted = Get-BuildProvenanceViolation `
+	-ExpectedCommit $candidateCommit -ImageRevisionLabel $candidateCommit `
+	-ImageTags @("repocontext-mcp:candidate-$($mainCommit.Substring(0, 9))") `
+	-ImageCreated $imageCreatedAfterCandidate -ExpectedCommitDate $candidateCommitDate -RunningImageId 'sha256:aaaa'
+_Assert -Name 'prefers the LABEL over a disagreeing candidate tag' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+# No expected commit means nothing to adjudicate against. Check 2 already
+# refuses that, and duplicating the refusal here would report one absence twice.
+$accepted = Get-BuildProvenanceViolation -ExpectedCommit '' -ImageRevisionLabel '' -ImageTags @() `
+	-ImageCreated '' -ExpectedCommitDate '' -RunningImageId 'sha256:aaaa'
+_Assert -Name 'adds no violation when no expected commit was supplied (check 2 owns that)' `
+	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
+
+# --- the resolution itself, since the report prints it to the operator.
+
+$resolution = Get-ImageBuildCommitResolution -RevisionLabel $candidateCommit -ImageTags @()
+_Assert -Name "resolution reports source 'label' when the label answered" `
+	-Condition ($resolution.Source -eq 'label' -and $resolution.Commit -eq $candidateCommit)
+
+$resolution = Get-ImageBuildCommitResolution -RevisionLabel '' -ImageTags @("repocontext-mcp:candidate-$($candidateCommit.Substring(0, 9))")
+_Assert -Name "resolution reports source 'tag' when only a tag answered" `
+	-Condition ($resolution.Source -eq 'tag' -and $resolution.Commit -eq $candidateCommit.Substring(0, 9))
+
+$resolution = Get-ImageBuildCommitResolution -RevisionLabel '' -ImageTags @('orleans-lattice/repocontext:local')
+_Assert -Name "resolution reports source 'none' when nothing answered" `
+	-Condition ($resolution.Source -eq 'none' -and $resolution.Commit -eq '')
+
+# A registry port puts a colon in the NAME as well as before the tag, and taking
+# the first colon would read the port as the tag.
+$resolution = Get-ImageBuildCommitResolution -RevisionLabel '' -ImageTags @("registry.local:5000/repocontext-mcp:candidate-$($candidateCommit.Substring(0, 9))")
+_Assert -Name 'resolution reads a tag correctly through a registry:port prefix' `
+	-Condition ($resolution.Source -eq 'tag' -and $resolution.Commit -eq $candidateCommit.Substring(0, 9))
+
+# --- the shared commit matcher, whose tri-state both checks depend on.
+
+_Assert -Name 'commit matcher returns TRUE for a prefix' `
+	-Condition ((Test-ProvenanceCommitsMatch -Left $candidateCommit -Right '9fcaaa9') -eq $true)
+_Assert -Name 'commit matcher returns FALSE for two different commits' `
+	-Condition ((Test-ProvenanceCommitsMatch -Left $candidateCommit -Right $mainCommit) -eq $false)
+# The tri-state is the point: folding "cannot tell" into TRUE certifies an
+# unverified revision, and folding it into FALSE accuses a correct one.
+_Assert -Name 'commit matcher returns NULL - not false - when a side is too short' `
+	-Condition ($null -eq (Test-ProvenanceCommitsMatch -Left $candidateCommit -Right '9fcaa'))
+_Assert -Name 'commit matcher returns NULL when a side is empty' `
+	-Condition ($null -eq (Test-ProvenanceCommitsMatch -Left $candidateCommit -Right ''))
+
+# --- timestamp parsing, over the two real producer formats.
+
+_Assert -Name 'parses a docker nanosecond .Created stamp' `
+	-Condition ($null -ne (ConvertFrom-ProvenanceTimestamp -Value '2026-09-10T21:02:55.123456789Z'))
+_Assert -Name "parses a git %cI stamp with a numeric offset" `
+	-Condition ($null -ne (ConvertFrom-ProvenanceTimestamp -Value '2026-09-11T07:49:35+01:00'))
+_Assert -Name 'normalises both to UTC, so an offset is not read as a discrepancy' `
+	-Condition ((ConvertFrom-ProvenanceTimestamp -Value '2026-09-11T08:49:35+01:00') -eq (ConvertFrom-ProvenanceTimestamp -Value '2026-09-11T07:49:35Z'))
+_Assert -Name 'returns NULL for an unparseable timestamp rather than throwing' `
+	-Condition ($null -eq (ConvertFrom-ProvenanceTimestamp -Value 'not-a-date'))
+_Assert -Name 'returns NULL for an absent timestamp' `
+	-Condition ($null -eq (ConvertFrom-ProvenanceTimestamp -Value ''))
+
+# ---------------------------------------------------------------------------
+_Section 'The self-referential comparison (the tautology this check replaced)'
+# ---------------------------------------------------------------------------
+
+# The whole defect in one predicate. Check 1 REQUIRES the compose working
+# directory to equal the expected checkout, so on every passing run check 2's
+# two sides are one `git rev-parse` of one directory. It printed identical shas
+# above an OK for eleven hours while the image under it was 45 commits old.
+_Assert -Name 'DETECTS the default arrangement as self-referential' `
+	-Condition (Test-GitProvenanceIsSelfReferential -ExpectedCheckout $candidateCheckout `
+			-ComposeWorkingDirectory $candidateCheckout -CaseSensitive $false)
+
+_Assert -Name 'and detects it through a separator/case difference too' `
+	-Condition (Test-GitProvenanceIsSelfReferential -ExpectedCheckout $candidateCheckout `
+			-ComposeWorkingDirectory ($candidateCheckout.Replace('\', '/') + '/') -CaseSensitive $false)
+
+# Genuinely independent in either of two ways, and both must be recognised, or
+# the report would caveat a comparison that really did carry information.
+_Assert -Name 'does NOT call it self-referential when the container resolved a DIFFERENT directory' `
+	-Condition (-not (Test-GitProvenanceIsSelfReferential -ExpectedCheckout $candidateCheckout `
+				-ComposeWorkingDirectory $mainCheckout -CaseSensitive $false))
+
+_Assert -Name 'does NOT call it self-referential when the operator SUPPLIED the expected commit' `
+	-Condition (-not (Test-GitProvenanceIsSelfReferential -ExpectedCheckout $candidateCheckout `
+				-ComposeWorkingDirectory $candidateCheckout -CaseSensitive $false `
+				-ExpectedCommitCameFromCheckoutHead $false))
+
+# It is a REPORTING signal, never a violation: refusing here would refuse every
+# correct default invocation, and the remedy for a comparison carrying no
+# information is to stop presenting it as though it did - which is what check 6
+# is for.
+$report = Get-ContainerProvenanceReport -Readings (New-AgreeingReadings) `
+	-ExpectedCheckout $candidateCheckout -ExpectedSettings $expectedSettings -CaseSensitive $false
+_Assert -Name 'the composite REPORTS the self-reference without refusing on it' `
+	-Condition ($report.IsSatisfied -and $report.IsGitCheckSelfReferential) -Detail ($report.Violations -join '; ')
 
 # ---------------------------------------------------------------------------
 _Section 'Composite report'
