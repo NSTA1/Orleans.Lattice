@@ -58,6 +58,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.atomic_write.duration` | histogram (ms) | `tree`, `outcome` | Overview, AtomicWrites | Saga duration p50/p95/p99; saga duration p95 by outcome |
 | `orleans.lattice.atomic_write.batch_size` | histogram (`{entry}`) | `tree`, `outcome` | Overview, AtomicWrites | Batch size p50/p95/p99; batch size p95 by outcome |
 | `orleans.lattice.coordinator.completed` | counter | `tree`, `kind` | Overview | Coordinator completions |
+| `orleans.lattice.coordinator.phase_tick.failures` | counter (`{failure}`) | `tree`, `kind`, tenant | Overview | Coordinator phase-tick failures (rate) - zero-primed per coordinator, so a flat zero is a reading that ticks are succeeding; any non-zero value is discarded phase-loop work and is operator-actionable |
 | `orleans.lattice.tree.lifecycle` | counter | `tree`, `kind` | Overview | Tree lifecycle events (annotation + stat) |
 | `orleans.lattice.events.published` | counter | `tree`, `kind` | Overview | Events published |
 | `orleans.lattice.events.dropped` | counter | `tree`, `reason` | Overview | Events dropped |
@@ -435,6 +436,8 @@ Every instrument here carries the derived `tenant` label with the reserved `_pla
 | `repocontext.retrieval.duration` | histogram (`s`) | `tool` = `search`, `context`, `outline`, `related`; `path` = the resolved retrieval path, `not_applicable` (graph read), or `unresolved` (call ended before a path was settled) | (none) | **not charted** |
 | `repocontext.retrieval.stage.duration` | histogram (`s`) | `stage` = `embed`, `vector_search`, `hydrate`, `keyword_scan`; `path` as above | (none) | **not charted** |
 | `repocontext.bootstrap.pass_arm_faults` | counter (`{fault}`) | `arm` = `retire`, `ingest-files`, `ingest-symbols`, `ingest-memory`; `kind` = `scan-page-stalled` or an exception type name | (none) | **not charted** |
+| `repocontext.bootstrap.phase_cancelled` | counter (`{cancellation}`) | `phase` = `Walking`, `Reconciling`, `Applying`, `Vectorising` | (none) | **not charted** - zero-primed for all four phases, so any non-zero value is an indexing run whose in-flight work was discarded |
+| `repocontext.bootstrap.phase_cancelled.discarded_time` | counter (`ms`) | `phase` = `Walking`, `Reconciling`, `Applying`, `Vectorising` | (none) | **not charted** - running total of run time thrown away by the cancellations above; zero-primed for the same four phases |
 
 The two retrieval-latency histograms are a matched pair and neither is readable alone. `repocontext.retrieval.duration` is recorded from a `finally` on **every** call, including a cancelled or faulted one (tagged `path="unresolved"` when it ended before a path was settled), so its `_count` is a true call total. `repocontext.retrieval.stage.duration` is recorded **only for stages that actually ran**, so it is deliberately sparse and its zero does not describe itself: it is the call total that turns the absence into a measurement. No `embed` beside a rising call total on `repocontext.retrieval.duration` is an intended keyword-only host; both at zero means no retrieval ran at all. Both are subject to the summary rendering described above, so read them as `rate(..._sum[5m]) / rate(..._count[5m])` - a mean - and treat `histogram_quantile` against this endpoint as unavailable rather than as returning a wrong answer.
 

@@ -159,6 +159,26 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     private string RepoId => _repoId ??=
         RepoContextAnnIndexKeys.TryParseBuildGrainKey(GrainKey, out var parsed, out _) ? parsed : GrainKey;
 
+    /// <summary>
+    /// The backing lattice tree reported on the phase-tick failure counter: the
+    /// tree this coordinator's work actually lands in, per
+    /// <see cref="LatticeRepoContextAnnBackingFactory"/>.
+    /// <para>
+    /// The base class default would use the grain key, which here is composite -
+    /// <c>{repoId}/{spaceFingerprint}</c> - and so would tag every embedding space
+    /// as a distinct "tree", which is both untrue and unaggregatable. The
+    /// repository id is not a substitute: it is not a tree either, and emitting it
+    /// through the derived tenant label would populate a <c>tenant</c> dimension
+    /// shared with genuine tree coordinators with values that are not trees, so an
+    /// operator filtering by tree name would silently miss these failures and could
+    /// not tell the fabricated values from the real ones. A dimension that lies is
+    /// worse than one that abstains. The repository and embedding space ride the
+    /// accompanying log line, at a cardinality a log affords and a metric backend
+    /// does not.
+    /// </para>
+    /// </summary>
+    protected override string MetricsTreeId => RepoContextTrees.VectorIndex;
+
     /// <inheritdoc />
     public async Task EnsureBuildingAsync(EmbeddingSpaceTag space)
     {

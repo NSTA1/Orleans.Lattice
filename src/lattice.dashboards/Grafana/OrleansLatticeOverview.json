@@ -1566,6 +1566,22 @@
         { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le, grain_type, outcome) (rate(orleans_lattice_grain_call_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "{{grain_type}} {{outcome}} p95" },
         { "refId": "RATE", "expr": "sum by (grain_type, outcome) (rate(orleans_lattice_grain_call_duration_milliseconds_count{cluster=~\"$cluster\"}[5m]))", "legendFormat": "{{grain_type}} {{outcome}} calls/s" }
       ]
+    },
+    {
+      "id": 68,
+      "title": "Coordinator phase-tick failures (rate)",
+      "description": "Rate of coordinator phase-timer ticks that threw and were swallowed by the phase loop (orleans_lattice_coordinator_phase_tick_failures_total), split by the coordinator kind and the tree it drives. Each such tick is a phase of work the coordinator began and discarded: the loop absorbs the fault and re-arms, so throughput degrades silently and no other series moves. Before this counter existed the only trace was a log line, and 35 failures over 516 minutes on the acceptance rig left every exported series flat - which is what issue #2705 was filed for. The counter is zero-primed for every coordinator when its phase timer starts, so a flat line at zero is a positive reading that ticks are succeeding, NOT an absent series; 'No data' here means the coordinator never started, which is itself worth investigating. Any sustained non-zero rate is operator-actionable, and the emitting grain escalates its own log from warning to error after three consecutive failures - so correlate a step here with the error-level log to find the failing coordinator.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1007 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, kind) (rate(orleans_lattice_coordinator_phase_tick_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "{{tree}} {{kind}}"
+        }
+      ]
     }
   ]
 }

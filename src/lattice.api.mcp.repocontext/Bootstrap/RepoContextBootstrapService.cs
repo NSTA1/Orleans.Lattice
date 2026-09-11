@@ -47,6 +47,38 @@ internal sealed class RepoContextBootstrapService : IDisposable
     private const string PassArmFaultInstrumentName = "repocontext.bootstrap.pass_arm_faults";
 
     /// <summary>
+    /// The instrument name for the mid-phase indexing-cancellation counter. Tagged
+    /// by the phase the run was executing when it was cancelled.
+    /// </summary>
+    private const string PhaseCancelledInstrumentName = "repocontext.bootstrap.phase_cancelled";
+
+    /// <summary>
+    /// The instrument name for the monotonic total of work discarded by mid-phase
+    /// cancellations, in milliseconds of elapsed run time, tagged by phase. A
+    /// counter rather than a histogram deliberately: the operative question the
+    /// epic's definition of done asks is "how much work has this deployment thrown
+    /// away", which is a running total, and a counter is the only shape of the two
+    /// that can be zero-primed without fabricating a sample that never happened.
+    /// </summary>
+    private const string PhaseCancelledDiscardedInstrumentName =
+        "repocontext.bootstrap.phase_cancelled.discarded_time";
+
+    /// <summary>
+    /// The phases a run can be cancelled in, and therefore the phases whose
+    /// cancellation series are zero-primed at construction. <see cref="RepoIndexPhase.Pending"/>
+    /// and <see cref="RepoIndexPhase.Done"/> are excluded because no work is in
+    /// flight in either, and <see cref="RepoIndexPhase.Resetting"/> because a reset
+    /// is not driven through this service's phase variable.
+    /// </summary>
+    private static readonly RepoIndexPhase[] CancellablePhases =
+    [
+        RepoIndexPhase.Walking,
+        RepoIndexPhase.Reconciling,
+        RepoIndexPhase.Applying,
+        RepoIndexPhase.Vectorising,
+    ];
+
+    /// <summary>
     /// How many additional files must embed between vectorising heartbeat log
     /// lines. The vectorising pass reports progress per embedding batch; throttling
     /// the log to one line per this many freshly embedded files keeps a large
@@ -99,6 +131,8 @@ internal sealed class RepoContextBootstrapService : IDisposable
     // but was 0" in an unrelated fixture). Enforced by MeterFieldDeclarationOrderTests.
     private readonly Meter _meter;
     private readonly Counter<long> _passArmFaults;
+    private readonly Counter<long> _phaseCancellations;
+    private readonly Counter<long> _phaseCancelledDiscardedMs;
 
     /// <summary>
     /// The per-repository cross-walk pruning cache, keyed by repository id. Each entry
@@ -201,6 +235,27 @@ internal sealed class RepoContextBootstrapService : IDisposable
             PassArmFaultInstrumentName,
             unit: "{fault}",
             description: "Indexing-pass arm faults, tagged by the arm that faulted and the fault kind.");
+        _phaseCancellations = _meter.CreateCounter<long>(
+            PhaseCancelledInstrumentName,
+            unit: "{cancellation}",
+            description: "Indexing runs cancelled mid-phase, tagged by the phase that was executing. Zero-primed for every cancellable phase, so zero is a reading rather than an absence.");
+        _phaseCancelledDiscardedMs = _meter.CreateCounter<long>(
+            PhaseCancelledDiscardedInstrumentName,
+            unit: "ms",
+            description: "Running total of run time discarded by mid-phase indexing cancellations, tagged by the phase that was executing. Zero-primed for every cancellable phase.");
+
+        // Zero-prime both cancellation series. A Counter exports nothing until its
+        // first Add, so an instrument touched only when a run is cancelled reports
+        // the healthy state - no work discarded - as silence, which is exactly the
+        // reading an operator cannot distinguish from a missing instrument. The
+        // phase set is fixed and small, so priming every member at construction
+        // gives the whole instrument a true zero from process start (issue #2705).
+        foreach (var phase in CancellablePhases)
+        {
+            var phaseTag = new KeyValuePair<string, object?>("phase", phase.ToString());
+            _phaseCancellations.Add(0, phaseTag, LatticeTenantLabel.Platform);
+            _phaseCancelledDiscardedMs.Add(0, phaseTag, LatticeTenantLabel.Platform);
+        }
     }
 
     /// <summary>Disposes the meter this service publishes its instruments on.</summary>
@@ -1022,11 +1077,44 @@ internal sealed class RepoContextBootstrapService : IDisposable
         catch (OperationCanceledException)
         {
             stopwatch.Stop();
+
+            // The elapsed time is the work this run is throwing away: durable
+            // structural writes already committed survive, but everything the
+            // cancelled phase had accumulated and not yet banked is lost, and a
+            // re-run pays for it again. That quantity was computed here and then
+            // dropped into a log line, so the only evidence a deployment had
+            // discarded half an hour of vectorising was a line someone happened to
+            // read (issue #2705). Recording it before the rethrow makes the
+            // epic's "converges without discarding work" criterion answerable from
+            // telemetry alone.
+            RecordPhaseCancellation(phase, stopwatch.ElapsedMilliseconds);
+
             _logger.LogInformation(
                 "Repo {RepoId}: indexing cancelled during the {Phase} phase after {Elapsed} ms; durable structural writes already committed are preserved and a re-run resumes from the first uncommitted chunk.",
                 repoId, phase, stopwatch.ElapsedMilliseconds);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Records one mid-phase indexing cancellation: the count, and the elapsed run
+    /// time it discarded. Both are tagged by phase only, matching
+    /// <see cref="RecordArmFault"/> - the repository id rides on the accompanying
+    /// log line, at a cardinality logs can afford and a metric backend cannot.
+    /// </summary>
+    /// <param name="phase">The phase the run was executing when it was cancelled.</param>
+    /// <param name="discardedMilliseconds">Elapsed run time discarded by the
+    /// cancellation. Clamped at zero so a pathological clock cannot walk a
+    /// monotonic counter backwards, which would be rejected by the exporter.</param>
+    private void RecordPhaseCancellation(RepoIndexPhase phase, long discardedMilliseconds)
+    {
+        // An indexing pass is a host-process background loop over process-wide
+        // repocontext trees shared by every registered repository, so a cancelled
+        // run is a property of this host rather than of any tenant's traffic - the
+        // same reasoning that puts _passArmFaults and _annSweeps on the sentinel.
+        var phaseTag = new KeyValuePair<string, object?>("phase", phase.ToString());
+        _phaseCancellations.Add(1, phaseTag, LatticeTenantLabel.Platform);
+        _phaseCancelledDiscardedMs.Add(Math.Max(0, discardedMilliseconds), phaseTag, LatticeTenantLabel.Platform);
     }
 
     /// <summary>
