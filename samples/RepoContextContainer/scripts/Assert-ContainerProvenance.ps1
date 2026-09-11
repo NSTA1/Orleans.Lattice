@@ -150,6 +150,21 @@
 	pwsh -File ./scripts/Assert-ContainerProvenance.ps1 -ExpectedCommit 9fcaaa998
 
 .NOTES
+	EXIT STATUS. The exit code says what the printed verdict says, and it is set
+	explicitly rather than inherited (issue #2718):
+
+	  0  every check agreed
+	  1  an unexpected terminating error
+	  2  provenance REFUSED - one or more checks disagreed
+	  3  the container could not be interrogated (no docker, no daemon, no such
+	     container)
+	  4  the expected configuration could not be read
+
+	Codes 3 and 4 are deliberately distinct from 2: nothing about the deployment
+	was adjudicated in either case, so a caller must not read them as "this
+	container is wrong". Gate on `-eq 0` for "safe to proceed", and branch on the
+	specific code when the remedy differs.
+
 	This is an OPERATOR check, not a CI gate, and it is not wired into any
 	workflow. It needs a running container, and a fixture that skipped when
 	Docker was absent would produce exactly the false green this check exists to
@@ -225,6 +240,53 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# ---------------------------------------------------------------------------
+# EXIT STATUS
+#
+# The printed verdict is read by a person; the exit code is read by a machine,
+# and until issue #2718 the two disagreed. This script never called `exit`, so
+# its status was whatever the last internal native command happened to leave in
+# $LASTEXITCODE - and on the PASSING path that was 128, from the `git rev-parse`
+# probe in Get-ArchiveGitReading, which is SUPPOSED to fail because an archive
+# correctly located outside every checkout makes git exit 128.
+#
+# The inversion is the part worth stating plainly: the script's own success
+# condition produced its non-zero status, and the only arrangement that would
+# have left a zero there is a MISPLACED archive - the defect check 5 exists to
+# reject. Any caller gating on `$LASTEXITCODE -eq 0` therefore read a false
+# failure on every healthy deployment and a plausible success on the bad one.
+#
+# The reach of that is narrower than it looks, and the narrow part is the
+# dangerous part. `pwsh -File` DISCARDS $LASTEXITCODE when a script ends without
+# calling `exit`, so a subprocess caller saw 0 and an in-process caller - an
+# operator at a prompt, or a wrapper .ps1, which is how the runbook invokes this
+# - saw 128. One run, two contradictory statuses, neither chosen by this script.
+# Calling `exit` explicitly is what makes the two channels agree AND makes the
+# value this script's own statement rather than an accident of the last probe.
+#
+#   0  every check agreed
+#   1  an unexpected terminating error (see the trap below)
+#   2  provenance REFUSED - one or more checks disagreed
+#   3  the container could not be interrogated at all
+#   4  the expected configuration could not be read
+#
+# Each refusal path gets its own code so a caller can tell "this deployment is
+# wrong" from "this check could not run", which a single non-zero cannot.
+# ---------------------------------------------------------------------------
+$ExitAllChecksAgree = 0
+$ExitUnexpectedError = 1
+$ExitProvenanceRefused = 2
+$ExitContainerNotInterrogable = 3
+$ExitExpectedConfigurationUnreadable = 4
+
+# An unexpected terminating error must also SAY something. Without this, such an
+# error leaves an in-process caller reading whatever stale $LASTEXITCODE the last
+# probe left - which can be 0, i.e. a crash reported as a pass.
+trap {
+	[Console]::Error.WriteLine(($_ | Out-String).TrimEnd())
+	exit $ExitUnexpectedError
+}
+
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here '_provenance.ps1')
 
@@ -232,10 +294,65 @@ function Invoke-Docker {
 	param([Parameter(Mandatory)] [string[]] $DockerArgument)
 
 	$output = & docker @DockerArgument 2>&1
-	if ($LASTEXITCODE -ne 0) {
-		throw "docker $($DockerArgument -join ' ') failed with exit code $LASTEXITCODE`n$output"
+	$exitCode = [int] $LASTEXITCODE
+
+	# Cleared for the same reason every git probe below is: two of the three
+	# docker readings this script takes are wrapped in a catch that swallows the
+	# failure deliberately, and a swallowed failure that leaves its exit code
+	# behind is indistinguishable from one that was never swallowed.
+	$global:LASTEXITCODE = 0
+
+	if ($exitCode -ne 0) {
+		throw "docker $($DockerArgument -join ' ') failed with exit code $exitCode`n$output"
 	}
 	return ($output | Out-String).Trim()
+}
+
+# EVERY git probe in this script goes through here, and that is a structural
+# requirement rather than a tidiness one.
+#
+# Each of the four probes is allowed to fail, and each failure is deliberately
+# swallowed: an unknown commit, a directory that is not a checkout, no ancestry
+# between two commits. Every one of those is a correct answer to ask for, and
+# every one of them leaves a non-zero $LASTEXITCODE behind that no later reader
+# has any business inheriting.
+#
+# Clearing it once at the end of the script would fix the symptom observed in
+# issue #2718 and leave the next appended probe free to reintroduce it silently.
+# Clearing it HERE means a probe cannot be written that does not clear, and
+# Test-ProvenanceExitCode.ps1 asserts that no raw `& git` survives outside this
+# function, so the guarantee is checked rather than merely intended.
+function Invoke-GitProbe {
+	param(
+		[Parameter(Mandatory)] [string[]] $GitArgument,
+		[string] $StandardErrorPath = ''
+	)
+
+	$probe = @{ Ran = $false; ExitCode = 0; Output = '' }
+
+	try {
+		if ([string]::IsNullOrWhiteSpace($StandardErrorPath)) {
+			$output = & git @GitArgument 2>$null
+		}
+		else {
+			$output = & git @GitArgument 2>$StandardErrorPath
+		}
+
+		$probe.ExitCode = [int] $LASTEXITCODE
+		$probe.Output = "$output"
+		$probe.Ran = $true
+	}
+	catch {
+		# git absent from PATH, or not executable. No answer was obtained, so
+		# `Ran` stays false and callers treat the reading as unavailable rather
+		# than as a negative answer.
+		$probe.Ran = $false
+	}
+	finally {
+		$global:LASTEXITCODE = 0
+	}
+
+	return $probe
 }
 
 function Get-HeadCommit {
@@ -243,9 +360,9 @@ function Get-HeadCommit {
 
 	if (-not (Test-Path -LiteralPath $Directory)) { return '' }
 
-	$commit = & git -C $Directory rev-parse HEAD 2>$null
-	if ($LASTEXITCODE -ne 0) { return '' }
-	return ("$commit").Trim()
+	$probe = Invoke-GitProbe -GitArgument @('-C', $Directory, 'rev-parse', 'HEAD')
+	if (-not $probe.Ran -or $probe.ExitCode -ne 0) { return '' }
+	return ("$($probe.Output)").Trim()
 }
 
 # Check 6's chronology reading. The commit-date, not the AUTHOR date: a
@@ -263,9 +380,9 @@ function Get-CommitDate {
 	if ([string]::IsNullOrWhiteSpace($Commit)) { return '' }
 	if (-not (Test-Path -LiteralPath $Directory)) { return '' }
 
-	$date = & git -C $Directory show -s --format=%cI $Commit 2>$null
-	if ($LASTEXITCODE -ne 0) { return '' }
-	return ("$date").Trim()
+	$probe = Invoke-GitProbe -GitArgument @('-C', $Directory, 'show', '-s', '--format=%cI', $Commit)
+	if (-not $probe.Ran -or $probe.ExitCode -ne 0) { return '' }
+	return ("$($probe.Output)").Trim()
 }
 
 # How far BEHIND the expected commit the image's own commit is, in commits.
@@ -286,11 +403,11 @@ function Get-CommitDistance {
 	if ([string]::IsNullOrWhiteSpace($From) -or [string]::IsNullOrWhiteSpace($To)) { return $null }
 	if (-not (Test-Path -LiteralPath $Directory)) { return $null }
 
-	$count = & git -C $Directory rev-list --count "$From..$To" 2>$null
-	if ($LASTEXITCODE -ne 0) { return $null }
+	$probe = Invoke-GitProbe -GitArgument @('-C', $Directory, 'rev-list', '--count', "$From..$To")
+	if (-not $probe.Ran -or $probe.ExitCode -ne 0) { return $null }
 
 	$parsed = 0
-	if (-not [int]::TryParse(("$count").Trim(), [ref] $parsed)) { return $null }
+	if (-not [int]::TryParse(("$($probe.Output)").Trim(), [ref] $parsed)) { return $null }
 	return $parsed
 }
 
@@ -351,14 +468,15 @@ function Get-ArchiveGitReading {
 		$toplevel = ''
 		$exitCode = $null
 
-		try {
-			$toplevel = & git -C $Path rev-parse --show-toplevel 2>$stderrFile
-			$exitCode = $LASTEXITCODE
-		}
-		catch {
+		$probe = Invoke-GitProbe `
+			-GitArgument @('-C', $Path, 'rev-parse', '--show-toplevel') -StandardErrorPath $stderrFile
+		if (-not $probe.Ran) {
 			# git absent from PATH. No answer, so the reading stays unexaminable.
 			return $reading
 		}
+
+		$toplevel = $probe.Output
+		$exitCode = $probe.ExitCode
 
 		$stderr = if (Test-Path -LiteralPath $stderrFile) { [string] (Get-Content -Raw -LiteralPath $stderrFile -ErrorAction SilentlyContinue) } else { '' }
 
@@ -409,14 +527,35 @@ if ([string]::IsNullOrWhiteSpace($ExpectedCommitDate)) {
 }
 if ($null -eq $ExpectedSetting -or $ExpectedSetting.Count -eq 0) {
 	$composeFile = Join-Path $ExpectedCheckout 'docker-compose.yml'
-	$ExpectedSetting = @{
-		'LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD' = (Get-DeclaredSetting -ComposeFile $composeFile -Name 'LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD')
+	try {
+		$ExpectedSetting = @{
+			'LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD' = (Get-DeclaredSetting -ComposeFile $composeFile -Name 'LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD')
+		}
+	}
+	catch {
+		# Distinct from a refusal: nothing about the deployment has been
+		# adjudicated, so a caller must not read this as "the container is
+		# wrong". It is "this check could not run".
+		[Console]::Error.WriteLine(
+			"Container provenance could not be adjudicated for '$ContainerName': $($_.Exception.Message)")
+		exit $ExitExpectedConfigurationUnreadable
 	}
 }
 
-$inspected = Invoke-Docker -DockerArgument @('inspect', $ContainerName) | ConvertFrom-Json
+try {
+	$inspected = Invoke-Docker -DockerArgument @('inspect', $ContainerName) | ConvertFrom-Json
+}
+catch {
+	# Also distinct from a refusal, and for the same reason: docker absent, the
+	# daemon down, or the container gone tells you nothing about provenance.
+	[Console]::Error.WriteLine(
+		"Container provenance could not be interrogated for '$ContainerName': $($_.Exception.Message)")
+	exit $ExitContainerNotInterrogable
+}
 if ($null -eq $inspected -or @($inspected).Count -eq 0) {
-	throw "container '$ContainerName' was not found; start the stack before running this check"
+	[Console]::Error.WriteLine(
+		"container '$ContainerName' was not found; start the stack before running this check")
+	exit $ExitContainerNotInterrogable
 }
 $container = @($inspected)[0]
 
@@ -608,7 +747,9 @@ Write-Host ''
 
 if (-not $report.IsSatisfied) {
 	$detail = ($report.Violations | ForEach-Object { "  - $_" }) -join [Environment]::NewLine
-	throw ("Container provenance REFUSED for '$ContainerName': this container cannot be shown to have been launched from '$ExpectedCheckout'." + [Environment]::NewLine + $detail)
+	[Console]::Error.WriteLine(
+		"Container provenance REFUSED for '$ContainerName': this container cannot be shown to have been launched from '$ExpectedCheckout'." + [Environment]::NewLine + $detail)
+	exit $ExitProvenanceRefused
 }
 
 Write-Host ("  OK  all six provenance checks agree for '{0}'" -f $ContainerName) -ForegroundColor Green
@@ -619,3 +760,9 @@ if ($report.IsGitCheckSelfReferential) {
 	Write-Host '      check 2 was self-referential and carried no weight; the line above is the one' -ForegroundColor DarkGray
 	Write-Host '      that establishes what is deployed.' -ForegroundColor DarkGray
 }
+
+# The last statement, and the only one that decides this script's exit status.
+# Everything above it that could leave a code behind has already cleared it, so
+# reaching here with anything other than an explicit 0 is not possible by
+# accident - which is the whole of issue #2718.
+exit $ExitAllChecksAgree

@@ -51,6 +51,37 @@ cd samples/RepoContextContainer
 pwsh -File ./scripts/Assert-ContainerProvenance.ps1
 ```
 
+### What its exit code means
+
+The script's exit status is part of its contract, so automation can gate on it
+(#2718):
+
+| Code | Meaning |
+| --- | --- |
+| `0` | all six provenance checks agree |
+| `1` | unexpected error: the script itself failed and reached NO verdict |
+| `2` | provenance REFUSED: at least one check dissented |
+| `3` | the container could not be interrogated (not running, or docker unreachable) |
+| `4` | the expected configuration could not be read from the checkout |
+
+Codes `3` and `4` say the question could not be ASKED. They are an inconclusive run
+to be fixed and repeated, not a failed deployment, and reading them as "this
+container is wrong" is a misdiagnosis.
+
+Until #2718 the script never called `exit` at all, so its status was whatever its
+last internal git probe happened to leave behind - and on the PASSING path that was
+`128`, from the `git rev-parse` that CORRECTLY fails inside a memory archive located
+outside every checkout. The script's own success condition produced its failure
+status, and the only arrangement that would have left a zero there was a MISPLACED
+archive, which is the defect that check exists to reject.
+
+Note the invocation dependence, because it is why this survived a release. `pwsh
+-File` DISCARDS `$LASTEXITCODE` when a script ends without calling `exit`, so the
+form used throughout this runbook exited `0` and looked correct, while an operator
+running the script at a prompt - or any wrapper `.ps1` calling it with `&` - read
+`128` from the same run. One run, two contradictory statuses, neither chosen by the
+script.
+
 The same limit applies to this runbook's own guard test, which is discussed under
 [How this runbook is kept honest](#how-this-runbook-is-kept-honest).
 
