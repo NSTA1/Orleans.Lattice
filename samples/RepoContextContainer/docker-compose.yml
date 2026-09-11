@@ -481,6 +481,34 @@ services:
       # /workspace/<repo>). Note ../../.. resolves this compose file's grandparent
       # (the repo root's parent), NOT the repo root itself.
       - ${REPO_PATH:-../../..}:/workspace:ro
+    # Grain-liveness healthcheck (issue #2666). Before this, the repocontext
+    # service PUBLISHED no healthcheck at all while CONSUMING service_healthy
+    # from its dependencies above: the two services that can report health were
+    # green through an outage in which the silo itself vanished, and it had to be
+    # found by a human reading `docker ps` by eye.
+    #
+    # The runtime image is chiseled and shell-less (no curl/wget/nc), so the test
+    # is the host binary re-invoked with --healthcheck, exactly as the embedder
+    # service does. That self-probe GETs the host's own /health/silo endpoint,
+    # which - unlike /health/live (always green) and the latched /health/ready -
+    # re-exercises silo membership and a trivial grain call on EVERY probe. So it
+    # goes red for a silo that died after reaching readiness, which is the whole
+    # point: a probe that only proves Kestrel is listening cannot.
+    #
+    # start_period is sized for REAL silo startup (cluster join + WAL replay
+    # warmup), which is far longer than a stateless service's. Docker's health
+    # model is two-valued (exit 0/1); "starting" is realised by this window
+    # holding early non-zero exits out of the retry tally. Getting it too short
+    # matters here because restart: unless-stopped is set below, so a silo still
+    # joining that were reported unhealthy would crash-loop during normal boot.
+    # The endpoint still REPORTS the three-way verdict (healthy/starting/unhealthy)
+    # in its body for observability; the self-probe echoes it to the health log.
+    healthcheck:
+      test: ["CMD", "dotnet", "Orleans.Lattice.Api.Mcp.RepoContext.Host.dll", "--healthcheck"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
     restart: unless-stopped
     # Run PID 1 as an init process (issue #2576). Docker bind-mounts its own
     # static `docker-init` binary in and runs it as PID 1, so this needs nothing

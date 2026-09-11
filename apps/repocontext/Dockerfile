@@ -28,9 +28,15 @@
 #
 # The runtime stage is the distroless, shell-less, non-root chiseled ASP.NET
 # image. There is no shell in the final image, so health probing is HTTP-only
-# (GET /health/live and GET /health/ready) - there is deliberately no
-# shell-exec HEALTHCHECK. Orchestrate liveness/readiness with an HTTP probe
-# (Kubernetes httpGet, an external checker, or a sidecar).
+# and a shell-form HEALTHCHECK cannot work. The host instead answers
+# --healthcheck by probing its own /health/silo endpoint and exiting 0/1, the
+# same self-probe pattern the ONNX embedder image uses (see the exec-form
+# HEALTHCHECK below). That endpoint re-exercises silo membership and the grain
+# layer on every call, so the probe goes RED for a silo that died after reaching
+# readiness while the process kept listening - the outage recorded by issue
+# #2666, which a bare "is Kestrel listening" probe (GET /health/live, always
+# green) could not detect. The /health/live and /health/ready HTTP probes remain
+# for Kubernetes httpGet or an external checker.
 # ---------------------------------------------------------------------------
 
 # --- Build stage -----------------------------------------------------------
@@ -100,4 +106,16 @@ EXPOSE 8080
 
 # The chiseled ASP.NET image already runs as a non-root user (the base image's
 # $APP_UID). No shell, no package manager, no setuid binaries.
+#
+# Exec-form health probe. The chiseled runtime has NO SHELL, so a shell-form
+# HEALTHCHECK cannot work; the host answers --healthcheck by probing its own
+# /health/silo endpoint and exiting 0 (healthy) or 1 (starting/unhealthy). The
+# start period is sized for real silo startup - cluster join plus WAL replay
+# warmup - which is far longer than a stateless service's, so a silo still
+# joining reads as "starting" rather than a failure and does not crash-loop the
+# container under compose's restart: unless-stopped. The compose file restates
+# this healthcheck (see samples/RepoContextContainer/docker-compose.yml) so the
+# behaviour holds whether the image is run directly or via compose.
+HEALTHCHECK --interval=15s --timeout=10s --start-period=180s --retries=5 \
+    CMD ["dotnet", "Orleans.Lattice.Api.Mcp.RepoContext.Host.dll", "--healthcheck"]
 ENTRYPOINT ["dotnet", "Orleans.Lattice.Api.Mcp.RepoContext.Host.dll"]
