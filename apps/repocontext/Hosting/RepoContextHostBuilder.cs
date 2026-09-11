@@ -461,10 +461,21 @@ public static class RepoContextHostBuilder
         // liveness) and it is not part of the readiness conjunction. It exists to be
         // the one probe that re-checks the silo on every call, so the container's
         // Docker healthcheck can go red for a silo that died after reaching
-        // readiness - the outage of issue #2666.
-        healthChecks.AddCheck<RepoContextSiloHealthCheck>(
+        // readiness - the outage of issue #2666. Registered through a factory rather
+        // than AddCheck<T> so its drain-grace window tracks the SAME resolved
+        // stop_grace_period grant the shutdown budget above is derived from: a drain
+        // that outlives the grant can only be a hung self-initiated shutdown, and the
+        // check reports it Unhealthy instead of green-forever. Passing the resolved
+        // grant here (not the compile-time default) keeps the two visibly one value.
+        healthChecks.Add(new HealthCheckRegistration(
             RepoContextSiloHealthCheck.Name,
-            tags: new[] { SiloTag });
+            sp => new RepoContextSiloHealthCheck(
+                sp.GetRequiredService<IRepoContextSiloProbe>(),
+                sp.GetRequiredService<RepoContextReadinessState>(),
+                shutdown.StopGracePeriod,
+                TimeProvider.System),
+            failureStatus: null,
+            tags: new[] { SiloTag }));
         if (isAzure)
         {
             healthChecks.AddLatticeScalingHealthCheck(tags: new[] { ReadinessTag });
