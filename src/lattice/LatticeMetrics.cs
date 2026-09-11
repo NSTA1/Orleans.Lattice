@@ -1180,6 +1180,42 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.offset_floor_unavailable", unit: "{pass}",
             description: "WAL GC passes that could not compute the durable offset floor because the pin store was unreachable, tagged by tree.");
 
+    /// <summary>
+    /// Counter of WAL garbage-collection passes for which no retained-byte
+    /// backlog could be sampled, tagged with <see cref="TagTree"/> and with
+    /// <see cref="TagReason"/> = <c>policy_disabled</c> or
+    /// <c>provider_unsupported</c>. This is the positive "not measured" signal
+    /// for <see cref="WalGcBacklogBytes"/> (issue #2694).
+    /// <para>
+    /// <see cref="WalGcBacklogBytes"/> records only when the pass actually
+    /// sampled bytes, so on a host with byte accounting turned off it publishes
+    /// <b>no series at all</b> - a shape a reader cannot distinguish from a dead
+    /// subsystem, a broken instrument, or a genuine zero backlog without opening
+    /// the source. That ambiguity is the defect: the prior contract asked the
+    /// reader to infer "not measured" from the <i>absence</i> of one series
+    /// beside the presence of another (<see cref="WalGcPasses"/>), which is an
+    /// inference from silence and is exactly what produced the wrong,
+    /// publicly-retracted diagnosis in issue #2692.
+    /// </para>
+    /// <para>
+    /// This counter states it instead, and separates the two causes a reader
+    /// would act on differently: <c>policy_disabled</c> means
+    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> is unset and setting it
+    /// turns byte accounting on, whereas <c>provider_unsupported</c> means the
+    /// policy <i>is</i> enabled but the configured <see cref="IWalStorageProvider"/>
+    /// returned no retained byte size, so the remedy is a different provider.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcBacklogBytesUnavailable =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.backlog_bytes_unavailable", unit: "{pass}",
+            description: "WAL GC passes that sampled no retained-byte backlog, tagged by tree and by reason (policy_disabled/provider_unsupported).");
+
+    /// <summary><see cref="TagReason"/> = <c>policy_disabled</c> (byte accounting is off because <see cref="LatticeOptions.WalMaxRetainedBytes"/> is unset).</summary>
+    public static readonly KeyValuePair<string, object?> ReasonBytePolicyDisabled = new(TagReason, "policy_disabled");
+
+    /// <summary><see cref="TagReason"/> = <c>provider_unsupported</c> (the byte-pressure policy is enabled but the WAL storage provider reports no retained byte size).</summary>
+    public static readonly KeyValuePair<string, object?> ReasonByteProviderUnsupported = new(TagReason, "provider_unsupported");
+
     /// <summary><see cref="TagOutcome"/> = <c>reclaimed</c> (a WAL GC pass that trimmed at least one entry).</summary>
     public static readonly KeyValuePair<string, object?> OutcomeReclaimed = new(TagOutcome, "reclaimed");
 
@@ -1245,6 +1281,43 @@ public static class LatticeMetrics
     public static readonly Counter<long> MaterialiserPinReportsShed =
         Meter.CreateCounter<long>("orleans.lattice.materialiser.pin.reports_shed", unit: "{report}",
             description: "Coalescible leaf-materialiser pin reports shed under durable pin-store pressure, tagged by tree.");
+
+    /// <summary>
+    /// Counter of leaf-materialiser pin merges classified by what the merge
+    /// actually moved, tagged with <see cref="TagTree"/> and
+    /// <see cref="TagOutcome"/> = <c>offset</c>, <c>frontier_only</c>, or
+    /// <c>none</c> (issue #2694).
+    /// <para>
+    /// <see cref="MaterialiserPinDurableWrites"/> counts <i>writes</i> and tags
+    /// them <c>birth</c>/<c>coalesced</c>, which describes how a write was
+    /// scheduled and not what it achieved. Neither value distinguishes a pin
+    /// whose checkpoint <b>offset advanced</b> from one rewritten at the same
+    /// offset, and with bucketing a single advancing pin rewrites its whole
+    /// bucket - so the write rate is not even proportional to the advance rate.
+    /// </para>
+    /// <para>
+    /// Offset advancement is the quantity that determines whether the WAL GC
+    /// <i>offset</i> floor can move (the GC reads
+    /// <c>IWalMaterialiserPinGrain.GetPinOffsetsAsync</c>), so
+    /// <c>offset</c> is the arm to read when asking "why is retained WAL not
+    /// being reclaimed?". A healthy <c>frontier_only</c> rate with a flat
+    /// <c>offset</c> rate is the specific shape of a floor that cannot move
+    /// while pins are otherwise being maintained; <c>none</c> counts a report
+    /// that was fully coalesced away.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> MaterialiserPinAdvances =
+        Meter.CreateCounter<long>("orleans.lattice.materialiser.pin.advances", unit: "{report}",
+            description: "Leaf-materialiser pin merges tagged by what advanced: offset, frontier_only, or none.");
+
+    /// <summary><see cref="TagOutcome"/> = <c>offset</c> (a pin merge that advanced the consumer's durable checkpoint offset, which is what lets the WAL GC offset floor move).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomePinOffsetAdvanced = new(TagOutcome, "offset");
+
+    /// <summary><see cref="TagOutcome"/> = <c>frontier_only</c> (a pin merge that advanced the HLC frontier while leaving the checkpoint offset where it was).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomePinFrontierOnly = new(TagOutcome, "frontier_only");
+
+    /// <summary><see cref="TagOutcome"/> = <c>none</c> (a pin merge fully coalesced away: neither the frontier nor the offset moved).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomePinNoAdvance = new(TagOutcome, "none");
 
     /// <summary>
     /// Histogram of leaf-materialiser drain lag, in milliseconds, recorded by the
@@ -1693,6 +1766,26 @@ public static class LatticeMetrics
 
     /// <summary>Canonical name of the observable 0/1 gauge that flags a tree whose retained WAL bytes currently breach the advisory ceiling (tagged <see cref="TagTree"/>).</summary>
     public const string StoragePolicyOverThresholdName = "orleans.lattice.storage.policy.over_threshold";
+
+    /// <summary>
+    /// Canonical name of the observable 0/1 gauge reporting whether a tree's
+    /// storage usage has ever been measured at <i>depth</i> - that is, whether
+    /// a deep report carrying real snapshot and leaf-state byte counts has been
+    /// published for it (tagged <see cref="TagTree"/>). Issue #2693.
+    /// <para>
+    /// <c>1</c> means <see cref="StorageSnapshotBytesName"/>,
+    /// <see cref="StorageLeafStateBytesName"/>, and
+    /// <see cref="StorageTotalBytesName"/> carry a real measurement for the
+    /// tree. <c>0</c> means only the cheap WAL-only refresh path has run, so
+    /// those three gauges publish <b>no measurement</b> for that tree and
+    /// <see cref="StorageWalBytesName"/> is the only byte surface that has been
+    /// sampled. The gauge itself reports no measurement for a tree that has not
+    /// been observed at all, so the three states - never seen, seen WAL-only,
+    /// and deeply measured - are all distinguishable from
+    /// <c>/metrics</c> alone without reading the source.
+    /// </para>
+    /// </summary>
+    public const string StorageUsageDeepPublishedName = "orleans.lattice.storage.usage_deep_published";
 
     /// <summary>
     /// Counter incremented once per <see cref="ILatticeWalGc.RunOnceAsync"/>
