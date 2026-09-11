@@ -58,7 +58,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.atomic_write.duration` | histogram (ms) | `tree`, `outcome` | Overview, AtomicWrites | Saga duration p50/p95/p99; saga duration p95 by outcome |
 | `orleans.lattice.atomic_write.batch_size` | histogram (`{entry}`) | `tree`, `outcome` | Overview, AtomicWrites | Batch size p50/p95/p99; batch size p95 by outcome |
 | `orleans.lattice.coordinator.completed` | counter | `tree`, `kind` | Overview | Coordinator completions |
-| `orleans.lattice.coordinator.phase_tick.failures` | counter (`{failure}`) | `tree`, `kind`, tenant | (none) | **not charted** - zero-primed per coordinator, so any non-zero value is discarded phase-loop work and warrants an operator |
+| `orleans.lattice.coordinator.phase_tick.failures` | counter (`{failure}`) | `tree`, `kind`, tenant | Overview | Coordinator phase-tick failures (rate) - zero-primed per coordinator, so a flat zero is a reading that ticks are succeeding; any non-zero value is discarded phase-loop work and is operator-actionable |
 | `orleans.lattice.tree.lifecycle` | counter | `tree`, `kind` | Overview | Tree lifecycle events (annotation + stat) |
 | `orleans.lattice.events.published` | counter | `tree`, `kind` | Overview | Events published |
 | `orleans.lattice.events.dropped` | counter | `tree`, `reason` | Overview | Events dropped |

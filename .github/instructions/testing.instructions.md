@@ -178,16 +178,19 @@ Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging t
 
 **Catching cross-project breakage is CI's job, not the local dev loop's.** CI runs the full cross-solution non-chaos suite on every PR (plus the `Chaos` and `AzureStorageEmulator` suites), so an `Orleans.Lattice` change that broke `Orleans.Lattice.Replication.Tests` is caught there. Only run the full cross-solution `dotnet test` (no project arg) locally when you have deliberately made a cross-cutting change to the core public surface that you expect to ripple through downstream projects - and even then, prefer running just the specific downstream test projects you expect to be affected.
 
-**Exception: the repository-wide gates live in `test/lattice/` and scan every package.** The scoping rule above is correct for ordinary tests and structurally blind to these. Four fixtures resolve the repository root and scan **all of `src/`** irrespective of which package they sit in, so a per-package pre-PR run passes green while the gate your change actually broke never runs at all:
+**Exception: the repository-wide gates scan every package, and they do not all live in one test project.** The scoping rule above is correct for ordinary tests and structurally blind to these. Five fixtures resolve the repository root and scan **all of `src/`** irrespective of which package they sit in, so a per-package pre-PR run passes green while the gate your change actually broke never runs at all. Note the set is defined by the **concern** (instruments), not by a directory: four sit in `test/lattice/` and one in `test/lattice.dashboards/`, so treating `test/lattice/` as the boundary reproduces the very blindness this exception exists to correct.
 
-| fixture | what it enrols, across every package |
-| --- | --- |
-| `TenantMetricDimensionHygieneTests` | each instrument's tenant dimension, including the `PlatformSentinelInstruments` list - which is keyed on the **C# field name**, not the metric name |
-| `MeterDashboardCoverageEnrolmentTests` | each instrument's dashboard panel mapping |
-| `MetricsDocCoverageEnrolmentTests` | each instrument's row in its package reference doc |
-| `MeterFieldDeclarationOrderTests` | the `Meter`-field-declared-above-every-instrument ordering |
+| fixture | project | what it enrols, across every package |
+| --- | --- | --- |
+| `TenantMetricDimensionHygieneTests` | `test/lattice/` | each instrument's tenant dimension, including the `PlatformSentinelInstruments` list - which is keyed on the **C# field name**, not the metric name |
+| `MeterDashboardCoverageEnrolmentTests` | `test/lattice/` | that every **meter** is covered by some charting guard (meter-keyed, so it does not see an individual unpaneled instrument) |
+| `MetricsDocCoverageEnrolmentTests` | `test/lattice/` | each instrument's row in its package reference doc |
+| `MeterFieldDeclarationOrderTests` | `test/lattice/` | the `Meter`-field-declared-above-every-instrument ordering |
+| `DashboardJsonTests` | `test/lattice.dashboards/` | that every **individual instrument** on `orleans.lattice` / `orleans.lattice.replication` is referenced by a bundled Grafana panel, or enrolled in `IntentionallyUnpaneledInstruments` with a justification |
 
-So **a change that adds or removes a metric instrument in any package must also run these four from `test/lattice/`**, alongside the six standard content gates, whichever package the instrument itself lives in. Budget for it: adding a single instrument costs at least three edits outside its own package.
+Note the last two dashboard entries are **two separate enrolment lists for adjacent concerns**, and neither implies the other: `MeterDashboardCoverageEnrolmentTests` asks "is this meter charted by something", `DashboardJsonTests` asks "is this instrument on a panel". A new instrument on an already-covered meter satisfies the first and can still fail the second.
+
+So **a change that adds or removes a metric instrument in any package must also run these five**, alongside the six standard content gates, whichever package the instrument itself lives in. Budget for it: adding a single instrument costs at least four edits outside its own package, in two different test projects.
 
 **Run each gate as its own `--filter`, never several OR-ed into one.** OR-ing them crashes the vstest host and misattributes the failure to whichever fixture happened to be running. Confirm each run reports a non-zero discovered count, too: a gate fixture that does not exist in the project you ran it against asserts nothing and exits 0, which reads exactly like a pass. Treat such a vacuous green as evidence about *which project the gate lives in*, not merely about that one fixture.
 
