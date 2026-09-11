@@ -67,12 +67,14 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.storage.snapshot_bytes` | observable gauge (`By`) | `tree` | Overview | Storage footprint by tree |
 | `orleans.lattice.storage.leaf_state_bytes` | observable gauge (`By`) | `tree` | Overview | Storage footprint by tree |
 | `orleans.lattice.storage.total_bytes` | observable gauge (`By`) | `tree` | Overview | Cluster total retained bytes |
+| `orleans.lattice.storage.usage_deep_published` | observable gauge (0/1) | `tree` | Overview | Storage usage measurement depth by tree |
 | `orleans.lattice.storage.policy.over_threshold` | observable gauge (0/1) | `tree` | Overview | Trees over advisory threshold |
 | `orleans.lattice.storage.policy.trim_triggered` | counter | `tree`, `reason` | Overview | Byte-pressure trim activity |
 | `orleans.lattice.storage.policy.bytes_reclaimed` | counter (`By`) | `tree` | Overview | Byte-pressure trim activity |
 | `orleans.lattice.wal.gc.passes` | counter (`{pass}`) | `tree`, `outcome` | Replication | WAL GC pass rate by outcome |
 | `orleans.lattice.wal.gc.interval` | histogram (`s`) | `tree` | Replication | WAL GC adaptive interval |
 | `orleans.lattice.wal.gc.backlog_bytes` | histogram (`By`) | `tree` | Replication | WAL GC retained backlog after pass |
+| `orleans.lattice.wal.gc.backlog_bytes_unavailable` | counter (`{pass}`) | `tree`, `reason` | Replication | WAL GC backlog bytes unavailable by reason |
 | `orleans.lattice.wal.gc.offset_floor_unavailable` | counter (`{pass}`) | `tree` | Replication | WAL GC offset floor unavailable (pin store unreachable) |
 | `orleans.lattice.admission.live_keys` | observable gauge (`{key}`) | `tree` | Overview | Admission - live keys by tree |
 | `orleans.lattice.admission.estimated_bytes` | observable gauge (`By`) | `tree` | Overview | Admission - estimated bytes by tree |
@@ -121,6 +123,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.shard_root.activation_ready.timeouts` | counter | `tree` | CommitPath | Reshard activity |
 | `orleans.lattice.shard_root.reshard.in_flight` | histogram (`{reshard}`) | `tree` | CommitPath | Reshard runs in flight |
 | `orleans.lattice.materialiser.pin.durable_writes` | counter | `tree`, `outcome` | CommitPath | Leaf-materialiser durable pin path (issue #1030) |
+| `orleans.lattice.materialiser.pin.advances` | counter (`{report}`) | `tree`, `outcome` | CommitPath | Leaf-materialiser pin advancement by outcome (issue #2694) |
 | `orleans.lattice.leaf.activation_replays` | counter | `tree`, `activation_temperature` | CommitPath | Leaf-materialiser durable pin path (issue #1030); the `cold`/`warm` arms give the activation-temperature ratio (issue #2148) |
 | `orleans.lattice.leaf.activation_replays_over_budget` | counter | `tree`, `partition` | CommitPath | Per-leaf post-filter replay cost over budget against an intact WAL (issues #1738, #2149) |
 | `orleans.lattice.leaf.activation_stalled_replays` | counter | `tree`, `partition` | CommitPath | Leaf replay re-entered from a checkpoint that did not advance; fault arm, alert on persistence not appearance (issue #2285) |

@@ -1563,13 +1563,25 @@
     {
       "id": 67,
       "title": "WAL GC retained backlog after pass (p95, bytes)",
-      "description": "95th-percentile retained WAL bytes left after a garbage-collection pass (orleans.lattice.wal.gc.backlog_bytes), sampled from the pass own report so it costs no extra I/O. Byte accounting is a provider capability gated behind LatticeOptions.WalMaxRetainedBytes, so this series is absent on a host without it - and because orleans.lattice.wal.gc.passes is emitted unconditionally, a tree reporting passes but no backlog samples is knowably not measured rather than ambiguously at zero backlog.",
+      "description": "95th-percentile retained WAL bytes left after a garbage-collection pass (orleans.lattice.wal.gc.backlog_bytes), sampled from the pass own report so it costs no extra I/O. Byte accounting is a provider capability gated behind LatticeOptions.WalMaxRetainedBytes, so this series is absent on a host without it. Do NOT infer the reason from the absence: orleans.lattice.wal.gc.backlog_bytes_unavailable is emitted on any pass that could not sample, tagged with the reason (policy_disabled or provider_unsupported), and the panel beside it reads it directly (issue #2694).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 225 },
       "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_wal_gc_backlog_bytes_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
+      ]
+    },
+    {
+      "id": 69,
+      "title": "WAL GC backlog bytes unavailable by reason (ops/s) - issue #2694",
+      "description": "Rate of WAL garbage-collection passes that could NOT sample the retained-backlog histogram beside this panel (orleans.lattice.wal.gc.backlog_bytes_unavailable), tagged by reason: policy_disabled means the pass computed no byte ceiling, so LatticeOptions.WalMaxRetainedBytes is unset - the default configuration, and an expected steady rate rather than a fault; provider_unsupported means a ceiling was computed but the IWalStorageProvider reports no byte accounting, which IS a misconfiguration because the operator asked for a byte policy the provider cannot enforce. This panel exists because the backlog histogram is silent in exactly the configuration most deployments run, and silence looks identical whether the policy is off, the provider cannot count, or the collector is wedged. With this series the first two announce themselves and name their reason, so only genuine silence remains unexplained.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 232 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_wal_gc_backlog_bytes_unavailable_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{reason}}/s" }
       ]
     },
     {

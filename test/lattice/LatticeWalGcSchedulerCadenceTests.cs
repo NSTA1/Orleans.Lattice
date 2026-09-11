@@ -74,8 +74,8 @@ public sealed class LatticeWalGcSchedulerCadenceTests
             Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeWalGcScheduler>>(),
             time);
 
-    private static LatticeWalGcReport Report(long entriesTrimmed, long? retainedBytesAfter = null) =>
-        new("tree", null, null, null, null, 1, entriesTrimmed, null, null, retainedBytesAfter);
+    private static LatticeWalGcReport Report(long entriesTrimmed, long? retainedBytesAfter = null, long? byteCeiling = null) =>
+        new("tree", null, null, null, null, 1, entriesTrimmed, byteCeiling, null, retainedBytesAfter);
 
     private static Task Parked(Task parked) => parked.WaitAsync(TimeSpan.FromSeconds(30));
 
@@ -594,7 +594,7 @@ public sealed class LatticeWalGcSchedulerCadenceTests
         var time = new VirtualTimeProvider();
 
         using var backlog = new InstrumentRecorder(LatticeMetrics.WalGcBacklogBytes, Tree);
-        using var passes = new InstrumentRecorder(LatticeMetrics.WalGcPasses, Tree);
+        using var unavailable = new InstrumentRecorder(LatticeMetrics.WalGcBacklogBytesUnavailable, Tree);
 
         var scheduler = CreateScheduler(FactoryWithTrees(Tree), gc, Adaptive(), time);
         await StartAndRunFirstPassAsync(scheduler, time);
@@ -606,11 +606,117 @@ public sealed class LatticeWalGcSchedulerCadenceTests
             // defined branch: nothing is recorded on the backlog histogram ...
             Assert.That(backlog.Measurements, Is.Empty);
 
-            // ... and the pass counter is still emitted, so a consumer can tell
-            // "not measured" apart from "no backlog" instead of reading silence.
-            Assert.That(passes.Measurements, Has.Count.EqualTo(1));
-            Assert.That(passes.Measurements[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("reclaimed"));
+            // ... and the branch states itself on its own series. It used to be
+            // knowable only by inferring it from the pass counter having a
+            // series while the backlog histogram did not, and an inference from
+            // silence is exactly the step that produced a wrong, retracted
+            // root-cause diagnosis on this repository (issues #2692, #2694).
+            Assert.That(unavailable.Measurements, Has.Count.EqualTo(1));
+            Assert.That(
+                unavailable.Measurements[0].Tag(LatticeMetrics.TagReason),
+                Is.EqualTo("policy_disabled"),
+                "no configured byte ceiling means the policy is off, which is the operator's lever");
         });
+    }
+
+    [Test]
+    public async Task ExecuteAsync_backlog_bytes_unavailable_names_an_unsupported_provider()
+    {
+        const string Tree = "walgc-metering-provider-unsupported";
+        var gc = Substitute.For<ILatticeWalGc>();
+        gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Report(entriesTrimmed: 7, retainedBytesAfter: null, byteCeiling: 1_048_576));
+        var time = new VirtualTimeProvider();
+
+        using var unavailable = new InstrumentRecorder(LatticeMetrics.WalGcBacklogBytesUnavailable, Tree);
+
+        var scheduler = CreateScheduler(FactoryWithTrees(Tree), gc, Adaptive(), time);
+        await StartAndRunFirstPassAsync(scheduler, time);
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.That(unavailable.Measurements, Has.Count.EqualTo(1));
+        Assert.That(
+            unavailable.Measurements[0].Tag(LatticeMetrics.TagReason),
+            Is.EqualTo("provider_unsupported"),
+            "a ceiling is configured, so the policy is on and the provider is the thing to change");
+    }
+
+    [Test]
+    public async Task ExecuteAsync_does_not_report_backlog_bytes_unavailable_when_bytes_are_measured()
+    {
+        const string Tree = "walgc-metering-bytes-measured";
+        var gc = Substitute.For<ILatticeWalGc>();
+        gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Report(entriesTrimmed: 7, retainedBytesAfter: 4_096, byteCeiling: 1_048_576));
+        var time = new VirtualTimeProvider();
+
+        using var backlog = new InstrumentRecorder(LatticeMetrics.WalGcBacklogBytes, Tree);
+        using var unavailable = new InstrumentRecorder(LatticeMetrics.WalGcBacklogBytesUnavailable, Tree);
+
+        var scheduler = CreateScheduler(FactoryWithTrees(Tree), gc, Adaptive(), time);
+        await StartAndRunFirstPassAsync(scheduler, time);
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // The positive arm is asserted in the same test on purpose: an
+            // Is.Empty on its own passes just as well when the pass never ran
+            // at all, so it needs a witness that this pass did measure bytes.
+            Assert.That(backlog.Measurements, Has.Count.EqualTo(1));
+            Assert.That(backlog.Measurements[0].Value, Is.EqualTo(4_096));
+            Assert.That(unavailable.Measurements, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task ExecuteAsync_zero_primes_the_wal_retention_counters_for_each_tree()
+    {
+        const string Tree = "walgc-metering-priming";
+        var gc = Substitute.For<ILatticeWalGc>();
+        gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Report(entriesTrimmed: 0));
+        var time = new VirtualTimeProvider();
+
+        using var shed = new InstrumentRecorder(LatticeMetrics.MaterialiserPinReportsShed, Tree);
+        using var pins = new InstrumentRecorder(LatticeMetrics.SnapshotPinCount, Tree);
+
+        var scheduler = CreateScheduler(FactoryWithTrees(Tree), gc, Adaptive(), time);
+        await StartAndRunFirstPassAsync(scheduler, time);
+        await scheduler.StopAsync(CancellationToken.None);
+
+        // A Counter exports no series until its first Add, so a tree that has
+        // never shed a pin report and never held a snapshot pin was silent on
+        // both - indistinguishable from a dead subsystem (issue #2694). Adding
+        // zero creates the series without perturbing the value.
+        Assert.Multiple(() =>
+        {
+            Assert.That(shed.Measurements, Has.Count.EqualTo(1));
+            Assert.That(shed.Measurements[0].Value, Is.Zero);
+            Assert.That(pins.Measurements, Has.Count.EqualTo(1));
+            Assert.That(pins.Measurements[0].Value, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task ExecuteAsync_zero_primes_a_tree_only_once_across_passes()
+    {
+        const string Tree = "walgc-metering-priming-idempotent";
+        var gc = Substitute.For<ILatticeWalGc>();
+        gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Report(entriesTrimmed: 0));
+        var time = new VirtualTimeProvider();
+
+        using var shed = new InstrumentRecorder(LatticeMetrics.MaterialiserPinReportsShed, Tree);
+
+        var scheduler = CreateScheduler(FactoryWithTrees(Tree), gc, Adaptive(), time);
+        await StartAndRunFirstPassAsync(scheduler, time);
+        var parked = time.NextTimerAsync();
+        time.Advance(time.LastScheduledDelay);
+        await Parked(parked);
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.That(shed.Measurements, Has.Count.EqualTo(1),
+            "priming exists to create the series once, not to add a zero on every pass");
     }
 
     [Test]

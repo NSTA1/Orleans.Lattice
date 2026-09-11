@@ -702,12 +702,24 @@
       ]
     },
     {
+      "id": 134,
+      "title": "Leaf-materialiser pin advancement by outcome (rate) - issue #2694",
+      "description": "What each merged leaf-materialiser pin report actually ADVANCED (orleans.lattice.materialiser.pin.advances), by outcome: offset = the durable checkpoint offset moved forward, which is the only outcome that can lower the WAL GC offset floor and let retention fall; frontier_only = the HLC frontier moved but the offset did not, so retention is unchanged; none = a report at or behind the existing pin on both axes. It exists because the durable_writes panel beside it counts WRITES, and writes are not proportional to advancement: pins are bucketed, so one advancing consumer rewrites its whole bucket, and a frontier-only merge rewrites the pin at the same offset. A store writing steadily while offset stays flat is a stalled retention floor presenting as healthy write throughput, which durable_writes alone cannot show. Emitted unconditionally on every merge, so all three series exist for any tree with a live pin grain rather than appearing only once the condition occurs.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 4, "x": 20, "y": 143 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(orleans_lattice_materialiser_pin_advances_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{outcome}}/s" }
+      ]
+    },
+    {
       "id": 125,
       "title": "Leaf-materialiser drain lag p50/p95 (ms) - issue #1030 back-pressure",
       "description": "Distribution of leaf-materialiser drain lag (orleans.lattice.materialiser.drain_lag), recomputed on every tick of the silo-wide WalSaturationSampler hosted service as now minus the MINIMUM materialiser cursor in the in-memory WAL cursor registry. It observes in-memory drain progress, NOT the durable WAL retention floor: a stalled pin store leaves this panel flat, which is what the pin durable-write latency panel below exists to catch. This is the drain-lag back-pressure signal: when it exceeds WalSaturationMaterialiserLagThreshold for WalSaturationMaterialiserLagSampleWindows consecutive sampler ticks the classifier holds the tree at Throttled, a pure back-off that paces each local append by WalThrottledAdmissionPace. Drain lag deliberately does NOT escalate a tree to Saturated and never engages the writer admission gate's LatticeSaturatedException fast-fail (asserted by Drain_lag_never_escalates_to_Saturated), so do not wait on a Saturated transition here: it cannot occur. Because the aggregate is a minimum across consumers, one legitimately dormant consumer and a broad materialiser stall produce an identical reading; the lagging-consumer panel below separates them (issue #2444). A sustained climb here is the early warning the wedge is forming.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 143 },
+      "gridPos": { "h": 7, "w": 8, "x": 12, "y": 143 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },

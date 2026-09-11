@@ -135,6 +135,15 @@ internal sealed class LatticeWalGcScheduler(
     /// </summary>
     private int _generation;
 
+    /// <summary>
+    /// Trees whose zero-primed WAL-retention counter series have already been
+    /// emitted. Confined to the <see cref="ExecuteAsync"/> loop like the fields
+    /// above, and pruned alongside <see cref="_cadence"/> so a deleted tree
+    /// cannot leak an entry for the life of the silo. Re-priming a tree that
+    /// was retired and re-registered is harmless - the prime adds zero.
+    /// </summary>
+    private readonly HashSet<string> _primedTrees = new(StringComparer.Ordinal);
+
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -358,6 +367,18 @@ internal sealed class LatticeWalGcScheduler(
     {
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        // Zero-prime the WAL-retention counters whose healthy steady state is
+        // "never fired". A Counter publishes no series until its first Add, so
+        // a tree that has never shed a pin report and never held a snapshot pin
+        // is silent on both - a shape indistinguishable from a dead subsystem or
+        // a broken instrument (issue #2694). Priming here, once per tree, turns
+        // that silence into an exported zero, which is a measurement. The WAL GC
+        // scheduler is the right primer because it enumerates exactly the trees
+        // whose retention is being collected, which is the population the
+        // question is asked about. Adding zero cannot perturb either value.
+        PrimeRetentionSeries(treeId, treeTag, tenantTag);
+
         TimeSpan next;
         try
         {
@@ -377,7 +398,7 @@ internal sealed class LatticeWalGcScheduler(
             // Backlog metering. Byte accounting is a provider capability, so this
             // is an explicit two-branch decision rather than a silent skip; see
             // PublishBacklogBytes for the contract a consumer relies on.
-            PublishBacklogBytes(report.RetainedBytesAfter, treeTag, tenantTag);
+            PublishBacklogBytes(report.RetainedBytesAfter, report.ByteCeiling, treeTag, tenantTag);
 
             next = reclaimed ? minInterval : Relax(currentInterval, minInterval, interval);
         }
@@ -406,34 +427,72 @@ internal sealed class LatticeWalGcScheduler(
 
     /// <summary>
     /// Publishes the post-pass retained-byte backlog for a tree, when the pass
-    /// measured one.
+    /// measured one, and otherwise publishes the positive "not measured" signal
+    /// naming why.
     /// <para>
     /// Byte accounting is a capability of the configured
     /// <see cref="IWalStorageProvider"/> gated behind the byte-pressure policy
     /// (<see cref="LatticeOptions.WalMaxRetainedBytes"/>), so
     /// <see cref="LatticeWalGcReport.RetainedBytesAfter"/> is
-    /// <see langword="null"/> on a host that has either turned off. That is a
-    /// defined branch, not an incidental skip: nothing is recorded, and the
-    /// absence is positively identifiable because
-    /// <see cref="LatticeMetrics.WalGcPasses"/> is emitted for every pass
-    /// regardless. A tree reporting passes but no backlog-byte samples is
-    /// therefore knowably "not measured" rather than ambiguously "no backlog",
-    /// and its reclaimed volume is still observable in records through
-    /// <see cref="LatticeMetrics.WalEntriesTrimmed"/> and the
+    /// <see langword="null"/> on a host that has either turned off.
+    /// </para>
+    /// <para>
+    /// That branch used to record nothing at all, leaving the absence knowable
+    /// only by <i>inferring</i> it from <see cref="LatticeMetrics.WalGcBacklogBytes"/>
+    /// having no series while <see cref="LatticeMetrics.WalGcPasses"/> did. An
+    /// inference from silence is exactly the reasoning step that produced a
+    /// wrong, retracted root-cause diagnosis on this repository (issue #2692),
+    /// so the branch now states itself through
+    /// <see cref="LatticeMetrics.WalGcBacklogBytesUnavailable"/>, tagged with the
+    /// reason a reader would act on: <c>policy_disabled</c> when no ceiling is
+    /// configured (set <see cref="LatticeOptions.WalMaxRetainedBytes"/>), or
+    /// <c>provider_unsupported</c> when a ceiling <i>is</i> configured and the
+    /// provider still reported no retained byte size (change provider).
+    /// Reclaimed volume in that configuration remains observable in records
+    /// through <see cref="LatticeMetrics.WalEntriesTrimmed"/> and the
     /// <see cref="LatticeMetrics.OutcomeReclaimed"/> pass outcome.
     /// </para>
     /// </summary>
     private static void PublishBacklogBytes(
         long? retainedBytesAfter,
+        long? byteCeiling,
         in KeyValuePair<string, object?> treeTag,
         in KeyValuePair<string, object?> tenantTag)
     {
         if (retainedBytesAfter is not { } backlogBytes)
         {
+            LatticeMetrics.WalGcBacklogBytesUnavailable.Add(
+                1,
+                treeTag,
+                byteCeiling is null
+                    ? LatticeMetrics.ReasonBytePolicyDisabled
+                    : LatticeMetrics.ReasonByteProviderUnsupported,
+                tenantTag);
             return;
         }
 
         LatticeMetrics.WalGcBacklogBytes.Record(backlogBytes, treeTag, tenantTag);
+    }
+
+    /// <summary>
+    /// Emits a one-time zero observation for each WAL-retention counter whose
+    /// healthy steady state is "never incremented", so the series exists and
+    /// reads a true zero instead of being absent. Idempotent per tree: the
+    /// primed set is consulted on every pass and the instrument is touched only
+    /// on the first.
+    /// </summary>
+    private void PrimeRetentionSeries(
+        string treeId,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag)
+    {
+        if (!_primedTrees.Add(treeId))
+        {
+            return;
+        }
+
+        LatticeMetrics.MaterialiserPinReportsShed.Add(0, treeTag, tenantTag);
+        LatticeMetrics.SnapshotPinCount.Add(0, treeTag, tenantTag);
     }
 
     /// <summary>
@@ -500,6 +559,7 @@ internal sealed class LatticeWalGcScheduler(
             if (entry.Value.Generation != generation)
             {
                 _cadence.Remove(entry.Key);
+                _primedTrees.Remove(entry.Key);
             }
         }
     }

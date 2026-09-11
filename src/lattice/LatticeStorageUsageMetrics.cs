@@ -8,10 +8,11 @@ namespace Orleans.Lattice;
 /// <see cref="LatticeMetrics.Meter"/>. The per-tree storage-usage aggregator
 /// pushes the latest <see cref="TreeStorageUsageReport"/> for each tree here
 /// (already coalesced behind <see cref="LatticeOptions.StorageUsageCacheTtl"/>),
-/// and the five observable gauges - <c>storage.wal_bytes</c>,
+/// and the six observable gauges - <c>storage.wal_bytes</c>,
 /// <c>storage.snapshot_bytes</c>, <c>storage.leaf_state_bytes</c>,
-/// <c>storage.total_bytes</c>, and the 0/1 <c>storage.policy.over_threshold</c>
-/// gauge - read from that last-known snapshot when a listener observes the
+/// <c>storage.total_bytes</c>, the 0/1 <c>storage.policy.over_threshold</c>
+/// gauge, and the 0/1 <c>storage.usage_deep_published</c> depth gauge - read
+/// from that last-known snapshot when a listener observes the
 /// meter. Registration is process-wide and idempotent; observation unions
 /// every live instance, so when more than one silo is co-hosted in a single
 /// process (for example an in-process multi-silo test cluster) each silo's
@@ -30,6 +31,19 @@ namespace Orleans.Lattice;
 /// The over-threshold gauge likewise contributes a measurement for a tree only
 /// once a byte-pressure evaluation has observed it.
 /// </para>
+/// <para>
+/// <b>Depth is part of that contract (issue #2693).</b> The snapshot,
+/// leaf-state, and total surfaces are populated only by the deep
+/// <see cref="Publish"/> path; the continuously-driven <see cref="PublishWal"/>
+/// path refreshes WAL bytes alone. A tree seen only through the cheap path
+/// therefore contributes <b>no measurement</b> on those three gauges instead of
+/// the seeded zero it used to export - a zero that was indistinguishable from a
+/// measured one, and which is what let a reader conclude from a live scrape that
+/// no leaf state or snapshots existed when 137 MB of them did. The companion
+/// <c>storage.usage_deep_published</c> gauge reports <c>0</c> for such a tree so
+/// the absence is stated positively rather than left to be inferred from
+/// silence.
+/// </para>
 /// </summary>
 public sealed class LatticeStorageUsageMetrics : IDisposable
 {
@@ -37,7 +51,7 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     private static readonly List<LatticeStorageUsageMetrics> Instances = new();
     private static bool _gaugesRegistered;
 
-    private readonly ConcurrentDictionary<string, (TreeStorageUsageReport Report, DateTimeOffset PublishedAt)> _reports = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (TreeStorageUsageReport Report, bool DeepMeasured, DateTimeOffset PublishedAt)> _reports = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, (bool OverThreshold, DateTimeOffset PublishedAt)> _overThreshold = new(StringComparer.Ordinal);
     private readonly TimeProvider _time;
 
@@ -106,25 +120,25 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
 
         meter.CreateObservableGauge(
             LatticeMetrics.StorageWalBytesName,
-            static () => ObserveAll(static r => r.WalRetainedBytes),
+            static () => ObserveAll(static r => r.WalRetainedBytes, requireDeep: false),
             unit: "By",
             description: "Retained WAL bytes for the tree.");
 
         meter.CreateObservableGauge(
             LatticeMetrics.StorageSnapshotBytesName,
-            static () => ObserveAll(static r => r.SnapshotBytes),
+            static () => ObserveAll(static r => r.SnapshotBytes, requireDeep: true),
             unit: "By",
             description: "Snapshot blob bytes for the tree.");
 
         meter.CreateObservableGauge(
             LatticeMetrics.StorageLeafStateBytesName,
-            static () => ObserveAll(static r => r.LeafStateBytes),
+            static () => ObserveAll(static r => r.LeafStateBytes, requireDeep: true),
             unit: "By",
             description: "Summed leaf/shard-root state bytes for the tree.");
 
         meter.CreateObservableGauge(
             LatticeMetrics.StorageTotalBytesName,
-            static () => ObserveAll(static r => r.TotalBytes),
+            static () => ObserveAll(static r => r.TotalBytes, requireDeep: true),
             unit: "By",
             description: "Sum of the three storage surfaces for the tree.");
 
@@ -133,6 +147,12 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
             static () => ObserveAllOverThreshold(),
             unit: "1",
             description: "1 when the tree's retained WAL bytes currently breach the advisory ceiling, else 0.");
+
+        meter.CreateObservableGauge(
+            LatticeMetrics.StorageUsageDeepPublishedName,
+            static () => ObserveAllDeepPublished(),
+            unit: "1",
+            description: "1 when the tree's snapshot/leaf-state/total byte surfaces carry a real measurement, 0 when only the cheap WAL-only path has run.");
     }
 
     /// <summary>
@@ -142,7 +162,14 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     /// union never double-counts it; co-hosted silos each contribute the trees
     /// they host.
     /// </summary>
-    private static IEnumerable<Measurement<long>> ObserveAll(Func<TreeStorageUsageReport, long> selector)
+    /// <param name="selector">Selects the byte surface to observe from a report.</param>
+    /// <param name="requireDeep">
+    /// When <see langword="true"/>, a tree whose cached report came only from
+    /// the cheap <see cref="PublishWal"/> path contributes no measurement, so a
+    /// surface that was never measured is absent rather than exported as a zero
+    /// indistinguishable from a real one (issue #2693).
+    /// </param>
+    private static IEnumerable<Measurement<long>> ObserveAll(Func<TreeStorageUsageReport, long> selector, bool requireDeep)
     {
         LatticeStorageUsageMetrics[] snapshot;
         lock (RegistrationLock)
@@ -151,7 +178,23 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
         }
         foreach (var instance in snapshot)
         {
-            foreach (var measurement in instance.Observe(selector))
+            foreach (var measurement in instance.Observe(selector, requireDeep))
+            {
+                yield return measurement;
+            }
+        }
+    }
+
+    private static IEnumerable<Measurement<long>> ObserveAllDeepPublished()
+    {
+        LatticeStorageUsageMetrics[] snapshot;
+        lock (RegistrationLock)
+        {
+            snapshot = Instances.ToArray();
+        }
+        foreach (var instance in snapshot)
+        {
+            foreach (var measurement in instance.ObserveDeepPublished())
             {
                 yield return measurement;
             }
@@ -187,7 +230,7 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     public void Publish(TreeStorageUsageReport report)
     {
         ArgumentNullException.ThrowIfNull(report.TreeId);
-        _reports[report.TreeId] = (report, _time.GetUtcNow());
+        _reports[report.TreeId] = (report, true, _time.GetUtcNow());
     }
 
     /// <summary>
@@ -197,11 +240,22 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     /// background poller and the per-tree WAL-only aggregator so the
     /// byte-pressure path and the <c>storage.wal_bytes</c> gauge stay
     /// timely without paying the cost of a deep leaf/snapshot fan-out.
-    /// Snapshot / leaf-state / total bytes continue to reflect the last
-    /// deep publish (if any) until an explicit
+    /// <para>
+    /// A tree seen only through this path is marked <b>not deeply
+    /// measured</b>, so the snapshot, leaf-state, and total gauges publish
+    /// <b>no measurement</b> for it rather than the zero the add factory
+    /// seeds, and the 0/1
+    /// <see cref="LatticeMetrics.StorageUsageDeepPublishedName"/> gauge reads
+    /// <c>0</c> to say so positively. This is the same reasoning that already
+    /// makes this method return early on
+    /// <see cref="TreeWalUsageReport.Partial"/> - do not publish a byte count
+    /// that was not taken - applied to a count that was never taken at all
+    /// (issue #2693). Those three surfaces begin publishing once an explicit
     /// <see cref="ILatticeAdmin.RefreshStorageUsageAsync"/> or
-    /// <see cref="ILattice.GetStorageUsageAsync"/> caller drives a fresh
-    /// deep report through <see cref="Publish"/>.
+    /// <see cref="ILattice.GetStorageUsageAsync"/> caller drives a deep report
+    /// through <see cref="Publish"/>, after which this path carries the deep
+    /// values forward as before.
+    /// </para>
     /// </summary>
     public void PublishWal(TreeWalUsageReport report)
     {
@@ -226,7 +280,7 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
                 TotalBytes = report.WalRetainedBytes,
                 Partial = false,
                 SampledAt = report.SampledAt,
-            }, now),
+            }, false, now),
             (_, existing) =>
             {
                 var prev = existing.Report;
@@ -240,7 +294,7 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
                     Partial = prev.Partial,
                     SampledAt = report.SampledAt,
                 };
-                return (merged, now);
+                return (merged, existing.DeepMeasured, now);
             });
     }
 
@@ -259,12 +313,12 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
         _overThreshold[treeId] = (overThreshold, _time.GetUtcNow());
     }
 
-    private IEnumerable<Measurement<long>> Observe(Func<TreeStorageUsageReport, long> selector)
+    private IEnumerable<Measurement<long>> Observe(Func<TreeStorageUsageReport, long> selector, bool requireDeep)
     {
         var cutoff = _time.GetUtcNow() - StalenessHorizon;
         foreach (var kv in _reports)
         {
-            var (report, publishedAt) = kv.Value;
+            var (report, deepMeasured, publishedAt) = kv.Value;
             if (publishedAt < cutoff)
             {
                 // Series not refreshed within the horizon: the aggregator
@@ -281,8 +335,47 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
                 // "unsupported" sentinel; do not publish a wrong byte count.
                 continue;
             }
+
+            if (requireDeep && !deepMeasured)
+            {
+                // Only the cheap WAL-only path has run for this tree, so the
+                // snapshot / leaf-state / total surfaces were never sampled.
+                // Publishing the seeded zero would be a measurement claim we
+                // cannot make; the companion deep-published gauge reports 0
+                // for this tree so the absence is explained rather than
+                // merely silent (issue #2693).
+                continue;
+            }
+
             yield return new Measurement<long>(
                 selector(report),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
+                LatticeTenantLabel.ForTree(kv.Key));
+        }
+    }
+
+    /// <summary>
+    /// Observes the 0/1 depth flag for every live, non-stale, non-partial tree:
+    /// 1 once a deep report has landed, 0 while only the cheap WAL-only path
+    /// has run. A tree that has never been published at all contributes no
+    /// measurement, so "never seen" stays distinct from "seen WAL-only".
+    /// </summary>
+    private IEnumerable<Measurement<long>> ObserveDeepPublished()
+    {
+        var cutoff = _time.GetUtcNow() - StalenessHorizon;
+        foreach (var kv in _reports)
+        {
+            var (report, deepMeasured, publishedAt) = kv.Value;
+            if (publishedAt < cutoff || report.Partial)
+            {
+                // Staleness eviction is left to Observe so the byte gauges stay
+                // the single owner of the horizon; a partial report publishes no
+                // byte surfaces at all, so it has no depth to report.
+                continue;
+            }
+
+            yield return new Measurement<long>(
+                deepMeasured ? 1L : 0L,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
                 LatticeTenantLabel.ForTree(kv.Key));
         }
