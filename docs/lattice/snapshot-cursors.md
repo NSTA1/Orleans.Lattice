@@ -195,6 +195,30 @@ Over the read-only state API this refusal is mapped to gRPC `ResourceExhausted`;
 | `orleans.lattice.snapshot.replay.entries` | Counter | `tree`, `shard` | WAL entries consumed during snapshot-leaf replay. |
 | `orleans.lattice.snapshot.pins` | ObservableGauge | `tree` | Live WAL retention pins held by snapshot cursors, derived from the WAL cursor registry rather than accumulated. |
 
+`orleans.lattice.snapshot.pins` reports the pins held **now**, derived from the WAL
+cursor registry, rather than accumulating a `+1` on open and a `-1` on close. That is
+what makes it self-healing: an activation lost with its silo never emits a `-1`, but
+there is no compensating write to lose, so the series falls to zero the moment the
+registry stops holding the pin. A value that climbs and stays up is a real pin leak.
+
+Two properties of that derivation are worth knowing before you trust a reading:
+
+- **The value is as of the tree's last WAL GC pass, not as of the scrape.** Opening and
+  closing a cursor updates the series immediately, but the re-derivation that drops a pin
+  no one could report the release of runs once per GC pass. So a pin lost with its silo
+  clears within that tree's *effective* GC interval, which the scheduler varies between
+  [`WalGcMinInterval`](configuration.md#walgcmininterval) and
+  [`WalGcInterval`](configuration.md#walgcinterval) (30 s to 1 h by default). A quiet tree
+  relaxes toward the ceiling, so the worst case on a healthy tree is the ceiling; a tree
+  blocked by an unusable pin holds at the floor, so the tree most likely to be under
+  investigation is also the one that reconciles most often.
+- **Setting `WalGcInterval` to zero or less disables the scheduler, and with it the
+  self-healing.** Neither the per-tree zero-priming nor the re-derivation runs. Opens and
+  closes still keep the series correct, and it still cannot ratchet, so it remains more
+  accurate than a plain accumulating counter - but a pin lost with its silo will never age
+  out of the gauge, because nothing re-reads the registry. Re-enable WAL GC if you need
+  this series to self-heal.
+
 ## Examples
 
 ### Manual lifecycle (durable cursor shape)

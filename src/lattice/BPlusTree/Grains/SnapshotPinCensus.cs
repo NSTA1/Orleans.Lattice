@@ -40,6 +40,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// and unregisters it. The gauge tracks the pin, not the activation, so it
 /// falls to zero exactly when the pin does.
 /// </para>
+/// <para>
+/// <b>The derived value is as of the last WAL GC pass for the tree, not as of
+/// the scrape</b>, and the self-healing half is inert when WAL GC is disabled.
+/// See <see cref="ObservePins"/> for the staleness bound and its consequences
+/// before reading a pin count that disagrees with the registry.
+/// </para>
 /// </summary>
 internal sealed class SnapshotPinCensus
 {
@@ -206,6 +212,36 @@ internal sealed class SnapshotPinCensus
     /// <see cref="LatticeMetrics.TagTree"/> and tenant tags the superseded
     /// up/down counter carried, so existing dashboard panels and queries keep
     /// matching the series unchanged.
+    /// <para>
+    /// <b>Staleness bound.</b> This reports the pin set as of the <i>last WAL GC
+    /// pass for that tree</i>, not as of the scrape. The two mark sites keep the
+    /// graceful paths current at the instant they run, but the self-healing half
+    /// - dropping a pin whose activation was lost with its silo, which no mark
+    /// can ever report - happens only in <see cref="ReconcileAsync"/>, which the
+    /// WAL GC scheduler calls once per pass. So the worst-case lag between a pin
+    /// ceasing to hold the trim floor down and this gauge ceasing to report it
+    /// is that tree's <i>effective</i> GC interval, which the scheduler varies
+    /// within
+    /// <c>[<see cref="LatticeOptions.WalGcMinInterval"/>,
+    /// <see cref="LatticeOptions.WalGcInterval"/>]</c> (30 s to 1 h by default).
+    /// A quiet tree relaxes toward the ceiling, so on a healthy tree the bound
+    /// is the ceiling, not the floor. A tree blocked by an unusable pin holds at
+    /// the floor (issue #2704), so the surface most likely to be under
+    /// investigation is also the one that reconciles most often.
+    /// </para>
+    /// <para>
+    /// <b>With <see cref="LatticeOptions.WalGcInterval"/> at or below zero the
+    /// self-healing half is inert.</b> That setting disables the scheduler
+    /// outright, so neither the per-tree zero-priming nor
+    /// <see cref="ReconcileAsync"/> ever runs. <see cref="MarkHeld"/> and
+    /// <see cref="MarkReleased"/> still keep every graceful path correct, and
+    /// keying on the consumer id still makes the pre-#2700 ratchet
+    /// unrepresentable, so the series remains strictly more accurate than the
+    /// up/down counter it replaced - but a pin lost with its silo would never
+    /// age out of this gauge, because nothing would re-read the registry. A
+    /// deployment that disables WAL GC and needs this gauge to self-heal must
+    /// re-enable it.
+    /// </para>
     /// </summary>
     private IEnumerable<Measurement<long>> ObservePins()
     {
