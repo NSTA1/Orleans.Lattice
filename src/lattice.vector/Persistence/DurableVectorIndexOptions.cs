@@ -133,6 +133,41 @@ public sealed class DurableVectorIndexOptions
     /// returns rather than throwing: it is a bounded slice, not a failure.
     /// </para>
     /// <para>
+    /// <b>The deadline starts at a WAIT, not at the slice.</b> The two bounds above
+    /// are compatible only because of where the second one starts. A deadline
+    /// running from the top of the slice measures the clock rather than the
+    /// source, so on a budget too small for one item it fires before the first
+    /// read is even issued: the source is handed a token that is already
+    /// cancelled, yields nothing, and the slice banks nothing and moves no cursor
+    /// - which is the very stall the after-consumption sample exists to prevent,
+    /// reintroduced above it. #2651 measured that as a coin flip rather than a
+    /// constant failure, because a timer racing a source read resolves
+    /// differently on every run. Four independent measurements of the same
+    /// byte-identical tree, by three people: 21 failures in 30 and 3 in 10 (both
+    /// with no rebuild in the run window), 12 in 25 run sequentially, and 19 in
+    /// 20 when every run was preceded by a rebuild. Do not quote any of these as
+    /// THE rate. The first two share a condition and still straddle the third
+    /// from both sides, so the tempting reading - that the rate tracks how loaded
+    /// the machine is - does not survive its own data. What every point does
+    /// agree on is that a byte-identical tree does not have a stable rate here,
+    /// which is the signature of a race and not of a fixed per-run probability.
+    /// The only sound use of these numbers is the PAIRED one: a before and after
+    /// arm measured under the same conditions, interleaved so machine state is
+    /// shared between them. Interleaving validates the COMPARISON; it tells you
+    /// nothing about the absolute rate. Arming the deadline when the step first
+    /// has to wait is what keeps both bounds intact, and it is the arming MOMENT
+    /// that carries this, not any one branch: reinstating the old moment turns
+    /// the fixture red 20 times in 20.
+    /// </para>
+    /// <para>
+    /// A slice that has banked nothing gets the full budget for that wait rather
+    /// than what remains of it. Truncating it protects no progress - there is none
+    /// - while guaranteeing the stall, and it is not a hypothetical difference: a
+    /// clock charged per item can read as already past the budget on a slice that
+    /// has consumed nothing at all, which turns the remaining budget negative and
+    /// cancels the first read on the spot.
+    /// </para>
+    /// <para>
     /// Bounding the step is also what bounds the TURN a host pumps it on. An
     /// unbounded step held its coordinator's non-reentrant activation for the
     /// whole of a measured four and a half minutes, behind which that
