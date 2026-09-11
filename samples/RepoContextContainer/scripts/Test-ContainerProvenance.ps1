@@ -146,6 +146,7 @@ function New-AgreeingReadings {
 		ArchiveSource             = $durableArchiveSource
 		ArchiveMountType          = 'bind'
 		ArchiveSourceExistsOnHost = $true
+		ArchiveGitReadingExaminable = $true
 		ArchiveGitToplevel        = ''
 		ArchiveIsLinkedWorktree   = $false
 	}
@@ -437,7 +438,7 @@ _Assert -Name 'ACCEPTS an absolute bind source outside every git checkout' `
 	-Condition ((Get-ArchiveDurabilityViolation `
 			-ArchiveDestination '/memory-archive' -ArchiveSource $durableArchiveSource `
 			-ArchiveMountType 'bind' -GitToplevel '' -IsLinkedWorktree $false `
-			-SourceExistsOnHost $true).Count -eq 0)
+			-SourceExistsOnHost $true -GitReadingExaminable $true).Count -eq 0)
 
 # --- the measured defect ----------------------------------------------------
 $refused = Get-ArchiveDurabilityViolation `
@@ -492,6 +493,40 @@ $refused = Get-ArchiveDurabilityViolation `
 _Assert -Name 'REFUSES a source it cannot examine rather than passing it' -Condition ($refused.Count -eq 1)
 _Assert -Name 'and says so, rather than reporting the archive as durable' `
 	-Condition ($refused.Count -ge 1 -and $refused[0].Contains('CANNOT BE ESTABLISHED')) -Detail ($refused -join '; ')
+
+# A check can be blind in TWO ways: the path is not visible (above), or the git
+# query against a perfectly visible path never produced an answer. An empty
+# toplevel is the PASSING state, so collapsing "git said no" into "git did not
+# answer" means the check reports clean exactly when it has been blinded.
+#
+# This is not exotic here. The archive is written by the container as root while
+# this check runs as the operator, so an ownership split is the normal steady
+# state, and `git rev-parse` exits 128 under safe.directory for exactly that.
+$refused = Get-ArchiveDurabilityViolation `
+	-ArchiveDestination '/memory-archive' -ArchiveSource $durableArchiveSource `
+	-ArchiveMountType 'bind' -GitToplevel '' -IsLinkedWorktree $false `
+	-SourceExistsOnHost $true -GitReadingExaminable $false
+_Assert -Name 'REFUSES an empty toplevel when the git query DID NOT COMPLETE' -Condition ($refused.Count -eq 1) -Detail ($refused -join '; ')
+_Assert -Name 'and says the containment CANNOT BE ESTABLISHED rather than reporting durable' `
+	-Condition ($refused.Count -ge 1 -and $refused[0].Contains('CANNOT BE ESTABLISHED')) -Detail ($refused -join '; ')
+
+# The companion, and it is not redundant: a test that only pins the refusal
+# cannot tell you the clean path still works, so a fix that refused everything
+# would look identical to a correct one.
+_Assert -Name 'ACCEPTS the same empty toplevel when the query DID complete' `
+	-Condition ((Get-ArchiveDurabilityViolation `
+			-ArchiveDestination '/memory-archive' -ArchiveSource $durableArchiveSource `
+			-ArchiveMountType 'bind' -GitToplevel '' -IsLinkedWorktree $false `
+			-SourceExistsOnHost $true -GitReadingExaminable $true).Count -eq 0)
+
+# Fail-closed by DEFAULT, not merely when the caller remembers to say so. If the
+# parameter's default were flipped to true, every unanticipated git failure
+# would silently rejoin the clean path, so the default itself is pinned.
+_Assert -Name 'and treats an OMITTED examinability reading as unexaminable, not as clean' `
+	-Condition ((Get-ArchiveDurabilityViolation `
+			-ArchiveDestination '/memory-archive' -ArchiveSource $durableArchiveSource `
+			-ArchiveMountType 'bind' -GitToplevel '' -IsLinkedWorktree $false `
+			-SourceExistsOnHost $true).Count -eq 1)
 
 # ---------------------------------------------------------------------------
 _Section 'Composite report'
@@ -585,9 +620,35 @@ $noArchive.Remove('ArchiveMountType')
 $noArchive.Remove('ArchiveSourceExistsOnHost')
 $noArchive.Remove('ArchiveGitToplevel')
 $noArchive.Remove('ArchiveIsLinkedWorktree')
+$noArchive.Remove('ArchiveGitReadingExaminable')
 $report = Get-ContainerProvenanceReport -Readings $noArchive `
 	-ExpectedCheckout $candidateCheckout -ExpectedSettings $expectedSettings -CaseSensitive $false
 _Assert -Name 'REFUSES readings that carry no archive reading at all' `
+	-Condition ((-not $report.IsSatisfied) -and $report.Violations.Count -eq 1) -Detail ($report.Violations -join '; ')
+
+# An unexaminable git reading has to survive the trip through the COMPOSITE, not
+# merely be handled by the pure function. These two fixtures are what would go
+# red if check 5 were left intact but its new reading were never wired through.
+$blindGit = New-AgreeingReadings
+$blindGit['ArchiveGitReadingExaminable'] = $false
+$report = Get-ContainerProvenanceReport -Readings $blindGit `
+	-ExpectedCheckout $candidateCheckout -ExpectedSettings $expectedSettings -CaseSensitive $false
+_Assert -Name 'REFUSES a report whose archive git query did not complete' `
+	-Condition ((-not $report.IsSatisfied) -and $report.Violations.Count -eq 1) -Detail ($report.Violations -join '; ')
+_Assert -Name 'and reports it as unestablished rather than as a containment finding' `
+	-Condition ($report.Violations.Count -ge 1 -and $report.Violations[0].Contains('CANNOT BE ESTABLISHED')) `
+	-Detail ($report.Violations -join '; ')
+
+# The examinability key MISSING is not the same statement as it being false, and
+# the composite must treat it the same way regardless. Asserted explicitly
+# because otherwise the fail-closed direction rests on the unstated PowerShell
+# detail that [bool] $null is $false - a guard kept honest by an accident of the
+# language is the shape this bucket exists to stop.
+$missingKey = New-AgreeingReadings
+$missingKey.Remove('ArchiveGitReadingExaminable')
+$report = Get-ContainerProvenanceReport -Readings $missingKey `
+	-ExpectedCheckout $candidateCheckout -ExpectedSettings $expectedSettings -CaseSensitive $false
+_Assert -Name 'REFUSES readings that OMIT the archive examinability key entirely' `
 	-Condition ((-not $report.IsSatisfied) -and $report.Violations.Count -eq 1) -Detail ($report.Violations -join '; ')
 
 # ---------------------------------------------------------------------------

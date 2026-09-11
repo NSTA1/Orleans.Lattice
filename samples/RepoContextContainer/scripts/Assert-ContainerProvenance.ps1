@@ -215,19 +215,79 @@ function Get-DeclaredSetting {
 # Only the archive path is passed in. Deliberately: the compose directory is
 # legitimately a worktree and check 2 requires it to be one, so a probe that
 # could see it is a probe that could be keyed on it by a later edit.
+#
+# `Examinable` is the reading that says whether this probe got an ANSWER, as
+# distinct from whether the answer was "no". It is promoted to true only on
+# positive recognition - a clean success, or the exact not-a-repository
+# signature - and never merely because nothing appeared to go wrong. An empty
+# toplevel with `Examinable` false means the query failed and the pure half
+# refuses to call that clean.
 function Get-ArchiveGitReading {
 	param([Parameter(Mandatory)] [AllowEmptyString()] [string] $Path)
 
-	$reading = @{ Exists = $false; Toplevel = ''; IsLinkedWorktree = $false }
+	$reading = @{ Exists = $false; Toplevel = ''; IsLinkedWorktree = $false; Examinable = $false }
 	if ([string]::IsNullOrWhiteSpace($Path)) { return $reading }
 
 	if (-not (Test-Path -LiteralPath $Path)) { return $reading }
 	$reading.Exists = $true
 
-	$toplevel = & git -C $Path rev-parse --show-toplevel 2>$null
-	if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($toplevel)) { return $reading }
+	# git's stderr is matched below, so its locale is pinned for this call only.
+	# A recognition that silently stops matching under a translated git is the
+	# same false clean wearing a different hat.
+	$savedLcAll = $env:LC_ALL
+	$savedLang = $env:LANG
+	$stderrFile = [System.IO.Path]::GetTempFileName()
 
-	$reading.Toplevel = ("$toplevel").Trim()
+	try {
+		$env:LC_ALL = 'C'
+		$env:LANG = 'C'
+
+		$toplevel = ''
+		$exitCode = $null
+
+		try {
+			$toplevel = & git -C $Path rev-parse --show-toplevel 2>$stderrFile
+			$exitCode = $LASTEXITCODE
+		}
+		catch {
+			# git absent from PATH. No answer, so the reading stays unexaminable.
+			return $reading
+		}
+
+		$stderr = if (Test-Path -LiteralPath $stderrFile) { [string] (Get-Content -Raw -LiteralPath $stderrFile -ErrorAction SilentlyContinue) } else { '' }
+
+		if ($exitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($toplevel)) {
+			$reading.Examinable = $true
+			$reading.Toplevel = ("$toplevel").Trim()
+		}
+		elseif ($exitCode -eq 128 -and $stderr -match 'not a git repository \(or any of the parent directories\)') {
+			# The ONE negative answer that is an answer, and the parenthetical is
+			# load-bearing rather than decorative. git emits the BARE phrase
+			# "fatal: not a git repository: <admin dir>" for an ORPHANED LINKED
+			# WORKTREE - one whose .git/worktrees entry has been removed - which is
+			# precisely a state check 5 exists to catch. Matching the bare phrase
+			# would promote that to durable. Only the parenthetical form, emitted
+			# when discovery genuinely walked to the root and found nothing, means
+			# "outside every checkout". Verified against git on all three inputs:
+			# genuine miss (parenthetical), orphaned worktree (bare only), and a
+			# corrupt gitfile ("invalid gitfile format", neither).
+			#
+			# Every other 128 - a dubious-ownership refusal under safe.directory, a
+			# locked or corrupt repository, an orphaned worktree - leaves this
+			# false, because those are failures to look.
+			$reading.Examinable = $true
+		}
+		else {
+			return $reading
+		}
+	}
+	finally {
+		$env:LC_ALL = $savedLcAll
+		$env:LANG = $savedLang
+		Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
+	}
+
+	if ([string]::IsNullOrWhiteSpace($reading.Toplevel)) { return $reading }
 
 	# A LINKED worktree carries a `.git` FILE pointing at the main repository's
 	# admin directory; a primary checkout carries a `.git` DIRECTORY. That is the
@@ -315,6 +375,7 @@ $readings = @{
 	ArchiveSource              = $archiveSource
 	ArchiveMountType           = $archiveMountType
 	ArchiveSourceExistsOnHost  = $archiveGit.Exists
+	ArchiveGitReadingExaminable = $archiveGit.Examinable
 	ArchiveGitToplevel         = $archiveGit.Toplevel
 	ArchiveIsLinkedWorktree    = $archiveGit.IsLinkedWorktree
 }
@@ -350,7 +411,7 @@ foreach ($name in ($ExpectedSetting.Keys | Sort-Object)) {
 	Write-Host ("      in container          : {0}" -f $(if ($observed) { $observed.Substring($observed.IndexOf('=') + 1) } else { '<ABSENT>' }))
 }
 Write-Host ("  memory archive mount      : {0}" -f $(if ($archiveSource) { "$archiveSource -> $ArchiveDestination ($archiveMountType)" } else { "<NOTHING BOUND AT $ArchiveDestination>" }))
-Write-Host ("  archive inside git        : {0}" -f $(if ($archiveGit.Toplevel) { "$($archiveGit.Toplevel)$(if ($archiveGit.IsLinkedWorktree) { ' (LINKED WORKTREE)' } else { ' (checkout)' })" } elseif ($archiveGit.Exists) { '<no - outside every checkout>' } else { '<UNEXAMINABLE - source not present on this host>' }))
+Write-Host ("  archive inside git        : {0}" -f $(if ($archiveGit.Toplevel) { "$($archiveGit.Toplevel)$(if ($archiveGit.IsLinkedWorktree) { ' (LINKED WORKTREE)' } else { ' (checkout)' })" } elseif (-not $archiveGit.Exists) { '<UNEXAMINABLE - source not present on this host>' } elseif (-not $archiveGit.Examinable) { '<UNEXAMINABLE - the git query DID NOT COMPLETE>' } else { '<no - outside every checkout>' }))
 Write-Host ''
 
 if (-not $report.IsSatisfied) {

@@ -541,8 +541,27 @@ function Test-ProvenancePathIsAbsolute {
 	The readings are supplied by the caller, which is what keeps this pure and
 	testable: `ArchiveSource` and `ArchiveMountType` come from the container's own
 	mount table, and `GitToplevel` / `IsLinkedWorktree` from a git query run
-	against that source on the host. `GitToplevel` empty means the archive is not
-	inside any git checkout, which is the state this check wants.
+	against that source on the host.
+
+	AN EMPTY `GitToplevel` IS TWO DIFFERENT FACTS AND THEY ARE NOT INTERCHANGEABLE.
+	Either the source genuinely sits outside every checkout - the state this check
+	wants - or the git query never produced an answer. `git rev-parse` exits 128
+	for dubious ownership under `safe.directory`, for a locked or corrupt
+	repository, and produces nothing at all when git is absent from PATH. The
+	ownership case is not hypothetical here: the archive is written by the
+	container as root while this script runs as the operator, which is precisely
+	the mismatch that provokes exit 128.
+
+	Collapsing the two would mean the check reports CLEAN exactly when it has been
+	blinded, which is the wrong failure direction for the only check that reads
+	the write path. So the caller must state which it is, through
+	`GitReadingExaminable`, and that parameter DEFAULTS TO FALSE: a caller that
+	does not know has not established anything, and silence is not evidence of
+	absence.
+
+	This is the same rule `SourceExistsOnHost` already applies one branch above. A
+	check can be blind in two ways - the path is not visible, or the query failed -
+	and a check that cannot look must not report clean in EITHER of them.
 
 	A linked worktree and an ordinary checkout are reported as DISTINCT
 	violations. They have different lifetimes and different remedies - a worktree
@@ -559,7 +578,11 @@ function Get-ArchiveDurabilityViolation {
 		[AllowNull()] [AllowEmptyString()] [string] $ArchiveMountType,
 		[AllowNull()] [AllowEmptyString()] [string] $GitToplevel,
 		[bool] $IsLinkedWorktree,
-		[bool] $SourceExistsOnHost = $true
+		[bool] $SourceExistsOnHost = $true,
+		# Defaults to FALSE deliberately. A caller that has not positively
+		# recognised "this is not a git repository" has not established that it
+		# is not one, and must not be able to obtain a clean verdict by omission.
+		[bool] $GitReadingExaminable = $false
 	)
 
 	$violations = [System.Collections.Generic.List[string]]::new()
@@ -588,6 +611,9 @@ function Get-ArchiveDurabilityViolation {
 	}
 
 	if ([string]::IsNullOrWhiteSpace($GitToplevel)) {
+		if (-not $GitReadingExaminable) {
+			$violations.Add("the archive bound at '$destination' is at '$source', and the git query against it did not complete, so whether it sits inside a checkout or worktree CANNOT BE ESTABLISHED; git exits 128 for a dubious-ownership refusal under safe.directory and for a locked or corrupt repository, and answers nothing at all when it is absent from PATH. The archive is written by the container as root while this check runs as the operator, which is exactly that ownership mismatch. This is reported rather than passed over, because a check that cannot look must not report clean")
+		}
 		return ,$violations.ToArray()
 	}
 	$toplevel = ConvertFrom-DockerDesktopHostPath -Path $GitToplevel
@@ -656,7 +682,8 @@ function Get-ContainerProvenanceReport {
 				-ArchiveMountType $Readings['ArchiveMountType'] `
 				-GitToplevel $Readings['ArchiveGitToplevel'] `
 				-IsLinkedWorktree ([bool] $Readings['ArchiveIsLinkedWorktree']) `
-				-SourceExistsOnHost ([bool] $Readings['ArchiveSourceExistsOnHost'])))
+				-SourceExistsOnHost ([bool] $Readings['ArchiveSourceExistsOnHost']) `
+		-GitReadingExaminable ([bool] $Readings['ArchiveGitReadingExaminable'])))
 
 	return [pscustomobject] @{
 		Readings    = $Readings
