@@ -1512,7 +1512,14 @@ internal sealed class RepoContextVectorWriter
         try
         {
             var coverage = await LoadCoverageAsync(repoId, cancellationToken).ConfigureAwait(false);
-            await _coverageDigest.RebuildAsync(repoId, coverage, cancellationToken).ConfigureAwait(false);
+            if (!await _coverageDigest.RebuildAsync(repoId, coverage, cancellationToken).ConfigureAwait(false))
+            {
+                // The seed read was gate-pruned, so the digest was deliberately left
+                // unbuilt. Return that directly rather than re-loading: the re-load
+                // would return the same unbuilt digest after a second full page sweep.
+                return RepoContextCoverageDigest.Unbuilt;
+            }
+
             return await _coverageDigest.LoadAsync(repoId, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1535,7 +1542,13 @@ internal sealed class RepoContextVectorWriter
     /// </summary>
     /// <param name="repoId">The repository to audit. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the audit.</param>
-    /// <returns><see langword="true"/> when the digest was re-derived.</returns>
+    /// <returns>
+    /// <see langword="true"/> when the digest was re-derived. <see langword="false"/>
+    /// when there is no digest configured, or when the authoritative scan came back
+    /// gate-pruned and was refused - the audit is the repair path, so mirroring a
+    /// pruned read here would not merely fail to fix a corrupt digest, it would
+    /// re-corrupt a healthy one while reporting success.
+    /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
     public async Task<bool> AuditCoverageDigestAsync(string repoId, CancellationToken cancellationToken)
     {
@@ -1547,8 +1560,7 @@ internal sealed class RepoContextVectorWriter
         }
 
         var coverage = await LoadCoverageAsync(repoId, cancellationToken).ConfigureAwait(false);
-        await _coverageDigest.RebuildAsync(repoId, coverage, cancellationToken).ConfigureAwait(false);
-        return true;
+        return await _coverageDigest.RebuildAsync(repoId, coverage, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1604,7 +1616,28 @@ internal sealed class RepoContextVectorWriter
                 }
             }
 
-            return new RepoContextEmbeddingCoverage(embedded, contentless);
+            return new RepoContextEmbeddingCoverage(embedded, contentless)
+            {
+                // Ask the gate what it withheld, and do it UNCONDITIONALLY rather than
+                // only when the scan came back empty. The documented guidance on
+                // GetRangeReadGateCoverageAsync is to consult it only on an empty read,
+                // and that guidance is right for the hot scan path it was written for -
+                // an extra grain call per empty read is a real tax there.
+                //
+                // This is not that path. It is the O(sources) whole-set read that seeds
+                // and audits the DURABLE coverage digest, so one round trip is rounding
+                // error against a scan that already walks every source. And the
+                // only-when-empty rule is blind to the more dangerous case: a PARTIAL
+                // prune leaves a non-empty result, so it would be skipped, yet it is
+                // strictly worse than a total one. A total prune at least yields an
+                // empty set, which is an anomaly something might notice; a partial
+                // prune yields a populated, plausible, slightly-wrong coverage that
+                // looks exactly like a healthy one. Marked built, that becomes a
+                // durable lie about precisely the sources the gate hid.
+                RangeGateCoverage = await tree
+                    .GetRangeReadGateCoverageAsync(prefix, endExclusive, cancellationToken)
+                    .ConfigureAwait(false),
+            };
         }, cancellationToken);
     }
 
