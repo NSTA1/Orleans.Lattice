@@ -94,6 +94,28 @@ internal static class RepoContextRetrievalStage
 /// be decomposed is a number rather than a measurement. Hence the second instrument.
 /// </para>
 /// <para>
+/// <b>The stages do not sum to the end-to-end figure, and the gap is not measured.</b>
+/// The four stages time the parts of retrieval that have distinct owners; they do not
+/// partition the call. They are recorded from sibling scopes rather than nested ones,
+/// so they do not overlap and their sum is well defined - but work inside a timed call
+/// and outside every stage is real and untimed: argument validation, ranking and
+/// de-duplication of the hit pool, budget packing and receipt bookkeeping for
+/// <c>context</c>, and serialising the payload. That remainder is <b>unattributed</b>.
+/// No instrument measures it, and <b>its size is not currently bounded</b>: the
+/// arithmetic has never been measured against the total, so nothing here licenses
+/// treating the stages plus the remainder as a verified decomposition of the call.
+/// </para>
+/// <para>
+/// <b>How to read that gap, which is the operative part.</b> Subtracting the summed
+/// stage time from the end-to-end time over the same window yields the remainder, and
+/// it must be attributed to <b>none</b> of the stages. A small remainder means the
+/// named stages account for the cost. <b>A large or growing one is itself the
+/// signal</b> - it says the cost has moved somewhere no instrument is watching, which
+/// is a prompt to go and measure rather than a figure to explain away. What it must
+/// never be is quietly folded into whichever stage is nearest, because an unexplained
+/// remainder is precisely where a real cost hides.
+/// </para>
+/// <para>
 /// <b>Every duration carries the retrieval path that produced it.</b> A fast keyword
 /// answer and a fast approximate answer mean opposite things about system health - the
 /// first is a capability loss served quickly, the second is the system working - so a
