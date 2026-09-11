@@ -297,11 +297,15 @@ case where the label *cannot* be stamped; it does nothing about the case where i
 simply *was not*, and that second case is the one this deployment has actually been
 in: the image running on this host resolves no revision at all.
 
-**Test the value, not the exit code.** `docker inspect --format` prints an empty
-line and exits **0** for a label that is present-and-empty and for one that is
-absent entirely. Neither can name the built commit, so the distinction does not
-matter here - but it does mean a check that only inspects `$LASTEXITCODE`, or that
-only looks for a non-zero exit, passes on both. Compare the string.
+**Test the value, not the exit code.** `docker inspect --format` prints an empty line
+and exits **0** in all three of these cases: the label is present and empty, the label
+is absent from the image, and the label name you asked for does not exist at all. The
+first two are both unprovenanced, so telling them apart does not matter - but the third
+is why this matters to whoever maintains the command above. Mistype
+`org.opencontainers.image.revision` and the check still runs, still exits 0, and still
+prints nothing, so it would report every image as unprovenanced rather than reporting
+its own typo. A check that inspects `$LASTEXITCODE`, or that only looks for a non-zero
+exit, passes on all three. Compare the string, and keep the label name exact.
 
 `Assert-ContainerProvenance.ps1` applies the same rule later, against the running
 container: it reads this label first, falls back to a `candidate-<sha>` tag, and
