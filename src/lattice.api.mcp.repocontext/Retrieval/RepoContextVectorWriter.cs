@@ -1070,6 +1070,15 @@ internal sealed class RepoContextVectorWriter
             var contentless = new HashSet<string>(StringComparer.Ordinal);
             if (candidateSourceKeys.Count == 0)
             {
+                // A probe with no candidates still EXECUTED, and returning from here
+                // without a word is what made that execution byte-identical in the
+                // log to a probe that never ran (issue #2679). This is the reachable
+                // zero: both symbol-arm callers build their page keys by filtering
+                // out null-valued records with no empty guard, so a page whose rows
+                // all read null arrives here. Route it through the same reporting
+                // seam as every other execution, so the zero lands as a value rather
+                // than as an absence.
+                ReportProbeAccounting(repoId, new MembershipProbeAccounting());
                 return new RepoContextEmbeddingCoverage(embedded, contentless);
             }
 
@@ -1113,17 +1122,72 @@ internal sealed class RepoContextVectorWriter
     /// <summary>
     /// Emits the probe's per-key accounting (issue #2287).
     /// <para>
-    /// At debug level on every non-empty probe, because the gain this item was opened
+    /// At debug level on <b>every</b> execution, because the gain this item was opened
     /// for is that a gap count now arrives with its denominator and its breakdown
     /// instead of on its own. At warning level only when the probe saw something with
     /// no benign reading - see <see cref="MembershipProbeAccounting.IsAnomalous"/>,
     /// which deliberately excludes the not-returned count.
     /// </para>
+    /// <para>
+    /// "Every execution" includes the one that asked for nothing, which is the repair
+    /// made for issue #2679. A zero-request probe reports a short line of its own
+    /// rather than returning silently: silence there is not a smaller version of the
+    /// ordinary reading, it is the same bytes an operator sees when the probe never
+    /// ran at all, so the state they most want to confirm - it ran and the membership
+    /// was clean - is the one the log could not evidence.
+    /// </para>
     /// </summary>
     private void ReportProbeAccounting(string repoId, MembershipProbeAccounting accounting)
     {
-        if (accounting.Requested == 0)
+        if (accounting.Requested == 0 && !accounting.IsAnomalous)
         {
+            // Deliberately NOT a silent return (issue #2679). A probe that ran and
+            // asked for nothing made a real finding - there was nothing on this page
+            // to ask about - and suppressing it collapsed three distinct states onto
+            // one empty log: the probe ran and found a clean membership, the probe
+            // ran and requested zero keys, and the probe never executed. An operator
+            // enabling debug on this category to investigate vector-writer
+            // dispositions would read the first from evidence that equally supports
+            // the third, and the first reads as a pass.
+            //
+            // The line deliberately keeps the shared "Repo-context membership probe"
+            // prefix and a literal requested=0, so it joins the population an
+            // operator already greps for and is positively identifiable AS a zero
+            // rather than merely being some line.
+            //
+            // Conditioned on IsAnomalous so the warning arm below cannot be bypassed.
+            // A zero-request accounting cannot presently be anomalous - nothing was
+            // probed, so nothing can have been pruned, unparseable, or unrequested -
+            // which means this conjunct is, today, unreachable as false.
+            //
+            // That is deliberate, and the symmetry is worth naming before someone
+            // else notices it: this change deletes an unreachable guard and adds an
+            // unreachable conjunct in the same breath. The difference is DIRECTION.
+            // The guard that was removed SUPPRESSED AN OBSERVATION, so being
+            // unreachable it hid a state an operator needed to see. This one only
+            // PRESERVES AN ALARM PATH, so if it ever begins to matter it can only
+            // make the system louder. A dead branch that can only ever add signal is
+            // not the defect class issue #2679 is about, so do not cite #2679 to
+            // delete it - that would use the issue's own reasoning to undo the
+            // issue's own fix.
+            //
+            // No test covers this conjunct and none can: an anomalous zero-request
+            // accounting is not constructible through any path that reaches this
+            // method. A coverage audit must therefore record it as UNVERIFIED, not
+            // as checked and clean. Telling those two apart is the whole subject of
+            // this issue, and it would be poor form to ship a predicate that blurs
+            // them without saying so here.
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogDebug(
+                    "Repo-context membership probe for '{RepoId}': requested=0. The probe ran and had no "
+                    + "candidate keys, so it asked the store for nothing: this is neither a clean membership "
+                    + "nor a gap, and no disposition should be read from it. It is reported rather than "
+                    + "skipped because a silent zero is byte-identical in the log to a probe that never "
+                    + "executed, and those two call for opposite actions.",
+                    repoId);
+            }
+
             return;
         }
 
