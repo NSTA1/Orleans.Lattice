@@ -1072,16 +1072,33 @@ public static class LatticeMetrics
             description: "WAL entries consumed by the zero-observable-writes snapshot-leaf replay engine.");
 
     /// <summary>
-    /// Up-down counter tracking the number of live WAL retention pins
-    /// registered by snapshot cursors against
-    /// <see cref="IWalCursorRegistry"/>. Incremented on
-    /// <c>OpenSnapshotKeyCursorAsync</c> / <c>OpenSnapshotEntryCursorAsync</c>
-    /// after a successful pin report and decremented on close /
-    /// idle-TTL eviction. Tagged with <see cref="TagTree"/>.
+    /// Name of the observable gauge reporting the number of live WAL retention
+    /// pins registered by snapshot cursors against
+    /// <see cref="IWalCursorRegistry"/>, tagged with <see cref="TagTree"/> and
+    /// the tenant label. Published by
+    /// <see cref="BPlusTree.Grains.SnapshotPinCensus"/>, which derives the value
+    /// from the registry's live pin set for the tree.
+    /// <para>
+    /// This was an <c>UpDownCounter</c> until issue #2700. A counter is
+    /// process-lifetime state, and the <c>+1</c> / <c>-1</c> were guarded by a
+    /// per-<i>activation</i> boolean on the cursor grain, so the increment was
+    /// repeatable across activations while the decrement was not guaranteed:
+    /// an activation collected, migrated, or lost with its silo while holding a
+    /// pin never emitted its compensating <c>-1</c> and the series ratcheted
+    /// permanently upward - which made a genuine pin leak indistinguishable
+    /// from accumulated drift, the one question the instrument exists to
+    /// answer. An observable gauge reporting present truth has no compensating
+    /// write to lose, so a deployment already carrying drift returns to
+    /// reporting the truth on its own after upgrade.
+    /// </para>
+    /// <para>
+    /// The tree set is seeded by the WAL GC scheduler, so a tree that has never
+    /// opened a snapshot cursor still exports an explicit <c>0</c> rather than
+    /// no series at all - the same priming convention issue #2694 established
+    /// for the WAL-retention counters, and for the same reason.
+    /// </para>
     /// </summary>
-    public static readonly UpDownCounter<long> SnapshotPinCount =
-        Meter.CreateUpDownCounter<long>("orleans.lattice.snapshot.pins", unit: "{pin}",
-            description: "Live WAL retention pins held by zero-observable-writes snapshot cursors.");
+    public const string SnapshotPinsGaugeName = "orleans.lattice.snapshot.pins";
 
     // --- WAL garbage-collector instruments ----------------------------------
 
