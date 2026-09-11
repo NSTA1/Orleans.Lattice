@@ -366,10 +366,40 @@ internal sealed class RepoContextCoverageDigestStore(
     /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>
     /// <param name="coverage">The authoritative membership coverage to mirror. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the rebuild.</param>
-    internal async Task RebuildAsync(
+    /// <returns>
+    /// <see langword="true"/> when the digest was re-derived and marked built;
+    /// <see langword="false"/> when the supplied coverage was refused as
+    /// inconclusive and the digest was left exactly as it was.
+    /// </returns>
+    internal async Task<bool> RebuildAsync(
         string repoId, RepoContextEmbeddingCoverage coverage, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
+
+        // A rebuild MIRRORS its input, so it can only ever be as trustworthy as the
+        // read that produced it. A coverage whose absences are not conclusive - the
+        // read-path access gate pruned probed keys, or restricted the scanned range -
+        // is not merely incomplete here: mirroring it would write "these sources are
+        // not covered" for every source the gate withheld, mark that built, and turn a
+        // transient authorization condition into a durable, authoritative, and
+        // self-refreshing lie. Every later pass would then re-embed the whole withheld
+        // set while reporting success.
+        //
+        // Refusing leaves the digest in whatever state it was already in. When that is
+        // unbuilt, callers fall back to the per-source membership probe, which IS gate
+        // accounted and degrades deliberately - which is exactly the behaviour the
+        // unbuilt state already means downstream, so no new state is invented.
+        if (!coverage.AbsenceIsConclusive)
+        {
+            _logger.LogWarning(
+                "Repo {RepoId}: refusing to rebuild the vector-coverage digest because the membership read it " +
+                "would mirror is not conclusive - the read-path access gate pruned {Pruned} probed key(s) and " +
+                "reported range coverage {RangeCoverage}. Seeding from it would record every withheld source as " +
+                "uncovered and mark that authoritative. The digest is left unchanged and this pass falls back to " +
+                "the per-source membership probe.",
+                repoId, coverage.PrunedByAccessGate, coverage.RangeGateCoverage);
+            return false;
+        }
 
         var pages = new Dictionary<int, (HashSet<ulong> Embedded, HashSet<ulong> Contentless)>();
         foreach (var sourceId in coverage.Embedded)
@@ -415,6 +445,7 @@ internal sealed class RepoContextCoverageDigestStore(
             "contentless source(s) across {Pages} page(s). Gap detection now reads a fixed number of digest rows " +
             "per pass instead of two membership reads per source.",
             repoId, coverage.Embedded.Count, coverage.Contentless.Count, RepoContextCoveragePage.PageCount);
+        return true;
     }
 
     /// <summary>
