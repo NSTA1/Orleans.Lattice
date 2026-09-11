@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Tests;
 /// </summary>
 [TestFixture]
 [Category("Unit")]
-public sealed class LatticeWalGcSchedulerCadenceTests
+public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
     private static readonly TimeSpan Ceiling = TimeSpan.FromHours(1);
     private static readonly TimeSpan Floor = TimeSpan.FromSeconds(30);
@@ -74,8 +74,23 @@ public sealed class LatticeWalGcSchedulerCadenceTests
             Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeWalGcScheduler>>(),
             time);
 
-    private static LatticeWalGcReport Report(long entriesTrimmed, long? retainedBytesAfter = null, long? byteCeiling = null) =>
-        new("tree", null, null, null, null, 1, entriesTrimmed, byteCeiling, null, retainedBytesAfter);
+    private static LatticeWalGcReport Report(
+        long entriesTrimmed,
+        long? retainedBytesAfter = null,
+        long? byteCeiling = null,
+        WalGcCursorFloorState cursorFloorState = WalGcCursorFloorState.Available) =>
+        new("tree", null, null, null, null, 1, entriesTrimmed, byteCeiling, null, retainedBytesAfter,
+            false, false, cursorFloorState);
+
+    /// <summary>
+    /// A pass that reclaimed nothing because an unusable durable materialiser
+    /// pin disabled the cursor branch - the defect state of issue #2702. Byte
+    /// for byte the same report a quiescent tree produces, apart from the one
+    /// field that distinguishes them, which is the point: before that field
+    /// existed the scheduler could not tell these two apart.
+    /// </summary>
+    private static LatticeWalGcReport BlockedReport() =>
+        Report(entriesTrimmed: 0, cursorFloorState: WalGcCursorFloorState.BlockedByUnusablePin);
 
     private static Task Parked(Task parked) => parked.WaitAsync(TimeSpan.FromSeconds(30));
 
@@ -509,9 +524,9 @@ public sealed class LatticeWalGcSchedulerCadenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(passes.Measurements, Has.Count.EqualTo(1));
-            Assert.That(passes.Measurements[0].Value, Is.EqualTo(1));
-            Assert.That(passes.Measurements[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("reclaimed"));
+            Assert.That(passes.Counted, Has.Count.EqualTo(1));
+            Assert.That(passes.Counted[0].Value, Is.EqualTo(1));
+            Assert.That(passes.Counted[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("reclaimed"));
             Assert.That(intervals.Measurements, Has.Count.EqualTo(1));
             Assert.That(intervals.Measurements[0].Value, Is.EqualTo(Floor.TotalSeconds));
         });
@@ -534,8 +549,8 @@ public sealed class LatticeWalGcSchedulerCadenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(passes.Measurements, Has.Count.EqualTo(1));
-            Assert.That(passes.Measurements[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("idle"));
+            Assert.That(passes.Counted, Has.Count.EqualTo(1));
+            Assert.That(passes.Counted[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("idle"));
             Assert.That(intervals.Measurements[0].Value, Is.EqualTo(TimeSpan.FromMinutes(1).TotalSeconds));
         });
     }
@@ -558,8 +573,8 @@ public sealed class LatticeWalGcSchedulerCadenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(passes.Measurements, Has.Count.EqualTo(1));
-            Assert.That(passes.Measurements[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("failed"),
+            Assert.That(passes.Counted, Has.Count.EqualTo(1));
+            Assert.That(passes.Counted[0].Tag(LatticeMetrics.TagOutcome), Is.EqualTo("failed"),
                 "a wedged tree must be visible as a failed pass rather than an idle one.");
             Assert.That(backlog.Measurements, Is.Empty);
         });
@@ -873,6 +888,24 @@ public sealed class LatticeWalGcSchedulerCadenceTests
         public IReadOnlyList<Captured> Measurements
         {
             get { lock (_gate) { return _measurements.ToArray(); } }
+        }
+
+        /// <summary>
+        /// The measurements that record a real event, excluding zero-valued
+        /// priming observations.
+        /// <para>
+        /// A Counter publishes no series until its first <c>Add</c>, so several
+        /// WAL-retention series are deliberately primed with a zero so that
+        /// their absence means "not reporting" and a flat zero means "measured,
+        /// never happened" (issues #2694 and #2702). A primed zero is a real
+        /// measurement and a listener sees it, but it is not an occurrence of
+        /// the thing being counted - so a fixture asserting "exactly one idle
+        /// pass" filters it out rather than loosening its count.
+        /// </para>
+        /// </summary>
+        public IReadOnlyList<Captured> Counted
+        {
+            get { lock (_gate) { return _measurements.Where(m => m.Value != 0).ToArray(); } }
         }
 
         public void Dispose() => _listener.Dispose();
