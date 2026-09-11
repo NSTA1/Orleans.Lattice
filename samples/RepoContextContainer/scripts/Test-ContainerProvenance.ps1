@@ -454,6 +454,13 @@ _Assert -Name 'an unrecognised failure is NOT examinable, so an unenumerated fau
 _Assert -Name 'exit 0 with NO toplevel is NOT examinable' `
 	-Condition (-not (Test-GitReadingIsExaminable -ExitCode 0 -StandardError '' -Toplevel ''))
 
+# The exit-code conjunct of the first promotion guard is load-bearing on its own.
+# Nothing else in this suite drives a FAILING exit that nevertheless carries a
+# toplevel, so without this assertion the guard could be relaxed to promote on any
+# non-blank toplevel and every other fixture here would still pass.
+_Assert -Name 'a FAILING exit carrying a toplevel is NOT examinable' `
+	-Condition (-not (Test-GitReadingIsExaminable -ExitCode 128 -StandardError 'fatal: a fault this suite does not enumerate' -Toplevel 'C:\dev\lattice'))
+
 # --- the VM path form must be understood before anything else is asked ------
 _Assert -Name 'a Docker Desktop VM host path is rewritten to the operator path' `
 	-Condition ((ConvertFrom-DockerDesktopHostPath -Path '/run/desktop/mnt/host/c/dev/x') -eq 'C:\dev\x')
