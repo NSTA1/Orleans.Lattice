@@ -548,6 +548,57 @@ jobs:
       - name: Self-test the package selector
         run: .github/workflows/select-test-packages-selftest.sh
 
+      # A samples-only change selects no package leg, because `nonSample`
+      # carries '!samples/**'. That was sound while every sample was
+      # self-contained, and stopped being sound when a sample became the body of
+      # a test. `samples/RepoContextContainer/scripts/Test-ContainerProvenance.ps1`
+      # is a 92-assertion provenance suite whose ONLY executor is
+      # `test/lattice.api.mcp.repocontext`, which shells out to it, and
+      # `test/lattice` hygiene guards read the same sample's compose,
+      # `.env.example` and README. Neither the package-discovery convention
+      # (`src/{name}/` <-> `test/{name}/` <-> `docs/{name}/`) nor the samples
+      # lane below models a `test/{package}/` -> `samples/{sample}/` dependency,
+      # and the samples lane skips this sample outright because it has no csproj
+      # - so the change and its own test were never connected and the run went
+      # green having executed neither. See #2653.
+      #
+      # This asks the selector the narrow question the gate needs: does a
+      # CHANGED sample have a test project that names it? The selector derives
+      # that from the test sources themselves, so it cannot drift from them, and
+      # the answer stays targeted - a sample no test project reads still takes
+      # the cheap samples-only lane and selects nothing. Fanning every samples
+      # change out to the full matrix would close the hole at the cost of a
+      # 46-package run on every sample edit, which is not a trade this repository
+      # makes.
+      #
+      # The step is ungated: it must run before the gate can consult it, and it
+      # is a git diff plus one grep.
+      - name: Detect changed samples with test-project dependents
+        id: sampledeps
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # THREE-dot, for the reasons given on `Detect benchmark harness
+          # changes`: diff against the merge base, which is what THIS branch
+          # changed.
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > /tmp/sampledep-changed-files.txt
+
+          .github/workflows/select-test-packages.sh \
+            --sample-dependents \
+            --changed-file /tmp/sampledep-changed-files.txt \
+            > /tmp/sample-dependents.txt
+
+          if [ -s /tmp/sample-dependents.txt ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::A changed sample is read by the test project(s) of: $(tr '\n' ' ' < /tmp/sample-dependents.txt)"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No changed sample is named by any test source."
+          fi
+
       # Decide whether to run the test matrix at all, and close #2351 while
       # doing it.
       #
@@ -576,12 +627,22 @@ jobs:
       # `version_only` still suppresses the matrix: a release version bump
       # changes no compiled behaviour, and that reasoning is unaffected by
       # which files carry the bump.
+      #
+      # The `else` arm's stated reason used to be "no test-relevant files
+      # changed", and a samples-only change took it. That premise was false
+      # whenever the changed file WAS the body of a test, which is the whole of
+      # #2653: the reason did not merely fail to select a leg, it asserted that
+      # there was nothing to select, so the hole could not be read off the run's
+      # own output. Every arm below now states something that is actually
+      # checked.
       - name: Decide whether to run tests
         id: gate
         env:
+          CODE: ${{ steps.filter.outputs.code }}
           NON_SAMPLE: ${{ steps.filter.outputs.nonSample }}
           WORKFLOWS: ${{ steps.filter.outputs.workflows }}
           VERSION_ONLY: ${{ steps.verbump.outputs.version_only }}
+          SAMPLE_DEPENDENTS: ${{ steps.sampledeps.outputs.found }}
         run: |
           set -euo pipefail
 
@@ -594,9 +655,15 @@ jobs:
           elif [ "$WORKFLOWS" = "true" ]; then
             run_tests=true
             reason="workflow files changed (#2351): the selector's no-match fallback selects every package"
+          elif [ "$SAMPLE_DEPENDENTS" = "true" ]; then
+            run_tests=true
+            reason="a changed sample is named by a test source (#2653): the selector seeds the test project(s) that read it"
+          elif [ "$CODE" = "true" ]; then
+            run_tests=false
+            reason="samples-only change, and no test source names the changed sample(s) by path (whole-tree samples scans are not modelled; see section 4b of select-test-packages.sh)"
           else
             run_tests=false
-            reason="no test-relevant files changed"
+            reason="nothing changed outside documentation, .gitignore, and the separately-laned trees (benchmark, apps, reference-architecture, docs-site), each of which runs its own tests in its own lane"
           fi
 
           echo "run_tests=$run_tests" >> "$GITHUB_OUTPUT"
