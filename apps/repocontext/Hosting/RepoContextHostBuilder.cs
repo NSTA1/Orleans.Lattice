@@ -376,9 +376,11 @@ public static class RepoContextHostBuilder
 
         // Constructed eagerly, for the same reason as the GC meter above: an
         // observable instrument that nobody resolves is never published, so a lazily
-        // registered singleton would leave /metrics with no backup series at all -
-        // which is precisely the absence issue #2640 records, where every capture
-        // threw and no surface could say so. Constructed unconditionally, and not
+        // registered singleton would leave these series absent from /metrics
+        // entirely. The existing orleans_lattice_backup_* family does reach the
+        // exposition, but it reports a zero-entry capture as success and cannot
+        // distinguish "never succeeded" from "failing after an earlier success",
+        // which is the gap issue #2640 records. Constructed unconditionally, and not
         // under the Enabled guard below, so the disabled deployment reports state 0
         // as a value rather than reporting nothing.
         var backupMeter = new RepoContextBackupMeter(backupStatus);

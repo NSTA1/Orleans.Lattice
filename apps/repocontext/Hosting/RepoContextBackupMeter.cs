@@ -10,11 +10,17 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>What this fixes.</b> Issue #2640 records that <c>/metrics</c> carried no
-/// backup series of any kind while every capture threw, so there was nothing for an
-/// alert rule to be written against. <see cref="RepoContextBackupStatus"/> already
-/// held every fact needed; nothing had ever exported it. This type is only the
-/// export, and it derives nothing of its own: the verdict comes from
+/// <b>What this fixes.</b> The existing <c>orleans_lattice_backup_*</c> family does
+/// reach <c>/metrics</c>, and reports per-scope run status, so this is not a missing
+/// surface but an under-determined one. That family collapses "captured nothing"
+/// into success and "never succeeded" into generic failure: a capture that runs,
+/// commits a manifest and protects zero entries is reported as healthy by every
+/// series currently served. Its per-scope gauge is also written only on cycle
+/// completion, so a scope that has never run emits no measurement at all and its
+/// documented <c>0=none</c> value is unreachable - "never ran" is an absent series
+/// rather than a zero. <see cref="RepoContextBackupStatus"/> already held every fact
+/// needed to say all of this; nothing had exported it. This type is only the export,
+/// and it derives nothing of its own: the verdict comes from
 /// <see cref="RepoContextBackupStatus.State"/>, which the health check reads too, so
 /// the two surfaces cannot disagree.
 /// </para>
@@ -23,11 +29,12 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// that is created on the first failure does not exist until the failure, so the
 /// series an alert needs is missing during exactly the window the alert is meant to
 /// cover, and a scraper cannot distinguish "no failures" from "no instrument". Worse,
-/// a series first created late can be refused outright: the collector caps its series
-/// (issue #2480), and a cap refuses <em>new</em> series, so an instrument that waits
-/// for an event can find the door shut when the event arrives. Observable instruments
-/// are sampled at scrape time from process start, so every series here exists, with a
-/// real value, from the first scrape onwards.
+/// a series first created late can be refused outright: the collector checks its
+/// ceilings only when a series is <em>created</em> and never on the update path, so a
+/// late first occurrence is refused permanently while the exposition still looks
+/// complete (issue #2480). Observable instruments are sampled at scrape time from
+/// process start, so every series here first occurs at the earliest moment any
+/// series can.
 /// </para>
 /// <para>
 /// <b>It is constructed eagerly by the host builder.</b> An observable instrument
@@ -84,10 +91,10 @@ public sealed class RepoContextBackupMeter : IDisposable
         ArgumentNullException.ThrowIfNull(status);
         _status = status;
 
-        // Published on the host meter, whose name sits under the collector's
+        // Published on the shared host meter, whose name sits under the collector's
         // subscribed prefix, so these series reach the existing /metrics endpoint
         // with no exposition change.
-        _meter = new Meter(RepoContextDrainForecastService.MeterName);
+        _meter = new Meter(RepoContextHostMeter.Name);
 
         _meter.CreateObservableGauge(
             StateGaugeName,
@@ -112,7 +119,12 @@ public sealed class RepoContextBackupMeter : IDisposable
                 + "denominates "
                 + StateGaugeName
                 + ": a container reporting state 2 with this at zero has attempted and achieved nothing, "
-                + "which is the condition that previously reported healthy on every surface.");
+                + "which is the condition that previously reported healthy on every surface. This "
+                + "deliberately overlaps orleans_lattice_backup_captures_total and will normally disagree "
+                + "with it; neither is broken. That counter is estate-wide and spans every backup scope "
+                + "and the whole cluster's history, whereas this one is scoped to this container's "
+                + "agent-memory tree and resets when the process restarts. Compare each against itself "
+                + "over time, never against the other.");
 
         _meter.CreateObservableGauge(
             LastFullEntriesGaugeName,

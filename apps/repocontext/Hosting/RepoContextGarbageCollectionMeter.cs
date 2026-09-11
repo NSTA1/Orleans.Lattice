@@ -109,7 +109,7 @@ public sealed class RepoContextGarbageCollectionMeter : IDisposable
         _readPauseTotal = readPauseTotal ?? GC.GetTotalPauseDuration;
         _readCollectionCount = readCollectionCount ?? ReadTotalCollections;
 
-        _meter = new Meter(RepoContextDrainForecastService.MeterName);
+        _meter = new Meter(RepoContextHostMeter.Name);
         _meter.CreateObservableCounter(
             PauseSecondsCounterName,
             () => _readPauseTotal().TotalSeconds,
