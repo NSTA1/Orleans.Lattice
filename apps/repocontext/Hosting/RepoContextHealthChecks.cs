@@ -156,3 +156,97 @@ public sealed class RepoContextRetrievalReadinessHealthCheck(RepoContextRetrieva
             _ => Building,
         };
 }
+
+/// <summary>
+/// Reports whether the durable agent-memory tree is actually being captured. It is
+/// the missing machine-readable surface recorded by issue #2640: the backup wiring
+/// added by #2602 kept a complete status object and printed it to the log, and no
+/// health component ever read it, so a container on which every single capture threw
+/// (issue #2621, 14 failures out of 14 attempts) answered every probe green.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Never-captured is Degraded, not Healthy.</b> That is the entire point. A
+/// component that reports healthy until something fails cannot distinguish a
+/// container capturing hourly from one that has never captured at all, which is the
+/// exact confusion that let an unprotected deployment look fine. So the verdicts are
+/// three-valued: Healthy states a capture demonstrably happened, Degraded states
+/// that nothing is known to be protected yet, and Unhealthy states an attempt
+/// failed.
+/// </para>
+/// <para>
+/// <b>Disabled is Healthy, deliberately.</b> A host is required to boot with no
+/// backup sink configured, and failing an optional durability feature would make it
+/// mandatory. The verdict is healthy and the message says plainly that the tree is
+/// not captured anywhere, so the fact is reported rather than implied by silence.
+/// </para>
+/// <para>
+/// <b>It is deliberately not tagged for readiness or liveness.</b> A failing backup
+/// is not a reason to restart the container or to stop routing MCP traffic to it -
+/// draining a box because its backup sink is unreachable would turn a durability
+/// fault into an availability outage, and would stop the very traffic that keeps the
+/// memory worth backing up. It is registered on its own tag and served on its own
+/// path so it can be probed and alerted on without touching orchestration.
+/// </para>
+/// <para>
+/// Unlike its siblings here, no result is cached: every field of the message is live
+/// state, and a cached result would report a stale verdict.
+/// </para>
+/// </remarks>
+/// <param name="status">The shared backup status.</param>
+public sealed class RepoContextBackupHealthCheck(RepoContextBackupStatus status) : IHealthCheck
+{
+    /// <summary>The health-check registration name.</summary>
+    public const string Name = "backup";
+
+    private readonly RepoContextBackupStatus _status = status
+        ?? throw new ArgumentNullException(nameof(status));
+
+    /// <inheritdoc />
+    public Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken cancellationToken = default)
+    {
+        // One read of the derived state, then one rendering of the evidence behind
+        // it. The state is derived on the status object itself so this check and the
+        // metric series can never disagree about the same container.
+        var state = _status.State;
+        var description = _status.Describe();
+
+        var result = state switch
+        {
+            RepoContextBackupState.Disabled => HealthCheckResult.Healthy(description),
+
+            RepoContextBackupState.Protected => HealthCheckResult.Healthy(description),
+
+            RepoContextBackupState.NeverCaptured => HealthCheckResult.Degraded(
+                "Nothing has been captured yet, so nothing produced by this container is recoverable. "
+                + description),
+
+            RepoContextBackupState.CapturedNothing => HealthCheckResult.Degraded(
+                "Captures are completing but the last full capture described ZERO entries, so it "
+                + "protects nothing. " + description),
+
+            RepoContextBackupState.FailingAfterCapture => HealthCheckResult.Unhealthy(
+                "The most recent capture attempt FAILED; earlier captures from this container are still "
+                + "recoverable but the configured cadence is broken. " + description),
+
+            // Nothing this container produced is recoverable and attempts are
+            // failing. This is the state issue #2621 reported as healthy.
+            RepoContextBackupState.FailingUnprotected => HealthCheckResult.Unhealthy(
+                "Capture is FAILING and this container has never captured anything, so the tree is "
+                + "unprotected by it. " + description),
+
+            // Fail closed. Every state above is enumerated, so this arm is reached
+            // only by a state added later without a verdict, and the safe reading of
+            // an unclassified backup condition is "not known to be protected" rather
+            // than a green probe. It deliberately claims nothing specific about the
+            // cause, because it does not know one.
+            _ => HealthCheckResult.Unhealthy(
+                $"Backup is in an unrecognised state ({state}), so protection cannot be confirmed. "
+                + description),
+        };
+
+        return Task.FromResult(result);
+    }
+}

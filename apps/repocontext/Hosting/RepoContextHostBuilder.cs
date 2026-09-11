@@ -40,6 +40,19 @@ public static class RepoContextHostBuilder
     public const string ReadinessPath = "/health/ready";
 
     /// <summary>
+    /// The backup probe path: whether the durable agent-memory tree is actually
+    /// being captured.
+    /// </summary>
+    /// <remarks>
+    /// Served apart from liveness and readiness on purpose. A failing backup must not
+    /// restart the container or pull it out of rotation - that would convert a
+    /// durability fault into an availability outage - but it does have to be probeable
+    /// by something other than a human reading logs, which is what issue #2640
+    /// records was missing.
+    /// </remarks>
+    public const string BackupPath = "/health/backup";
+
+    /// <summary>
     /// The Prometheus scrape path. Serves every instrument published on a
     /// Lattice-owned meter in the process, in the standard text exposition format.
     /// </summary>
@@ -58,6 +71,9 @@ public static class RepoContextHostBuilder
 
     /// <summary>The health-check tag identifying the readiness probe.</summary>
     public const string ReadinessTag = "ready";
+
+    /// <summary>The health-check tag identifying the backup probe.</summary>
+    public const string BackupTag = "backup";
 
     /// <summary>
     /// The host's shutdown budget when the deployment declares no container grant:
@@ -355,8 +371,18 @@ public static class RepoContextHostBuilder
         // always state positively what is (or is not) being captured rather than
         // saying nothing when nothing is wired.
         builder.Services.AddSingleton(backupSettings);
-        builder.Services.AddSingleton(
-            new RepoContextBackupStatus(backupSettings.Enabled, RepoContextHostTrees.Memory));
+        var backupStatus = new RepoContextBackupStatus(backupSettings.Enabled, RepoContextHostTrees.Memory);
+        builder.Services.AddSingleton(backupStatus);
+
+        // Constructed eagerly, for the same reason as the GC meter above: an
+        // observable instrument that nobody resolves is never published, so a lazily
+        // registered singleton would leave /metrics with no backup series at all -
+        // which is precisely the absence issue #2640 records, where every capture
+        // threw and no surface could say so. Constructed unconditionally, and not
+        // under the Enabled guard below, so the disabled deployment reports state 0
+        // as a value rather than reporting nothing.
+        var backupMeter = new RepoContextBackupMeter(backupStatus);
+        builder.Services.AddSingleton(backupMeter);
 
         // The status is registered unconditionally and the service is not, and the
         // asymmetry is deliberate rather than an oversight. The status is what lets
@@ -390,6 +416,17 @@ public static class RepoContextHostBuilder
         healthChecks.AddCheck<RepoContextRetrievalReadinessHealthCheck>(
             RepoContextRetrievalReadinessHealthCheck.Name,
             tags: new[] { ReadinessTag });
+
+        // The backup component, on its own tag. Registered unconditionally, exactly
+        // as the status it reads is: the deployment with no sink is the one whose
+        // probe most needs to answer, and a component that only exists when backup is
+        // enabled would fall silent in the case where nothing is protected at all.
+        // Deliberately carries neither LivenessTag nor ReadinessTag - see
+        // RepoContextBackupHealthCheck for why a failing backup must not restart the
+        // container or stop traffic to it.
+        healthChecks.AddCheck<RepoContextBackupHealthCheck>(
+            RepoContextBackupHealthCheck.Name,
+            tags: new[] { BackupTag });
         if (isAzure)
         {
             healthChecks.AddLatticeScalingHealthCheck(tags: new[] { ReadinessTag });
@@ -405,6 +442,10 @@ public static class RepoContextHostBuilder
         app.MapHealthChecks(ReadinessPath, new HealthCheckOptions
         {
             Predicate = registration => registration.Tags.Contains(ReadinessTag),
+        });
+        app.MapHealthChecks(BackupPath, new HealthCheckOptions
+        {
+            Predicate = registration => registration.Tags.Contains(BackupTag),
         });
 
         app.MapGet(MetricsPath, (RepoContextMetricsCollector collector) =>
