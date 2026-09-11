@@ -244,6 +244,8 @@ public sealed class RepoContextRetrievalLatencyTests
         using var published = new PublishedInstruments();
         using var probe = new RepoContextRetrievalLatencyReporter();
         probe.RecordCall(RepoContextRetrievalTool.Search, RepoContextRetrievalPath.SemanticExact, TimeSpan.Zero);
+        probe.RecordStage(
+            RepoContextRetrievalStage.Embed, RepoContextRetrievalPath.SemanticExact, TimeSpan.Zero);
 
         Assert.Multiple(() =>
         {
@@ -260,7 +262,92 @@ public sealed class RepoContextRetrievalLatencyTests
             Assert.That(
                 published.PlatformTagged(RepoContextRetrievalLatencyReporter.DurationInstrumentName), Is.True,
                 "latency is a property of the host process, so it carries the reserved platform tenant value");
+            Assert.That(
+                published.PlatformTagged(RepoContextRetrievalLatencyReporter.StageDurationInstrumentName), Is.True,
+                "and so does the stage instrument. The test's name says instruments, plural, and asserting only "
+                + "one of the two left the other resting entirely on TenantMetricDimensionHygieneTests over in "
+                + "test/lattice - which does catch it, but which a repocontext-only test run never executes.");
         });
+    }
+
+    /// <summary>
+    /// The measured value, not merely the fact of a measurement, reaches the meter.
+    /// <para>
+    /// Every other case in this fixture asserts on counts and tags, which a reporter
+    /// that recorded a constant would satisfy exactly as well as one that times the
+    /// work: a latency series reading zero for every call carries the same tool, path
+    /// and stage tags, and the same totals, as a correct one. On an instrument whose
+    /// stated purpose is to say which stage of which path is slow, the value IS the
+    /// measurand, so it is asserted directly.
+    /// </para>
+    /// <para>
+    /// Driven through the reporter rather than a real retrieval on purpose. Asserting
+    /// that an end-to-end duration is greater than zero would make the test a function
+    /// of how fast the machine ran it, which is the clock dependency that made
+    /// issue #2629 a 23% flake. A supplied elapsed and an exact expected value is
+    /// deterministic, and it catches three separate defects: a constant, a unit drift
+    /// between milliseconds and the declared seconds, and a value recorded against the
+    /// wrong tag tuple.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void A_recorded_duration_reaches_the_meter_as_seconds_with_its_value_intact()
+    {
+        using var latency = new RepoContextRetrievalLatencyReporter();
+        using var measurements = new LatencyMeasurements();
+
+        latency.RecordCall(
+            RepoContextRetrievalTool.Search,
+            RepoContextRetrievalPath.SemanticExact,
+            TimeSpan.FromMilliseconds(1500));
+        latency.RecordStage(
+            RepoContextRetrievalStage.Embed,
+            RepoContextRetrievalPath.SemanticExact,
+            TimeSpan.FromMilliseconds(250));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                measurements.CallValues(
+                    RepoContextRetrievalTool.Search, RepoContextRetrievalPath.SemanticExact),
+                Is.EqualTo(new[] { 1.5d }).Within(1e-9),
+                "1500 ms must arrive as 1.5, because the instrument declares its unit as seconds. A "
+                + "constant records the wrong number here, and so does a reporter that forwards "
+                + "milliseconds under a seconds unit - which no count-based assertion can see.");
+            Assert.That(
+                measurements.StageValues(RepoContextRetrievalStage.Embed),
+                Is.EqualTo(new[] { 0.25d }).Within(1e-9),
+                "and the stage instrument carries its own value through the same conversion.");
+        });
+    }
+
+    /// <summary>
+    /// The documented negative clamp is enforced, not merely described.
+    /// <para>
+    /// The reporter states that a negative elapsed is clamped to zero so a clock
+    /// irregularity cannot poison the sum, "which would be indistinguishable from a
+    /// genuine measurement once summed". That is a safety property asserted in prose,
+    /// and prose is not a guarantee: deleting the clamp changes no count and no tag, so
+    /// every other case in this fixture passes without it.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void A_negative_elapsed_is_clamped_to_zero_so_it_cannot_poison_the_sum()
+    {
+        using var latency = new RepoContextRetrievalLatencyReporter();
+        using var measurements = new LatencyMeasurements();
+
+        latency.RecordCall(
+            RepoContextRetrievalTool.Search,
+            RepoContextRetrievalPath.SemanticExact,
+            TimeSpan.FromSeconds(-5));
+
+        Assert.That(
+            measurements.CallValues(RepoContextRetrievalTool.Search, RepoContextRetrievalPath.SemanticExact),
+            Is.EqualTo(new[] { 0d }).Within(1e-9),
+            "A negative duration must reach the meter as zero. Recorded as -5 it would subtract from the "
+            + "histogram sum, dragging the reported mean below the true one - an under-report, which is the "
+            + "direction that hides a latency regression rather than raising a false alarm about one.");
     }
 
     private static RepoContextSearchService CreateSearch(
@@ -416,6 +503,8 @@ public sealed class RepoContextRetrievalLatencyTests
     {
         private readonly Dictionary<(string Tool, string Path), int> _calls = new();
         private readonly Dictionary<(string Stage, string Path), int> _stages = new();
+        private readonly Dictionary<(string Tool, string Path), List<double>> _callValues = new();
+        private readonly Dictionary<(string Stage, string Path), List<double>> _stageValues = new();
         private readonly MeterListener _listener = new();
 
         public LatencyMeasurements()
@@ -429,7 +518,7 @@ public sealed class RepoContextRetrievalLatencyTests
                     l.EnableMeasurementEvents(instrument);
                 }
             };
-            _listener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
+            _listener.SetMeasurementEventCallback<double>((instrument, value, tags, _) =>
             {
                 string? first = null;
                 string? path = null;
@@ -460,6 +549,24 @@ public sealed class RepoContextRetrievalLatencyTests
                 lock (bucket)
                 {
                     bucket[(first, path)] = bucket.GetValueOrDefault((first, path)) + 1;
+                }
+
+                // The measured VALUE is retained, not only the fact of a measurement.
+                // Counting alone cannot distinguish an instrument that times the work
+                // from one that records a constant: a latency series reporting zero for
+                // every call carries exactly the same tags and totals as a correct one.
+                var values = instrument.Name == RepoContextRetrievalLatencyReporter.DurationInstrumentName
+                    ? _callValues
+                    : _stageValues;
+                lock (values)
+                {
+                    if (!values.TryGetValue((first, path), out var list))
+                    {
+                        list = [];
+                        values[(first, path)] = list;
+                    }
+
+                    list.Add(value);
                 }
             });
             _listener.Start();
@@ -502,6 +609,31 @@ public sealed class RepoContextRetrievalLatencyTests
             lock (_stages)
             {
                 return _stages.Keys.Select(k => k.Path).Distinct(StringComparer.Ordinal).ToArray();
+            }
+        }
+
+        /// <summary>
+        /// The recorded end-to-end durations, in seconds, for one tool and path.
+        /// </summary>
+        public IReadOnlyList<double> CallValues(string tool, string path)
+        {
+            lock (_callValues)
+            {
+                return _callValues.TryGetValue((tool, path), out var list) ? list.ToArray() : [];
+            }
+        }
+
+        /// <summary>
+        /// The recorded durations, in seconds, for one stage across every path.
+        /// </summary>
+        public IReadOnlyList<double> StageValues(string stage)
+        {
+            lock (_stageValues)
+            {
+                return _stageValues
+                    .Where(kv => kv.Key.Stage == stage)
+                    .SelectMany(kv => kv.Value)
+                    .ToArray();
             }
         }
 
