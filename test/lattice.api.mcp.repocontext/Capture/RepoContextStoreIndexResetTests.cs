@@ -639,4 +639,88 @@ public sealed class RepoContextStoreIndexResetTests
             .GetAsync(RepoContextKeys.Repo("acme"), Ct);
         Assert.That(marker, Is.Null, "remove_repo must still delete the root marker.");
     }
+
+    /// <summary>
+    /// The completion half of the #2642 observability contract. After a reset
+    /// finishes, the same status verb onboarding uses (<c>index_status</c>,
+    /// backed by the job grain) reports the teardown <see cref="RepoIndexStatus.Completed"/>
+    /// with a completion time, an elapsed duration, and the count of trees swept -
+    /// not the pre-2642 <see cref="RepoIndexStatus.None"/>, which read as "never
+    /// attempted" and was indistinguishable from a reset that never ran.
+    /// </summary>
+    [Test]
+    public async Task ResetIndexAsync_reports_a_completed_teardown_through_index_status()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var store = Store(harness);
+
+        var (codeIndex, _) = await SeedFullRepoAsync(harness, "acme", Ct);
+
+        var result = await store.ResetIndexAsync("acme", Ct);
+
+        var progress = await harness.GrainFactory.GetGrain<IRepoIndexJobGrain>("acme").GetProgressAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(progress.Status, Is.EqualTo(RepoIndexStatus.Completed),
+                "A finished reset reports Completed through index_status - not None, which reads as "
+                + "'never attempted' and is the reading that prompts re-running a destructive verb.");
+            Assert.That(progress.Phase, Is.EqualTo(RepoIndexPhase.Done));
+            Assert.That(progress.CompletedAt, Is.Not.Null, "A completed reset stamps a completion time.");
+            Assert.That(progress.ElapsedMilliseconds, Is.Not.Null,
+                "A completed reset records how long it took.");
+            Assert.That(progress.TreesSwept, Is.EqualTo(RepoContextTrees.CodeIndexTrees.Count),
+                "Every code-index tree was swept, and the completion snapshot says so.");
+            Assert.That(progress.EntriesDeleted, Is.EqualTo(result.EntriesDeleted),
+                "The pollable status agrees with the returned result on how much was dropped.");
+            Assert.That(progress.EntriesDeleted, Is.EqualTo(codeIndex.Count));
+        });
+    }
+
+    /// <summary>
+    /// The in-progress half, and the guard against an optimistic completion
+    /// marker. A reset interrupted before it finishes (here, a token already
+    /// cancelled when the sweep begins) must stay <see cref="RepoIndexStatus.Running"/>
+    /// in phase <see cref="RepoIndexPhase.Resetting"/> and must never carry a
+    /// completion time: <see cref="RepoIndexJobGrain.CompleteResetAsync"/> is the
+    /// sole completion signal and runs only after the sweep loop finishes, which
+    /// an interrupted reset never reaches. If a completion marker were ever
+    /// written at or before <see cref="RepoIndexJobGrain.BeginResetAsync"/> - the
+    /// exact inversion #2642 exists to prevent - this test's
+    /// <c>CompletedAt Is.Null</c> assertion fires.
+    /// </summary>
+    [Test]
+    public async Task ResetIndexAsync_interrupted_before_it_finishes_stays_running_and_never_reports_complete()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var store = Store(harness);
+
+        await SeedFullRepoAsync(harness, "acme", Ct);
+        await SeedIngestedMarkerAsync(harness, "acme", Ct);
+
+        // TearDown and BeginReset take no token and run, marking the teardown
+        // Running; the census read and the sweep loop honour the token and throw
+        // before CompleteResetAsync is ever reached.
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        Assert.CatchAsync<OperationCanceledException>(
+            async () => await store.ResetIndexAsync("acme", cts.Token));
+
+        var progress = await harness.GrainFactory.GetGrain<IRepoIndexJobGrain>("acme").GetProgressAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(progress.Status, Is.EqualTo(RepoIndexStatus.Running),
+                "An interrupted reset is in progress, not done.");
+            Assert.That(progress.Phase, Is.EqualTo(RepoIndexPhase.Resetting),
+                "The teardown phase is visible so a caller sees a reset - not a build - in flight.");
+            Assert.That(progress.CompletedAt, Is.Null,
+                "A reset that never finished must never carry a completion time - the optimistic-marker guard.");
+            Assert.That(progress.Status, Is.Not.EqualTo(RepoIndexStatus.Completed),
+                "Absence of completion must never be readable as success.");
+        });
+    }
 }

@@ -138,4 +138,26 @@ public sealed record RepoIndexProgress
     /// </summary>
     [Id(18)]
     public int SymbolsEmbedded { get; init; }
+
+    /// <summary>
+    /// The number of code-index trees a reset sweep has dropped so far, out of
+    /// the fixed set it sweeps. Zero outside a reset. It is the reset's
+    /// coarse-grained progress evidence: while <see cref="Phase"/> is
+    /// <see cref="RepoIndexPhase.Resetting"/> this advances as each tree is
+    /// tombstoned, so a caller can see a teardown making progress rather than
+    /// merely a boolean "resetting" flag that a wedged reset would also show.
+    /// </summary>
+    [Id(19)]
+    public int TreesSwept { get; init; }
+
+    /// <summary>
+    /// The number of entries a reset sweep has tombstoned across the code-index
+    /// trees so far. Zero outside a reset. The fine-grained companion to
+    /// <see cref="TreesSwept"/>: it advances within a single large tree's drain,
+    /// so a reset dropping a big corpus is observably moving even while
+    /// <see cref="TreesSwept"/> holds steady on one tree. On completion it equals
+    /// the reset result's <c>EntriesDeleted</c>.
+    /// </summary>
+    [Id(20)]
+    public int EntriesDeleted { get; init; }
 }
