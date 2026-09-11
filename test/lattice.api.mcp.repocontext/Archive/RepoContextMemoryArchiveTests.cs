@@ -60,6 +60,18 @@ public sealed class RepoContextMemoryArchiveTests
     private string PreviousSnapshotPath => Path.Combine(
         archiveDirectory, RepoContextMemoryArchive.PreviousSnapshotFileName);
 
+    /// <summary>
+    /// Seeds memory through <see cref="RepoContextMemoryCodec.Accessor"/> - the path
+    /// production writes through - rather than a raw <c>SetAsync</c>.
+    /// <para>
+    /// This is load-bearing and it is why issue #2641's sibling defect stayed hidden.
+    /// A raw <c>SetAsync</c> stores the record un-enveloped; the capture path stores it
+    /// inside an <see cref="MvRegister"/> blob. A round-trip suite that seeds raw
+    /// therefore exercises a route production never takes, and certifies it while
+    /// reporting coverage of the one it does. Every export, import, and read below has
+    /// to see the shape a real store holds or it is testing a different system.
+    /// </para>
+    /// </summary>
     private static async Task SeedMemoryAsync(
         ILattice tree, Serializer serializer, string repoId, params string[] ids)
     {
@@ -75,16 +87,23 @@ public sealed class RepoContextMemoryArchiveTests
                 Body = RepoContextValues.Lww($"body-{id}", Clock(1_000)),
             };
 
-            await tree.SetAsync(
-                RepoContextKeys.Memory(repoId, "gotchas", id), serializer.SerializeToArray(record));
+            await RepoContextMemoryCodec
+                .Accessor(tree, RepoContextKeys.Memory(repoId, "gotchas", id))
+                .SetAsync("local", serializer.SerializeToArray(record));
         }
     }
 
+    /// <summary>
+    /// Reads memory back through the supported decoder, which unwraps the register the
+    /// capture path writes. Deserializing the stored bytes directly decodes the leading
+    /// ASCII of the JSON envelope as a type reference and fails identically for every
+    /// record, whether the archive is perfect or shredded.
+    /// </summary>
     private static async Task<MemoryRecord?> ReadMemoryAsync(
         ILattice tree, Serializer serializer, string repoId, string id)
     {
         var bytes = await tree.GetAsync(RepoContextKeys.Memory(repoId, "gotchas", id));
-        return bytes is null ? null : serializer.Deserialize<MemoryRecord>(bytes);
+        return RepoContextMemoryCodec.Fold(bytes, serializer);
     }
 
     [Test]
@@ -147,7 +166,17 @@ public sealed class RepoContextMemoryArchiveTests
         Assert.Multiple(() =>
         {
             Assert.That(restore.Restored, Is.False);
-            Assert.That(restore.Reason, Does.Contain("already holds memory"));
+            Assert.That(restore.Outcome, Is.EqualTo(RepoContextMemoryRestoreOutcome.NothingToRestore));
+            Assert.That(restore.Reason, Does.Contain("already holds"));
+
+            // The decline must say WHY the store was left alone, not merely that it
+            // was. A store can be non-empty because it is in use or because a previous
+            // restore died partway, and only the second is wreckage worth overwriting
+            // (issue #2641) - so the reason has to name the marker it consulted.
+            Assert.That(restore.Reason, Does.Contain("restore-state marker"));
+            Assert.That(
+                restore.RecordsInStore, Is.EqualTo(1),
+                "The decline must report what the store actually holds rather than zero.");
         });
     }
 
