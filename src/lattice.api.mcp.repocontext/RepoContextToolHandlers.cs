@@ -912,6 +912,15 @@ internal static class RepoContextToolHandlers
     /// unknown repository is a no-op that reports zero deletions. Reaching this
     /// handler means the caller cleared the fail-closed authorization gate and
     /// the host opted writes in.
+    /// <para>
+    /// The reset reports its own lifecycle through <c>repocontext_index_status</c>,
+    /// the same surface onboarding uses: while the sweep runs the status is
+    /// <c>Running</c> in phase <c>Resetting</c> with advancing tree/entry counters,
+    /// and it flips to <c>Completed</c> only once the sweep finishes. So a caller
+    /// that loses this call's response can still poll to learn whether the reset
+    /// finished, rather than being forced to re-run a destructive verb because
+    /// still-working and wedged looked identical.
+    /// </para>
     /// </summary>
     /// <param name="context">The MCP request context, used to resolve the store.</param>
     /// <param name="repoId">The repository identity whose code index to reset.</param>
@@ -953,8 +962,11 @@ internal static class RepoContextToolHandlers
 
     /// <summary>
     /// Returns the current progress snapshot for a repository's indexing job so a
-    /// caller can follow an asynchronous onboarding pass to completion. Read-only.
-    /// A repository that was never onboarded reports status <c>None</c>.
+    /// caller can follow an asynchronous onboarding pass to completion, or an
+    /// in-flight reset (phase <c>Resetting</c>) as it tears the index down, so one
+    /// status verb answers whether a repository is being built up or torn down
+    /// right now. Read-only. A repository that was never onboarded reports status
+    /// <c>None</c>.
     /// </summary>
     /// <param name="context">The MCP request context, used to resolve the job grain.</param>
     /// <param name="repoId">The repository identity whose indexing job to inspect.</param>

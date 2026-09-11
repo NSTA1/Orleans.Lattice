@@ -105,6 +105,23 @@ internal sealed class RepoIndexJobState
     public int SymbolsEmbedded { get; set; }
 
     /// <summary>
+    /// The number of code-index trees a reset sweep has dropped so far. Zero
+    /// outside a reset. Advances while <see cref="Phase"/> is
+    /// <see cref="RepoIndexPhase.Resetting"/> so a teardown reports progress, not
+    /// merely a flag.
+    /// </summary>
+    [Id(19)]
+    public int TreesSwept { get; set; }
+
+    /// <summary>
+    /// The number of entries a reset sweep has tombstoned so far. Zero outside a
+    /// reset. The fine-grained companion to <see cref="TreesSwept"/>; on
+    /// completion it equals the reset result's <c>EntriesDeleted</c>.
+    /// </summary>
+    [Id(20)]
+    public int EntriesDeleted { get; set; }
+
+    /// <summary>
     /// Projects the durable state into the immutable snapshot returned to callers.
     /// </summary>
     /// <param name="repoId">The repository identity carried in the grain key.</param>
@@ -124,6 +141,8 @@ internal sealed class RepoIndexJobState
         FilesEmbedded = FilesEmbedded,
         FilesContentProjected = FilesContentProjected,
         SymbolsEmbedded = SymbolsEmbedded,
+        TreesSwept = TreesSwept,
+        EntriesDeleted = EntriesDeleted,
         Attempt = Attempt,
         StartedAt = StartedAt,
         UpdatedAt = UpdatedAt,

@@ -26,4 +26,18 @@ public enum RepoIndexPhase
 
     /// <summary>The run finished; no phase is executing.</summary>
     Done = 5,
+
+    /// <summary>
+    /// Tearing the code index down rather than building it up: a
+    /// <c>repocontext_reset_index</c> sweep is dropping the repository's
+    /// structural, symbol, content, cross-reference, session, and vector trees.
+    /// This phase is what lets one status verb answer "is this repository being
+    /// built up or torn down right now" - a job in <see cref="Resetting"/> is a
+    /// reset in flight, distinct from every build phase above, so a caller that
+    /// loses the reset's response can still poll <c>index_status</c> and see the
+    /// teardown running (rather than the pre-2642 silence, where a reset left no
+    /// pollable signal at all and a still-working reset was indistinguishable
+    /// from one that had died).
+    /// </summary>
+    Resetting = 6,
 }

@@ -1079,6 +1079,18 @@ internal sealed partial class RepoContextStore
         var resetStopwatch = System.Diagnostics.Stopwatch.StartNew();
         await TearDownIndexingControlAsync(repoId).ConfigureAwait(false);
 
+        // Mark the reset observable BEFORE any deletion. TearDownIndexingControlAsync
+        // above cleared the job grain (it cancels and clears any in-flight index
+        // run), so index_status would otherwise report None - indistinguishable
+        // from a never-onboarded repository - for the whole of a sweep that can run
+        // for minutes. BeginResetAsync re-populates that same surface with a
+        // running teardown (status Running, phase Resetting), so a caller that
+        // loses this call's response can still poll index_status and see the reset
+        // in flight rather than nothing at all. The completion signal is written
+        // only by CompleteResetAsync after the sweep finishes, never here.
+        var jobGrain = _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId);
+        await jobGrain.BeginResetAsync().ConfigureAwait(false);
+
         var scanPrefix = RepoContextKeys.RepoScanPrefix(repoId);
         var end = RepoContextPortability.PrefixUpperBound(scanPrefix)
             ?? throw new McpException("The repository id produced an unbounded delete range.");
@@ -1142,6 +1154,7 @@ internal sealed partial class RepoContextStore
         }
 
         long deleted = 0;
+        var treesSwept = 0;
         foreach (var treeName in RepoContextTrees.CodeIndexTrees)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1159,6 +1172,14 @@ internal sealed partial class RepoContextStore
             deleted += await Tree(treeName)
                 .DeleteRangeAsync(scanPrefix, end, DeleteStepSize, maxAttempts: null, cancellationToken)
                 .ConfigureAwait(false);
+
+            // Report progress after each tree drains, so index_status shows the
+            // teardown advancing (evidence of progress, not merely a "resetting"
+            // flag). A wedged sweep stops advancing these counters, which is the
+            // signal a caller needs; the completion marker is still withheld until
+            // the whole loop finishes.
+            treesSwept++;
+            await jobGrain.ReportResetProgressAsync(treesSwept, checked((int)deleted)).ConfigureAwait(false);
         }
 
         // The root marker sits at repo/{repoId} with no trailing separator, so it
@@ -1201,6 +1222,16 @@ internal sealed partial class RepoContextStore
         }
 
         resetStopwatch.Stop();
+
+        // The sole completion signal, written only now the sweep has finished.
+        // Everything above this line ran with the job surface reporting a running
+        // teardown; this is what flips it to Completed, so a caller can distinguish
+        // "reset in progress" from "reset done" and, critically, an interrupted
+        // reset (which never reaches this line) never reports itself complete.
+        await jobGrain
+            .CompleteResetAsync(resetStopwatch.ElapsedMilliseconds, treesSwept, checked((int)deleted))
+            .ConfigureAwait(false);
+
         return new RepoContextIndexResetResult
         {
             RepoId = repoId,
