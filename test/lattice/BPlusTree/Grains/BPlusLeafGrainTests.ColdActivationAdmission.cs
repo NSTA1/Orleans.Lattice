@@ -399,7 +399,42 @@ public class BPlusLeafGrainColdActivationAdmissionTests
                 Is.EqualTo(LeafSnapshotHydrationAdmission.UnknownHeapLimitBudgetBytes),
                 "and an unreported limit takes a fixed conservative bound - an unknown ceiling is not "
                 + "licence to be unbounded, since unbounded is the defect");
+
+            // Adaptivity stated as a property over two synthetic limits rather
+            // than as a single point. A constant tuned to one container passes a
+            // point assertion and fails this one, which is the whole difference
+            // between a bound that travels to a 2 GiB host and one that does not.
+            Assert.That(
+                LeafSnapshotHydrationAdmission.ResolveBudgetBytes(16L * 1024 * 1024 * 1024),
+                Is.EqualTo(2 * LeafSnapshotHydrationAdmission.ResolveBudgetBytes(8L * 1024 * 1024 * 1024)),
+                "halving the heap hard limit halves the budget - the gate scales with the container it "
+                + "is actually running in, and carries no assumption about how large that container is");
         });
+    }
+
+    [Test]
+    public void The_shared_gate_is_sized_from_the_heap_hard_limit_and_not_from_a_last_GC_reading()
+    {
+        // ResolveBudgetBytes being correct proves nothing about which signal the
+        // process-wide gate feeds it, and that choice is the load-bearing half:
+        // a derivation that is tested but unused ships a constant, and the
+        // obvious alternative signals are actively wrong here. GCMemoryInfo's
+        // MemoryLoadBytes and HeapSizeBytes are LAST-GC values that read zero
+        // until a collection has happened - so during a cold-activation storm,
+        // which is the exact window this gate exists to protect, a gate reading
+        // them sees no pressure and admits everything. HighMemoryLoadThresholdBytes
+        // is worse still: it tracks physical host RAM and ignores the hard limit
+        // entirely, so inside a container it can sit several times above the
+        // ceiling and never trip.
+        //
+        // Both sides are computed, so this asserts the derivation rather than a
+        // machine-dependent constant and holds on any host or CI agent.
+        Assert.That(
+            LeafSnapshotHydrationAdmission.Shared.BudgetBytes,
+            Is.EqualTo(LeafSnapshotHydrationAdmission.ResolveBudgetBytes(
+                GC.GetGCMemoryInfo().TotalAvailableMemoryBytes)),
+            "the shared gate must derive its budget from TotalAvailableMemoryBytes, which is the same "
+            + "cgroup-derived figure the heap hard limit itself is sized from");
     }
 
     [Test]
