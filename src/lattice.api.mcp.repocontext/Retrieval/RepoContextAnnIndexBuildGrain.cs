@@ -328,9 +328,41 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         // survives a process death - so a transient store fault costs one slice and
         // the build resumes from its checkpoint rather than being abandoned until
         // some query happens to re-arm it.
-        var progress = await registry
-            .BuildStepAsync(repoId, space, CancellationToken.None)
-            .ConfigureAwait(true);
+        //
+        // THE FAULT IS COUNTED AND RETHROWN, NOT HANDLED. A step that throws is
+        // still a step this coordinator took, and leaving it uncounted reintroduces
+        // the precise ambiguity the slice counter exists to remove - one layer down.
+        // A corpus read that CANNOT BE SERVED is a different condition from one that
+        // is served and returns nothing: the empty read completes, so it reaches the
+        // record below and lands on 'idle', whereas the faulting read never reaches
+        // it at all. Under a record taken only after a completed step, a coordinator
+        // faulting on every single tick totals zero, which reads as "this coordinator
+        // is not stepping" and sends the next investigation to the scheduler while
+        // the coordinator is in fact stepping hard and failing every time. Issue
+        // #2737 measured exactly that: a vector-plane partition whose projection
+        // checkpoint had fallen off the write-ahead log threw on every read, and the
+        // designed self-heal that would have cleared it was refused by the access
+        // gate, so the fault was permanent rather than transient.
+        //
+        // The catch deliberately does nothing except count. It does not log (the
+        // base class already logs the exception it receives), does not swallow, does
+        // not back off, and does not set _advancedThisActivation - a step that banked
+        // nothing must not be able to satisfy the once-per-activation check that lets
+        // a converged coordinator stand down. Rethrowing unchanged is what keeps the
+        // timer's own behaviour, the checkpoint-resume path, and the reminder
+        // lifetime exactly as they were.
+        VectorIndexBuildProgress progress;
+        try
+        {
+            progress = await registry
+                .BuildStepAsync(repoId, space, CancellationToken.None)
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            sliceReporter.RecordSlice(RepoContextAnnBuildSliceOutcome.Faulted);
+            throw;
+        }
 
         _advancedThisActivation = true;
 

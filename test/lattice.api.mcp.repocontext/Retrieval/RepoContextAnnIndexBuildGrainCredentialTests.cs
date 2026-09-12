@@ -80,11 +80,40 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         /// </summary>
         public bool Denied { get; set; }
 
+        /// <summary>
+        /// Makes every corpus read throw, standing in for a store-of-record read
+        /// that cannot be served at all.
+        /// <para>
+        /// This is a DIFFERENT condition from <see cref="Denied"/> and the
+        /// distinction is the whole point of the fixtures that use it. A denied
+        /// read returns cleanly and empty, so the build step completes and reports
+        /// progress; a faulting read completes nothing, so the step itself throws.
+        /// The live condition this models is issue #2737: a vector-plane partition
+        /// whose projection checkpoint has fallen off the write-ahead log throws
+        /// <see cref="LeafProjectionStaleException"/> on every read, and the
+        /// designed self-heal that would clear it is refused by the access gate.
+        /// </para>
+        /// </summary>
+        public bool Faults { get; set; }
+
+        private void ThrowIfFaulted()
+        {
+            if (Faults)
+            {
+                throw new LeafProjectionStaleException(
+                    "Leaf projection for tree 'repo-context-vector-membership' partition 3 cannot be rebuilt "
+                    + "from the WAL: the durable projection checkpoint (offset 3548) has fallen off the log "
+                    + "(oldest readable offset 4361) and no covering snapshot.");
+            }
+        }
+
         /// <inheritdoc />
         public int Dimensions => inner.Dimensions;
 
         private bool Admitted()
         {
+            ThrowIfFaulted();
+
             // Read the ambient credential at the moment of the call, exactly where
             // the real gate resolves the caller subject.
             var subject = LatticeCredentialContext.Current?.Token;
@@ -365,6 +394,39 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
             {
                 await Grain.ProcessNextPhaseAsync();
             }
+        }
+
+        /// <summary>
+        /// Drives an exact number of phase ticks, absorbing a fault from any one of
+        /// them and continuing, and returns how many threw.
+        /// <para>
+        /// This is what the real timer does. The base class logs an exception out of
+        /// <c>ProcessNextPhaseAsync</c> and leaves the timer running, so a
+        /// persistently faulting corpus read produces tick after tick that each
+        /// throw - it does not stand the coordinator down. A pump that propagated
+        /// the first fault would model a coordinator that stops, which is precisely
+        /// the behaviour that does NOT occur and would hide the defect.
+        /// </para>
+        /// </summary>
+        /// <param name="ticks">The number of timer ticks to deliver.</param>
+        /// <returns>The number of ticks that threw.</returns>
+        public async Task<int> PumpAbsorbingFaultsAsync(int ticks)
+        {
+            await Grain.EnsureBuildingAsync(Space);
+            var faulted = 0;
+            for (var tick = 1; tick <= ticks; tick++)
+            {
+                try
+                {
+                    await Grain.ProcessNextPhaseAsync();
+                }
+                catch (LeafProjectionStaleException)
+                {
+                    faulted++;
+                }
+            }
+
+            return faulted;
         }
 
         public void Dispose()

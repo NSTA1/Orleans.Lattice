@@ -46,6 +46,14 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
     /// </summary>
     private const int SteppedCorpus = 64;
 
+    /// <summary>
+    /// The number of consecutive faulting ticks the fault fixtures deliver. Chosen
+    /// larger than one so the assertions distinguish "counted once" from "counted
+    /// on every step", and small enough to stay well inside <c>MaxTicks</c> when
+    /// the same rig is afterwards pumped to convergence.
+    /// </summary>
+    private const int FaultingTicks = 6;
+
     [Test]
     public async Task A_coordinator_that_never_steps_records_no_slice_at_all()
     {
@@ -70,7 +78,156 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
             Assert.That(slices.Advanced, Is.Zero);
             Assert.That(slices.Starved, Is.Zero);
             Assert.That(slices.Idle, Is.Zero);
+            Assert.That(slices.Faulted, Is.Zero);
         });
+    }
+
+    [Test]
+    public async Task A_faulting_corpus_read_is_counted_as_a_step_and_not_mistaken_for_never_stepping()
+    {
+        // THE THIRD SIGNATURE, AND THE ONE THE LIVE RIG IS ACTUALLY IN.
+        //
+        // The counter above separates "stepping and banking nothing" from "never
+        // stepping" for a corpus that is EMPTY. It does not separate either from a
+        // corpus that FAULTS, and that is a different condition with a different
+        // remedy: a denied read returns cleanly and empty so the step completes,
+        // whereas a read whose leaf projection is stale throws, so the step throws
+        // before it can be counted at all.
+        //
+        // Issue #2737 measured exactly that on the acceptance rig: a vector-plane
+        // partition whose projection checkpoint had fallen off the log threw on
+        // every read, and the designed self-heal was refused by the access gate, so
+        // the fault was permanent. Under a record taken only after a completed step
+        // that produces a total of ZERO - byte-identical to the (b) signature the
+        // fixture above pins - and the zero then says "this coordinator is not
+        // stepping", sending the next investigation to the scheduler when the
+        // coordinator is in fact stepping hard and failing every time.
+        //
+        // A counter that reports the wrong layer is worse than no counter, so the
+        // faulting step must be counted, on its own arm, and the fault must still
+        // propagate so the timer's own logging and the build's checkpoint-resume
+        // behaviour are unchanged.
+        using var rig = new Rig(RunAuthority());
+        rig.Backing.SeedRing(RepoId, Space, SteppedCorpus);
+        rig.Backing.Gate(RepoId, Space).Faults = true;
+        rig.Start();
+
+        var faulted = await rig.PumpAbsorbingFaultsAsync(FaultingTicks);
+        var slices = rig.SliceReporter.Read();
+        var converged = await rig.Grain.IsConvergedAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(faulted, Is.GreaterThan(0),
+                "positive control: ticks must actually have thrown, or this fixture is measuring "
+                + "a healthy build and would go vacuously green");
+            Assert.That(converged, Is.False,
+                "positive control: a build whose corpus cannot be read must not converge");
+            Assert.That(slices.Total, Is.EqualTo(FaultingTicks),
+                "every tick delivered took a step and must be counted, whether it completed or "
+                + "threw. Leaving the throwing ones uncounted makes a permanently faulting "
+                + "coordinator read as a coordinator that never ran, which is the exact ambiguity "
+                + "this counter was added to remove");
+            Assert.That(slices.Faulted, Is.EqualTo(faulted),
+                "and every tick that threw must land on its own arm: 'faulted' is a "
+                + "store-of-record read that could not be served, which needs a different remedy "
+                + "from 'idle' (a read that was served and returned nothing) and from 'starved' "
+                + "(a read that was served too slowly to bank a vector). Asserted against the "
+                + "observed throw count rather than against the tick count, because the build "
+                + "legitimately takes some steps that do not read the source at all");
+            Assert.That(slices.Idle, Is.Zero,
+                "a fault must not be folded into the idle arm, which would report a corpus that "
+                + "was read successfully and found empty - a condition whose remedy is to check "
+                + "the gate and the embedding throughput, not the projection");
+        });
+    }
+
+    [Test]
+    public async Task A_corpus_that_faults_and_then_recovers_resumes_and_converges()
+    {
+        // THE RESUME QUESTION. A permanent fault must not latch the coordinator into
+        // a state it cannot leave, because the remedy for issue #2737 is upstream:
+        // the projection is repaired and the SAME coordinator must then go on to
+        // build. If a run of faults poisoned the activation - by banking a converged
+        // empty index, by standing the timer down, or by leaving the classifier
+        // comparing against a progress reading that never advances again - the plane
+        // would stay dark after its cause was fixed, and that would present as the
+        // repair not having worked.
+        using var rig = new Rig(RunAuthority());
+        rig.Backing.SeedRing(RepoId, Space, SteppedCorpus);
+        var gate = rig.Backing.Gate(RepoId, Space);
+        gate.Faults = true;
+        rig.Start();
+
+        var faulted = await rig.PumpAbsorbingFaultsAsync(FaultingTicks);
+        Assert.That(faulted, Is.GreaterThan(0),
+            "positive control: the build must genuinely have been faulting before it recovers");
+        Assert.That(await rig.Grain.IsConvergedAsync(), Is.False,
+            "positive control: it must not already have converged");
+
+        // The projection is repaired upstream. Nothing else changes.
+        gate.Faults = false;
+
+        var ticks = await rig.PumpAsync();
+        var slices = rig.SliceReporter.Read();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ticks, Is.LessThan(MaxTicks),
+                "the coordinator must resume and converge once its corpus can be read again; a "
+                + "build that cannot recover from a transient projection fault would need the "
+                + "silo restarted to pick up the repair");
+            Assert.That(slices.Faulted, Is.EqualTo(faulted),
+                "the faulted total is a record of what happened and must not be rewritten by the "
+                + "recovery");
+            Assert.That(slices.Advanced, Is.GreaterThan(0),
+                "and the steps after the repair must land on the advanced arm, so the series "
+                + "shows the recovery rather than merely stopping");
+        });
+    }
+
+    [Test]
+    public async Task A_fault_does_not_let_a_converged_coordinator_stand_down_instead_of_retrying()
+    {
+        // THE STAND-DOWN HAZARD, which is why the fault is counted and rethrown and
+        // nothing else is touched on that path.
+        //
+        // InProgress is `!Converged || !_advancedThisActivation`, so for a build that
+        // has NOT converged the once-per-activation flag is irrelevant - the first
+        // disjunct already keeps the coordinator alive. It becomes load-bearing
+        // exactly when the build HAS converged: the flag is what lets a converged
+        // coordinator take one re-opening step per activation and then stand down.
+        //
+        // A fault must not be able to satisfy it. Setting the flag on the throwing
+        // path would mean a converged coordinator whose store has gone bad takes one
+        // step, throws, and then reports itself finished on the very next tick -
+        // retiring itself on the strength of a step that banked nothing, at the
+        // moment its store most needs re-reading. The coordinator must keep
+        // attempting instead, so a repair that lands later is picked up.
+        using var rig = new Rig(RunAuthority());
+        rig.Backing.SeedRing(RepoId, Space, SteppedCorpus);
+        rig.Start();
+
+        var ticks = await rig.PumpAsync();
+        Assert.That(ticks, Is.LessThan(MaxTicks),
+            "positive control: the build must converge first, or this fixture exercises the "
+            + "not-converged path where the flag is irrelevant and would prove nothing");
+        Assert.That(await rig.Grain.IsConvergedAsync(), Is.True,
+            "positive control: the coordinator must actually be converged");
+
+        // A fresh activation, so the once-per-activation flag starts clear, and then
+        // the store goes bad under a coordinator that believes it is finished.
+        rig.Reactivate();
+        rig.Backing.Gate(RepoId, Space).Faults = true;
+
+        var faulted = await rig.PumpAbsorbingFaultsAsync(FaultingTicks);
+
+        Assert.That(faulted, Is.EqualTo(FaultingTicks),
+            "every tick must have attempted a step and thrown. A coordinator that stands down "
+            + "after the first fault would throw once and then quietly report itself complete "
+            + "for every tick after it, which both loses the retry and hides the fault from the "
+            + "faulted arm - the series would show a single fault and then silence, which reads "
+            + "as a transient blip rather than as a store that is still broken");
     }
 
     [Test]
@@ -249,7 +406,7 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
             Assert.That(outcomes, Is.Not.Empty,
                 "positive control: the reflection must find members, or every assertion below "
                 + "passes over an empty set and reports nothing");
-            Assert.That(outcomes, Has.Length.EqualTo(3),
+            Assert.That(outcomes, Has.Length.EqualTo(4),
                 "a member added without a tag of its own would fall onto 'idle' and be silently "
                 + "merged with it; add the tag and update this count together");
             Assert.That(tags, Is.Unique,
@@ -333,21 +490,31 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
 
         var arms = minted.Select(m => m.Key).ToArray();
 
+        // Reflected over the enum rather than listed by hand, so an arm added later
+        // cannot be left unminted by a fixture that still passes over the arms that
+        // came before it. The count is asserted first so the reflection can never go
+        // vacuously green.
+        var expectedArms = Enum.GetValues<RepoContextAnnBuildSliceOutcome>()
+            .Select(RepoContextAnnBuildSliceReporter.DescribeOutcome)
+            .ToArray();
+
         Assert.Multiple(() =>
         {
             Assert.That(minted, Is.Not.Empty,
                 "positive control: the listener must have observed measurements, or every "
                 + "assertion below passes over an empty set and pins nothing");
+            Assert.That(expectedArms, Is.Not.Empty,
+                "positive control: the reflection must find members, or the arm assertion below "
+                + "passes over an empty set");
             Assert.That(minted.Select(m => m.Value), Is.All.Zero,
                 "a pre-mint must not move the reading it is minting, or the counter starts "
                 + "life lying about work that never happened");
-            Assert.That(arms, Does.Contain(RepoContextAnnBuildSliceReporter.ProgressAdvancedTag));
-            Assert.That(arms, Does.Contain(RepoContextAnnBuildSliceReporter.ProgressStarvedTag),
-                "the starved arm is the one whose zero carries the diagnosis, so it is the one "
-                + "that must exist before it ever fires");
-            Assert.That(arms, Does.Contain(RepoContextAnnBuildSliceReporter.ProgressIdleTag),
-                "the idle arm distinguishes 'stepping and getting nowhere' from 'not stepping', "
-                + "which is a claim only a present series can make");
+            Assert.That(arms, Is.EquivalentTo(expectedArms),
+                "every arm the reporter can ever report must exist, at zero, on the first "
+                + "scrape. The starved arm's zero is what carries the diagnosis, the idle arm "
+                + "distinguishes 'stepping and getting nowhere' from 'not stepping', and the "
+                + "faulted arm distinguishes 'stepping and throwing' from both - claims only a "
+                + "present series can make");
         });
     }
 
