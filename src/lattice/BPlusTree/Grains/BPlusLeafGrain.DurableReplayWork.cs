@@ -197,6 +197,17 @@ internal sealed partial class BPlusLeafGrain
     /// warned once per activation. This is observability ONLY - the prepare is
     /// still recorded unconditionally; nothing here caps or drops it.
     /// </para>
+    /// <para>
+    /// The threshold test is <c>&gt;=</c>, not <c>&gt;</c> (issue #2756). The
+    /// capped deferred-terminal recorder refuses at
+    /// <c>work.Count &gt;= cap</c> BEFORE adding, so the ledger stops growing
+    /// having reached exactly <paramref name="thresholdCap"/>, and that resting
+    /// value is the one at which terminals begin being dropped. A strict
+    /// <c>&gt;</c> here only ever fired at cap + 1, which a ledger held at the
+    /// cap by the deferred recorder never reaches - so the signal was blind at
+    /// precisely the value that matters. Inclusive is a widening of the
+    /// observability window by one, and changes no behaviour.
+    /// </para>
     /// </summary>
     private void EnsureUnresolvedPrepareRecorded(int partition, long offset, in LatticeMutation mutation, int thresholdCap)
     {
@@ -207,7 +218,7 @@ internal sealed partial class BPlusLeafGrain
         var work = state.State.UnresolvedReplayWork ??= [];
         work.Add(new UnresolvedReplayWorkEntry(partition, offset, mutation));
 
-        if (thresholdCap > 0 && work.Count > thresholdCap)
+        if (thresholdCap > 0 && work.Count >= thresholdCap)
         {
             LatticeMetrics.LeafUnresolvedPrepareLedgerBeyondCap.Add(
                 1,
