@@ -215,7 +215,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
         });
 
         release.SetResult();
-        var results = await Task.WhenAll(rehydrates);
+        var results = await Task.WhenAll(rehydrates).WaitAsync(TimeSpan.FromSeconds(20));
 
         Assert.Multiple(() =>
         {
@@ -239,7 +239,13 @@ public class BPlusLeafGrainColdActivationAdmissionTests
         // divide, so it could never shrink.
         var admission = new LeafSnapshotHydrationAdmission(budgetBytes: 1_000L);
 
-        using var lease = await admission.AcquireAsync(50_000_000L, CancellationToken.None);
+        // Bounded rather than CancellationToken.None so that a gate which does
+        // NOT admit the sole occupant fails this test instead of hanging it. A
+        // hang is a real signal but a useless one: it aborts the run, produces
+        // no per-assertion detail, and is indistinguishable from a deadlock
+        // somewhere else.
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var lease = await admission.AcquireAsync(50_000_000L, deadline.Token);
 
         Assert.Multiple(() =>
         {
@@ -279,12 +285,12 @@ public class BPlusLeafGrainColdActivationAdmissionTests
         });
 
         first.Dispose();
-        var admittedLarge = await large;
+        var admittedLarge = await large.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.That(admittedLarge.Queued, Is.True, "the head of the queue is admitted first");
 
         admittedLarge.Dispose();
-        (await small).Dispose();
+        (await small.WaitAsync(TimeSpan.FromSeconds(10))).Dispose();
     }
 
     [Test]
@@ -316,7 +322,10 @@ public class BPlusLeafGrainColdActivationAdmissionTests
             + "tenths of its budget spare that the loaded blob had already consumed");
 
         lease.Reconcile(10L);
-        (await next).Dispose();
+
+        // Bounded: perturbing the drain out of Reconcile would otherwise hang
+        // here rather than redden, and a hang carries no per-assertion detail.
+        (await next.WaitAsync(TimeSpan.FromSeconds(10))).Dispose();
     }
 
     [Test]
