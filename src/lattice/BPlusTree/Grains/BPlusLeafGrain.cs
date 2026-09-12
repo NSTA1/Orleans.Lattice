@@ -2119,28 +2119,27 @@ internal sealed partial class BPlusLeafGrain(
             HighKeyExclusive = state.State.HighKeyExclusive,
         });
 
-    public Task SetCheckpointOffsetHintAsync(long offset)
-    {
-        // Routes through the existing ILeafProjection seam so the
-        // unresolved-prepare clamp is honoured. For a freshly-created
-        // sibling at birth there are no unresolved prepares so the
-        // clamp is a no-op; the seam's monotonic-non-decrease guard
-        // makes a re-call with a smaller offset a silent no-op.
-        return ((ILeafProjection)this).SetCheckpointOffsetAsync(offset, CancellationToken.None);
-    }
-
     public async Task SetCheckpointOffsetHintsAsync(long[] offsetsByPartition)
     {
         ArgumentNullException.ThrowIfNull(offsetsByPartition);
 
-        // Batched companion to SetCheckpointOffsetHintAsync: apply one
-        // hint per WAL partition under that partition's apply-offset
-        // scope so the per-partition clamp targets the right offset
-        // space. The donor used to issue one cross-grain RPC per
-        // partition with the scope stamped on the wire; folding the
-        // loop into the callee collapses the split fast-path's
-        // sibling-checkpoint cost to a single round-trip while keeping
-        // the per-partition scoping identical.
+        // Apply one hint per WAL partition under that partition's apply-offset
+        // scope so the per-partition clamp targets the right offset space.
+        //
+        // The scope is opened HERE, inside the callee, and that is the whole
+        // point of the signature. The removed singular form took only an offset
+        // and let the callee resolve its partition from
+        // LatticeApplyOffsetContext.CurrentPartition ?? 0; that context is an
+        // AsyncLocal and does not flow across an Orleans grain call, so the
+        // scope was always absent at the callee and every hint silently landed
+        // on partition 0 (issue #2699). Carrying the partition in the argument
+        // is what makes the scoping something the caller cannot fail to supply.
+        //
+        // Routes through the ILeafProjection seam so the unresolved-prepare
+        // clamp is honoured. For a freshly-created sibling at birth there are
+        // no unresolved prepares so the clamp is a no-op; the seam's
+        // monotonic-non-decrease guard makes a re-call with a smaller offset a
+        // silent no-op.
         for (var p = 0; p < offsetsByPartition.Length; p++)
         {
             var offset = offsetsByPartition[p];

@@ -476,23 +476,6 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LeafKeyRange> GetKeyRangeAsync();
 
     /// <summary>
-    /// Stamps an initial projection-checkpoint offset on a freshly
-    /// created leaf so its first activation can skip replaying WAL
-    /// entries that were already materialised into its
-    /// <c>Entries</c> at birth. Called by
-    /// <c>CompleteSplitAsync</c> on the donor leaf with the shard's
-    /// WAL head offset captured at split time, after the donor has
-    /// populated the sibling's entries via
-    /// <see cref="MergeEntriesAsync"/>. Routes through
-    /// <c>ILeafProjection.SetCheckpointOffsetAsync</c> so the
-    /// existing unresolved-prepare clamp is honoured; for a sibling
-    /// at birth there are no unresolved prepares so the clamp is a
-    /// no-op. Idempotent: a re-call with a smaller offset is a
-    /// no-op (the underlying seam enforces monotonic non-decrease).
-    /// </summary>
-    Task SetCheckpointOffsetHintAsync(long offset);
-
-    /// <summary>
     /// Seeds every birth-time metadata slot on a freshly created split
     /// sibling in a single round-trip: tree id, shard index, ownership
     /// key range, and the next/prev sibling pointers. Replaces the five
@@ -512,15 +495,42 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>
     /// Applies a batch of per-partition projection-checkpoint hints in a
-    /// single round-trip. <paramref name="offsetsByPartition"/> index
-    /// <c>p</c> is the WAL head offset to hint for partition <c>p</c>;
-    /// a non-positive entry is skipped. Replaces the per-partition
-    /// <see cref="SetCheckpointOffsetHintAsync"/> fan-out the split
-    /// donor used to issue once per WAL partition, each a separate
-    /// cross-grain round-trip. Each partition's hint is still applied
-    /// under that partition's <c>LatticeApplyOffsetContext</c> scope so
-    /// the sibling's clamp targets the correct offset space.
+    /// single round-trip, stamping initial checkpoint offsets on a freshly
+    /// created leaf so its first activation can skip replaying WAL entries
+    /// that were already materialised into its <c>Entries</c> at birth.
+    /// Called by <c>CompleteSplitAsync</c> on the donor leaf with the
+    /// shard's per-partition WAL head offsets captured at split time, after
+    /// the donor has populated the sibling's entries via
+    /// <see cref="MergeEntriesAsync"/>.
+    /// <para>
+    /// <paramref name="offsetsByPartition"/> index <c>p</c> is the WAL head
+    /// offset to hint for partition <c>p</c>; a non-positive entry is
+    /// skipped. Each partition's hint is applied under that partition's
+    /// <c>LatticeApplyOffsetContext</c> scope, opened <em>inside</em> this
+    /// method, so the sibling's clamp targets the correct offset space.
+    /// </para>
+    /// <para>
+    /// <b>The partition must travel in the argument, which is why there is no
+    /// singular form.</b> A prior <c>SetCheckpointOffsetHintAsync(long)</c>
+    /// took only an offset and resolved its partition from
+    /// <c>LatticeApplyOffsetContext.CurrentPartition ?? 0</c>. That context is
+    /// an <c>AsyncLocal</c>, and an <c>AsyncLocal</c> does not flow across an
+    /// Orleans grain call, so over a grain reference the scope was always
+    /// absent at the callee and every hint landed on partition 0 whatever the
+    /// caller meant - silently, with no error, under a name that reads as
+    /// partition-agnostic. It was removed rather than documented (issue #2699).
+    /// To hint a single partition <c>p</c>, pass an array whose only positive
+    /// entry is at index <c>p</c>.
+    /// </para>
+    /// <para>
+    /// Routes through <c>ILeafProjection.SetCheckpointOffsetAsync</c> so the
+    /// existing unresolved-prepare clamp is honoured; for a sibling at birth
+    /// there are no unresolved prepares so the clamp is a no-op. Idempotent:
+    /// a re-call with a smaller offset is a no-op (the underlying seam
+    /// enforces monotonic non-decrease).
+    /// </para>
     /// </summary>
+    /// <param name="offsetsByPartition">Per-partition WAL head offsets, indexed by partition ordinal. Must not be <see langword="null"/>.</param>
     Task SetCheckpointOffsetHintsAsync(long[] offsetsByPartition);
 
     /// <summary>

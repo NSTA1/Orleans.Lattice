@@ -599,13 +599,19 @@ public sealed class LatticeWalGc(
             foreach (var offset in offsets.Values)
             {
                 // Skip the "-1" sentinel: a consumer reports -1 when it has no
-                // WAL-replay dependency at all - either a never-checkpointed
-                // Zero-HLC block pin (whose WAL retention is already enforced by
-                // the HLC block-pin branch, which disables the cursor trim
-                // entirely) or a split sibling that received its data via an
-                // in-memory handoff rather than WAL replay. Letting a -1 collapse
-                // the floor would wedge the trim for the whole tree; only real
-                // checkpoints (offset >= 0) constrain the offset floor.
+                // WAL-replay dependency at all. Three ways to get there, and
+                // only two of them carry a block pin: a genuinely empty
+                // partition (no durable checkpoint AND no live cache row, so
+                // there is no committed prefix to lose - reported with the
+                // leaf's REAL frontier, deliberately without a block pin); a
+                // never-checkpointed or uncovered data-bearing partition (whose
+                // WAL retention IS enforced by the Zero-HLC block-pin branch,
+                // which disables the cursor trim entirely); or a split sibling
+                // that received its data via an in-memory handoff rather than
+                // WAL replay. Letting a -1 collapse the floor would wedge the
+                // trim for the whole tree - the empty-partition case reports -1
+                // indefinitely and legitimately - so only real checkpoints
+                // (offset >= 0) constrain the offset floor.
                 if (offset < 0)
                 {
                     continue;
@@ -640,15 +646,19 @@ public sealed class LatticeWalGc(
             // leaves that REPORTED an offset, not over the leaves that OWE
             // entries. A leaf absent from the pin set does not constrain the
             // floor at all, and absence is NOT the same state as a reported -1:
-            // a reported -1 always arrives paired with a Zero HLC block pin that
-            // disables the cursor trim (ResolveDurablePinForPartition guarantees
-            // it), whereas an absent leaf - one whose birth block-pin seed was
-            // swallowed, or that predates the durable pin store being wired -
-            // carries no such HLC cover. Making absence constrain the floor
-            // conservatively (e.g. treating absence as offset 0) would pin the
-            // WAL forever for any permanently-departed leaf, so it is NOT done
-            // here; distinguishing absent from reported -1 needs an independent
-            // owner census this seam does not have.
+            // a reported -1 comes from a participating leaf that has told us it
+            // owes nothing, and is covered either by a paired Zero HLC block pin
+            // (the data-bearing, not-durably-recoverable case) or by there being
+            // no committed prefix to lose at all (the genuinely-empty case,
+            // which ResolveDurablePinForPartition reports with the leaf's REAL
+            // frontier and so with no block pin - it does not need one). An
+            // absent leaf - one whose birth block-pin seed was swallowed, or
+            // that predates the durable pin store being wired - has told us
+            // nothing and carries neither cover. Making absence constrain the
+            // floor conservatively (e.g. treating absence as offset 0) would pin
+            // the WAL forever for any permanently-departed leaf, so it is NOT
+            // done here; distinguishing absent from reported -1 needs an
+            // independent owner census this seam does not have.
             LatticeMetrics.WalGcOffsetFloorUnavailable.Add(
                 1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
