@@ -26,6 +26,24 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
     /// <summary>How many read calls have been issued, point and batch alike.</summary>
     internal int Reads { get; private set; }
 
+    /// <summary>
+    /// Every record byte ever handed to <see cref="WriteAsync"/>, counting a
+    /// rewrite of a key already held again rather than replacing its earlier
+    /// contribution.
+    /// <para>
+    /// This is the write-amplification measure, and it is deliberately NOT
+    /// <see cref="TotalBytes"/>: a log-structured store appends each write, so
+    /// what reaches its write-ahead log is the cumulative figure, while the
+    /// resident figure is what remains after reclamation. Measuring only the
+    /// resident size is precisely what hides a tree that rewrites its whole
+    /// contents on every pass.
+    /// </para>
+    /// </summary>
+    internal long BytesWritten { get; private set; }
+
+    /// <summary>Resets <see cref="BytesWritten"/> so a test can measure one phase in isolation.</summary>
+    internal void ResetBytesWritten() => BytesWritten = 0;
+
     /// <summary>The number of records currently held.</summary>
     internal int RecordCount => _records.Count;
 
@@ -107,6 +125,7 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
         Writes++;
         foreach (var entry in entries)
         {
+            BytesWritten += entry.Value.Length;
             _records[entry.Key] = entry.Value;
         }
 

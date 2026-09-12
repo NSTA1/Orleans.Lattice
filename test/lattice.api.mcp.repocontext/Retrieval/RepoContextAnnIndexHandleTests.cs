@@ -374,6 +374,90 @@ public sealed class RepoContextAnnIndexHandleTests
     }
 
     [Test]
+    public async Task A_write_taken_while_the_build_is_still_streaming_is_not_applied_to_the_open_index()
+    {
+        // While the index is ingesting it holds one untrained cell, and a write
+        // the build did not make itself costs the checkpoint a rewrite of that
+        // whole cell rather than an append. The writer hands a batch over once
+        // per slice, so applying them here makes the build's write volume
+        // quadratic in corpus size - issue #2691.
+        using var rig = new Rig();
+        rig.SeedRing(64);
+
+        var progress = await rig.Handle.AdvanceAsync(Ct);
+        Assert.That(
+            progress.Phase, Is.Not.EqualTo(VectorIndexBuildPhase.Ready),
+            "the arm needs a build that is still streaming after one step");
+
+        var before = rig.Store.RecordsWritten;
+        for (var i = 0; i < 8; i++)
+        {
+            await rig.Handle.ApplyWriteAsync(
+                [new RepoContextAnnVectorUpdate(
+                    $"vec-{i:D6}", RepoContextKeys.File(RepoId, $"src/File{i}.cs"), Rig.Unit(3))],
+                [],
+                Ct);
+        }
+
+        Assert.That(
+            rig.Store.RecordsWritten,
+            Is.EqualTo(before),
+            "a write taken mid-build must be recorded for replay, not pushed into the ingesting index");
+    }
+
+    [Test]
+    public async Task A_write_taken_while_the_build_was_streaming_is_replayed_once_it_is_ready()
+    {
+        using var rig = new Rig();
+        rig.SeedRing(64);
+
+        // The build has to have STREAMED the identifier before the write arrives,
+        // or it simply reads the new value from the store of record on its way
+        // past and the replay is never what made the index current. Advancing
+        // until it has banked vectors is what orders the two: identifiers are
+        // streamed in order and this one sorts first, so it is in the index.
+        VectorIndexBuildProgress progress;
+        do
+        {
+            progress = await rig.Handle.AdvanceAsync(Ct);
+            Assert.That(
+                progress.Phase,
+                Is.Not.EqualTo(VectorIndexBuildPhase.Ready),
+                "the build finished before the arm could take a write mid-stream");
+        }
+        while (progress.VectorsIndexed == 0);
+
+        const string Revised = "vec-000000";
+        var distinctive = Rig.Unit(3);
+        rig.Source.Set(Revised, RepoContextKeys.File(RepoId, "src/File0.cs"), distinctive);
+        await rig.Handle.ApplyWriteAsync(
+            [new RepoContextAnnVectorUpdate(Revised, RepoContextKeys.File(RepoId, "src/File0.cs"), distinctive)],
+            [],
+            Ct);
+
+        await rig.Handle.EnsureBuiltAsync(Ct);
+
+        // The ring occupies dimensions 0 and 1 only, so the revised vector is
+        // orthogonal to every vector the build streamed. Identity alone would
+        // not discriminate here: a query nothing matches still returns a best
+        // result, and it can be this identifier by arbitrary ordering while the
+        // index holds the stale vector. The SCORE is what separates the two -
+        // it is one against the revised vector and zero against the ring.
+        var outcome = await rig.Handle.SearchAsync(distinctive, 1, Ct);
+        Assert.That(outcome.Matches, Is.Not.Empty, "the plane must be serving once the build is Ready");
+
+        var best = outcome.Matches[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                best.Score,
+                Is.GreaterThan(0.9d),
+                "the deferred write was never replayed, so the index still holds the vector the build streamed");
+            Assert.That(best.VectorId, Is.EqualTo(Revised));
+        });
+    }
+
+    [Test]
     public async Task A_restart_reports_the_index_as_restored_from_durable_state()
     {
         using var rig = new Rig();
