@@ -61,6 +61,20 @@ internal enum RepoContextExactScanBudgetDecision
 /// <param name="BreakerResets">Times a serving plane closed an open breaker.</param>
 /// <param name="BreakerProbes">Half-open probes the breaker granted, each of which ran a gather it would otherwise have suppressed.</param>
 /// <param name="BreakerProbeRecoveries">Half-open probes that completed and closed the breaker without the plane ever serving.</param>
+/// <param name="GatherFaultsAbsorbed">
+/// Exact gathers that faulted on capacity - a stall, a timeout, an allocation
+/// failure, or a deadline this process owns - and were absorbed into the breaker's
+/// backoff. Read against <paramref name="GatherFaultsPropagated"/>: the two are
+/// the ladder's opposite verdicts on the same event, and before issue #2749 only
+/// the first of the four absorbed shapes was recognised, so the other three were
+/// silently counted as the second.
+/// </param>
+/// <param name="GatherFaultsPropagated">
+/// Exact gathers that faulted in a way that said something about the index rather
+/// than about capacity, and so were reported as a degraded index rather than
+/// absorbed. A non-zero here is a real defect to chase; a zero here beside a
+/// non-zero absorbed count is the healthy shape of a loaded deployment.
+/// </param>
 internal readonly record struct RepoContextRetrievalGuardSnapshot(
     long Searches,
     long PlaneServed,
@@ -76,7 +90,9 @@ internal readonly record struct RepoContextRetrievalGuardSnapshot(
     long BreakerRepeatSkips,
     long BreakerResets,
     long BreakerProbes = 0,
-    long BreakerProbeRecoveries = 0)
+    long BreakerProbeRecoveries = 0,
+    long GatherFaultsAbsorbed = 0,
+    long GatherFaultsPropagated = 0)
 {
     /// <summary>
     /// How many times the budget was actually asked. A zero here and a zero in
@@ -197,6 +213,21 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
     internal const string StateApproximateTag = "approximate";
 
     /// <summary>
+    /// The counter name partitioning every exact-gather fault by the class of
+    /// fault it was, so "the gather ran out of capacity" and "the index is broken"
+    /// are separable without reading a log. Tagged by
+    /// <see cref="RepoContextExactGatherFault.FaultTagKey"/>; the arms are the tag
+    /// constants on that type.
+    /// <para>
+    /// This exists because issue #2749 had to be diagnosed by counting exception
+    /// type names in a container's log, which is not a reading any deployment can be
+    /// asked to produce. The distinction it publishes is the one the whole ladder
+    /// turns on, and before this it was the one thing the ladder did not export.
+    /// </para>
+    /// </summary>
+    internal const string ExactGatherFaultInstrumentName = "repocontext.retrieval.exact_gather.faults";
+
+    /// <summary>
     /// How often a repository's summary may be emitted. One line per minute per
     /// repository is small against the query volume that produces it, and is
     /// frequent enough that an operator watching a live container sees the state
@@ -215,6 +246,7 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
     // .github/copilot-instructions.md.
     private readonly Meter _meter;
     private readonly Counter<long> _annSearches;
+    private readonly Counter<long> _exactGatherFaults;
 
     /// <summary>Creates the reporter.</summary>
     /// <param name="timeProvider">
@@ -262,6 +294,33 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
         _annSearches.Add(0, new KeyValuePair<string, object?>(StateTagKey, StateBootstrappingTag), LatticeTenantLabel.Platform);
         _annSearches.Add(0, new KeyValuePair<string, object?>(StateTagKey, StateExhaustiveTag), LatticeTenantLabel.Platform);
         _annSearches.Add(0, new KeyValuePair<string, object?>(StateTagKey, StateApproximateTag), LatticeTenantLabel.Platform);
+
+        _exactGatherFaults = _meter.CreateCounter<long>(
+            ExactGatherFaultInstrumentName,
+            unit: "{fault}",
+            description:
+                "Exact k-nearest-neighbour gathers that faulted, partitioned by the class of fault: 'stalled' "
+                + "(the tree aborted its own page fill), 'timed_out' (a call the gather issued never answered), "
+                + "'exhausted' (the gather could not allocate), 'abandoned' (a deadline this process owns "
+                + "cancelled it), or 'propagated' (the fault said something about the index rather than about "
+                + "capacity, so it was reported as a degraded index instead of being absorbed). The first four "
+                + "arm the exact-scan breaker's backoff; the last deliberately does not. Read 'propagated' "
+                + "against the other four rather than alone: a rising 'propagated' is a real index defect, "
+                + "whereas the other four are load. All five arms are pre-minted at zero when this reporter is "
+                + "constructed, so a zero on any one of them is a measured absence rather than an absent "
+                + "measurement - which is the specific reading issue #2749 could not make, because before it "
+                + "the only record of which fault had occurred was an exception type name in a log line.");
+
+        // Pre-mint every arm, for the reason given on the ANN-search instrument above
+        // and for one more that is specific to this counter: four of these five arms
+        // are meant to be READ AS ZERO on a healthy deployment, so an arm that only
+        // appeared on its first occurrence would make the healthy case and the
+        // never-wired case identical (issue #2749).
+        _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.StalledTag), LatticeTenantLabel.Platform);
+        _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.TimedOutTag), LatticeTenantLabel.Platform);
+        _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.ExhaustedTag), LatticeTenantLabel.Platform);
+        _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.AbandonedTag), LatticeTenantLabel.Platform);
+        _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.PropagatedTag), LatticeTenantLabel.Platform);
     }
 
     /// <summary>The minimum spacing between summaries for one repository.</summary>
@@ -328,6 +387,31 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
     /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
     public void RecordBreakerTrip(string repoId) => Counters(repoId).BreakerTrip();
+
+    /// <summary>
+    /// Records the class of fault an exact gather died of, onto
+    /// <see cref="ExactGatherFaultInstrumentName"/>.
+    /// <para>
+    /// Called for <b>every</b> gather fault, including the ones that are not
+    /// absorbed. Recording only the absorbed half would reproduce the defect issue
+    /// #2749 was filed for one level out: the absent series and the healthy series
+    /// would look identical, which is the exact ambiguity that made the original
+    /// fault take a log-scrape to find.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>
+    /// <param name="fault">One of the tag constants on <see cref="RepoContextExactGatherFault"/>. Must not be <see langword="null"/>.</param>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    public void RecordExactGatherFault(string repoId, string fault)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(fault);
+        Counters(repoId).ExactGatherFault(fault);
+        _exactGatherFaults.Add(
+            1,
+            new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, fault),
+            LatticeTenantLabel.Platform);
+    }
 
     /// <summary>
     /// Records that an open breaker suppressed a gather. This is the path that runs
@@ -458,6 +542,8 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
         private long _breakerResets;
         private long _breakerProbes;
         private long _breakerProbeRecoveries;
+        private long _gatherFaultsAbsorbed;
+        private long _gatherFaultsPropagated;
         private int _lastCorpus;
         private int _lastAffordable;
 
@@ -541,6 +627,18 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
 
         public void BreakerProbeRecovery() => Interlocked.Increment(ref _breakerProbeRecoveries);
 
+        public void ExactGatherFault(string fault)
+        {
+            if (string.Equals(fault, RepoContextExactGatherFault.PropagatedTag, StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref _gatherFaultsPropagated);
+            }
+            else
+            {
+                Interlocked.Increment(ref _gatherFaultsAbsorbed);
+            }
+        }
+
         public bool BreakerStuck() => Announce(1 << 10);
 
         public RepoContextRetrievalGuardSnapshot Read() => new(
@@ -558,7 +656,9 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
             Interlocked.Read(ref _breakerRepeatSkips),
             Interlocked.Read(ref _breakerResets),
             Interlocked.Read(ref _breakerProbes),
-            Interlocked.Read(ref _breakerProbeRecoveries));
+            Interlocked.Read(ref _breakerProbeRecoveries),
+            Interlocked.Read(ref _gatherFaultsAbsorbed),
+            Interlocked.Read(ref _gatherFaultsPropagated));
 
         public bool TryTakeSummarySlot(DateTimeOffset now, TimeSpan interval)
         {

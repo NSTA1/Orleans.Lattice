@@ -81,8 +81,8 @@ Do **not** use classic assert (`Assert.AreEqual`, `Assert.IsNull`, etc.).
 
 A false green is worse than a red. A red is a defect to fix; a green that never
 ran the property it names is a defect *plus* a standing claim that there is no
-defect, which is why these survive for so long. Two shapes have cost real time on
-this repository and both are cheap to avoid once named. A third - an
+defect, which is why these survive for so long. Six shapes have cost real time
+on this repository and each is cheap to avoid once named. A seventh - an
 emulator-gated run that prints `Passed!` while 89 tests silently vanish - is
 documented under Tier 3 above.
 
@@ -174,12 +174,18 @@ for a defect in code that is already correct.
 
 Remedies, in order of preference:
 
-1. **Restore with `git checkout -- <path>` or `git restore <path>`.** Git writes
-   the file fresh and stamps it now. This is also the only restore that cannot
-   drift from the committed text.
-2. **If you must restore from a copy, stamp it afterwards**:
+1. **Restore by writing the text back with `[IO.File]::WriteAllText`** from a
+   snapshot the driver took before it perturbed. This stamps the current time,
+   so the rebuild happens, and it cannot touch any *other* edit in your working
+   tree.
+2. **`git checkout -- <path>` / `git restore <path>` also stamps the file
+   fresh**, and is the only restore that cannot drift from the committed text -
+   but it restores the file to its *committed* state, so it silently destroys
+   your own uncommitted work in that file. Use it only when you know the
+   perturbed file carried nothing of yours.
+3. **If you must restore from a copy, stamp it afterwards**:
    `(Get-Item <path>).LastWriteTime = Get-Date`.
-3. **Never diagnose a surprising post-restore result before confirming the
+4. **Never diagnose a surprising post-restore result before confirming the
    rebuild happened.** `dotnet build` printing no compile line for the project
    you perturbed is the tell.
 
@@ -188,6 +194,127 @@ Several guards here take that route already: `MeterFieldDeclarationOrderTests`
 runs its ordering logic against a synthetic in-memory probe type rather than
 reordering a real metrics class, so nothing on disk is ever perturbed and there
 is nothing to restore.
+
+### A killed perturbation run leaves residue that git cannot distinguish
+
+This is the sibling of the `Copy-Item` hazard and it fails in the opposite
+direction, which is why naming only one of them is not enough. `Copy-Item` gives
+you a **wrong binary from a restore that succeeded**. A shell killed between the
+edit and the restore - a timeout, a cancelled turn, a closed window - gives you a
+**wrong source file from a restore that never ran at all**.
+
+That residue is uniquely hard to notice:
+
+- It survives `git status`, where it appears as an ordinary modified tracked
+  file, byte-for-byte indistinguishable from your own work in progress.
+- It survives a rebuild, because the perturbed text is usually still valid code -
+  a perturbation that did not compile would have been caught by the arm itself.
+- It is one `git add -A` from being committed, and a perturbation is by
+  construction a change that makes something behave wrongly.
+
+**The defence cannot be a restore step, because the restore step is precisely the
+one that did not execute.** It has to be a check that runs *after* the damage, on
+the state actually on disk. Two halves, and the gate only works if both are
+honoured:
+
+1. **Every perturbation driver stamps a marker beside each edit it makes.** The
+   token is `LATTICE` + `-PERTURBATION` (written here in two halves so this file
+   is not itself flagged). A driver that perturbs by bare string substitution
+   leaves nothing to detect, which is exactly how this got past everyone the
+   first time - the residue was indistinguishable because nothing had marked it.
+2. **`PerturbationResidueHygieneTests` fails the build if a marker survives into
+   any file in the repository.** It is deliberately not sliced per package the
+   way the em-dash and mojibake gates are: residue has no owner and lands
+   wherever the interrupted arm happened to be working, most often in a package
+   the author was not otherwise touching.
+
+Alongside both: **stage explicit paths, never `git add -A`.** The gate is a
+backstop that runs at test time; explicit staging is what stops residue reaching
+the index in the first place.
+
+### `--no-build` against an artefact that only exists in the build output
+
+Whether a perturbation arm needs a rebuild is **not** a question about what you
+perturbed (a doc, a dashboard, a source file). It is a question about **how the
+fixture reaches the artefact**:
+
+- **Through the filesystem - `--no-build` is adequate.**
+  `MetricsDocCoverageTestsBase` and `RepoContextMetricsToPanelMapTests` both
+  locate the repository with `HygieneRepository.FindRepoRoot()` and read the
+  markdown with `File.ReadAllText`. Perturbing `metrics.md` reddens them on a
+  `--no-build` rerun, because the built assembly was never the input.
+- **Through the build output - a rebuild is mandatory.** The Grafana dashboard
+  JSON is an **embedded resource**. A fixture that loads it from the assembly
+  manifest is structurally incapable of observing an edit to the `.json` on
+  disk, so a `--no-build` arm reports a green against the stale embedded copy
+  and you conclude the gate is dead when it is merely blindfolded.
+
+Check which one your fixture is by reading it, in one line, before you trust the
+arm. The two look identical from the outside and give opposite answers.
+
+A related trap sits one level up: the repository-wide **enrolment** gates pass
+whether or not your specific row and panel exist, because they assert that each
+package *is enrolled*, and the packages already are. Only the **per-package**
+fixtures catch a missing row. Running just the enrolment gates yields a clean
+local green and a red CI.
+
+### An arm that will not redden has four causes, not two
+
+When you revert a clause and the test you expected to fail stays green, the
+instinct is to re-run it. Re-running distinguishes none of the four causes, and
+they have opposite remedies:
+
+1. **A stale input.** The arm never reached the fixture - see the `--no-build`
+   and `Copy-Item` shapes above. Rebuild and rerun; this is the only cause
+   re-running addresses, which is why it is worth eliminating first.
+2. **A dead clause.** Nothing depends on the code you reverted. Remedy: delete
+   the clause, or find out why it is unreachable.
+3. **A vacuous assertion.** The test cannot observe the clause. The sharpest
+   instance is a constant-perturbation arm whose assertion compares that same
+   constant against itself, so both sides move together and the comparison holds
+   in every world. Remedy: rewrite the assertion against an independently
+   derived expectation.
+4. **The wrong fixture, or a clause whose stated purpose is wrong.** The clause
+   is live and observable, but not by the test you named - often because the
+   clause does something other than what its name and comment claim, so the
+   obvious assertion is aimed at a property it never had.
+
+Causes 3 and 4 are the expensive ones, and one habit catches both:
+
+> **When you name the fixture an arm should redden, write one sentence saying
+> why that fixture is the one that can observe that clause.**
+
+If you cannot write the sentence, you have not predicted a failure - you have
+guessed one. And **predict the value, not merely the status**: an expected red is
+the easiest place in the whole process to stop reading, and a failure message
+that says `Expected: 240s But was: 60s` carries the diagnosis, where "it failed"
+carries none.
+
+Finally, **"every arm went red" is the reading to double-check, and "no arm went
+red" is the reading that should alarm you.** A suite in which nothing reddens has
+produced no in-band evidence that it can observe anything at all.
+
+### A fixture CI builds but never selects, and its near-miss twin
+
+CI does not run this project's content gates by listing them. It runs one filter,
+`(FullyQualifiedName~Formal|FullyQualifiedName~Hygiene|FullyQualifiedName~Docs)`,
+so a fixture is included only if its **fully-qualified name** contains one of
+those words. Put a new hygiene fixture in `test/lattice/Hygiene/` but leave it in
+namespace `Orleans.Lattice.Tests`, and CI compiles it on every run and never
+executes a single one of its tests. Nothing reports this: the build is green, the
+gate job is green, and the test count is the only thing that moves.
+`CiContentGateWiringTests` exists to catch exactly that, and the fixture's
+namespace - not its directory - is what satisfies it.
+
+The near-miss is the part worth remembering, because the gate stays green through
+it. A fixture named `PerturbationResidueHygieneTests` in namespace
+`Orleans.Lattice.Tests` **is** selected - not because it is wired up, but because
+the word `Hygiene` happens to appear in its *type name*. It runs today and it
+would silently stop running the day somebody renames the class, with no failing
+check at the moment of the rename. So place the fixture in
+`Orleans.Lattice.Tests.Hygiene` (or the `.Formal` / `.Docs` sibling) and let the
+namespace carry the selection. Matching on a coincidence in the type name is a
+green you did not earn, and it expires without telling you.
 
 ## File Organization
 

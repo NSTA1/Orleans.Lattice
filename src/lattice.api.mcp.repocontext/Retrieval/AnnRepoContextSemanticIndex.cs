@@ -339,9 +339,9 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             {
                 _logger.LogInformation(
                     "Repository-context exact-scan breaker for {RepoId} granted its first half-open probe in space "
-                    + "{ModelId}/{Dimension} after {OpenFor} open across {Stalls} stall(s): running one gather to "
-                    + "test whether the contention that stalled it has cleared. Further probes are counted into the "
-                    + "periodic retrieval-ladder guard summary rather than logged per window.",
+                    + "{ModelId}/{Dimension} after {OpenFor} open across {Faults} gather fault(s): running one gather "
+                    + "to test whether the contention that stalled it has cleared. Further probes are counted into "
+                    + "the periodic retrieval-ladder guard summary rather than logged per window.",
                     repoId,
                     querySpace.ModelId,
                     querySpace.Dimension,
@@ -352,7 +352,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             {
                 _logger.LogDebug(
                     "Repository-context exact-scan breaker for {RepoId} granted a half-open probe in space "
-                    + "{ModelId}/{Dimension} after {OpenFor} open across {Stalls} stall(s).",
+                    + "{ModelId}/{Dimension} after {OpenFor} open across {Faults} gather fault(s).",
                     repoId,
                     querySpace.ModelId,
                     querySpace.Dimension,
@@ -467,6 +467,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             // ceiling per query.
             var first = _exactScanBreaker.Trip(repoId);
             _guards.RecordBreakerTrip(repoId);
+            _guards.RecordExactGatherFault(repoId, RepoContextExactGatherFault.StalledTag);
             _logger.Log(
                 first ? LogLevel.Warning : LogLevel.Debug,
                 ex,
@@ -481,6 +482,78 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
 
             ReportBreakerWedgedIfDue(repoId);
             return Array.Empty<RepoContextVectorMatch>();
+        }
+        catch (Exception ex) when (RepoContextExactGatherFault.IsTransient(ex, cancellationToken))
+        {
+            // Issue #2749. The absorbed set above is a SUBCLASS of the fault this
+            // path actually produces. ScanPageStalledException derives from
+            // TimeoutException: the tree raises the derived type when it abandons
+            // its own page fill, but a grain call whose target never replies raises
+            // the base type, and the catch above does not see it. A census over one
+            // deployment's whole uptime found TimeoutException ten times,
+            // OperationCanceledException three, OutOfMemoryException twice, and
+            // ScanPageStalledException not once - so before this arm the absorbed
+            // set matched nothing that was happening.
+            //
+            // What that cost is not that the query failed; it falls back to keyword
+            // recall either way. It is that Trip is the ONLY thing that grows the
+            // probe delay, so a fault arriving here left the breaker pinned at its
+            // initial delay forever instead of doubling towards MaxProbeDelay. The
+            // same deployment shows the signature exactly: open for 21 minutes
+            // across ONE stall, having granted THIRTEEN half-open probes, none of
+            // which closed it. Each of those probes re-ran a full-prefix gather over
+            // the very tree the build is streaming - which is the contention the
+            // breaker exists to remove, running at roughly three times the rate the
+            // backoff was designed to allow, and not decaying.
+            //
+            // Absorbing here preserves the constraint the handler above states,
+            // because the predicate recognises timing and memory faults ONLY. A
+            // fault about the index's CONTENTS - a deserialisation failure, a
+            // missing record, a contract violation - matches nothing in
+            // RepoContextExactGatherFault and still propagates to
+            // keyword.index_degraded, loud, exactly as before. A caller's own
+            // cancellation is likewise not absorbed: the breaker is shared by every
+            // caller of this repository, so one client walking away must not arm a
+            // backoff that withholds the fallback from the rest.
+            //
+            // The caller is told keyword.exact_fallback_suppressed rather than
+            // keyword.index_degraded, because the breaker is now open and that is
+            // what is true: a gather failed and the fallback is being withheld until
+            // a probe retries it. That is the honest classification issue #2749 asked
+            // for, and it is reached by the existing IsExactFallbackSuppressed seam
+            // in RepoContextSearchService rather than by a new path constant.
+            var fault = RepoContextExactGatherFault.Classify(ex);
+            var first = _exactScanBreaker.Trip(repoId);
+            _guards.RecordBreakerTrip(repoId);
+            _guards.RecordExactGatherFault(repoId, fault);
+            _logger.Log(
+                first ? LogLevel.Warning : LogLevel.Debug,
+                ex,
+                "Repository-context semantic search for {RepoId} in space {ModelId}/{Dimension} abandoned the "
+                + "exact scan: the gather failed with a transient {Fault} fault while the approximate plane was "
+                + "not serving. This is capacity, not a broken index, so it is absorbed and backed off rather "
+                + "than reported as a degraded index. Serving keyword recall, and suppressing the gather for "
+                + "this repository until a half-open probe in {ProbeDueIn} retries it, or the plane answers for "
+                + "itself.",
+                repoId,
+                querySpace.ModelId,
+                querySpace.Dimension,
+                fault,
+                _exactScanBreaker.ProbeDueIn(repoId));
+
+            ReportBreakerWedgedIfDue(repoId);
+            return Array.Empty<RepoContextVectorMatch>();
+        }
+        catch (Exception)
+        {
+            // Not absorbed, and deliberately so: this fault says something about the
+            // index rather than about capacity, and it keeps propagating to
+            // keyword.index_degraded. It is counted before it is rethrown so that
+            // "no integrity faults occurred" is a measured zero on the same
+            // instrument as the absorbed arms, rather than an absent series that
+            // looks identical to the instrument never having been wired.
+            _guards.RecordExactGatherFault(repoId, RepoContextExactGatherFault.PropagatedTag);
+            throw;
         }
     }
 
@@ -564,7 +637,10 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             + "skipped as unaffordable; last read corpus {Corpus} against an affordable {Affordable}. Exact-scan "
             + "breaker: currently {BreakerState}, {BreakerTrips} trip(s), {BreakerRepeatSkips} gather(s) suppressed "
             + "while open, {BreakerProbes} half-open probe(s) of which {BreakerProbeRecoveries} closed the breaker "
-            + "with no help from the plane, {BreakerResets} closure(s) by a serving plane. Zero evaluations means "
+            + "with no help from the plane, {BreakerResets} closure(s) by a serving plane. Gather faults: "
+            + "{GatherFaultsAbsorbed} absorbed as capacity and backed off, {GatherFaultsPropagated} propagated as "
+            + "a degraded index. Read those two against each other rather than alone - a propagated count climbing "
+            + "beside a flat absorbed count is a real index defect, and the reverse is load. Zero evaluations means "
             + "the guard was never reached; evaluations with zero skips means it was reached and let the gather "
             + "run.",
             repoId,
@@ -585,7 +661,9 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             guards.BreakerRepeatSkips,
             guards.BreakerProbes,
             guards.BreakerProbeRecoveries,
-            guards.BreakerResets);
+            guards.BreakerResets,
+            guards.GatherFaultsAbsorbed,
+            guards.GatherFaultsPropagated);
     }
 
     /// <summary>
@@ -607,7 +685,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
 
         return string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"open for {_exactScanBreaker.OpenFor(repoId)} across {stalls} stall(s), next half-open probe in "
+            $"open for {_exactScanBreaker.OpenFor(repoId)} across {stalls} gather fault(s), next half-open probe in "
             + $"{_exactScanBreaker.ProbeDueIn(repoId)}");
     }
 
