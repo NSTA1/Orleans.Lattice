@@ -132,6 +132,85 @@ public sealed class LocalDeploymentRunbookHygieneTests
         "repocontext.LATTICE_BACKUP_BLOB_CONNECTION_STRING",
     };
 
+    /// <summary>
+    /// The marker a DERIVED row must carry in the Value column. Distinct from
+    /// <see cref="RedactionMarker"/> because the two express opposite things: a redacted
+    /// value is one the runbook declines to reproduce, whereas a derived value is one the
+    /// runbook <b>cannot</b> reproduce, because it is a property of the host and corpus
+    /// the stack is deployed on rather than of the repository.
+    /// </summary>
+    private const string DerivedMarker = "derived";
+
+    /// <summary>
+    /// Settings whose value is derived per deployment (issue #2779) and therefore has no
+    /// correct literal to document. Every resource knob in the tuning overlay was a
+    /// transcription of one developer machine - 16 logical CPUs and 55.7 GiB of RAM - so
+    /// the two <c>mem_limit</c> values alone summed to 17 GiB and the stack could not
+    /// start at all on a 16 GiB host.
+    /// <para>
+    /// Unlike <see cref="RedactedValues"/>, this set does NOT widen a hole, because the
+    /// value comparison it replaces is exchanged for a STRICTER property rather than a
+    /// weaker one. Value parity asks whether a literal is currently correct; the
+    /// companion test
+    /// <see cref="Every_derived_resource_setting_is_declared_as_a_variable_reference"/>
+    /// asks whether the setting is capable of being a literal at all, which is the
+    /// property actually wanted and which no value comparison can express.
+    /// </para>
+    /// </summary>
+    private static readonly HashSet<string> DerivedValues = new(StringComparer.Ordinal)
+    {
+        "repocontext.cpus",
+        "repocontext.mem_limit",
+        "repocontext.DOTNET_GCHeapCount",
+        "repocontext.LATTICE_WAL_MAX_CONCURRENT_REPLAYS",
+        "embedder.cpus",
+        "embedder.mem_limit",
+        "embedder.EMBED_INTRA_THREADS",
+    };
+
+    /// <summary>
+    /// Values supplied to <c>docker compose config</c> purely so the document RESOLVES.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// These are not derived values and are not a recommendation. Every setting listed in
+    /// <see cref="DerivedValues"/> is a <c>${VAR:?}</c> reference with no default, so
+    /// compose refuses to resolve the document until each is supplied. This fixture
+    /// resolves a document; it does not deploy one, so the values need only PARSE.
+    /// New-TuningEnv.ps1 is what derives real ones.
+    /// </para>
+    /// <para>
+    /// Deliberately ODD values, not the reference host's 6/12g/4/5g. If they matched, a
+    /// regression that dropped a setting back to a hard-coded literal would still satisfy
+    /// the parity assertions by coincidence, and the guard would read green for the wrong
+    /// reason. Distinctive values mean the resolved document can only agree with these if
+    /// interpolation actually happened.
+    /// </para>
+    /// </remarks>
+    private static readonly (string Name, string Value)[] ToolchainProbeVariables =
+    [
+        ("REPOCONTEXT_CPUS", "3"),
+        ("REPOCONTEXT_MEM_LIMIT", "7168m"),
+        ("REPOCONTEXT_GC_HEAP_COUNT", "3"),
+        ("REPOCONTEXT_MAX_CONCURRENT_REPLAYS", "3"),
+        ("EMBEDDER_CPUS", "2"),
+        ("EMBEDDER_MEM_LIMIT", "5120m"),
+        ("EMBEDDER_INTRA_THREADS", "2"),
+    ];
+
+    /// <summary>
+    /// A required-variable reference - <c>${NAME:?message}</c>. The <c>:?</c> form is the
+    /// one this deployment uses for a value that must not have a default (issue #2627
+    /// established it for the memory archive path, and #2779 extends it to every resource
+    /// knob). A bare <c>${NAME}</c> does not qualify: compose refuses an empty
+    /// <c>mem_limit</c> or <c>cpus</c> either way, so the difference is not silent
+    /// breakage but the message - <c>invalid size: ''</c> sends an operator to the YAML,
+    /// whereas this form names the variable and the script that derives it.
+    /// </summary>
+    private static readonly Regex RequiredVariableReference = new(
+        @"^\$\{[A-Z_][A-Z0-9_]*:\?[^}]+\}$",
+        RegexOptions.Compiled);
+
     private static readonly Regex TableRow = new(
         @"^\|\s*`(?<service>[^`]+)`\s*\|\s*`(?<setting>[^`]+)`\s*\|\s*`(?<value>[^`]*)`\s*\|(?<why>[^|]*)\|\s*$",
         RegexOptions.Compiled);
@@ -187,7 +266,17 @@ public sealed class LocalDeploymentRunbookHygieneTests
 
     /// <summary>A <c>KEY: "value"</c> or <c>KEY: value</c> line inside a compose file.</summary>
     private static readonly Regex YamlScalar = new(
-        @"^\s{6,}(?<key>[A-Za-z_][A-Za-z0-9_.]*)\s*:\s*""?(?<value>[^""#]*?)""?\s*$",
+        @"^\s{6,}(?<key>[A-Za-z_][A-Za-z0-9_.]*)\s*:\s*"
+        + @"(?:""(?<value>[^""]*)""|(?<value>[^#]*?))\s*(?:#.*)?$",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// A service-level scalar such as <c>cpus:</c> or <c>mem_limit:</c>, which sits at
+    /// indent 4 rather than the indent 6+ an environment entry sits at.
+    /// </summary>
+    private static readonly Regex ScalarDeclaration = new(
+        @"^\s{4}(?<key>[A-Za-z_][A-Za-z0-9_.]*)\s*:\s*"
+        + @"(?:""(?<value>[^""]*)""|(?<value>[^#]*?))\s*(?:#.*)?$",
         RegexOptions.Compiled);
 
     // ---------------------------------------------------------------------
@@ -276,6 +365,7 @@ public sealed class LocalDeploymentRunbookHygieneTests
         var mismatched = documented
             .Where(entry => resolved.TryGetValue(entry.Key, out var actual)
                 && !RedactedValues.Contains(entry.Key)
+                && !DerivedValues.Contains(entry.Key)
                 && !Normalise(entry.Key, entry.Value).Equals(Normalise(entry.Key, actual), StringComparison.Ordinal))
             .Select(entry => $"{entry.Key}: runbook says '{entry.Value}', resolved document says "
                 + $"'{resolved[entry.Key]}'")
@@ -290,6 +380,19 @@ public sealed class LocalDeploymentRunbookHygieneTests
             .Where(resolved.ContainsKey)
             .Where(key => !documented.TryGetValue(key, out var cell)
                 || !cell.Equals(RedactionMarker, StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(resolved[key]))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        // The derived seam is the same shape as the redaction seam above, and for the
+        // same reason: the value comparison is REPLACED by two assertions rather than
+        // dropped. Presence parity in both directions still applies unchanged, and the
+        // form assertion that makes the setting incapable of being a literal lives in
+        // Every_derived_resource_setting_is_declared_as_a_variable_reference.
+        var badDerivation = DerivedValues
+            .Where(resolved.ContainsKey)
+            .Where(key => !documented.TryGetValue(key, out var cell)
+                || !cell.Equals(DerivedMarker, StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(resolved[key]))
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -322,7 +425,154 @@ public sealed class LocalDeploymentRunbookHygieneTests
                 + "still supply a non-empty value. A redacted row that stops matching the marker, "
                 + "or whose real value has gone empty, is a hole in the guard rather than a "
                 + "deliberate exception to it.");
+
+            Assert.That(
+                badDerivation,
+                Is.Empty,
+                $"these settings are derived per deployment (#2779), so {RunbookPath} must "
+                + $"document them with the exact cell `{DerivedMarker}` and the resolved "
+                + "document must still supply a non-empty value. Writing a host's actual "
+                + "number into the table is how the transcription comes back: the table is "
+                + "read as the value to use, and the next operator copies a figure measured "
+                + "on 16 logical CPUs and 55.7 GiB of RAM onto a machine that has neither.");
         });
+    }
+
+    /// <summary>
+    /// Every derived resource knob must be declared in the tracked overlay as a
+    /// <c>${NAME:?...}</c> reference, so the file is INCAPABLE of carrying a literal.
+    /// <para>
+    /// This is the assertion that makes "adaptive" enforced rather than documented, and
+    /// it is deliberately separate from the parity test above. Parity compares values,
+    /// and a value comparison cannot distinguish a derived setting from a literal that
+    /// happens to be correct on the machine the suite is running on - which is precisely
+    /// the state issue #2779 describes, where every knob was right for one host and wrong
+    /// for every other. Only a check on the setting's FORM can express that.
+    /// </para>
+    /// <para>
+    /// It is also toolchain-free on purpose. The parity half needs Docker and is skipped
+    /// on a developer machine without it, so putting this property there would let the
+    /// one assertion that cannot be satisfied by luck be the one that silently does not
+    /// run. Reading the tracked file as text needs nothing.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void Every_derived_resource_setting_is_declared_as_a_variable_reference()
+    {
+        var path = Path.Combine(
+            HygieneRepository.FindRepoRoot(),
+            ComposeDirectory.Replace('/', Path.DirectorySeparatorChar),
+            TuningComposeFile);
+
+        var declared = new Dictionary<string, string>(StringComparer.Ordinal);
+        var service = string.Empty;
+
+        foreach (var line in File.ReadAllLines(path))
+        {
+            var serviceMatch = ServiceDeclaration.Match(line);
+
+            if (serviceMatch.Success)
+            {
+                service = serviceMatch.Groups["name"].Value;
+                continue;
+            }
+
+            if (service.Length == 0)
+            {
+                continue;
+            }
+
+            // Environment entries sit at indent 6+; the service-level scalars this guard
+            // cares about (cpus, mem_limit) sit at indent 4. YamlScalar covers the first,
+            // ScalarDeclaration the second, and a key matched by neither is not a setting.
+            var match = YamlScalar.Match(line);
+
+            if (!match.Success)
+            {
+                match = ScalarDeclaration.Match(line);
+            }
+
+            if (match.Success)
+            {
+                declared[$"{service}.{match.Groups["key"].Value}"] = match.Groups["value"].Value.Trim();
+            }
+        }
+
+        // ANCHOR DerivedValues TO AN INDEPENDENT ARTEFACT.
+        //
+        // The presence assertion below has the form filter(declared, by: DerivedValues)
+        // == DerivedValues, which holds for EVERY value of DerivedValues - including one
+        // quietly shrunk so a setting can go back to a hard-coded literal. A perturbation
+        // of that constant therefore cannot redden it: the list is both the thing checked
+        // and the thing checking. Anchoring it to the runbook's `derived` cells - a
+        // separate file, edited by a separate hand - is what makes shrinking it
+        // observable, and unlike the parity gate it needs no toolchain to do so.
+        var documentedAsDerived = ParseTable()
+            .Where(row => row.Value.Equals(DerivedMarker, StringComparison.Ordinal))
+            .Select(row => row.Key)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.That(
+            documentedAsDerived,
+            Is.EquivalentTo(DerivedValues.Order(StringComparer.Ordinal)),
+            $"the settings this fixture treats as derived must be exactly those the runbook "
+            + $"marks `{DerivedMarker}`. Without this, dropping an entry from DerivedValues "
+            + "would let the matching setting revert to a literal while every assertion "
+            + "keyed on that list stayed green - the list would be grading its own work.");
+
+        // Guards against the scan silently ceasing to parse the file, which would make
+        // every assertion below vacuously true while still reporting green.
+        Assert.That(
+            declared.Keys.Where(DerivedValues.Contains).Order(StringComparer.Ordinal),
+            Is.EquivalentTo(DerivedValues.Order(StringComparer.Ordinal)),
+            $"expected to find every derived setting in {TuningComposeFile}. A derived "
+            + "setting that has vanished from the overlay is not thereby adaptive - it has "
+            + "fallen back to whatever the base file or the Docker default supplies, "
+            + "unreviewed.");
+
+        var literals = DerivedValues
+            .Where(declared.ContainsKey)
+            .Where(key => !RequiredVariableReference.IsMatch(declared[key]))
+            .Select(key => $"{key} is declared as `{declared[key]}`, which is a literal. It "
+                + $"must be a `${{{SuggestVariableName(key)}:?...}}` reference instead.")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.That(
+            literals,
+            Is.Empty,
+            $"{TuningComposeFile} declares a derived resource knob as a literal value. Every "
+            + "resource knob in this overlay was once a transcription of one developer "
+            + "machine (16 logical CPUs, 55.7 GiB RAM), which is issue #2779: the two "
+            + "mem_limit values summed to 17 GiB, so the stack could not start on a 16 GiB "
+            + "host, and DOTNET_PROCESSOR_COUNT: \"16\" held the WAL replay concurrency gate "
+            + "at 16 permits against a 6.0-CPU quota - a 2.67x oversubscription measured on "
+            + "the live deployment, and the deployment half of the root cause in #2692. "
+            + "Derive it with scripts/New-TuningEnv.ps1 rather than writing the number here.");
+    }
+
+    /// <summary>
+    /// The variable name a derived setting is expected to read from, so the failure above
+    /// names the fix rather than only the fault.
+    /// </summary>
+    private static string SuggestVariableName(string key)
+    {
+        var separator = key.IndexOf('.');
+        var service = key[..separator];
+        var setting = key[(separator + 1)..];
+
+        var prefix = service.ToUpperInvariant();
+
+        return setting switch
+        {
+            "cpus" => $"{prefix}_CPUS",
+            "mem_limit" => $"{prefix}_MEM_LIMIT",
+            "DOTNET_GCHeapCount" => $"{prefix}_GC_HEAP_COUNT",
+            "LATTICE_WAL_MAX_CONCURRENT_REPLAYS" => $"{prefix}_MAX_CONCURRENT_REPLAYS",
+            "EMBED_INTRA_THREADS" => $"{prefix}_INTRA_THREADS",
+            _ => $"{prefix}_{setting.ToUpperInvariant()}",
+        };
     }
 
     /// <summary>
@@ -856,6 +1106,139 @@ public sealed class LocalDeploymentRunbookHygieneTests
         public string Key => $"{Service}.{Setting}";
     }
 
+    /// <summary>
+    /// The corpus count that feeds the memory grant must EXCLUDE build and VCS
+    /// directories, because that is the unit its slope was fitted against.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the arm that makes the exclusion falsifiable. Reverting Measure-Corpus to a
+    /// bare <c>Get-ChildItem -Recurse -Force</c> reddens it, which matters because that
+    /// regression does not present as a wrong number - it presents as the shortfall
+    /// warning saying THE HOST IS TOO SMALL. On the reference repository a raw walk returns
+    /// about 3.15x the tracked count, which requests roughly 35 GiB, clamps to the ceiling
+    /// and blames the machine. The operator's obvious responses (raise the host share, buy
+    /// RAM) both appear to work, which confirms the wrong model.
+    /// </para>
+    /// <para>
+    /// It also pins the separator-anchored match. A naive <c>-match 'bin'</c> would
+    /// exclude a directory called <c>binaries</c> and a file called <c>bin.txt</c>, so the
+    /// fixture contains both and requires them COUNTED. Without them the assertion would
+    /// pass just as well for an over-broad filter, which fails low and silently.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void The_corpus_count_excludes_build_and_vcs_directories()
+    {
+        var script = Path.Combine(
+            HygieneRepository.FindRepoRoot(),
+            ComposeDirectory.Replace('/', Path.DirectorySeparatorChar),
+            "scripts",
+            "New-TuningEnv.ps1");
+
+        Assert.That(File.Exists(script), Is.True, $"expected the derivation script at {script}.");
+
+        var sandbox = Path.Combine(Path.GetTempPath(), "lattice-corpus-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            // 5 ordinary source files, plus two decoys that MUST be counted.
+            Directory.CreateDirectory(sandbox);
+
+            for (var i = 0; i < 5; i++)
+            {
+                File.WriteAllText(Path.Combine(sandbox, $"source{i}.cs"), "//");
+            }
+
+            File.WriteAllText(Path.Combine(sandbox, "bin.txt"), "not a directory");
+            Directory.CreateDirectory(Path.Combine(sandbox, "binaries"));
+            File.WriteAllText(Path.Combine(sandbox, "binaries", "keep.cs"), "//");
+
+            // 12 files that must NOT be counted.
+            foreach (var (directory, count) in new[] { (".git", 7), ("bin", 3), ("obj", 2) })
+            {
+                Directory.CreateDirectory(Path.Combine(sandbox, directory));
+
+                for (var i = 0; i < count; i++)
+                {
+                    File.WriteAllText(Path.Combine(sandbox, directory, $"f{i}.dat"), "x");
+                }
+            }
+
+            var json = RunCorpusOnly(script, sandbox);
+
+            var raw = int.Parse(Regex.Match(json, @"""Raw""\s*:\s*(\d+)").Groups[1].Value);
+            var counted = int.Parse(Regex.Match(json, @"""Counted""\s*:\s*(\d+)").Groups[1].Value);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(raw, Is.EqualTo(19), "the sandbox should contain 19 files on disk.");
+                Assert.That(
+                    counted,
+                    Is.EqualTo(7),
+                    "the corpus count must exclude .git, bin and obj (12 files) while KEEPING "
+                    + "`binaries/keep.cs` and `bin.txt`. A count of 19 means the exclusion was "
+                    + "removed and the grant will be derived from a raw tree walk, which "
+                    + "over-requests by roughly 3x and then blames the host. A count below 7 "
+                    + "means the match is over-broad and will silently under-grant.");
+            });
+        }
+        finally
+        {
+            try { Directory.Delete(sandbox, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    private static string RunCorpusOnly(string script, string workspace)
+    {
+        foreach (var shell in new[] { "pwsh", "powershell" })
+        {
+            var start = new ProcessStartInfo(shell)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+
+            start.ArgumentList.Add("-NoProfile");
+            start.ArgumentList.Add("-File");
+            start.ArgumentList.Add(script);
+            start.ArgumentList.Add("-WorkspacePath");
+            start.ArgumentList.Add(workspace);
+            start.ArgumentList.Add("-CorpusOnly");
+
+            Process? process;
+
+            try
+            {
+                process = Process.Start(start);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (process is null)
+            {
+                continue;
+            }
+
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit(milliseconds: 120_000);
+
+            if (process.ExitCode != 0)
+            {
+                Assert.Fail($"`{shell} New-TuningEnv.ps1 -CorpusOnly` exited {process.ExitCode}: {stderr.Trim()}");
+            }
+
+            return stdout;
+        }
+
+        RequireToolchain("neither `pwsh` nor `powershell` could be started.");
+        return string.Empty;
+    }
+
     private static List<Row> ParseTable()
     {
         var path = Path.Combine(
@@ -1102,6 +1485,22 @@ public sealed class LocalDeploymentRunbookHygieneTests
         start.Environment["REPOCONTEXT_MEMORY_ARCHIVE_PATH"] =
             Path.Combine(Path.GetTempPath(), "repocontext-memory-archive-hygiene");
 
+        // ISSUE #2779, and the same reasoning one step further. The tuning overlay's
+        // resource knobs are `${VAR:?...}` with no defaults, so compose refuses to
+        // resolve the document at all until every one is supplied. These values only
+        // have to PARSE - this fixture resolves a document, it does not deploy one - so
+        // they are deliberately not the derived values for this host and must not be
+        // read as a recommendation. New-TuningEnv.ps1 derives those.
+        //
+        // Supplying them here is what keeps the parity gate RUNNING. Without it the
+        // refusal below reaches RequireToolchain and the two strongest assertions in
+        // this file skip on a developer box: a green run over a document that was never
+        // resolved, caused by the very change that was meant to harden it.
+        foreach (var (name, value) in ToolchainProbeVariables)
+        {
+            start.Environment[name] = value;
+        }
+
         Process? process = null;
         try
         {
@@ -1129,6 +1528,23 @@ public sealed class LocalDeploymentRunbookHygieneTests
             // repository, not an absent toolchain, and routing it through
             // RequireToolchain would let it SKIP on a developer machine - a green run
             // over a document that was never resolved.
+            //
+            // This now keys on the CLASS of failure rather than on one variable name.
+            // The #2627 guard below named REPOCONTEXT_MEMORY_ARCHIVE_PATH specifically,
+            // which was correct for the only no-default variable that then existed;
+            // #2779 added seven more, and a guard that enumerates names silently stops
+            // covering the next one somebody adds. Compose emits "required variable X is
+            // missing a value" for every `${VAR:?}`, so matching that phrase covers all
+            // of them, including ones added after this comment was written.
+            if (stderr.Contains("required variable", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Fail(
+                    "`docker compose config` refused because a variable with no default was not "
+                    + "supplied. Those are required by design (issues #2627 and #2779) and this "
+                    + "fixture is meant to set every one of them - see ToolchainProbeVariables. "
+                    + $"This is a repository fault, not an absent toolchain: {stderr.Trim()}");
+            }
+
             if (stderr.Contains("REPOCONTEXT_MEMORY_ARCHIVE_PATH", StringComparison.Ordinal))
             {
                 Assert.Fail(
