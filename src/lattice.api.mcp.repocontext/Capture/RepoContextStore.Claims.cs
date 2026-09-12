@@ -367,6 +367,13 @@ internal sealed partial class RepoContextStore
 
         if (!status.IsHeld || fencingToken == status.CurrentFencingToken)
         {
+            // The '!status.IsHeld' arm is LOAD-BEARING, not belt-and-braces, and a
+            // perturbation arm established that rather than assuming it: inverting
+            // this condition also breaks the unheld-lock path, which can only happen
+            // because ILatticeLockGrain reports a NON-NULL CurrentFencingToken on a
+            // lock nobody holds. Drop this arm and an unheld lock carrying a stale
+            // token refuses a retirement it has no business refusing - a record
+            // nobody has claimed becomes unretirable. Do not delete it during a tidy-up.
             return;
         }
 
