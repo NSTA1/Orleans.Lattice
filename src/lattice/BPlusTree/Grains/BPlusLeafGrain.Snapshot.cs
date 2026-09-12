@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -1052,6 +1053,18 @@ internal sealed partial class BPlusLeafGrain
                 context.GrainId.GetGuidKey());
             await snapshotGrain.SaveAsync(blob, cancellationToken);
             _lastCapturedSnapshotBytes = blob.SnapshotBytes;
+
+            // Bank the wire size this leaf will have to read back (issue #2765),
+            // so the next activation's admission claim is sized from what was
+            // actually written rather than from a generic bound. This is the
+            // cheapest possible place to learn it: the capture path is already
+            // about to persist state, so the hint rides a write that was
+            // happening anyway.
+            var capturedLoadBytes = MeasureSnapshotLoadBytes(blob);
+            if (capturedLoadBytes > 0)
+            {
+                state.State.SnapshotLoadHintBytes = capturedLoadBytes;
+            }
             // The blob is now durable, so the checkpointed prefix it covers
             // is recoverable independently of the WAL. Advance the coverage
             // view; the NEXT durable-pin flush will then authorise trimming
@@ -1606,14 +1619,16 @@ internal sealed partial class BPlusLeafGrain
             logger.LogError(
                 error,
                 "Leaf {GrainId} (tree '{TreeId}') could not load its snapshot because memory was exhausted, so "
-                + "it will now activate COLD and replay its whole readable WAL window - which allocates more than "
-                + "the load that just failed. This is a MEMORY fault, not a storage-provider fault: the underlying "
-                + "exception is raised inside the provider's deserialise of the snapshot blob and is reported by "
-                + "the provider as a failure to read grain state, which names no memory anywhere. The managed heap "
-                + "is using {HeapBytes} bytes against a hard limit of {HeapHardLimitBytes} bytes (0 means "
-                + "unlimited); under a container memory limit that ceiling is sized from the cgroup, so a recurring "
-                + "reading here means the host is provisioned below this deployment's working set. Raise the "
-                + "container memory limit rather than investigating the storage provider.",
+                + "this activation is DECLINED and will be retried once the cold-start storm has drained. It is "
+                + "deliberately not allowed to fall through to the whole-window WAL replay, which allocates more "
+                + "than the load that just failed and so drives the process into a restart loop (issue #2765). "
+                + "This is a MEMORY fault, not a storage-provider fault: the underlying exception is raised inside "
+                + "the provider's deserialise of the snapshot blob and is reported by the provider as a failure to "
+                + "read grain state, which names no memory anywhere. The managed heap is using {HeapBytes} bytes "
+                + "against a hard limit of {HeapHardLimitBytes} bytes (0 means unlimited); under a container memory "
+                + "limit that ceiling is sized from the cgroup. No operator action is required: hydration is "
+                + "admission-gated against that same ceiling and recovers on its own. A sustained rate here means "
+                + "the host is provisioned below this deployment's working set.",
                 context.GrainId,
                 treeId,
                 GC.GetTotalMemory(forceFullCollection: false),
@@ -1655,6 +1670,125 @@ internal sealed partial class BPlusLeafGrain
     /// to a from-zero replay.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// The admission gate this leaf reserves hydration budget from. Resolved
+    /// from the activation's services when one is registered - which is the seam
+    /// a test uses to drive a small, deterministic budget - and otherwise the
+    /// process-wide gate sized from the runtime's heap hard limit.
+    /// <para>
+    /// Resolution is per-activation rather than through a settable static
+    /// precisely because fixtures in this project run concurrently and share the
+    /// process: a static override would make one fixture's budget visible to
+    /// another's leaf, which is the kind of order-dependent coupling that
+    /// presents as a flake rather than as a failure.
+    /// </para>
+    /// </summary>
+    private LeafSnapshotHydrationAdmission SnapshotHydrationAdmission
+        => context.ActivationServices?.GetService<LeafSnapshotHydrationAdmission>()
+            ?? LeafSnapshotHydrationAdmission.Shared;
+
+    // Trees whose admission series has been primed to zero in this process.
+    private static readonly ConcurrentDictionary<string, byte> PrimedAdmissionTrees = new();
+
+    /// <summary>
+    /// Bytes a loaded blob costs to materialise. The binary frame is the figure
+    /// that matters: it is the array the provider read, the serializer copied,
+    /// and the cache may go on holding, whereas the logical row footprint
+    /// describes the decoded rows only and understates a frame the leaf is
+    /// carrying whole.
+    /// </summary>
+    private static long MeasureSnapshotLoadBytes(LeafSnapshotBlob blob)
+        => blob.EncodedRows is { Length: > 0 } frame
+            ? frame.Length
+            : Math.Max(blob.SnapshotBytes, 0L);
+
+    /// <summary>
+    /// Reserves hydration budget for this activation, returning
+    /// <see langword="null"/> when the caller's deadline elapsed while queued.
+    /// </summary>
+    private async Task<LeafSnapshotHydrationLease?> AcquireSnapshotHydrationLeaseAsync(
+        CancellationToken cancellationToken)
+    {
+        // The durable hint is the whole point of persisting it: the first claim
+        // a restarted process makes is already sized from what the previous run
+        // measured. Without one, fall back to the leaf's own configured size
+        // bound, which is the largest a leaf is ever meant to be and therefore
+        // the right conservative guess - not a new knob, just the existing one
+        // read for a second purpose.
+        //
+        // That fallback is conditional on the leaf having a tree, and the
+        // condition is load-bearing rather than defensive. Resolving options
+        // consults the registry, and an UNSEEDED leaf is required to reach its
+        // registry not at all during activation - a guarantee this repository
+        // asserts directly, so widening it here would be caught as a behaviour
+        // change rather than as a performance one. It is also the correct
+        // estimate on its own terms: a leaf with no tree has never captured a
+        // snapshot, so there is nothing for this activation to hydrate and a
+        // zero claim is the true cost, not a shortcut.
+        var estimatedBytes = state.State.SnapshotLoadHintBytes;
+        if (estimatedBytes <= 0 && state.State.TreeId is { Length: > 0 })
+        {
+            var options = await GetOptionsAsync();
+            estimatedBytes = options.MaxLeafBytes;
+        }
+
+        var admission = SnapshotHydrationAdmission;
+        LeafSnapshotHydrationLease lease;
+        try
+        {
+            // The gate converts stored bytes to the peak heap a hydration of
+            // them actually costs; the claim is expressed in stored bytes so
+            // there is only one place that conversion can be got wrong.
+            lease = await admission.AcquireAsync(estimatedBytes, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+
+        ObserveSnapshotHydrationAdmission(lease.Queued);
+        return lease;
+    }
+
+    /// <summary>
+    /// Records that a hydration passed the gate, and on which arm.
+    /// <para>
+    /// Both arms are primed to zero the first time a tree is seen in this
+    /// process. A counter that is only ever incremented reads as an absent
+    /// series in three completely different situations - the gate never had to
+    /// queue, the build does not carry the gate at all, or nothing has activated
+    /// yet - and those call for opposite responses. Priming makes the healthy
+    /// steady state an explicit zero instead of a silence.
+    /// </para>
+    /// </summary>
+    private void ObserveSnapshotHydrationAdmission(bool queued)
+    {
+        var treeId = state.State.TreeId;
+        if (treeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        if (PrimedAdmissionTrees.TryAdd(treeId, 0))
+        {
+            LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
+                0, treeTag, LatticeMetrics.SnapshotHydrationAdmittedImmediately, tenantTag);
+            LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
+                0, treeTag, LatticeMetrics.SnapshotHydrationQueued, tenantTag);
+        }
+
+        LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
+            1,
+            treeTag,
+            queued
+                ? LatticeMetrics.SnapshotHydrationQueued
+                : LatticeMetrics.SnapshotHydrationAdmittedImmediately,
+            tenantTag);
+    }
+
     internal async Task<bool> TryRehydrateFromSnapshotAsync(CancellationToken cancellationToken)
     {
         if (state.State.TreeId is null)
@@ -1678,6 +1812,26 @@ internal sealed partial class BPlusLeafGrain
         // because it is a confident one.
         if (!context.GrainId.TryGetGuidKey(out var leafKey, out _))
         {
+            return false;
+        }
+
+        // Admission gate (issue #2765). Everything from here to the end of the
+        // method materialises bytes - the provider's blob read, the serializer's
+        // copy of it, the payload validation, and the attach or full decode - and
+        // on a cold start every leaf Orleans activates is doing it at the same
+        // time. Reserving the estimated cost up front is what turns the aggregate
+        // transient allocation from a function of the activation storm into a
+        // function of this process's heap.
+        //
+        // `using var` scopes the reservation to the whole remainder of the
+        // method deliberately: every `return false` below is a path that has
+        // already spent some of those bytes, so releasing on each one
+        // individually would be one more place to forget.
+        using var lease = await AcquireSnapshotHydrationLeaseAsync(cancellationToken);
+        if (lease is null)
+        {
+            // Cancelled while queued. Identical to the cancellation arm around
+            // the load below, and swallowed for the same reason.
             return false;
         }
 
@@ -1726,12 +1880,65 @@ internal sealed partial class BPlusLeafGrain
             // cold replay allocates more than the load that just failed, so the
             // same few leaves go cold repeatedly and pressure rises.
             ObserveSnapshotLoadFailure(ex);
+
+            // ... and THAT is the loop this arm now breaks (issue #2765). The
+            // compounding described above is not a side effect of the fall-
+            // through, it IS the fall-through: a leaf that has just failed for
+            // want of heap responds by asking for strictly more heap, because
+            // the whole-window replay allocates more than the load did. Under a
+            // container memory limit that is positive feedback, and it ran the
+            // deployed process into a restart loop that banked no progress at
+            // all - the leaves stayed oversized, so nothing ever divided, so the
+            // next activation faced the same corpus.
+            //
+            // Declining ONE leaf is strictly less harm than losing EVERY leaf,
+            // which is what an OutOfMemoryException in the silo actually costs.
+            // So a resource verdict is fatal to this activation and Orleans
+            // retries it later, by which time the admission gate above will have
+            // let the storm drain. Nothing durable is lost: no coverage has been
+            // recorded and no state written at this point, so the retry sees
+            // exactly what this attempt saw.
+            //
+            // The two arms must stay distinct. An ordinary storage fault keeps
+            // the best-effort fall-through unchanged, because there is nothing
+            // self-defeating about replaying the WAL when the store is merely
+            // unreachable - the replay may well succeed. It is only the MEMORY
+            // arm where the remedy and the fault are the same resource.
+            if (IsResourceExhaustion(ex))
+            {
+                throw new LeafSnapshotUnaffordableException(
+                    state.State.TreeId ?? string.Empty,
+                    lease.HeldBytes,
+                    SnapshotHydrationAdmission.BudgetBytes,
+                    ex);
+            }
+
             return false;
         }
 
         if (blob is null)
         {
             return false;
+        }
+
+        // The estimate got us admitted; the measurement is what keeps the gate
+        // honest. Correcting the reservation here tightens admission for every
+        // claim still queued in THIS cold start, rather than only informing the
+        // next one, which matters because an underestimate that is never
+        // reconciled lets the gate admit far past its budget and bound nothing.
+        var observedBytes = MeasureSnapshotLoadBytes(blob);
+        lease.Reconcile(observedBytes);
+
+        // Bank the measurement durably (issue #2765). Stamped in memory only and
+        // carried by whichever ordinary WriteStateAsync comes next: forcing a
+        // write per leaf during a cold-start storm would add exactly the kind of
+        // unbounded concurrent work this gate exists to remove. What it buys is
+        // that a restart begins from an observed size rather than a generic
+        // guess, so progress survives the activation instead of being re-learned
+        // by overshoot on every restart.
+        if (observedBytes > 0)
+        {
+            state.State.SnapshotLoadHintBytes = observedBytes;
         }
 
         // Reject a blob whose row payload cannot be read in full - a truncated

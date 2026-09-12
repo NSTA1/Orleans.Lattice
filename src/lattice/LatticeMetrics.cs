@@ -1801,6 +1801,54 @@ public static class LatticeMetrics
         new(TagReason, "faulted");
 
     /// <summary>
+    /// Counter of activation-time leaf-snapshot hydrations that passed through
+    /// the byte-budgeted admission gate, tagged with <see cref="TagTree"/>,
+    /// <see cref="TagOutcome"/> (<c>immediate</c>/<c>queued</c>) and the tenant
+    /// label (issue #2765).
+    /// <para>
+    /// The gate bounds the aggregate bytes of snapshot loads materialising at
+    /// once, so a cold start costs a function of this process's heap rather than
+    /// of however many leaves Orleans happens to activate together. The
+    /// <c>queued</c> arm is the one that carries information: it counts the
+    /// hydrations that actually had to wait, and a sustained non-zero rate means
+    /// the deployment's leaves are large enough, or numerous enough, that
+    /// unbounded activation would have exceeded the heap hard limit - which is
+    /// precisely the condition that used to present as a clean-exit restart
+    /// loop with no OOM kill recorded anywhere.
+    /// </para>
+    /// <para>
+    /// Both arms are primed to zero per tree at the first hydration, because a
+    /// counter that is only ever incremented cannot distinguish "the gate never
+    /// had to queue anything" from "the gate is not deployed in this build" from
+    /// "nothing has activated yet". Those have entirely different responses, and
+    /// an absent series reads identically for all three.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotHydrationAdmissions =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.hydration_admissions", unit: "{hydration}",
+            description: "Activation-time leaf-snapshot hydrations admitted through the byte-budgeted concurrency gate, tagged by tree and outcome (immediate/queued). A sustained queued rate means unbounded cold activation would have exceeded the heap hard limit.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotHydrationAdmissions"/>.</summary>
+    public const string LeafSnapshotHydrationAdmissionsName = "orleans.lattice.leaf.snapshot.hydration_admissions";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>immediate</c> on
+    /// <see cref="LeafSnapshotHydrationAdmissions"/>: the hydration fitted inside
+    /// the remaining budget and started without waiting.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotHydrationAdmittedImmediately =
+        new(TagOutcome, "immediate");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>queued</c> on
+    /// <see cref="LeafSnapshotHydrationAdmissions"/>: the hydration waited behind
+    /// the budget before starting. This is the gate doing its job, not a fault,
+    /// but a sustained rate is the signal that cold activation is memory-bound.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotHydrationQueued =
+        new(TagOutcome, "queued");
+
+    /// <summary>
     /// Counter of leaf-snapshot capture <b>attempts</b>, emitted by
     /// <c>BPlusLeafGrain.CaptureSnapshotCoreAsync</c> once per attempt that
     /// passes the eligibility gates, tagged with <see cref="TagTree"/>,
