@@ -99,7 +99,9 @@ internal sealed partial class BPlusLeafGrain
     /// ceiling advance past <paramref name="offset"/>.
     /// <para>
     /// Returns <see langword="false"/> once the ledger reaches
-    /// <paramref name="cap"/>. That is a deliberate safe degradation rather
+    /// <paramref name="cap"/>, EXCEPT for the one offer whose refusal would
+    /// freeze the partition outright - see the liveness-priority admission
+    /// below (issue #2746). An ordinary refusal is a safe degradation rather
     /// than an error: the caller then clamps exactly as it did before this
     /// change, which is slow but has shipped in every previous release. The
     /// cap exists only for the pathological case of sagas whose terminals
@@ -113,7 +115,24 @@ internal sealed partial class BPlusLeafGrain
     /// durable and the record is not.
     /// </para>
     /// </summary>
-    private bool TryRecordUnresolvedReplayWork(int partition, long offset, in LatticeMutation mutation, int cap)
+    /// <param name="consumedBelowOffset">
+    /// The highest offset this activation has already consumed - applied or
+    /// ledgered - in this partition, strictly below <paramref name="offset"/>.
+    /// Callers pass the replay loop's running <c>maxApplied</c>, which has not
+    /// yet taken <paramref name="offset"/> into account at the point of the
+    /// offer, so it is exactly "what precedes this entry in the window".
+    /// </param>
+    /// <param name="windowStartCheckpoint">
+    /// The partition checkpoint this activation's replay window opened at, which
+    /// is the value <paramref name="consumedBelowOffset"/> is seeded from.
+    /// </param>
+    private bool TryRecordUnresolvedReplayWork(
+        int partition,
+        long offset,
+        in LatticeMutation mutation,
+        int cap,
+        long consumedBelowOffset,
+        long windowStartCheckpoint)
     {
         if (cap <= 0)
             return false;
@@ -123,13 +142,84 @@ internal sealed partial class BPlusLeafGrain
             return true;
 
         var work = state.State.UnresolvedReplayWork ??= [];
-        if (work.Count >= cap)
+        if (work.Count >= cap && !RefusalWouldFreezePartition(consumedBelowOffset, windowStartCheckpoint))
             return false;
 
         work.Add(new UnresolvedReplayWorkEntry(partition, offset, mutation));
         index.Add((partition, offset));
         return true;
     }
+
+    /// <summary>
+    /// Liveness-priority admission (issue #2746). Reports whether refusing the
+    /// offer currently in front of the cap would freeze this partition's
+    /// checkpoint outright, rather than merely slowing it down.
+    /// <para>
+    /// A refused offset goes back on the in-memory clamp, which holds the
+    /// incremental flush ceiling at <c>offset - 1</c>. Whether that is a safe
+    /// degradation or a permanent freeze turns on one question: <b>does that
+    /// ceiling retire any entry?</b>
+    /// </para>
+    /// <list type="bullet">
+    /// <item>If entries precede the offer in this window, the ceiling lands at
+    /// or above the last of them, so the next activation opens on a strictly
+    /// shorter window. The partition banks real progress on every activation
+    /// and drains eventually. This is the "slow but shipped" behaviour the cap
+    /// has always had, and it is left exactly as it was.</item>
+    /// <item>If the offer is the window's FIRST entry, the ceiling lands at
+    /// <c>offset - 1</c>, which is where the window already opened. Zero
+    /// entries are retired, so the next activation re-reads the identical
+    /// window, defers the identical terminal, is refused identically and banks
+    /// nothing again. That is not a slow path, it is a livelock, and no amount
+    /// of retrying escapes it.</item>
+    /// </list>
+    /// <para>
+    /// So the second case - and only the second - is admitted past the cap.
+    /// The reasoning is exactly issue #2183's for an unresolved prepare: a
+    /// permanently pinned ceiling is strictly worse than a persisted row one
+    /// entry longer. The difference is that #2183 could admit
+    /// unconditionally, because nothing drains a prepare whose saga never
+    /// terminates, whereas a deferred terminal DOES drain in pass 2 - so the
+    /// cap keeps its full force here for every offer that is not at the head
+    /// of the window.
+    /// </para>
+    /// <para>
+    /// <b>This needs no threshold, budget, or tunable, and deliberately has
+    /// none.</b> The predicate is self-limiting: at most one offer per
+    /// partition per activation can be the window's first entry, because the
+    /// entry that satisfies it immediately advances <c>maxApplied</c> past the
+    /// checkpoint and no later offer in that partition can satisfy it again.
+    /// The ledger can therefore exceed the cap by at most one row per
+    /// partition, each one bought with a strictly shorter replay window on the
+    /// next activation. A host-tuned constant here would be a latent defect on
+    /// every other host; there is nothing to tune.
+    /// </para>
+    /// <para>
+    /// Self-healing by construction, with no operator action and no
+    /// configuration change: a leaf already frozen in this state opens its
+    /// next window on the very terminal that froze it, which is by definition
+    /// the head entry, so the first activation after this change admits it and
+    /// the ceiling moves. Nothing is migrated and no persisted shape changes -
+    /// the admitted row is an ordinary
+    /// <see cref="UnresolvedReplayWorkEntry"/>, indistinguishable from one
+    /// admitted under the cap, so rows written by older builds read back
+    /// unchanged.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// The comparison is against the window's opening checkpoint rather than
+    /// against a literal zero or a "first offset" sentinel, which matters for
+    /// the reason issue #2703 documents: partition 0's checkpoint lives in a
+    /// scalar slot with no initializer, so an unassigned value decodes as 0
+    /// rather than at the -1 "nothing applied" sentinel. Seeding
+    /// <paramref name="consumedBelowOffset"/> from the same checkpoint the
+    /// caller opened the window with makes the two sides of this comparison
+    /// agree by construction whichever encoding is in play, so the predicate
+    /// cannot silently invert on a partition-0 leaf the way #2703's
+    /// <c>checkpoint &gt;= 0</c> test did.
+    /// </remarks>
+    private static bool RefusalWouldFreezePartition(long consumedBelowOffset, long windowStartCheckpoint) =>
+        consumedBelowOffset <= windowStartCheckpoint;
 
     /// <summary>
     /// Test seam for the issue #2183 regression control arm. Production always

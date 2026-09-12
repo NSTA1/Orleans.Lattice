@@ -3921,8 +3921,22 @@ internal sealed partial class BPlusLeafGrain
                         // when the ledger is full does the offset go back on
                         // the in-memory clamp, which is the pre-#2165
                         // behaviour.
+                        //
+                        // Issue #2746. maxApplied has not yet taken THIS entry
+                        // into account (it advances at the foot of the loop),
+                        // so it is exactly "the highest offset already consumed
+                        // below this one". Handing it and the window's opening
+                        // checkpoint to the ledger is what lets the ledger tell
+                        // a refusal that merely slows this partition down from
+                        // one that freezes it outright - see
+                        // RefusalWouldFreezePartition.
                         if (!TryRecordUnresolvedReplayWork(
-                                partition, entry.Offset, entry.Mutation, maxDurableUnresolvedWork))
+                                partition,
+                                entry.Offset,
+                                entry.Mutation,
+                                maxDurableUnresolvedWork,
+                                consumedBelowOffset: maxApplied,
+                                windowStartCheckpoint: checkpoint))
                         {
                             deferredOffsets.Add(partition, entry.Offset);
 
@@ -4004,8 +4018,24 @@ internal sealed partial class BPlusLeafGrain
                             }
                             else
                             {
+                                // Issue #2183's control seam, reproducing the
+                                // pre-#2183 behaviour in which a prepare went
+                                // through the capped path and was DROPPED once
+                                // the ledger filled. It is deliberately opted
+                                // OUT of issue #2746's liveness-priority
+                                // admission: the arm exists to reproduce the
+                                // old drop, so admitting the offer here would
+                                // silently disarm the control and the two arms
+                                // would stop differing in the fix. The operands
+                                // below make RefusalWouldFreezePartition false
+                                // by construction.
                                 TryRecordUnresolvedReplayWork(
-                                    partition, entry.Offset, entry.Mutation, maxDurableUnresolvedWork);
+                                    partition,
+                                    entry.Offset,
+                                    entry.Mutation,
+                                    maxDurableUnresolvedWork,
+                                    consumedBelowOffset: long.MaxValue,
+                                    windowStartCheckpoint: long.MinValue);
                             }
                         }
                     }
