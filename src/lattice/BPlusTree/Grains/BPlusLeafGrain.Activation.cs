@@ -3336,6 +3336,20 @@ internal sealed partial class BPlusLeafGrain
         var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
             $"{treeId}/{partition}");
 
+        // Issue #2756. Zero-prime the deferred-terminal drop counter before any
+        // drop can happen. A Counter exports no series at all until its first
+        // Add, so without this a partition that has never dropped a terminal is
+        // indistinguishable from a build in which the instrument was never
+        // wired - which is exactly the ambiguity this counter exists to remove,
+        // and the signal this repository has most often misread. Adding zero
+        // mints the series with the precise tag set a later drop will carry and
+        // cannot perturb the value.
+        LatticeMetrics.LeafDeferredTerminalsDroppedAtCap.Add(
+            0,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+            LatticeTenantLabel.ForTree(treeId));
+
         // Reuse the head the sweep-order pre-pass already probed when it has
         // one, so ordering the sweep costs no extra grain call. A head probed
         // moments ago can only be behind the true head, which simply leaves
@@ -3911,6 +3925,22 @@ internal sealed partial class BPlusLeafGrain
                                 partition, entry.Offset, entry.Mutation, maxDurableUnresolvedWork))
                         {
                             deferredOffsets.Add(partition, entry.Offset);
+
+                            // Issue #2756. The fall-back above is the only clamp
+                            // that can fire on a tree running no sagas, and it
+                            // can pin this partition's checkpoint and so block
+                            // WAL reclamation for the whole tree - yet it was
+                            // previously silent. Without this a frozen tree is
+                            // indistinguishable between "the clamp is pinning
+                            // the checkpoint" and "the clamp never fired". The
+                            // prepare-path counter is not a proxy: it is a
+                            // different ledger arm and is blind at exactly the
+                            // resting-at-cap value this drop implies.
+                            LatticeMetrics.LeafDeferredTerminalsDroppedAtCap.Add(
+                                1,
+                                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                                new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+                                LatticeTenantLabel.ForTree(treeId));
                         }
                     }
                     else

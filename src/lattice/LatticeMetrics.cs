@@ -2193,6 +2193,50 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap", unit: "{prepare}",
             description: "Resident unresolved saga prepares recorded beyond the MaxDurableUnresolvedReplayWork cap, tagged by tree and WAL partition. Provider-dependent persist hazard on Azure Table (1MB entity cap); benign on the SQLite local profile.");
 
+    /// <summary>
+    /// Deferred terminals (<c>TxCommit</c>, <c>TxAbort</c>, <c>DeleteRange</c>)
+    /// that pass 1 of replay could NOT record durably because the leaf's
+    /// <c>UnresolvedReplayWork</c> ledger was already at
+    /// <c>MaxDurableUnresolvedReplayWork</c>, and which therefore fell back to
+    /// the pre-#2165 in-memory clamp (issue #2756). Tagged <c>tree</c> and
+    /// <c>partition</c>.
+    /// <para>
+    /// This is the counterpart of
+    /// <see cref="LeafUnresolvedPrepareLedgerBeyondCap"/> for the OTHER ledger
+    /// arm, and it is not interchangeable with it. That counter is emitted by
+    /// the prepare recorder, which is uncapped by design and records
+    /// unconditionally; this one is emitted by the capped deferred-terminal
+    /// recorder, at the point where a terminal is DROPPED. Different ledger,
+    /// different policy, opposite outcome.
+    /// </para>
+    /// <para>
+    /// It exists because that drop was previously silent - no metric, no log,
+    /// no counter - while being able to pin the replay checkpoint and so block
+    /// WAL reclamation for the whole tree. On a non-transactional tree (one
+    /// that runs no sagas and therefore carries no prepares at all) the
+    /// deferred-terminal clamp is the ONLY clamp that can fire, so without this
+    /// instrument a frozen tree is indistinguishable between "this clamp is
+    /// pinning the checkpoint" and "this clamp never fired and the cause is
+    /// elsewhere".
+    /// </para>
+    /// <para>
+    /// Note the neighbouring counter cannot be used as a proxy for it even on a
+    /// tree that does run sagas. It fires on <c>work.Count &gt; cap</c>, so a
+    /// ledger resting at EXACTLY the cap drops every subsequent terminal
+    /// forever while leaving it at zero - it is a near-miss detector that is
+    /// blind at precisely the value where this clamp bites. That boundary is
+    /// now inclusive for the same reason.
+    /// </para>
+    /// <para>
+    /// Pre-minted at zero per (tree, partition) when a partition enters replay,
+    /// so an absent series means the build did not land rather than that the
+    /// clamp never fired. Observability only: the drop behaviour is unchanged.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafDeferredTerminalsDroppedAtCap =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.deferred_terminals_dropped_at_cap", unit: "{terminal}",
+            description: "Deferred terminals (TxCommit, TxAbort, DeleteRange) dropped by replay pass 1 because the durable UnresolvedReplayWork ledger was at the MaxDurableUnresolvedReplayWork cap, falling back to the in-memory clamp that can pin the replay checkpoint. Tagged by tree and WAL partition.");
+
     // --- Storage-usage instruments (byte-accurate retained footprint) ------
     //
     // The four byte gauges and the over-threshold gauge are observable gauges
