@@ -442,6 +442,7 @@ Every instrument here carries the derived `tenant` label with the reserved `_pla
 | `repocontext.ann.partitioning` | counter (`{observation}`) | `state` = `partitioned`, `unpartitioned-small`, `unpartitioned-large` | (none) | **not charted** |
 | `repocontext.ann.repartition` | counter (`{training}`) | `outcome` = `partitioned`, `declined` | (none) | **not charted** |
 | `repocontext.retrieval.ann.search` | counter (`{query}`) | `state` = `bootstrapping`, `exhaustive`, `approximate` | (none) | **not charted** |
+| `repocontext.retrieval.exact_gather.faults` | counter (`{fault}`) | `fault` = `stalled`, `timed_out`, `exhausted`, `abandoned`, `propagated` | (none) | **not charted** - all five arms are zero-primed, so read `propagated` against the other four: the first four are absorbed as capacity and backed off, `propagated` is a real index defect and is the only arm that warrants an operator |
 | `repocontext.retrieval.ready_seconds` | histogram (`s`) | `phase` = `serving`, `keyword_only`, `nothing_registered` | (none) | **not charted** |
 | `repocontext.retrieval.unavailable` | counter (`{event}`) | `cause` | (none) | **not charted** |
 | `repocontext.vectorplane.rederive` | counter (`{event}`) | `tree`, `outcome` | (none) | **not charted** |

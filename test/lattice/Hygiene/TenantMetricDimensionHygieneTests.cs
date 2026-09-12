@@ -186,6 +186,13 @@ public sealed class TenantMetricDimensionHygieneTests
         // point of the instrument is that its state tag is the dimension that carries
         // the signal.
         "_annSearches",
+        // repocontext.retrieval.exact_gather.faults - the fault class that ended an
+        // exact-scan gather, tagged by fault (issue #2749). The exact-scan fallback and
+        // the breaker it feeds are per-HOST: one scan budget, one breaker table, one
+        // probe schedule, shared by every caller regardless of tenant. A tenant tag
+        // would partition a series whose whole purpose is to say whether this process
+        // is shedding load, and the fault tag is the dimension that carries the signal.
+        "_exactGatherFaults",
         // repocontext.retrieval.duration and repocontext.retrieval.stage.duration -
         // end-to-end and per-stage retrieval latency, tagged by tool, stage, and the
         // retrieval path that answered (issue #2624). Latency here is a property of the
