@@ -48,7 +48,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// none of them reflects.
 /// </para>
 /// </summary>
-public sealed class BPlusLeafGrainCaptureSeamByteOverflowTests
+public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
 {
     private const string CaptureSeamTreeId = "tree-capture-seam-byte-overflow";
 

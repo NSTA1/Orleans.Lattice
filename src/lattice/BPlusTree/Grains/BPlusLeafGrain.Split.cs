@@ -140,6 +140,32 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task<bool> TrySplitForByteOverflowAsync(int maxLeafKeys, long maxLeafBytes)
     {
+        // Issue #2756. Zero-prime BOTH outcomes before any early return, so a
+        // leaf that reaches this seam and needs no division still mints the
+        // series. A Counter exports nothing at all until its first Add, so
+        // without this an absent leaf_byte_overflow_total spans three states
+        // that a reader cannot tell apart: the hoist of this call to the
+        // capture seam (issue #2733) did not land, or it landed and no leaf is
+        // oversized, or no leaf has activated yet. That ambiguity is not
+        // hypothetical - the absence of this very series was read as evidence
+        // the capture-seam hoist had failed, when it equally indicated success.
+        //
+        // Priming HERE rather than at activation is what makes the series a
+        // reachability proof: this method is reached only through
+        // CaptureSnapshotCoreAsync, so a minted zero says the capture seam ran
+        // and evaluated the bound, which is the property in question. An absent
+        // series then means the seam was never reached, which is a positive
+        // statement rather than silence.
+        //
+        // Primed through RecordLeafByteOverflow rather than by calling Add
+        // directly, so the primed series carries a tag set identical to a real
+        // emission BY CONSTRUCTION. A prime on a divergent tag shape would mint
+        // a second series that never converges with the one actually counting,
+        // leaving a permanently-zero line beside a live counter - worse than
+        // absence, because it reads as a measured zero.
+        RecordLeafByteOverflow(LatticeMetrics.LeafByteOverflowSplit, 0);
+        RecordLeafByteOverflow(LatticeMetrics.LeafByteOverflowIrreducible, 0);
+
         if (maxLeafBytes <= 0 || Cache.StateBytes <= maxLeafBytes)
         {
             return false;
@@ -218,11 +244,16 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private bool _irreducibleByteOverflowAnnounced;
 
-    private void RecordLeafByteOverflow(KeyValuePair<string, object?> outcome)
+    /// <summary>
+    /// Records one byte-overflow outcome, or mints its series without moving it
+    /// when <paramref name="delta"/> is zero. Both the real emission and the
+    /// zero-prime go through here so they cannot drift apart in tag shape.
+    /// </summary>
+    private void RecordLeafByteOverflow(KeyValuePair<string, object?> outcome, long delta = 1)
     {
         var treeId = state.State.TreeId ?? string.Empty;
         LatticeMetrics.LeafByteOverflows.Add(
-            1,
+            delta,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
             outcome,
             LatticeTenantLabel.ForTree(treeId));
