@@ -102,7 +102,7 @@ public sealed class RepoContextMetricsCollectorTests
     }
 
     [Test]
-    public void Meters_outside_the_lattice_prefix_are_excluded()
+    public void Meters_outside_every_subscribed_prefix_are_excluded()
     {
         using var collector = new RepoContextMetricsCollector();
         using var meter = new Meter("Contoso.Unrelated");
@@ -115,6 +115,160 @@ public sealed class RepoContextMetricsCollectorTests
             Assert.That(RepoContextMetricsCollector.IsSubscribedMeter("Orleans.Lattice.Api.Mcp.RepoContext"), Is.True,
                 "the repo-context meter is cased differently from the core meter and must still match");
             Assert.That(RepoContextMetricsCollector.IsSubscribedMeter(null), Is.False);
+        });
+    }
+
+    /// <summary>
+    /// Issue #2543: the runtime family is the only in-process account of what this
+    /// container's memory is doing, and it is not under the Lattice prefix, so it was
+    /// recorded by the runtime and discarded here.
+    /// </summary>
+    /// <remarks>
+    /// This asserts against the REAL <c>System.Runtime</c> meter rather than a
+    /// synthetic meter that borrows its name. A synthetic one would prove only that
+    /// the predicate matches a string, which is the half of the claim that was never
+    /// in doubt; the half that matters is that the base class library actually
+    /// publishes these instruments in this process with no package reference, which
+    /// is the premise the whole issue rests on. Publication happens synchronously
+    /// while the collector's own listener starts, so there is nothing to wait for.
+    /// </remarks>
+    [Test]
+    public void The_dotnet_runtime_family_reaches_the_exposition()
+    {
+        using var collector = new RepoContextMetricsCollector();
+
+        var payload = collector.Render();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleLine(payload, "dotnet_process_memory_working_set"), Is.Not.Null,
+                "the working set is the instrument that attributes container memory from inside the "
+                + "process. Without it, 'how much of the limit are we using' is answerable only by "
+                + "docker stats from outside, which carries no attribution and no history.");
+            Assert.That(
+                SampleLines(payload, "dotnet_gc_last_collection_heap_size"), Is.Not.Empty,
+                "managed heap size against working set is the discriminator between managed heap growth "
+                + "and unmanaged or mapped memory - the single most valuable reading when a container "
+                + "approaches its ceiling.");
+            Assert.That(
+                SampleLines(payload, "dotnet_gc_collections_total"), Is.Not.Empty,
+                "collections partitioned by generation. The host already exported an undifferentiated "
+                + "total; a gen2 rate is what separates a healthy allocation-heavy workload from one "
+                + "collecting the whole heap repeatedly.");
+            Assert.That(
+                SampleLines(payload, "dotnet_gc_collections_total")
+                    .Any(line => line.Contains("generation=", StringComparison.Ordinal)),
+                Is.True,
+                "the generation dimension has to survive the label rendering, or the family is the same "
+                + "undifferentiated total under a longer name.");
+        });
+    }
+
+    /// <summary>
+    /// Issue #2724. PR #2750 registered this family on the reference-architecture
+    /// silos, which collect through OpenTelemetry; this container collects through
+    /// its own listener and so did not inherit that fix.
+    /// </summary>
+    [Test]
+    public void The_orleans_runtime_meter_is_subscribed_and_reaches_the_exposition()
+    {
+        using var collector = new RepoContextMetricsCollector();
+        using var meter = new Meter(RepoContextMetricsCollector.OrleansRuntimeMeterNamePrefix);
+        meter.CreateCounter<long>("orleans-catalog-activation-latency").Add(3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                RepoContextMetricsCollector.IsSubscribedMeter("Microsoft.Orleans"), Is.True);
+            Assert.That(
+                SampleLine(collector.Render(), "orleans_catalog_activation_latency_total"),
+                Does.EndWith(" 3"),
+                "an Orleans runtime series has to reach the payload with its value, not merely match a "
+                + "predicate. Activation latency is the signal a survey of this rig concluded did not "
+                + "exist, when in fact it was being recorded and discarded one layer above the "
+                + "instrument.");
+        });
+    }
+
+    /// <summary>
+    /// The subscription itself has to be readable from the scrape, because a series
+    /// discarded at the listener is byte-identical on the endpoint to one that was
+    /// never declared.
+    /// </summary>
+    /// <remarks>
+    /// The zero is the load-bearing part. A collector constructed with nothing
+    /// published still renders one line per configured prefix, so an ABSENT prefix
+    /// means this build does not subscribe to that family - which is exactly what a
+    /// pre-fix image looks like - and a prefix at zero means the subscription landed
+    /// and nothing published. Without the mint, both states are the same absence.
+    /// </remarks>
+    [Test]
+    public void Every_subscribed_prefix_is_minted_on_the_exposition()
+    {
+        using var collector = new RepoContextMetricsCollector();
+
+        var lines = SampleLines(collector.Render(), RepoContextMetricsCollector.SubscribedMetersGaugeName);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                RepoContextMetricsCollector.SubscribedMeterNamePrefixes,
+                Has.Count.EqualTo(3),
+                "control: the guard below enumerates the production list, so a list that silently "
+                + "emptied would let it pass over nothing.");
+
+            foreach (var prefix in RepoContextMetricsCollector.SubscribedMeterNamePrefixes)
+            {
+                Assert.That(
+                    lines.Any(line => line.Contains($"prefix=\"{prefix}\"", StringComparison.Ordinal)),
+                    Is.True,
+                    $"prefix '{prefix}' is subscribed in code but names no series, so an operator cannot "
+                    + "tell a build that collects it from one that does not.");
+            }
+
+            Assert.That(
+                lines, Has.Count.EqualTo(RepoContextMetricsCollector.SubscribedMeterNamePrefixes.Count),
+                "one line per prefix and no more: a duplicate would double-count and a surplus would "
+                + "claim a subscription that is not in the predicate.");
+        });
+    }
+
+    /// <summary>
+    /// The mint is what makes the gauge readable: a prefix that has matched no meter
+    /// renders the number zero rather than being omitted.
+    /// </summary>
+    /// <remarks>
+    /// NonParallelizable because a <see cref="MeterListener"/> is process-wide, so a
+    /// concurrently running fixture holding a live <c>Microsoft.Orleans</c> meter
+    /// would be observed by this collector and turn the zero this test exists to
+    /// prove into a one.
+    /// </remarks>
+    [Test]
+    [NonParallelizable]
+    public void A_prefix_that_has_matched_nothing_renders_zero_rather_than_being_omitted()
+    {
+        using var collector = new RepoContextMetricsCollector();
+
+        var lines = SampleLines(collector.Render(), RepoContextMetricsCollector.SubscribedMetersGaugeName);
+        var orleansLine = lines.Single(l =>
+            l.Contains($"prefix=\"{RepoContextMetricsCollector.OrleansRuntimeMeterNamePrefix}\"", StringComparison.Ordinal));
+        var runtimeLine = lines.Single(l =>
+            l.Contains($"prefix=\"{RepoContextMetricsCollector.RuntimeMeterNamePrefix}\"", StringComparison.Ordinal));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                orleansLine, Does.EndWith(" 0"),
+                "no Orleans runtime meter exists in this test process, and the prefix still renders. "
+                + "That zero is the reachability proof: it separates 'this build subscribes to the "
+                + "family and nothing published' from 'this build does not subscribe to it', which are "
+                + "the same absence without the mint.");
+            Assert.That(
+                runtimeLine, Does.EndWith(" 1"),
+                "control: the base class library publishes exactly one meter named System.Runtime, so "
+                + "this arm reads a real count rather than a constant, and the zero above is an "
+                + "observation rather than a gauge that reports zero for everything.");
         });
     }
 

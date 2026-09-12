@@ -408,7 +408,17 @@ Two properties of that state are worth stating because both are deliberate and b
 
 `GET /metrics` serves a Prometheus text exposition (`text/plain; version=0.0.4`) on the same listener as MCP and the health probes, so a scraper needs no second port and no sidecar. Like the probes it is unauthenticated and always on: the listener is expected to sit on a private network, exactly as the sample compose file wires it.
 
-The endpoint exposes every instrument published on a meter whose name starts with `orleans.lattice` (case-insensitive), which covers the core `orleans.lattice` meter and every per-package meter, `Orleans.Lattice.Api.Mcp.RepoContext` included. Instruments are selected by meter *name*, never by meter instance, so an instrument is exposed regardless of which type created it.
+The endpoint exposes every instrument published on a meter whose name starts with one of three prefixes, matched case-insensitively: `orleans.lattice`, which covers the core meter and every per-package meter, `Orleans.Lattice.Api.Mcp.RepoContext` included; `Microsoft.Orleans`, the Orleans runtime's own meters; and `System.Runtime`, the base class library's runtime meter, which carries garbage-collection, working-set, allocation, JIT, thread-pool and exception series. Instruments are selected by meter *name*, never by meter instance, so an instrument is exposed regardless of which type created it, and no package reference is needed for any of the three.
+
+**The last two were added by issue #2543, and they are why a container-level memory question is now answerable from inside.** The listener previously matched `orleans.lattice` alone, so every measurement the .NET and Orleans runtimes published was enumerated and then discarded at the subscription predicate. The effect was not a *degraded* runtime view but the complete absence of one: no heap size, no working set, no per-generation collection counts, no allocation rate, and nothing whatever from Orleans. The families now on the endpoint are named `dotnet_*` - `dotnet_gc_last_collection_heap_size`, `dotnet_process_memory_working_set`, and `dotnet_gc_collections_total` tagged by generation, among others - and `microsoft_orleans_*`.
+
+**Which prefixes a build subscribes to is itself a series**, because that question could otherwise be answered only by reading the image's source:
+
+| Gauge | Meaning |
+|-------|---------|
+| `lattice_metrics_subscribed_meters` | Distinct meters that have published at least one instrument under each subscribed prefix, labelled `prefix`. |
+
+Read it three ways, and the third is the one it exists for. **Absent** means this build does not subscribe to that prefix at all, so an older image or a revert. **Zero** means the build subscribes and no meter has published under it, which is the honest reading on a host with no Orleans silo in it. **A positive count** says how many meters matched. Every prefix is minted at zero when the collector is constructed, before the listener starts, so the zero is always present and can never be read as the absence. Without that mint the two render identically, and an empty runtime section on a dashboard would be unattributable between "nothing published" and "this deployment does not collect it".
 
 Three properties are worth knowing when reading a scrape:
 
@@ -416,7 +426,13 @@ Three properties are worth knowing when reading a scrape:
 - A `Histogram<T>` renders as a Prometheus `summary` carrying `_sum` and `_count`, and **no `_bucket` series**. The listener reports raw measurements and does not surface bucket boundaries, and no instrument in this repository declares bucket-boundary advice, so emitting a `histogram` family would mean inventing buckets and reporting invented quantiles as measurements.
 
   This has a consequence worth stating plainly, because it fabricates a plausible number rather than an obvious gap. A PromQL `histogram_quantile` over a `_bucket` series returns nothing here, and the common dashboard idiom of appending `or vector(0)` then substitutes a literal **zero**. The shipped `OrleansLatticeCommitPath` dashboard does exactly that for `orleans_lattice_leaf_deactivation_checkpoint_delta`, so scraped from this endpoint its p95 panel reads a flat zero - which is indistinguishable from the sustained-zero cold-arm fault shape that same dashboard tells you to look for. Read `_sum` and `_count` from this endpoint and treat any quantile panel as unavailable, not as measured. A pipeline that needs true quantiles needs a real histogram exporter, not this endpoint.
-- The endpoint self-reports its own limits. `lattice_metrics_series` gauges the live series count and `lattice_metrics_dropped_measurements_total` counts measurements dropped once the series ceiling is reached, so a truncated scrape says so rather than reading as a quiet zero.
+- The endpoint self-reports its own limits, so a truncated scrape says so rather than reading as a quiet zero:
+
+  | Instrument | Meaning |
+  |------------|---------|
+  | `lattice_metrics_series` | Live series currently held by the collector. |
+  | `lattice_metrics_dropped_measurements_total` | Measurements dropped since start because a ceiling was reached. |
+  | `lattice_metrics_dropped_measurements_by_family_total` | The same drops attributed to the metric family that caused them, labelled `family`. |
 
 ## Graceful shutdown
 
@@ -559,6 +575,22 @@ The host runs a multi-GiB heap by design, so a collector pause is a first-class 
 Both are observable counters, sampled at scrape time from cumulative runtime figures, so a scrape gap loses resolution rather than corrupting the series and both exist from process start rather than appearing on a first occurrence. A series that is **absent** rather than zero therefore means the host did not construct the meter, or the collector refused the series at one of its ceilings; it never means the process has not paused. Neither carries a tenant dimension: a collector pause is a property of the host process and belongs to no tenant's traffic.
 
 `rate(lattice_repocontext_gc_pause_seconds_total[5m])` is the reading worth alerting on, because it is the fraction of wall-clock the process spent suspended and is directly comparable with a request-latency series.
+
+### Heap ceiling and commitment
+
+Subscribing the runtime meter supplies what the process is *using*. Nothing in it supplies the limit that usage is measured against, and that limit is what this epic's heap work is judged by: the fixes for cold activation of oversized leaves (#2765) and for resident hydrated leaf working set (#2767) both claim adherence to the heap hard limit as their primary effect, and before these three gauges neither claim was checkable from inside the container at all. It had to be inferred from `docker stats`, which carries one aggregate number with no attribution and no history.
+
+| Gauge | Meaning |
+|-------|---------|
+| `lattice_repocontext_heap_limit_bytes` | Memory the garbage collector believes it may use, in bytes. |
+| `lattice_repocontext_heap_committed_bytes` | Memory committed by the collector as of its last collection, in bytes. |
+| `lattice_repocontext_heap_high_load_threshold_bytes` | Commitment at which the collector begins treating memory as under pressure, in bytes. |
+
+`lattice_repocontext_heap_committed_bytes / lattice_repocontext_heap_limit_bytes` is heap-ceiling adherence directly. The two are published separately rather than pre-divided so a query can read either alone and neither can drift from the other. A hard limit is enforced against *committed* memory rather than against live heap size, which is why the numerator is commitment and not `dotnet_gc_last_collection_heap_size`.
+
+**The ceiling is read from the runtime, never configured here.** It resolves to whichever limit actually binds - a container memory limit, a configured GC heap hard limit, or physical memory - at the moment of the read, so the same code reports the truth on a 12 GiB container and on a 56 GiB developer machine without being told which it is on. That matters more than it sounds: the resource knobs on this image have already been found to be transcriptions of one developer machine (issue #2779), and a ceiling hard-coded here would be another one, with the added defect that it would look like a measurement. It also means a changed memory grant is followed without a restart and without a configuration change.
+
+**Zero semantics differ between the three, so they are stated separately.** All three are observable gauges sampled at scrape time and published from process start, so an *absent* series means the host did not construct the meter or the collector refused it at one of its ceilings; it never means memory is unbounded. The limit and the threshold are populated by the runtime before any collection has run, so a zero on either is a fault to investigate rather than a reading. Committed bytes is carried by the last collection's figures and so is genuinely zero until the first collection: read it against `lattice_repocontext_gc_collections_total` exactly as the pause total is read, and a zero beside a rising collection count is the only form that means the process has committed nothing. None of the three carries a tenant dimension.
 
 ### Agent-memory backup protection
 

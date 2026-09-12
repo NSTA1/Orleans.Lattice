@@ -240,6 +240,15 @@ public static class RepoContextHostBuilder
         var gcMeter = new RepoContextGarbageCollectionMeter();
         builder.Services.AddSingleton(gcMeter);
 
+        // The ceiling the collector above is measured against. Constructed eagerly
+        // for the same reason as its two neighbours. Without it the subscribed
+        // runtime family reports what the process is USING and nothing reports what
+        // it may use, so heap-ceiling adherence - the claimed effect of the heap
+        // fixes in this epic - stays an inference drawn from outside the container
+        // (issues #2543, #2765, #2767).
+        var heapCeilingMeter = new RepoContextHeapCeilingMeter();
+        builder.Services.AddSingleton(heapCeilingMeter);
+
         var isAzure = config.Profile == DurabilityProfile.Azure;
 
         // Resolve the backup settings once, before the silo lambda, so an unusable

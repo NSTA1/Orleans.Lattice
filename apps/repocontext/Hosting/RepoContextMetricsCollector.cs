@@ -37,14 +37,115 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 public sealed class RepoContextMetricsCollector : IDisposable
 {
     /// <summary>
-    /// The case-insensitive meter-name prefix this collector subscribes to. Every
+    /// The case-insensitive meter-name prefix covering the Lattice estate. Every
     /// Lattice meter is named under it - the core <c>orleans.lattice</c> meter and
     /// its per-package siblings, and the repository-context surface's own
     /// <c>Orleans.Lattice.Api.Mcp.RepoContext</c> meter - so one prefix covers the
     /// whole estate and a meter added by a future package is picked up without a
-    /// code change here.
+    /// code change here. It is one of <see cref="SubscribedMeterNamePrefixes"/>, not
+    /// the only one: the runtime families below are deliberately outside it.
     /// </summary>
     public const string MeterNamePrefix = "orleans.lattice";
+
+    /// <summary>
+    /// The BCL's built-in runtime meter. It is in the base class library, needs no
+    /// package reference and no opt-in beyond a listener, and carries the only
+    /// in-process account of what this container's memory is doing:
+    /// <c>dotnet.process.memory.working_set</c>, <c>dotnet.gc.last_collection.heap.size</c>,
+    /// <c>dotnet.gc.last_collection.memory.committed_size</c>,
+    /// <c>dotnet.gc.heap.total_allocated</c>, and <c>dotnet.gc.collections</c>
+    /// partitioned by generation.
+    /// </summary>
+    /// <remarks>
+    /// Issue #2543. This meter is not under <see cref="MeterNamePrefix"/>, so before
+    /// this constant existed the collector recorded every Lattice instrument and
+    /// discarded the entire runtime family at the listener. The consequence was not
+    /// a missing nicety: a container running against a hard memory limit exported no
+    /// instrument that could attribute a single byte of it, so every memory question
+    /// this reliability epic asked was answered by inference or by <c>docker stats</c>
+    /// from outside, and heap-ceiling adherence - the claimed effect of two merged
+    /// fixes in this same epic - was not measurable from inside at all.
+    /// <para>
+    /// Adding it costs no dependency, which is what keeps the class remarks above
+    /// true: this is still a plain <see cref="MeterListener"/> and the image still
+    /// gains no OpenTelemetry package.
+    /// </para>
+    /// </remarks>
+    public const string RuntimeMeterNamePrefix = "System.Runtime";
+
+    /// <summary>
+    /// Orleans' own runtime meter: grain and system-target activation counts,
+    /// activation latency, messaging, directory, and scheduler instruments.
+    /// </summary>
+    /// <remarks>
+    /// Issue #2724. The name is the one verified against the pinned Orleans version
+    /// by the reference-architecture registration (PR #2750) rather than recalled,
+    /// because the failure mode of getting it wrong is silent in exactly the way this
+    /// subscription exists to remove: a name that matches nothing registers nothing,
+    /// throws nothing, and leaves an endpoint byte-identical to the one that has the
+    /// bug.
+    /// <para>
+    /// PR #2750 fixed the two reference-architecture silos, which register with
+    /// OpenTelemetry. This container does not: it is distroless and dependency-free
+    /// and collects through this listener instead, so it did not inherit that fix and
+    /// the live rig still discarded every <c>Microsoft.Orleans</c> series. Activation
+    /// latency is the most direct signal for the inline-capture risk issue #2696
+    /// describes, and it was being recorded and thrown away one layer above the
+    /// instrument.
+    /// </para>
+    /// </remarks>
+    public const string OrleansRuntimeMeterNamePrefix = "Microsoft.Orleans";
+
+    /// <summary>
+    /// Every meter-name prefix this collector subscribes to, compared
+    /// case-insensitively. Ordered most-specific-first is unnecessary because the
+    /// prefixes are disjoint; the order here is the order the subscription-proof
+    /// series renders in.
+    /// </summary>
+    public static readonly IReadOnlyList<string> SubscribedMeterNamePrefixes =
+    [
+        MeterNamePrefix,
+        OrleansRuntimeMeterNamePrefix,
+        RuntimeMeterNamePrefix,
+    ];
+
+    /// <summary>
+    /// The gauge naming each meter-name prefix this collector subscribes to, valued
+    /// with the number of distinct meters it has matched.
+    /// </summary>
+    /// <remarks>
+    /// This exists because a series discarded at the listener is otherwise
+    /// indistinguishable from one that was never declared. Issue #2724 sets that out
+    /// as a three-way table in which two of the rows are discriminable and the third
+    /// is not: an instrument that is declared, firing, and dropped at the listener is
+    /// byte-identical on the endpoint to one that does not exist, and byte-identical
+    /// in the source to a healthy one. It is invisible to an endpoint scan and to
+    /// source inspection alike, which is how a survey of this very rig concluded that
+    /// Orleans exports no activation-duration instrument when the truth was that
+    /// Orleans exports it and the host threw it away.
+    /// <para>
+    /// One series per configured prefix, minted at zero when the collector is
+    /// constructed and therefore before any instrument can have been published,
+    /// resolves the table. An <b>absent</b> prefix means this build does not
+    /// subscribe to that family - which is what a pre-fix image looks like. A prefix
+    /// present at <b>zero</b> means the subscription landed and nothing has published
+    /// on that meter, which is a statement about the process rather than about the
+    /// build. A non-zero value names how many meters were matched. The zero is a
+    /// reachability proof for the subscription itself, in the sense the repository's
+    /// zero-priming convention intends.
+    /// </para>
+    /// <para>
+    /// Like the drop attribution, these samples are rendered straight from the
+    /// collector's own state rather than routed through the family and series
+    /// machinery, so a ceiling can never suppress the diagnostic that says which
+    /// families are being collected. Cardinality is fixed by
+    /// <see cref="SubscribedMeterNamePrefixes"/>, which is fixed by code.
+    /// </para>
+    /// </remarks>
+    public const string SubscribedMetersGaugeName = "lattice_metrics_subscribed_meters";
+
+    /// <summary>The label naming the subscribed prefix on <see cref="SubscribedMetersGaugeName"/>.</summary>
+    public const string PrefixLabelName = "prefix";
 
     /// <summary>
     /// The default ceiling on distinct series within a single metric family. A tag
@@ -123,6 +224,14 @@ public sealed class RepoContextMetricsCollector : IDisposable
 
     private readonly ConcurrentDictionary<string, MetricFamily> _families = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<(string Family, string Ceiling), DropCount> _dropsByFamily = new();
+
+    /// <summary>
+    /// The distinct meter names matched under each subscribed prefix. Every prefix
+    /// gets an entry at construction, so the gauge it renders is minted at zero
+    /// before any instrument can publish. See <see cref="SubscribedMetersGaugeName"/>.
+    /// </summary>
+    private readonly Dictionary<string, HashSet<string>> _matchedMetersByPrefix;
+
     private readonly MeterListener _listener = new();
     private readonly int _maxSeriesPerFamily;
     private readonly int _maxSeries;
@@ -155,6 +264,15 @@ public sealed class RepoContextMetricsCollector : IDisposable
         _maxSeriesPerFamily = maxSeriesPerFamily;
         _maxSeries = maxSeries;
 
+        // Minted here, before Start() replays anything, so every configured prefix
+        // has a series from the first scrape whether or not a meter ever publishes
+        // under it. That is what makes an ABSENT prefix mean "this build does not
+        // subscribe to that family" rather than "nothing happened".
+        _matchedMetersByPrefix = SubscribedMeterNamePrefixes.ToDictionary(
+            prefix => prefix,
+            _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            StringComparer.Ordinal);
+
         _listener.InstrumentPublished = OnInstrumentPublished;
         _listener.SetMeasurementEventCallback<byte>(OnMeasurement);
         _listener.SetMeasurementEventCallback<short>(OnMeasurement);
@@ -170,10 +288,36 @@ public sealed class RepoContextMetricsCollector : IDisposable
     /// Whether the supplied meter name is one this collector subscribes to.
     /// </summary>
     /// <param name="meterName">The meter name to test.</param>
-    /// <returns><see langword="true"/> when the meter is Lattice-owned.</returns>
+    /// <returns>
+    /// <see langword="true"/> when the meter is Lattice-owned, Orleans' own runtime
+    /// meter, or the BCL runtime meter.
+    /// </returns>
     public static bool IsSubscribedMeter(string? meterName)
-        => meterName is not null
-           && meterName.StartsWith(MeterNamePrefix, StringComparison.OrdinalIgnoreCase);
+        => MatchPrefix(meterName) is not null;
+
+    /// <summary>
+    /// The subscribed prefix that matches the supplied meter name, or
+    /// <see langword="null"/> when none does.
+    /// </summary>
+    /// <param name="meterName">The meter name to classify.</param>
+    /// <returns>The matching entry of <see cref="SubscribedMeterNamePrefixes"/>, or null.</returns>
+    public static string? MatchPrefix(string? meterName)
+    {
+        if (meterName is null)
+        {
+            return null;
+        }
+
+        foreach (var prefix in SubscribedMeterNamePrefixes)
+        {
+            if (meterName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return prefix;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Classifies a .NET instrument into the Prometheus family it renders as.
@@ -235,8 +379,38 @@ public sealed class RepoContextMetricsCollector : IDisposable
             "Measurements dropped because the container's collector reached a series ceiling, per family or overall.",
             Interlocked.Read(ref _dropped));
         AppendDropAttribution(builder);
+        AppendSubscribedMeters(builder);
 
         return builder.ToString();
+    }
+
+    private void RecordMatchedMeter(string prefix, string meterName)
+    {
+        lock (_matchedMetersByPrefix)
+        {
+            _matchedMetersByPrefix[prefix].Add(meterName);
+        }
+    }
+
+    private void AppendSubscribedMeters(StringBuilder builder)
+    {
+        builder.Append("# HELP ").Append(SubscribedMetersGaugeName)
+            .Append(" Meter-name prefixes this collector subscribes to, valued with the number of distinct")
+            .Append(" meters matched. A prefix absent here is not collected by this build; a prefix present")
+            .Append(" at zero is collected and has published nothing.\n");
+        builder.Append("# TYPE ").Append(SubscribedMetersGaugeName).Append(" gauge\n");
+
+        lock (_matchedMetersByPrefix)
+        {
+            foreach (var prefix in SubscribedMeterNamePrefixes)
+            {
+                builder.Append(SubscribedMetersGaugeName)
+                    .Append('{').Append(PrefixLabelName).Append("=\"")
+                    .Append(RepoContextPrometheusExposition.EscapeLabelValue(prefix)).Append("\"} ")
+                    .Append(_matchedMetersByPrefix[prefix].Count.ToString(CultureInfo.InvariantCulture))
+                    .Append('\n');
+            }
+        }
     }
 
     private void AppendDropAttribution(StringBuilder builder)
@@ -275,10 +449,13 @@ public sealed class RepoContextMetricsCollector : IDisposable
     {
         // Name comparison only - never a reference comparison against another
         // type's static Meter field. See the class remarks.
-        if (!IsSubscribedMeter(instrument.Meter.Name))
+        var prefix = MatchPrefix(instrument.Meter.Name);
+        if (prefix is null)
         {
             return;
         }
+
+        RecordMatchedMeter(prefix, instrument.Meter.Name);
 
         var kind = KindOf(instrument);
         var name = RepoContextPrometheusExposition.MetricName(instrument.Name, kind);
