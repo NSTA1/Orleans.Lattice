@@ -3604,18 +3604,122 @@ internal sealed partial class BPlusLeafGrain
         // deletes or atomic multi-key writes. With the ledger the ceiling
         // recovers the moment a deferred offset drains, here or in pass 2.
 
+        // Slice width is a LOCAL, not the constant (issue #2742). The read
+        // that fills a slice is the allocation this deployment could no
+        // longer afford, and the previous loop had exactly one response to
+        // that: unwind the whole partition replay. The next activation then
+        // re-read the identical window, failed identically, and banked
+        // nothing - 3,080 stalled replays on one tree, with the checkpoint
+        // frozen for the entire census. Width is now something the loop can
+        // spend to keep going.
+        var sliceBudget = ReplaySliceBudget;
+
         while (fromExclusive < head)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var slice = await coordinator.ReadSliceAsync(
-                fromExclusive,
-                head,
-                ReplaySliceBudget,
-                cancellationToken);
+            IReadOnlyList<CommitLogSliceEntry> slice;
+            try
+            {
+                slice = await coordinator.ReadSliceAsync(
+                    fromExclusive,
+                    head,
+                    sliceBudget,
+                    cancellationToken);
+            }
+            catch (Exception ex) when (sliceBudget > 1 && IsReadMemoryPressure(ex))
+            {
+                // The read was unaffordable, not wrong. Narrow and retry the
+                // SAME range: a quarter of the width is a quarter of the
+                // bytes the storage provider must find, and the narrower
+                // range is also a different key on the coordinator's slice
+                // cache, so the retry cannot be served the failed attempt.
+                // Everything applied so far is already durable - the
+                // incremental flush at the foot of this loop banked it - so
+                // the retry resumes rather than repeats.
+                var narrowed = sliceBudget / 4;
+                sliceBudget = narrowed < 1 ? 1 : narrowed;
+                ReplayLogger(context)?.LogWarning(
+                    ex,
+                    "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford a commit-log "
+                    + "read from offset {FromExclusive}; narrowing the slice budget to {SliceBudget} entries and "
+                    + "retrying. Progress up to offset {MaxApplied} is already banked.",
+                    context.GrainId,
+                    treeId,
+                    partition,
+                    fromExclusive,
+                    sliceBudget,
+                    maxApplied);
+                continue;
+            }
+            catch (Exception ex) when (IsReadMemoryPressure(ex))
+            {
+                // A single entry is the narrowest read there is, so there is
+                // no smaller retry to make. Let the failure surface: the
+                // activation must not come up serving a partition it did not
+                // finish replaying. What makes this an exit rather than the
+                // old livelock is that the checkpoint has MOVED - the next
+                // activation replays a strictly shorter gap, which is a
+                // strictly cheaper read.
+                //
+                // No flush is issued here, and the reason is narrower than
+                // "the foot of the loop already flushed". The foot-of-loop
+                // flush (issue #1513) is CALLED unconditionally after every
+                // non-empty slice, but calling it is not the same as banking:
+                // it clamps to the recovered ceiling and is skipped unless it
+                // strictly advances the partition's position. What makes a
+                // flush here pointless is that this path adds no progress the
+                // foot of the loop has not already offered - the slice that
+                // threw applied nothing. So a flush on this path can only
+                // repeat an offer already made, at the single moment the
+                // process is most starved. A perturbation arm that removed it
+                // reddened nothing, which is the evidence rather than the
+                // argument.
+                //
+                // That the absorbed prefix survives an interruption mid-replay
+                // is pinned independently by
+                // Cancellation_at_each_slice_boundary_banks_the_absorbed_prefix,
+                // which interrupts at each slice boundary and asserts the
+                // prefix banked. This throw is that same shape.
+                //
+                // One shape is exempt, and it is not this path's to repair:
+                // when the ledger is unavailable and a deferred terminal sits
+                // at the HEAD of the window, the ceiling clamps to the current
+                // checkpoint and nothing banks, for an interrupted replay of
+                // any kind. That is issue #2746, it predates this path (plain
+                // cancellation reproduces it with none of this code present),
+                // and it is unfixable here because the checkpoint is a single
+                // watermark: an unapplied head offset admits no correct
+                // checkpoint above the current one, however much of the rest
+                // of the window was absorbed.
+                ReplayLogger(context)?.LogError(
+                    ex,
+                    "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford even a "
+                    + "single-entry commit-log read from offset {FromExclusive}. Progress up to offset "
+                    + "{MaxApplied} has been banked; this activation will fail and the next will resume from "
+                    + "the shorter gap.",
+                    context.GrainId,
+                    treeId,
+                    partition,
+                    fromExclusive,
+                    maxApplied);
+                throw;
+            }
 
             if (slice.Count == 0)
                 break;
+
+            // Widen back on success. Without this a single pressure blip
+            // would pin the partition at one entry per slice for the rest of
+            // a multi-million-entry gap, which converges so slowly it is
+            // indistinguishable from the stall being fixed. Doubling recovers
+            // full width in a handful of slices while still backing off
+            // immediately if pressure returns.
+            if (sliceBudget < ReplaySliceBudget)
+            {
+                var widened = sliceBudget * 2;
+                sliceBudget = widened > ReplaySliceBudget ? ReplaySliceBudget : widened;
+            }
 
             foreach (var entry in slice)
             {
@@ -3955,6 +4059,59 @@ internal sealed partial class BPlusLeafGrain
         _replayEntriesAppliedThisActivation += appliedEntries;
 
         return (Advanced: maxApplied > checkpoint, MaxApplied: maxApplied);
+    }
+
+    private static ILogger? ReplayLogger(IGrainContext context) =>
+        context.ActivationServices?
+            .GetService<ILoggerFactory>()?
+            .CreateLogger<BPlusLeafGrain>();
+
+    /// <summary>
+    /// Reports whether a failed commit-log read means "this machine cannot
+    /// afford this read right now" rather than "this read is wrong".
+    /// </summary>
+    /// <remarks>
+    /// The distinction decides whether narrowing the window is a sensible
+    /// response, and it is the only reason narrowing is safe to do
+    /// automatically: a corrupt log, a missing offset, or a cancelled
+    /// activation would fail identically at every width, so retrying them
+    /// smaller would just spend the activation window discovering that. A
+    /// resource verdict is the one failure class where a smaller attempt is
+    /// genuinely a different attempt.
+    /// <para>
+    /// The chain is walked rather than matched on the outermost type
+    /// because the read crosses a grain boundary and is wrapped on the way
+    /// back, and <see cref="OutOfMemoryException"/> is accepted alongside the
+    /// typed verdict because a provider that has not been taught to raise
+    /// the typed one still fails for exactly this reason. Matching only the
+    /// typed exception would quietly restrict the fix to the file provider.
+    /// </para>
+    /// </remarks>
+    internal static bool IsReadMemoryPressure(Exception? exception)
+    {
+        for (var depth = 0; exception is not null && depth < 16; depth++)
+        {
+            switch (exception)
+            {
+                case WalReadUnderPressureException:
+                case OutOfMemoryException:
+                    return true;
+                case AggregateException aggregate:
+                    foreach (var inner in aggregate.InnerExceptions)
+                    {
+                        if (IsReadMemoryPressure(inner))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+            }
+
+            exception = exception.InnerException;
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -505,6 +505,14 @@ internal static class TypeAliases
     // package today; foreground commit-log adapter tomorrow)
     internal const string WalEntry = "ol.we";
 
+    // Read-path memory-pressure surface. Raised by a WAL storage provider
+    // when even a single-entry page cannot be materialised, so a replay
+    // can tell "this machine cannot afford the read right now" from a
+    // corrupt log and bank its progress instead of unwinding (issue 2742).
+    // Crosses the ILeafReplayCoordinatorGrain boundary, so it is
+    // serializable rather than a bare OutOfMemoryException.
+    internal const string WalReadUnderPressure = "ol.wrp";
+
     // WAL saturation back-pressure surface (push + poll + await
     // shapes exposed to callers driving offered load into ILattice;
     // see IWalSaturationSignal / IWalSaturationObserver).

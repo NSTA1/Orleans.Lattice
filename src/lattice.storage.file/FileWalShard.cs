@@ -20,7 +20,10 @@ internal sealed class FileWalShard : IDisposable
 
     private readonly string _directory;
     private readonly string _logPath;
+    private readonly string _treeId;
+    private readonly int _shardIndex;
     private readonly FileWalStorageOptions _options;
+    private readonly IWalReadPressureGovernor _governor;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     // Entries kept sorted ascending by offset. Out-of-order batch arrival
@@ -38,11 +41,35 @@ internal sealed class FileWalShard : IDisposable
     private long _trimWatermark = -1;
 
     internal FileWalShard(string directory, FileWalStorageOptions options)
+        : this(directory, options, string.Empty, 0, GcWalReadPressureGovernor.Instance)
+    {
+    }
+
+    internal FileWalShard(
+        string directory,
+        FileWalStorageOptions options,
+        string treeId,
+        int shardIndex,
+        IWalReadPressureGovernor governor)
     {
         _directory = directory;
         _logPath = Path.Combine(directory, "wal.log");
         _options = options;
+        _treeId = treeId;
+        _shardIndex = shardIndex;
+        _governor = governor;
     }
+
+    /// <summary>
+    /// Counts reads that had to give up window width to complete: once per
+    /// narrowing step forced by an allocation failure, and once more when
+    /// even a single-entry page was unaffordable. Monotonic. Exposed so the
+    /// degradation path is directly observable in a test rather than only
+    /// inferable from the absence of a crash.
+    /// </summary>
+    internal long ReadPressureDegradations => Interlocked.Read(ref _readPressureDegradations);
+
+    private long _readPressureDegradations;
 
     /// <summary>Appends a dense, non-overlapping batch atomically.</summary>
     internal async Task AppendAsync(IReadOnlyList<PreparedWalRecord> records, CancellationToken cancellationToken)
@@ -79,7 +106,12 @@ internal sealed class FileWalShard : IDisposable
     /// <param name="maxBytes">
     /// Maximum total payload bytes to materialise; must be at least
     /// <c>1</c>. At least one entry is always returned even when it alone
-    /// exceeds this budget, so the bound can never stall a reader.
+    /// exceeds this budget, so the bound can never stall a reader. The
+    /// value is an upper bound only: it is narrowed further, per read, by
+    /// the process's current memory occupancy (issue #2742), and a page
+    /// that still cannot be allocated is retried at a quarter of its width
+    /// down to a single entry before <see cref="WalReadUnderPressureException"/>
+    /// is raised.
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     internal async Task<(long[] Offsets, byte[][] Payloads)> SnapshotAsync(
@@ -119,22 +151,197 @@ internal sealed class FileWalShard : IDisposable
                 return (Array.Empty<long>(), Array.Empty<byte[]>());
             }
 
-            var take = Narrow(startIndex, Math.Min(available, maxEntries), maxBytes);
-            var offsets = new long[take];
-            var payloads = new byte[take][];
-            for (var i = 0; i < take; i++)
-            {
-                var entry = _entries[startIndex + i];
-                offsets[i] = entry.Offset;
-                payloads[i] = ReadPayload(entry);
-            }
-
-            return (offsets, payloads);
+            var budget = NarrowBudget(maxBytes);
+            var take = Narrow(startIndex, Math.Min(available, maxEntries), budget);
+            return MaterialiseOwnedPage(startIndex, take);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Snapshots a page like <see cref="SnapshotAsync"/>, but decodes each
+    /// payload directly from pooled, non-contiguous chunks instead of
+    /// handing the caller an owned <c>byte[]</c> per entry.
+    /// </summary>
+    /// <remarks>
+    /// This is the shape the replay read path uses. The caller wants a
+    /// deserialized record, never the bytes, so materialising a contiguous
+    /// array per entry only to throw it away is pure cost - and it is the
+    /// specific cost that fails first on a nearly-full heap, because a
+    /// contiguous request needs a single free block rather than merely
+    /// enough free memory. Decoding from a <see cref="ReadOnlySequence{T}"/>
+    /// removes the entry-sized contiguous requirement entirely: peak
+    /// additional memory for a page becomes the decoded records plus a
+    /// handful of pooled 64 KiB chunks, whatever the entry size.
+    /// <para>
+    /// <paramref name="decode"/> is invoked while the shard gate is held and
+    /// must not retain the sequence: the chunks behind it are returned to
+    /// the pool as soon as it returns.
+    /// </para>
+    /// </remarks>
+    internal async Task<(long[] Offsets, T[] Values)> SnapshotDecodedAsync<T>(
+        long fromOffsetExclusive,
+        int maxEntries,
+        long maxBytes,
+        Func<ReadOnlySequence<byte>, T> decode,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(decode);
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries), maxEntries, "At least one entry must be requested per read.");
+        }
+
+        if (maxBytes < 1L)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxBytes), maxBytes, "At least one byte must be budgeted per read.");
+        }
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureLoaded();
+            if (fromOffsetExclusive == long.MaxValue)
+            {
+                return (Array.Empty<long>(), Array.Empty<T>());
+            }
+
+            var startIndex = LowerBound(fromOffsetExclusive + 1);
+            var available = _entries.Count - startIndex;
+            if (available <= 0)
+            {
+                return (Array.Empty<long>(), Array.Empty<T>());
+            }
+
+            var budget = NarrowBudget(maxBytes);
+            var take = Narrow(startIndex, Math.Min(available, maxEntries), budget);
+            return DecodePage(startIndex, take, decode);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private (long[] Offsets, T[] Values) DecodePage<T>(int startIndex, int take, Func<ReadOnlySequence<byte>, T> decode)
+    {
+        while (true)
+        {
+            using var chunks = new PooledPayloadSequence();
+            var entry = default(IndexEntry);
+            try
+            {
+                var offsets = new long[take];
+                var values = new T[take];
+                for (var i = 0; i < take; i++)
+                {
+                    entry = _entries[startIndex + i];
+                    offsets[i] = entry.Offset;
+                    chunks.Fill(_stream!, entry.Position, entry.PayloadLength);
+                    values[i] = decode(chunks.Sequence);
+                }
+
+                return (offsets, values);
+            }
+            catch (OutOfMemoryException) when (take > 1)
+            {
+                take = NarrowAfterAllocationFailure(take);
+            }
+            catch (OutOfMemoryException ex)
+            {
+                throw UnaffordableRead(entry, ex);
+            }
+        }
+    }
+
+    private (long[] Offsets, byte[][] Payloads) MaterialiseOwnedPage(int startIndex, int take)
+    {
+        while (true)
+        {
+            var entry = default(IndexEntry);
+            try
+            {
+                var offsets = new long[take];
+                var payloads = new byte[take][];
+                for (var i = 0; i < take; i++)
+                {
+                    entry = _entries[startIndex + i];
+                    offsets[i] = entry.Offset;
+                    payloads[i] = ReadPayload(entry);
+                }
+
+                return (offsets, payloads);
+            }
+            catch (OutOfMemoryException) when (take > 1)
+            {
+                take = NarrowAfterAllocationFailure(take);
+            }
+            catch (OutOfMemoryException ex)
+            {
+                throw UnaffordableRead(entry, ex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Shrinks a read window after an allocation failure, quartering it down
+    /// to a single entry.
+    /// </summary>
+    /// <remarks>
+    /// The pre-read budget is a prediction; this is the correction when the
+    /// prediction was wrong. It has to exist because occupancy is sampled at
+    /// the last collection and hundreds of leaves read concurrently, so a
+    /// window that was affordable when it was chosen can be unaffordable a
+    /// moment later. Quartering rather than halving is deliberate: the
+    /// failure says the estimate was not slightly optimistic but
+    /// categorically so, and each extra attempt is itself an allocation
+    /// burst on an already-failing heap, so converging in four steps from a
+    /// 256-entry page costs less than converging in eight. Partially built
+    /// arrays are dropped by leaving the try block and become collectable
+    /// before the retry allocates.
+    /// </remarks>
+    private int NarrowAfterAllocationFailure(int take)
+    {
+        Interlocked.Increment(ref _readPressureDegradations);
+        var narrowed = take / 4;
+        return narrowed < 1 ? 1 : narrowed;
+    }
+
+    private WalReadUnderPressureException UnaffordableRead(in IndexEntry entry, Exception inner)
+    {
+        Interlocked.Increment(ref _readPressureDegradations);
+        return new WalReadUnderPressureException(_treeId, _shardIndex, entry.Offset, entry.PayloadLength, inner);
+    }
+
+    /// <summary>
+    /// Applies the process-wide memory-pressure narrowing to a configured
+    /// per-read byte ceiling.
+    /// </summary>
+    /// <remarks>
+    /// The configured ceiling answers "how large may a page be?", which is a
+    /// question about the log. It cannot answer "how large may a page be
+    /// <i>here, now</i>?", which is a question about the machine, and that
+    /// is the question that matters when a deployment is already at the edge
+    /// of its heap: a ceiling chosen for healthy operation is exactly the
+    /// wrong one for a process whose reads are failing, because affording it
+    /// is what is no longer possible. Narrowing is one-way - the configured
+    /// value remains an upper bound and is used unchanged whenever the
+    /// machine reports room to work in.
+    /// </remarks>
+    private long NarrowBudget(long maxBytes)
+    {
+        var narrowed = _governor.NarrowBudget(maxBytes);
+        if (narrowed < 1L)
+        {
+            narrowed = 1L;
+        }
+
+        return narrowed > maxBytes ? maxBytes : narrowed;
     }
 
     /// <summary>
@@ -479,7 +686,7 @@ internal sealed class FileWalShard : IDisposable
     private byte[] ReadPayload(in IndexEntry entry)
     {
         var stream = _stream!;
-        var buffer = new byte[entry.PayloadLength];
+        var buffer = _governor.Allocate(entry.PayloadLength);
         if (entry.PayloadLength > 0)
         {
             stream.Seek(entry.Position, SeekOrigin.Begin);
