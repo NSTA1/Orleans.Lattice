@@ -120,7 +120,30 @@ internal sealed partial class BPlusLeafGrain
     private long GetPersistedCheckpointForPartition(int partition)
     {
         if (partition == 0)
+        {
+            // Partition 0 lives in the scalar slot, which has no initializer and
+            // is therefore born 0 rather than at the -1 "nothing applied"
+            // sentinel every other partition uses (issue #2703). An unassigned 0
+            // is genuinely ambiguous - it means either "checkpointed at offset
+            // 0" or "never checkpointed" - so resolve it the conservative way
+            // and report the sentinel. Under-reporting progress costs at most a
+            // re-read of WAL offset 0, whose apply is idempotent; over-reporting
+            // it skips the replay advance that would have recorded the
+            // checkpoint, which is the defect itself. The first assignment sets
+            // ProjectionCheckpointOffsetAssigned, after which a persisted 0 is
+            // read at face value and the deferral disappears for good.
+            //
+            // This is the ONLY place the ambiguity is resolved. Every consumer
+            // of a per-partition checkpoint reads through this accessor, so all
+            // of them are honest by construction rather than by each carrying
+            // its own guard.
+            if (state.State.ProjectionCheckpointOffset == 0
+                && state.State.ProjectionCheckpointOffsetAssigned != true)
+            {
+                return -1L;
+            }
             return state.State.ProjectionCheckpointOffset;
+        }
         var arr = state.State.ProjectionCheckpointOffsetsByPartition;
         if (arr is null || partition >= arr.Length)
             return -1L; // "nothing applied" sentinel - legacy state has no per-partition value.
@@ -132,6 +155,10 @@ internal sealed partial class BPlusLeafGrain
         if (partition == 0)
         {
             state.State.ProjectionCheckpointOffset = value;
+            // Records that the scalar now holds an assigned value, so a
+            // persisted 0 stops reading as the ambiguous type default
+            // (issue #2703).
+            state.State.ProjectionCheckpointOffsetAssigned = true;
         }
         // Mirror partition 0 into the array slot (when present) so a
         // host that later reads ProjectionCheckpointOffsetsByPartition
@@ -149,7 +176,7 @@ internal sealed partial class BPlusLeafGrain
             // except partition 0, which mirrors the scalar slot.
             for (var i = 0; i < arr.Length; i++)
                 arr[i] = -1L;
-            arr[0] = state.State.ProjectionCheckpointOffset;
+            arr[0] = GetPersistedCheckpointForPartition(0);
             arr[partition] = value;
             state.State.ProjectionCheckpointOffsetsByPartition = arr;
             return;

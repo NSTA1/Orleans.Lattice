@@ -211,7 +211,8 @@ public sealed class LatticeWalGc(
         // cursor eagerly, but dormant leaves re-register only lazily, so
         // without this floor the GC would trim past a leaf's durable
         // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
-        minCursor = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, cancellationToken).ConfigureAwait(false);
+        var (flooredCursor, cursorBlocked, blockingConsumerId) = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, cancellationToken).ConfigureAwait(false);
+        minCursor = flooredCursor;
         // Offset-space retention floor. The HLC floor above cannot protect a
         // low-HLC / high-offset WAL entry (a tombstone-compaction reap re-emits
         // an old timestamp at a new offset, so the WAL is not HLC-monotonic in
@@ -257,6 +258,19 @@ public sealed class LatticeWalGc(
         var hasCursorPredicate = minCursor is { } mc && mc > HybridLogicalClock.Zero;
         var hasTtlPredicate = ttlCeiling is not null;
 
+        // Why the cursor branch is in the state it is. A null minCursor is
+        // ambiguous between "nobody is consuming this tree" (benign, and the
+        // scheduler should back off) and "an unusable durable pin short-circuited
+        // the floor" (a defect state in which the tree cannot reclaim at all and
+        // its WAL grows without bound). Collapsing the two is issue #2702; the
+        // scheduler reads this to schedule them differently. Purely diagnostic -
+        // the trim predicate below is unchanged.
+        var cursorFloorState = cursorBlocked
+            ? WalGcCursorFloorState.BlockedByUnusablePin
+            : hasCursorPredicate
+                ? WalGcCursorFloorState.Available
+                : WalGcCursorFloorState.NoCursorReported;
+
         // Sample retained bytes once up front so a byte-pressure trigger is
         // decided against the pre-trim footprint. Returns null when the
         // policy is disabled or the provider does not support byte accounting.
@@ -289,7 +303,7 @@ public sealed class LatticeWalGc(
             var over0 = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedBefore);
             return new LatticeWalGcReport(
                 treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0,
-                ceiling, retainedBefore, retainedBefore, triggered, over0);
+                ceiling, retainedBefore, retainedBefore, triggered, over0, cursorFloorState, blockingConsumerId);
         }
 
         long totalTrimmed = 0;
@@ -320,7 +334,7 @@ public sealed class LatticeWalGc(
 
         return new LatticeWalGcReport(
             treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed,
-            ceiling, retainedBefore, retainedAfter, triggered, overThreshold);
+            ceiling, retainedBefore, retainedAfter, triggered, overThreshold, cursorFloorState, blockingConsumerId);
     }
 
     /// <summary>
@@ -335,15 +349,34 @@ public sealed class LatticeWalGc(
     /// <para>
     /// A missing pin at a real frontier lowers the effective floor (more WAL
     /// retained, always safe). A missing pin at
-    /// <see cref="HybridLogicalClock.Zero"/> - a leaf that activated but never
-    /// checkpointed - returns <see langword="null"/>, disabling the cursor
+    /// <see cref="HybridLogicalClock.Zero"/> - a leaf whose durable pin carries
+    /// no usable offset, most often because it is fully checkpointed but holds
+    /// no durable snapshot, and otherwise because it has no usable checkpoint -
+    /// returns a
+    /// <see langword="null"/> floor <b>with
+    /// <c>Blocked</c> set</b>, disabling the cursor
     /// branch of the GC predicate entirely so the WAL head is retained for
     /// that leaf (the TTL ceiling still bounds growth). When the grain factory
     /// is unavailable (a bare-IServiceProvider unit-test construction) or no
     /// durable pins exist, the registry minimum is returned unchanged.
     /// </para>
+    /// <para>
+    /// The <c>Blocked</c> flag exists because a <see langword="null"/> floor is
+    /// otherwise ambiguous: it is also what an unconsumed tree yields. Only the
+    /// short-circuit above is a defect state, and only the caller that can tell
+    /// them apart can schedule them differently (issue #2702). The flag is
+    /// diagnostic; it does not participate in the trim predicate.
+    /// </para>
+    /// <para>
+    /// <c>BlockingConsumerId</c> names the consumer whose pin caused that
+    /// short-circuit, and is <see langword="null"/> on every other path
+    /// (issue #2464). It is what turns "this tree cannot reclaim" into a
+    /// actionable statement, because the id embeds the owning leaf's grain id.
+    /// Like <c>Blocked</c> it is diagnostic only and never widens what a pass
+    /// is allowed to trim.
+    /// </para>
     /// </summary>
-    private async Task<HybridLogicalClock?> ApplyDurableMaterialiserFloorAsync(
+    private async Task<(HybridLogicalClock? Floor, bool Blocked, string? BlockingConsumerId)> ApplyDurableMaterialiserFloorAsync(
         string treeName,
         HybridLogicalClock? registryMin,
         CancellationToken cancellationToken)
@@ -351,7 +384,7 @@ public sealed class LatticeWalGc(
         var factory = GrainFactory;
         if (factory is null)
         {
-            return registryMin;
+            return (registryMin, false, null);
         }
 
         IReadOnlyDictionary<string, HybridLogicalClock> pins;
@@ -365,12 +398,12 @@ public sealed class LatticeWalGc(
             // the in-memory floor rather than failing the whole GC run. The
             // next pass retries; a missed floor never trims unsafely because
             // the present in-memory consumers still constrain the trim point.
-            return registryMin;
+            return (registryMin, false, null);
         }
 
         if (pins.Count == 0)
         {
-            return registryMin;
+            return (registryMin, false, null);
         }
 
         var snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
@@ -393,10 +426,31 @@ public sealed class LatticeWalGc(
 
             if (pin <= HybridLogicalClock.Zero)
             {
-                // Never-checkpointed dormant leaf: block the cursor branch
+                // Pin carries no usable offset: block the cursor branch
                 // entirely so nothing is trimmed by cursor for this tree.
                 // Zero is the strongest possible floor, so short-circuit.
-                return null;
+                // Both a never-checkpointed leaf and a fully-checkpointed leaf
+                // with no durable snapshot land here; the caller reports this
+                // as blocked without asserting which.
+                //
+                // The consumer id IS carried out (issue #2464). Reporting that
+                // a tree is blocked without naming the consumer leaves an
+                // operator to guess which of potentially thousands of leaves is
+                // holding the tree, and leaves a fix unable to demonstrate it
+                // cleared every blocking leaf rather than some. The id encodes
+                // the owning leaf's grain id, so naming it is the whole
+                // difference between observing the condition and acting on it.
+                //
+                // It is deliberately returned rather than tagged onto a metric:
+                // the leaf population is unbounded, so the id is an unbounded
+                // metric dimension and belongs on the log line instead.
+                //
+                // This names ONE blocker, not all of them: the short-circuit is
+                // what makes the pass cheap, and enumerating every unusable pin
+                // would mean abandoning it. A later pass naming a different
+                // consumer is therefore expected while a tree drains, and is
+                // progress rather than a regression.
+                return (null, true, consumerId);
             }
 
             floor = floor is { } current
@@ -404,7 +458,7 @@ public sealed class LatticeWalGc(
                 : pin;
         }
 
-        return floor;
+        return (floor, false, null);
     }
 
     /// <summary>
@@ -414,8 +468,9 @@ public sealed class LatticeWalGc(
     /// <see cref="LatticeOptions.WalMaterialiserPinShards"/> grains; the GC must
     /// reconstruct the full floor by reading all of them. The dual-read of the
     /// legacy key keeps pins written before the upgrade counted. Shards are read
-    /// concurrently; per consumer id the lowest (most conservative) pin wins so a
-    /// stale duplicate can only retain more WAL.
+    /// concurrently; per consumer id the pin at the key the current build would
+    /// write to wins outright, and only when that key holds nothing do the
+    /// remaining (stranded) pins fold to the lowest.
     /// </summary>
     private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> ReadDurablePinsAsync(
         IGrainFactory factory,
@@ -442,16 +497,37 @@ public sealed class LatticeWalGc(
         // grow-and-rehash chain the prior grown-from-empty map paid.
         var union = new Dictionary<string, HybridLogicalClock>(
             WidestResultCount(results), StringComparer.Ordinal);
+        HashSet<string>? authoritative = null;
         for (var i = 0; i < results.Length; i++)
         {
             foreach (var (consumerId, pin) in results[i])
             {
-                // Single-probe min-fold: the prior shape probed `union` twice
-                // per consumer (a TryGetValue then an indexer set on the same
-                // key) in both branches. Nothing mutates `union` while the ref
-                // is live.
+                var isAuthoritative = i < shardCount
+                    && WalMaterialiserPinRouting.AuthoritativeKeyIndex(consumerId, shardCount) == i;
+
+                // Single-probe fold: the prior shape probed `union` twice per
+                // consumer (a TryGetValue then an indexer set on the same key)
+                // in both branches. Nothing mutates `union` while the ref is
+                // live - the authoritative set is a separate collection.
                 ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(union, consumerId, out var existed);
-                if (!existed || pin < slot)
+                if (isAuthoritative)
+                {
+                    // Only one key in the enumeration is authoritative for a
+                    // given consumer, and it is the only key the current build
+                    // writes to, so its pin supersedes every stranded duplicate
+                    // outright rather than folding against it.
+                    slot = pin;
+                    (authoritative ??= new HashSet<string>(StringComparer.Ordinal)).Add(consumerId);
+                    continue;
+                }
+
+                if (!existed)
+                {
+                    slot = pin;
+                    continue;
+                }
+
+                if (authoritative?.Contains(consumerId) != true && pin < slot)
                 {
                     slot = pin;
                 }
@@ -523,13 +599,19 @@ public sealed class LatticeWalGc(
             foreach (var offset in offsets.Values)
             {
                 // Skip the "-1" sentinel: a consumer reports -1 when it has no
-                // WAL-replay dependency at all - either a never-checkpointed
-                // Zero-HLC block pin (whose WAL retention is already enforced by
-                // the HLC block-pin branch, which disables the cursor trim
-                // entirely) or a split sibling that received its data via an
-                // in-memory handoff rather than WAL replay. Letting a -1 collapse
-                // the floor would wedge the trim for the whole tree; only real
-                // checkpoints (offset >= 0) constrain the offset floor.
+                // WAL-replay dependency at all. Three ways to get there, and
+                // only two of them carry a block pin: a genuinely empty
+                // partition (no durable checkpoint AND no live cache row, so
+                // there is no committed prefix to lose - reported with the
+                // leaf's REAL frontier, deliberately without a block pin); a
+                // never-checkpointed or uncovered data-bearing partition (whose
+                // WAL retention IS enforced by the Zero-HLC block-pin branch,
+                // which disables the cursor trim entirely); or a split sibling
+                // that received its data via an in-memory handoff rather than
+                // WAL replay. Letting a -1 collapse the floor would wedge the
+                // trim for the whole tree - the empty-partition case reports -1
+                // indefinitely and legitimately - so only real checkpoints
+                // (offset >= 0) constrain the offset floor.
                 if (offset < 0)
                 {
                     continue;
@@ -564,15 +646,19 @@ public sealed class LatticeWalGc(
             // leaves that REPORTED an offset, not over the leaves that OWE
             // entries. A leaf absent from the pin set does not constrain the
             // floor at all, and absence is NOT the same state as a reported -1:
-            // a reported -1 always arrives paired with a Zero HLC block pin that
-            // disables the cursor trim (ResolveDurablePinForPartition guarantees
-            // it), whereas an absent leaf - one whose birth block-pin seed was
-            // swallowed, or that predates the durable pin store being wired -
-            // carries no such HLC cover. Making absence constrain the floor
-            // conservatively (e.g. treating absence as offset 0) would pin the
-            // WAL forever for any permanently-departed leaf, so it is NOT done
-            // here; distinguishing absent from reported -1 needs an independent
-            // owner census this seam does not have.
+            // a reported -1 comes from a participating leaf that has told us it
+            // owes nothing, and is covered either by a paired Zero HLC block pin
+            // (the data-bearing, not-durably-recoverable case) or by there being
+            // no committed prefix to lose at all (the genuinely-empty case,
+            // which ResolveDurablePinForPartition reports with the leaf's REAL
+            // frontier and so with no block pin - it does not need one). An
+            // absent leaf - one whose birth block-pin seed was swallowed, or
+            // that predates the durable pin store being wired - has told us
+            // nothing and carries neither cover. Making absence constrain the
+            // floor conservatively (e.g. treating absence as offset 0) would pin
+            // the WAL forever for any permanently-departed leaf, so it is NOT
+            // done here; distinguishing absent from reported -1 needs an
+            // independent owner census this seam does not have.
             LatticeMetrics.WalGcOffsetFloorUnavailable.Add(
                 1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
@@ -585,8 +671,9 @@ public sealed class LatticeWalGc(
     /// Reads and unions the durable leaf-materialiser checkpoint offsets for
     /// <paramref name="treeName"/> across every shard activation plus the legacy
     /// unsuffixed key, mirroring <see cref="ReadDurablePinsAsync"/>. Per consumer
-    /// id the lowest (most conservative) offset wins so a stale duplicate can only
-    /// retain more WAL. A grain that returns <see langword="null"/> (an older
+    /// id the offset at the key the current build would write to wins outright,
+    /// and only when that key holds nothing do the remaining (stranded) offsets
+    /// fold to the lowest. A grain that returns <see langword="null"/> (an older
     /// activation predating the offset contract, surfaced by a substitute in
     /// tests) contributes nothing rather than faulting the read.
     /// </summary>
@@ -612,6 +699,7 @@ public sealed class LatticeWalGc(
         // Presized on the same reasoning as ReadDurablePinsAsync above.
         var union = new Dictionary<string, long>(
             WidestResultCount(results), StringComparer.Ordinal);
+        HashSet<string>? authoritative = null;
         for (var i = 0; i < results.Length; i++)
         {
             if (results[i] is null)
@@ -621,9 +709,28 @@ public sealed class LatticeWalGc(
 
             foreach (var (consumerId, offset) in results[i])
             {
-                // Single-probe min-fold, as in ReadDurablePinsAsync above.
+                var isAuthoritative = i < shardCount
+                    && WalMaterialiserPinRouting.AuthoritativeKeyIndex(consumerId, shardCount) == i;
+
+                // Single-probe route-authority fold, as in ReadDurablePinsAsync
+                // above. This plane carries the same defect and must be fixed
+                // with it: a floor repaired on one plane and left stranded on
+                // the other still pins the WAL.
                 ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(union, consumerId, out var existed);
-                if (!existed || offset < slot)
+                if (isAuthoritative)
+                {
+                    slot = offset;
+                    (authoritative ??= new HashSet<string>(StringComparer.Ordinal)).Add(consumerId);
+                    continue;
+                }
+
+                if (!existed)
+                {
+                    slot = offset;
+                    continue;
+                }
+
+                if (authoritative?.Contains(consumerId) != true && offset < slot)
                 {
                     slot = offset;
                 }

@@ -7,6 +7,14 @@
 # (without `-v`). See README.md for the start -> bootstrap -> recall -> restart
 # -> verify walkthrough.
 #
+# `docker compose down -v` destroys /data, and that volume holds the authored
+# agent memory as well as the rebuildable index. The /memory-archive bind mount
+# on the repocontext service exists for exactly that gesture: it is not a
+# declared volume, so `-v` does not remove it, and the host restores from it
+# into an empty store at startup. It is bounded by the export interval and is
+# not a backup - `repocontext_reset_index` remains the lossless way to rebuild
+# an index. See the comments on that service (issue #2601).
+#
 # Build context is the repository root for the host image (it ProjectReferences
 # the just-built src/ bits); the embedder builds from its own app directory. Run
 # from this directory.
@@ -58,13 +66,81 @@ services:
       # cpu, or cuda on an NVIDIA host started with a device reservation.
       # An unknown value falls back to the CPU rather than failing to boot.
       EMBED_PROVIDER: cpu
+      # EMBED_INTRA_THREADS is deliberately NOT set here, and deliberately not
+      # given a placeholder value either, for the same reason
+      # LATTICE_WAL_MAX_CONCURRENT_REPLAYS is left unset below: the correct value
+      # is a property of YOUR CPU grant, and copying a literal out of somebody
+      # else's deployment is precisely the failure the setting exists to prevent.
+      #
+      # WHAT IT IS. It sizes the ONNX Runtime intra-op thread pool - the threads
+      # that parallelise a single inference. Left unset, this server derives it
+      # from the container's ENFORCED cgroup CPU quota, which is the right answer
+      # in every case we have measured. You only need to declare it if you want
+      # to depart from that.
+      #
+      # WHY IT IS DERIVED FROM THE QUOTA AND NOT FROM THE CORE COUNT. ONNX
+      # Runtime's own default sizes the pool from the HOST core count and does
+      # not consult the cgroup quota. Under any CPU limit that oversubscribes by
+      # the ratio between the two, and the cost is not proportional - it is far
+      # worse. Measured on a 4.0-CPU grant on a 16-core host (issue #2606): a
+      # pool of 16, the kernel throttling 296 of 298 consecutive scheduling
+      # periods, and 346.3 CPU-seconds stalled against 118.8 running. The
+      # arithmetic is elementary once stated: 16 threads drain a 400ms quota in
+      # 25ms and are then frozen for the remaining 75ms, so 75:25 = 3.0 stalled
+      # per unit run, against 2.91 measured. Because ONNX Runtime synchronises
+      # intra-op threads at EVERY operator boundary and a transformer crosses
+      # hundreds per inference, a freeze landing mid-barrier stalls the whole
+      # operator rather than one thread, so throughput degrades super-linearly.
+      #
+      # WHY DOTNET_PROCESSOR_COUNT CANNOT BE REUSED FOR THIS. It is set on the
+      # repocontext service below, where it sizes an unrelated WAL replay gate.
+      # It OVERRIDES Environment.ProcessorCount and wins over the quota, so
+      # copying that service's environment block onto this one - an entirely
+      # ordinary thing to do - would silently restore the oversubscription. This
+      # server reads the quota directly and is immune to it, and logs a warning
+      # naming both figures when the two disagree.
+      #
+      # HOW TO DERIVE IT IF YOU DO SET IT. Use the container's actual CPU grant,
+      # rounded UP: `cpus: "4.5"` -> 5. Not the host core count, and not
+      # DOTNET_PROCESSOR_COUNT. IF YOU LATER CHANGE THE GRANT BELOW, A DECLARED
+      # VALUE DOES NOT FOLLOW IT - that is the whole hazard of pinning one, and
+      # is why leaving it unset is the recommended configuration. The startup log
+      # reports the resolved count and whether it was DECLARED or DERIVED, so
+      # check there rather than inferring it from this file.
     expose:
       - "9000"
+    # Run PID 1 as an init process (issue #2576). Docker bind-mounts its own
+    # static `docker-init` binary and runs it as PID 1, so this works unchanged
+    # on the distroless, shell-less runtime image - nothing has to be baked in.
+    #
+    # This is a SEPARATE defect from the stop_grace_period below, and neither
+    # substitutes for the other: the grace period governs how long the drain is
+    # given, while init governs whether PID 1 behaves like a process supervisor
+    # at all. Without it the server itself is PID 1, which reaps no orphaned
+    # children and is subject to the kernel's rule that PID 1 takes no default
+    # action for a signal it has installed no handler for.
+    init: true
+    # The embedder holds NO durable state: its weights are baked into an image
+    # layer and the base file mounts it no volume, so there is nothing to flush
+    # and Docker's 10s default would in fact be adequate here. It is set
+    # explicitly anyway, and deliberately short, so that the value is a decision
+    # on the record rather than an omission. The repocontext service below was
+    # left to the same default for years while its documentation promised a
+    # "generous shutdown budget" (issue #2389); the cost of that was not the
+    # default itself but that nothing distinguished "10s is enough here" from
+    # "nobody considered it". A reader of this file can now tell the two apart.
+    stop_grace_period: 30s
     # Survive a daemon/host restart like the repocontext service does. Without
     # this the embedder's default `no` policy leaves it stopped after a Docker
     # daemon restart while repocontext (unless-stopped) comes back on its own,
     # degrading search to keyword mode until the embedder is started by hand.
     restart: unless-stopped
+    # OPT-IN CPU PINNING. Unset by default, and unset it renders to NOTHING -
+    # Compose omits the key entirely rather than emitting an empty one, so a
+    # stack that does not set this variable resolves a byte-identical document
+    # to one built before the knob existed. See the repocontext service below
+    # for what it does, when to use it, and when NOT to (issue #2623).
+    cpuset: "${EMBEDDER_CPUSET:-}"
     # Cap container log growth: the default json-file driver is otherwise
     # unbounded. Rotate at 20 MiB x 5 files (100 MiB ceiling per container).
     logging:
@@ -74,20 +150,89 @@ services:
         max-file: "5"
 
   # The RepoContext MCP host: its ONLY application listener is the MCP endpoint on
-  # 8080 (plus the HTTP health probes). No gRPC facade, no Explorer UI.
+  # 8080 (plus the HTTP health probes and the /metrics scrape endpoint). No gRPC
+  # facade, no Explorer UI.
   repocontext:
     build:
       context: ../..
       dockerfile: apps/repocontext/Dockerfile
+      args:
+        # The commit being built, stamped into the image as the OCI label
+        # org.opencontainers.image.revision. Export it before building:
+        #
+        #     $env:GIT_COMMIT = (git rev-parse HEAD)   # pwsh
+        #     export GIT_COMMIT=$(git rev-parse HEAD)  # sh
+        #
+        # WHY THIS IS NOT OPTIONAL DECORATION. Without it the only record of
+        # what an image contains is the HEAD of whatever checkout someone
+        # happened to be standing in, and that is a fact about the checkout, not
+        # about the image. Bucket-4 gate run 4 made exactly that inference and
+        # measured eleven hours against an image built 45 commits behind what it
+        # believed (issue #2686).
+        #
+        # Unset resolves to the empty string, which
+        # scripts/Assert-ContainerProvenance.ps1 reads as unresolved: it then
+        # falls back to a `candidate-<sha>` image tag, and REFUSES if neither
+        # channel can name the built commit.
+        GIT_COMMIT: ${GIT_COMMIT:-}
     depends_on:
       embedder:
         condition: service_healthy
+      # Wait for the backup sink so the first capture at startup has somewhere
+      # to write. service_started rather than service_healthy on purpose: a
+      # sink that is slow to come up must never gate the MCP host's own
+      # readiness, and the capture path retries with backoff anyway.
+      azurite-backup-sink:
+        condition: service_started
     environment:
       # Default local, durable, zero-external-dependency profile.
       LATTICE_DURABILITY: local
       # All durable local state lives here (a named volume): the file WAL
       # directory and the SQLite database file.
       LATTICE_DATA_ROOT: /data
+      # Where the durable AGENT MEMORY archive is written (issue #2601).
+      #
+      # Read what this does and does not protect before relying on it.
+      #
+      # WHAT IS AT RISK. Two kinds of state share the /data volume above. The
+      # code index (structural, content, symbol, xref, session, and the vector
+      # planes) is DERIVED: destroy it and re-running repocontext_add_repo
+      # rebuilds it in minutes. Agent memory - every repocontext_remember note,
+      # decision, gotcha, and glossary entry - is AUTHORED, is the store of
+      # record, and is rebuildable from nothing. `docker compose down -v`
+      # destroys both, and the asymmetry is the whole defect: the gesture is
+      # documented as the ordinary way to reset an index, and it silently takes
+      # the irreplaceable half with it. It has already happened once, to epic
+      # #2368's own memory.
+      #
+      # WHY NOT SIMPLY A SECOND VOLUME. Because it cannot be done and would not
+      # help. It cannot be done: a Lattice tree's durable state spans a WAL root
+      # that is one directory for the whole PROVIDER, and a grain store that is
+      # one SQLite file for every tree - neither is per-tree addressable, so
+      # there is no memory-only path to mount elsewhere. And it would not help:
+      # `down -v` removes every named volume the project declares, so a second
+      # declared volume dies in the same gesture as the first.
+      #
+      # WHAT THIS DOES INSTEAD. A BIND MOUNT (below) is not a project volume, so
+      # `down -v` does not touch it. The host periodically exports memory there
+      # and restores it into an empty store at startup, so a `down -v` followed
+      # by `up` comes back with memory intact.
+      #
+      # WHAT IT DOES NOT DO. It is not a backup, and it does not make `down -v`
+      # safe. Everything written since the last export is lost, so the exposure
+      # is bounded by the interval below plus whatever a non-graceful stop
+      # discards. `repocontext_reset_index` remains the correct, lossless way to
+      # rebuild an index: it drops the derived planes and preserves memory
+      # outright, with no window at all. Reach for `down -v` only when you mean
+      # to destroy the container's state, and expect to lose memory written
+      # since the last export.
+      LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR: /memory-archive
+      # How often memory is exported. This is the size of the window you lose to
+      # an ungraceful stop, so lower it if a session's notes are expensive to
+      # recreate. A graceful stop exports once more on the way down, which closes
+      # most of the window for `down` / `down -v` / `stop` specifically; a SIGKILL
+      # or a host crash gets no such chance.
+      LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS: "300"
       LATTICE_MCP_PORT: "8080"
       # WAL materialiser pin buckets: how many persisted slots the retention-floor
       # pin state is split across, so an advancing floor rewrites a fraction of the
@@ -125,6 +270,72 @@ services:
       # Verify what actually bound: the silo logs the resolved ceiling once at
       # startup, alongside the configured option and Environment.ProcessorCount,
       # so a value that was ignored is visible rather than merely assumed.
+      # MEMORY. This box needs FAR more than a default Docker VM allocation, and
+      # under-provisioning it fails in a way that does not look like memory
+      # (issue #2364). Measured on a ~8000-file index: steady-state working set
+      # settled at about 10.2 GiB, so budget at least 12 GiB for the host
+      # container. A single-variable run - same image, same volume, same corpus,
+      # only the limit differing - produced 756 OutOfMemoryException and 528
+      # failed grain activations at 4 GiB, and zero of each at 12 GiB.
+      #
+      # No memory limit is declared here on purpose, for the same reason as the
+      # CPU ceiling above: the right number is a property of your corpus, not of
+      # this file. Measure yours rather than copying 12.
+      #
+      # The failure mode is why this is worth stating. A cgroup limit becomes the
+      # .NET GC heap HARD limit, so the process is not OOM-killed: there is no
+      # restart, no exit code and no resource event. Instead the allocation for a
+      # leaf-snapshot deserialisation fails, the snapshot read fails, and the leaf
+      # activates COLD and replays its whole WAL window - which raises pressure
+      # further. What an operator sees is a STORAGE error, so the box looks slow
+      # and flaky rather than short of memory. Watch
+      # orleans.lattice.leaf.snapshot.load_failures with reason=resource_exhausted
+      # to name it directly.
+      # GARBAGE COLLECTION. Follows directly from the memory note above, because
+      # the hazard is the PAIR (issue #2596): .NET defaults to Workstation GC,
+      # which collects a single heap with effectively single-threaded blocking
+      # gen2 phases. That is the right default for a small heap and the wrong one
+      # here. Once the heap is multi-GiB one collection walks all of it on one
+      # thread with every other thread in the process suspended. A deployment of
+      # this host at about 11 GiB resident had the runtime attribute a 252 second
+      # pause to the collector, against a 30 second Orleans request timeout.
+      #
+      #   DOTNET_gcServer: "1"
+      #   DOTNET_GCHeapCount: "<hex; see below>"
+      #
+      # Neither is set here, for the same reason as the two settings above: the
+      # right heap count is a property of your CPU grant, not of this file.
+      #
+      # DOTNET_GCHeapCount is what makes the first line safe to set at all. Server
+      # GC otherwise creates one heap per processor, and Environment.ProcessorCount
+      # is what DOTNET_PROCESSOR_COUNT overrides - the same variable the replay
+      # ceiling above discusses. That variable may legitimately be pinned ABOVE
+      # this container's CPU grant to hold the replay gate's permits, and reusing
+      # it as a heap count would then create one heap per phantom processor on a
+      # heap already at its ceiling. One variable, two jobs, opposite
+      # requirements. DOTNET_GCHeapCount separates them: derive it from the
+      # container's actual CPU grant, independently of DOTNET_PROCESSOR_COUNT.
+      #
+      # WRITE THE HEAP COUNT IN HEXADECIMAL. The collector reads its numeric
+      # ENVIRONMENT variables as hex, while the same settings in
+      # runtimeconfig.json are decimal. So "10" asks for 16 heaps and "16" asks
+      # for 22, silently and with no error. Values below 10 read the same either
+      # way, which is what makes this so easy to miss on a small box and then get
+      # wrong on a large one. Prefer an explicit 0x prefix.
+      #
+      # Verify rather than assume: this host reports GC.Mode, GC.HeapCount (the
+      # figure the collector RESOLVED, not the one declared) and its memory
+      # ceiling in the effective-configuration report at startup, and warns there
+      # when the combination is the hazardous one. Check the resolved heap count
+      # against what you wrote; a declaration that was misread or ignored is
+      # visible in that line rather than only in a latency graph.
+      #
+      # The claim here is narrow on purpose. This removes the class of pause that
+      # is multi-minute, process-wide, and attributed to the collector by the
+      # runtime itself. It is NOT a general remedy for stalls: measurement of the
+      # same container found collector pauses accounted for under a third of long
+      # silences and did not explain the largest timeout burst at all. Pauses the
+      # runtime does not attribute to the collector need their own diagnosis.
       # The read-only workspace root. Repositories are registered at runtime by
       # the client through the repocontext_add_repo tool, and every added path
       # must resolve under this root - a path escaping it (via `..` or a symlink)
@@ -156,6 +367,68 @@ services:
       # grain's out-of-band paged sweep forces an immediate in-pass scan whenever it
       # actually finds a gap.
       LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS: "300"
+      # The container's stop_grace_period, DECLARED to the process that has to fit
+      # inside it. The host derives its own shutdown budget from this (issue #2402)
+      # instead of holding a second, independent constant: 120s here yields the 90s
+      # budget the container has always run with, and the remainder is reserve for
+      # the host to unwind and report a cut-short drain before SIGKILL.
+      #
+      # It must EQUAL the stop_grace_period set on this same service below, and
+      # RepoContextComposeShutdownBudgetTests asserts exactly that. The adjacency is
+      # a convention, not an enforcement: the process cannot read the real grace
+      # period from inside the container, so a value edited here but not below (or
+      # vice versa) leaves the budget derived from a stale figure, and the dangerous
+      # direction - declaring MORE than the container actually grants - is
+      # undetectable at run time and reintroduces the silent kill of issue #2389.
+      # Change the two together, always.
+      LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD: "120s"
+      # --------------------------------------------------------------------
+      # Durable agent-memory backup (issue #2602).
+      #
+      # WHAT THIS PROTECTS. The repo-context-memory tree holds the decisions,
+      # gotchas, conventions and glossary entries agents write across
+      # sessions. Unlike the code-index trees it is NOT derivable from the
+      # workspace: destroyed, it is gone. On 2026-09-10 a routine
+      # "docker compose down -v", intended only to clear the code index,
+      # destroyed several hundred such entries with no copy anywhere.
+      #
+      # WHAT IS BACKED UP. Only repo-context-memory, by name. The code-index
+      # trees are deliberately excluded: they are orders of magnitude larger
+      # and can be rebuilt by re-adding the repository, so capturing them
+      # would fill the sink with the one thing that does not need protecting
+      # and age out the one thing that does.
+      #
+      # WHERE IT GOES. The azurite-backup-sink service below, whose storage
+      # is a HOST BIND MOUNT and therefore not a compose-managed volume, so
+      # "docker compose down -v" cannot reach it. See that service for the
+      # precise list of gestures this does and does not survive.
+      #
+      # Presence of the connection string is what enables backup. Unset it
+      # and the container runs with NO backup and says so at WARNING on
+      # startup rather than being silently indistinguishable from a backed-up
+      # one. This is the fixed, public Azurite development account, which is
+      # published in Microsoft's own documentation and is not a secret.
+      LATTICE_BACKUP_BLOB_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup-sink:10000/devstoreaccount1;"
+      # Cadence. An initial FULL capture runs at startup - manifest
+      # validation rejects an incremental with no base, so a full must exist
+      # first - and incrementals follow on this interval. Both values are the
+      # library defaults, restated here so the configured cadence is visible
+      # in the deployment and not only in code.
+      LATTICE_BACKUP_INCREMENTAL_MINUTES: "60"
+      LATTICE_BACKUP_FULL_HOURS: "24"
+      # Retention keeps a backup satisfying EITHER bound, and always
+      # preserves the base chain a retained increment depends on.
+      LATTICE_BACKUP_RETENTION_KEEP_LAST: "60"
+      LATTICE_BACKUP_RETENTION_MAX_AGE_DAYS: "14"
+      # OPERATOR-DRIVEN RESTORE. Left unset. Set it to a specific backup id
+      # and restart to replay that backup into the memory tree before the
+      # capture cadence starts, then UNSET it again. There is no latest
+      # value and no automatic restore-on-empty: a restore is an explicit
+      # human act. The replay merges by hybrid-logical-clock order, so it
+      # cannot clobber entries written since the backup was captured.
+      #
+      #   LATTICE_BACKUP_RESTORE_BACKUP_ID: "<backup-id>"
+      # --------------------------------------------------------------------
     ports:
       # The MCP streamable-HTTP endpoint (and the health probes) on the host.
       #
@@ -173,7 +446,52 @@ services:
       - "${REPOCONTEXT_PORT:-8080}:8080"
     volumes:
       # Durable state survives restart / recreation / image upgrade.
+      #
+      # It does NOT survive `docker compose down -v`, and that includes the agent
+      # memory that lives in here alongside the rebuildable index - see the
+      # LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR comment above for why the two
+      # cannot be split across volumes, and what is done instead.
       - repocontext-data:/data
+      # The agent-memory archive (issue #2601). A BIND MOUNT, deliberately, and
+      # the distinction is the entire protection: `docker compose down -v`
+      # removes the named volumes a project DECLARES, and a bind mount is not
+      # one of them, so this directory outlives the gesture that destroys /data
+      # above. Declaring a second named volume would not have worked - `-v`
+      # takes every declared volume, not the first one.
+      #
+      # It auto-creates on the host at `up`, so there is no `docker volume
+      # create` step to forget - and that auto-creation is precisely why this
+      # variable HAS NO DEFAULT (issue #2627).
+      #
+      # A relative default resolves against the directory `docker compose` was
+      # INVOKED FROM, not against this file, and compose then creates whatever
+      # that produced rather than refusing. The documented gate procedure
+      # composes from the candidate git WORKTREE on purpose, so the previous
+      # default `./memory-archive` put the only surviving copy of durable agent
+      # memory inside a directory that `git worktree remove` deletes. That
+      # deployment is indistinguishable from a correct one by every observable
+      # signal: the archive is written, it rotates, it is current, and it
+      # verifies by decoded content. There is no channel to read better, so
+      # reporting the resolved path would not have been enough on its own.
+      #
+      # Refusing to interpolate is therefore the fix rather than a stricter
+      # default: any default at all is a path nobody chose. `${VAR:?...}` fails
+      # the compose command with the message below - before a container starts
+      # and before a directory is created - so the operator must state where
+      # their last copy of durable memory lives. Copy `.env.example` to `.env`
+      # in this directory and compose loads it on every command, including
+      # `down`, `ps` and `logs`.
+      #
+      # Set it to an ABSOLUTE path outside every git checkout and worktree. The
+      # provenance check verifies that (check 5 of 5 in
+      # scripts/Assert-ContainerProvenance.ps1), keyed on the ARCHIVE path
+      # alone - never on the compose directory, which is legitimately a worktree
+      # and which check 2 of 5 requires to be one.
+      #
+      # Do NOT point it inside the /data volume or at a path that resolves under
+      # it. The host detects that and says so at startup, because an archive
+      # there dies with the thing it is meant to survive.
+      - "${REPOCONTEXT_MEMORY_ARCHIVE_PATH:?set REPOCONTEXT_MEMORY_ARCHIVE_PATH to an ABSOLUTE host path outside every git checkout and worktree - copy .env.example to .env in samples/RepoContextContainer. This variable has no default because a relative one resolves against the compose invocation directory, which silently placed the only working memory backup inside an ephemeral git worktree (issue #2627).}:/memory-archive"
       # The workspace the box can see, mounted READ-ONLY so the box can never
       # mutate the code it ingests. Mount a broad PARENT directory here and let
       # the client register individual repositories under it with
@@ -182,7 +500,159 @@ services:
       # /workspace/<repo>). Note ../../.. resolves this compose file's grandparent
       # (the repo root's parent), NOT the repo root itself.
       - ${REPO_PATH:-../../..}:/workspace:ro
+    # Grain-liveness healthcheck (issue #2666). Before this, the repocontext
+    # service PUBLISHED no healthcheck at all while CONSUMING service_healthy
+    # from its dependencies above: the two services that can report health were
+    # green through an outage in which the silo itself vanished, and it had to be
+    # found by a human reading `docker ps` by eye.
+    #
+    # The runtime image is chiseled and shell-less (no curl/wget/nc), so the test
+    # is the host binary re-invoked with --healthcheck, exactly as the embedder
+    # service does. That self-probe GETs the host's own /health/silo endpoint,
+    # which - unlike /health/live (always green) and the latched /health/ready -
+    # re-exercises silo membership and a trivial grain call on EVERY probe. So it
+    # goes red for a silo that died after reaching readiness, which is the whole
+    # point: a probe that only proves Kestrel is listening cannot.
+    #
+    # start_period is sized for REAL silo startup (cluster join + WAL replay
+    # warmup), which is far longer than a stateless service's. Docker's health
+    # model is two-valued (exit 0/1); "starting" is realised by this window
+    # holding early non-zero exits out of the retry tally. Getting it too short
+    # matters here because restart: unless-stopped is set below, so a silo still
+    # joining that were reported unhealthy would crash-loop during normal boot.
+    # The endpoint still REPORTS the three-way verdict (healthy/starting/unhealthy)
+    # in its body for observability; the self-probe echoes it to the health log.
+    healthcheck:
+      test: ["CMD", "dotnet", "Orleans.Lattice.Api.Mcp.RepoContext.Host.dll", "--healthcheck"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
     restart: unless-stopped
+    # Run PID 1 as an init process (issue #2576). Docker bind-mounts its own
+    # static `docker-init` binary in and runs it as PID 1, so this needs nothing
+    # in the distroless, shell-less runtime image and changes no application
+    # code: the host becomes a CHILD of PID 1 rather than PID 1 itself.
+    #
+    # Two things follow, and both were observed to matter during the epic #2368
+    # gate runs, where a container reached a state in which neither
+    # `docker kill` nor `docker rm -f` would reap PID 1 and it had to be
+    # SIGKILLed - taking the run's time-to-ready measurement with it:
+    #
+    #   * ORPHAN REAPING. PID 1 inherits every orphaned descendant and must
+    #     wait() on it. The .NET host installs no such reaper, so anything it
+    #     orphans accumulates as a zombie for the life of the container.
+    #   * SIGNAL SEMANTICS. The kernel applies NO default action to a signal
+    #     delivered to PID 1 that PID 1 has installed no handler for. A process
+    #     that is merely a well-behaved application when run as a child can
+    #     therefore become unkillable-by-SIGTERM purely by being PID 1. tini
+    #     always installs handlers and forwards, so signalling is never a
+    #     property of the application's own handler registration.
+    #
+    # This is INDEPENDENT of stop_grace_period below. The grace period decides
+    # how long the drain is allowed; init decides whether the SIGTERM that
+    # starts the drain is honoured at all, and whether the container's process
+    # table stays clean while it runs. Setting one and not the other leaves the
+    # other half of the failure in place - which is exactly the state this file
+    # was in when #2576 was raised, with a fully considered 120s grace period
+    # sitting above a PID 1 that was not an init process.
+    init: true
+    # How long Docker waits between SIGTERM and SIGKILL. This MUST exceed the
+    # host's own shutdown budget (RepoContextHostBuilder.ShutdownBudget, 90s) or
+    # that budget is dead configuration: the host asks for 90s to deactivate the
+    # silo and flush the WAL commit-log, and Docker's default grants 10s, so
+    # every `docker compose stop` / `restart` / `down` is a crash teardown and
+    # the graceful deactivation path never completes. That was issue #2389, and
+    # it was invisible because a SIGKILLed container reports only an exit code
+    # that the next start overwrites.
+    #
+    # 120s = the 90s the host is entitled to, plus 30s of headroom for process
+    # exit after the last hosted service stops. Measured, not guessed - and the
+    # measurements are the reason the bound to clear is the HOST budget rather
+    # than any one corpus's drain time. A rig holding a 400-file synthetic index
+    # spent 67.2s in Orleans' GrainDeactivation stage alone, and the same rig
+    # earlier drained the same corpus in 33.9s before its vector trees had
+    # landed. Drain time scales with resident state; the 90s ceiling does not.
+    #
+    # Note what that pair implies, because it is the trap this value has to
+    # survive: a `stop_grace_period` tuned to an observed drain would have been
+    # set to something like 45s after the first measurement and would then have
+    # started killing teardowns as the index grew, reintroducing #2389 silently
+    # and with a number that looked carefully chosen. Clearing the host budget is
+    # what makes the value stable as the corpus grows.
+    #
+    # THIS IS NOW THE ONLY NUMBER TO CHANGE. The host derives its own budget from
+    # the grant declared in LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD above (issue
+    # #2402), so raising the grace period raises the budget with it and a budget
+    # above the grant is unrepresentable. Keep the two in step: they are two
+    # halves of one statement, and the process cannot read this line.
+    # RepoContextComposeShutdownBudgetTests asserts they are equal.
+    #
+    # The drain is observable rather than inferred. The host logs
+    # "RepoContext drain complete in <n>s" once every hosted service has stopped,
+    # so `docker logs` after a stop tells you the measured requirement directly;
+    # if that line is ABSENT, the container was killed mid-drain and this value is
+    # too small.
+    stop_grace_period: 120s
+    # OPT-IN CPU PINNING - UNSET BY DEFAULT, AND DELIBERATELY SO (issue #2623).
+    #
+    # DO NOT SWITCH THIS ON IN THE MIDDLE OF A MEASUREMENT. Epic #2368 adopted a
+    # precondition that no service configuration may change between a gate run's
+    # T0 and its final scrape, after a mid-run service recreation voided gate
+    # run 3 for every criterion that spanned it. A change of this kind lands
+    # BEFORE a run's T0 and ALONE, or not at all. This knob exists unset so that
+    # enabling it is an ACT, on the record, at a moment somebody chose.
+    #
+    # WHAT IT FIXES. A container given a fractional CPU quota (`cpus: 4.0`, in
+    # docker-compose.tuning.yml) and no cpuset is ENTITLED to 4 CPUs but VISIBLE
+    # on all of them - 16 on the host this was measured on. CFS bandwidth
+    # control vends that quota to per-CPU run queues in 5 ms slices, and a
+    # thread waking on a run queue draws a whole slice whether it then runs for
+    # 5 ms or 5 us; the unused remainder is returned only lazily. Threads
+    # scattered across many run queues therefore exhaust the quota by
+    # RESERVATION rather than by execution, and the kernel throttles the cgroup
+    # while its actual utilisation is a small fraction of its entitlement. The
+    # effect scales with the number of run queues threads can land on, which is
+    # the VISIBLE CPU count, not the quota. Sizing the cpuset to the grant makes
+    # those two numbers equal.
+    #
+    # MEASURED, not inferred. Throwaway alpine containers, identical synthetic
+    # load, identical `--cpus=4`, varying ONLY `--cpuset-cpus`:
+    #
+    #              periods  throttled   ratio   quota used
+    #   cpuset 0-15    907         49    5.4%         ~17%
+    #   cpuset 0-3     953          0    0.0%         ~26%
+    #
+    # The load confound is INVERTED there, which is what makes it decisive: the
+    # arm offering MORE work throttled ZERO, and the arm offering LESS throttled
+    # at 17% of its quota. Utilisation cannot produce that ordering; scatter
+    # can. A heavier first experiment reached 47.7% against 0.0% on the same
+    # single variable.
+    #
+    # WHAT IT BUYS, WITHOUT OVERCLAIM. Latency jitter and scheduling
+    # determinism. It licenses NO throughput claim: the measurement is synthetic
+    # load on alpine, and the transfer to this silo and to the ONNX embedder is
+    # an inference. And do NOT read a throttle ratio as a measure of thread-pool
+    # oversubscription - it answers a different question and has a high floor
+    # (an idle container measured ~31% on this host). See the runbook section
+    # "CPU scatter under a fractional quota".
+    #
+    # HOW TO DERIVE A VALUE. One range per service, sized to the CEILING of that
+    # service's `cpus` grant, and the ranges must NOT overlap each other or you
+    # trade throttling for contention. On the 16-CPU host the tuning overlay was
+    # measured on, that is REPOCONTEXT_CPUSET=0-5 (6 cores for `cpus: 6.0`) and
+    # EMBEDDER_CPUSET=6-9 (4 cores for `cpus: 4.0`), leaving 10-15 for the host.
+    # These are NOT portable: Docker refuses to start a container whose cpuset
+    # names a CPU the host does not have, so a copied value fails loudly on a
+    # smaller machine. Set them in `.env` beside REPO_PATH; see .env.example.
+    #
+    # NOT CHANGED BY THIS KNOB: DOTNET_PROCESSOR_COUNT in
+    # docker-compose.tuning.yml is a number above the effective grant and is the
+    # same SHAPE, but it sizes the WAL replay concurrency gate rather than a
+    # thread pool, and moving it is a separate change with a separate blast
+    # radius that must be measured on its own. See "The pool-sizing class" in
+    # the runbook.
+    cpuset: "${REPOCONTEXT_CPUSET:-}"
     # Cap container log growth: the periodic self-index reconcile (every
     # LATTICE_RECONCILE_INTERVAL_SECONDS) logs continuously, so the default
     # unbounded json-file driver would grow without limit. Rotate at
@@ -193,6 +663,79 @@ services:
         max-size: "20m"
         max-file: "5"
 
+  # The DEDICATED sink the agent-memory backups are written to (issue #2602).
+  #
+  # WHY A SEPARATE SERVICE AND A SEPARATE STORE. A backup that lives in the
+  # same store it protects is not a backup: the gesture that destroys the
+  # primary destroys the copy at the same instant, while the deployment still
+  # reports itself as backed up. That is strictly worse than having no backup,
+  # because absence is visible and false protection is not. So this is its own
+  # Azurite instance on its own storage, and the host is configured to write
+  # here rather than to the default in-cluster sink.
+  #
+  # WHY A BIND MOUNT AND NOT A NAMED VOLUME. A down -v removes every named
+  # volume declared in this project. If this sink used one, the exact command
+  # that caused the loss this wiring exists to prevent would also destroy the
+  # backups. A bind mount is not a compose-managed volume and is not declared
+  # in the volumes: block below, so down -v has nothing to remove.
+  #
+  # An external: true volume also survives down -v and was considered. It was
+  # rejected because compose refuses to start until an operator has run
+  # docker volume create by hand, and a backup that needs a manual pre-step is
+  # exactly the backup that will not exist on the machine that needs it.
+  #
+  # WHAT THIS DOES AND DOES NOT SURVIVE. Stated precisely, because claiming
+  # more coverage than was implemented is the failure mode this issue is about.
+  #
+  #   SURVIVES: docker compose down -v, down, stop, restart, rm, image
+  #             rebuild, docker volume prune, docker system prune, and
+  #             deleting the repocontext-data volume by hand.
+  #
+  #   DOES NOT SURVIVE: deleting the host directory itself (by default
+  #             ./backup-sink, next to this file), git clean -xdf in this
+  #             directory, deleting or reformatting the host disk, or losing
+  #             the machine. This is a same-host copy, NOT an off-site backup.
+  #
+  # To place it outside the repository, or on another disk, set
+  # REPOCONTEXT_BACKUP_PATH to an absolute path in .env or the environment. To
+  # make it genuinely off-host, point LATTICE_BACKUP_BLOB_CONNECTION_STRING at
+  # a real Azure Storage account instead and remove this service.
+  azurite-backup-sink:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    # Blob only: backups are blobs, so the queue and table endpoints are not
+    # started. --skipApiVersionCheck keeps a newer Azure SDK from being
+    # rejected by an older emulator build.
+    command: azurite-blob --blobHost 0.0.0.0 --location /data --skipApiVersionCheck
+    volumes:
+      - ${REPOCONTEXT_BACKUP_PATH:-./backup-sink}:/data
+    ports:
+      # Published so an operator can point Azure Storage Explorer or azcopy at
+      # the sink during a restore without exec-ing into the container.
+      # Overridable because 11000 may already be taken on the host.
+      - "${REPOCONTEXT_BACKUP_SINK_PORT:-11000}:10000"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10000"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
 volumes:
   # Durable Lattice state (WAL + SQLite): the heart of "codebase memory in a box".
+  #
+  # the service above, which is not a declared volume and so is not removed.
+  #
+  # NOTE: the agent-memory backup sink is likewise NOT declared here. It is a
+  # host bind mount on the azurite-backup-sink service, for the same reason and
+  # by the same mechanism. Do not tidy either of them into a named volume. The
+  # two are separate and neither replaces the other: #2601's /memory-archive is
+  # an automatic restore-on-empty of the memory tree, while this sink holds
+  # scheduled, retained, manifest-tracked backups that only an operator
+  # restores.
   repocontext-data:

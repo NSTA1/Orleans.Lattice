@@ -1538,19 +1538,19 @@
     {
       "id": 65,
       "title": "WAL GC pass rate by outcome (ops/s)",
-      "description": "Rate of WAL garbage-collection passes the per-silo scheduler drove, split by outcome (orleans.lattice.wal.gc.passes). reclaimed = the pass trimmed at least one entry, so the tree had backlog above the trim floor; idle = nothing was reclaimable; failed = the pass threw. Emitted once per pass unconditionally, so this series is the denominator for the per-tree reclaim rate and the reference that tells apart a tree with no backlog from a tree that is not being collected at all.",
+      "description": "Rate of WAL garbage-collection passes the per-silo scheduler drove, split by outcome (orleans.lattice.wal.gc.passes). reclaimed = the pass trimmed at least one entry, so the tree had backlog above the trim floor; blocked = the pass reclaimed nothing because no durable leaf-materialiser pin carried a usable offset, so the consumer-cursor branch was disabled and the tree CANNOT reclaim at all; idle = the pass could compute a floor and simply found nothing above it, which is the healthy quiet state; failed = the pass threw. The blocked value was split out of idle by issue #2702: the two are opposite conditions - one strands WAL without bound, the other has nothing to do - and until then they were indistinguishable here, on a deployment that carried both simultaneously. Emitted once per pass unconditionally, and additionally zero-primed per tree for EVERY outcome arm (issue #2774), so each series survives a return to zero rather than vanishing when a tree recovers, and an absent arm is a reporting failure rather than a healthy reading. That is why this panel carries no 'or vector(0)' compensation: the compensation would render a missing series as a flat zero, which is the exact ambiguity the priming removes, so keeping both would re-create the fault behind something that looks like a fix. A missing line here means the build did not land. This is the denominator for the per-tree reclaim rate and the reference that tells apart a tree with no backlog from a tree that is not being collected at all.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 218 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_wal_gc_passes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{outcome}}" }
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_wal_gc_passes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{outcome}}" }
       ]
     },
     {
       "id": 66,
       "title": "WAL GC adaptive interval (p50/p95, s)",
-      "description": "The cadence the WAL garbage-collection scheduler selected per tree after its most recent pass (orleans.lattice.wal.gc.interval). The value moves inside the configured band [LatticeOptions.WalGcMinInterval, LatticeOptions.WalGcInterval]: a sustained reading at the floor is a tree whose log is growing faster than one pass reclaims, and a reading at the ceiling is a quiet tree. Read against the pass-outcome panel this shows the cadence tightening under backlog and relaxing once the backlog clears.",
+      "description": "The cadence the WAL garbage-collection scheduler selected per tree after its most recent pass (orleans.lattice.wal.gc.interval). The value moves inside the configured band [LatticeOptions.WalGcMinInterval, LatticeOptions.WalGcInterval], and a reading at the ceiling is a quiet tree. A sustained reading at the FLOOR now has two causes and they are not interchangeable: a tree whose log is growing faster than one pass reclaims, which is working as intended, or a tree held at the floor because it is blocked from reclaiming at all (issue #2702), which is a fault. The pass-outcome panel beside this one separates them - pair a floor reading with a non-zero blocked rate to identify the second. Read against that panel this shows the cadence tightening under backlog and relaxing once the backlog clears.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 218 },
@@ -1563,13 +1563,25 @@
     {
       "id": 67,
       "title": "WAL GC retained backlog after pass (p95, bytes)",
-      "description": "95th-percentile retained WAL bytes left after a garbage-collection pass (orleans.lattice.wal.gc.backlog_bytes), sampled from the pass own report so it costs no extra I/O. Byte accounting is a provider capability gated behind LatticeOptions.WalMaxRetainedBytes, so this series is absent on a host without it - and because orleans.lattice.wal.gc.passes is emitted unconditionally, a tree reporting passes but no backlog samples is knowably not measured rather than ambiguously at zero backlog.",
+      "description": "95th-percentile retained WAL bytes left after a garbage-collection pass (orleans.lattice.wal.gc.backlog_bytes), sampled from the pass own report so it costs no extra I/O. Byte accounting is a provider capability gated behind LatticeOptions.WalMaxRetainedBytes, so this series is absent on a host without it. Do NOT infer the reason from the absence: orleans.lattice.wal.gc.backlog_bytes_unavailable is emitted on any pass that could not sample, tagged with the reason (policy_disabled or provider_unsupported), and the panel beside it reads it directly (issue #2694).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 225 },
       "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_wal_gc_backlog_bytes_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
+      ]
+    },
+    {
+      "id": 69,
+      "title": "WAL GC backlog bytes unavailable by reason (ops/s) - issue #2694",
+      "description": "Rate of WAL garbage-collection passes that could NOT sample the retained-backlog histogram beside this panel (orleans.lattice.wal.gc.backlog_bytes_unavailable), tagged by reason: policy_disabled means the pass computed no byte ceiling, so LatticeOptions.WalMaxRetainedBytes is unset - the default configuration, and an expected steady rate rather than a fault; provider_unsupported means a ceiling was computed but the IWalStorageProvider reports no byte accounting, which IS a misconfiguration because the operator asked for a byte policy the provider cannot enforce. This panel exists because the backlog histogram is silent in exactly the configuration most deployments run, and silence looks identical whether the policy is off, the provider cannot count, or the collector is wedged. With this series the first two announce themselves and name their reason, so only genuine silence remains unexplained.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 232 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_wal_gc_backlog_bytes_unavailable_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{reason}}/s" }
       ]
     },
     {
@@ -1582,6 +1594,30 @@
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_wal_gc_offset_floor_unavailable_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+      ]
+    },
+    {
+      "id": 70,
+      "title": "WAL GC blocked passes by tree (ops/s) - issue #2702",
+      "description": "Rate of WAL garbage-collection passes that reclaimed nothing because no durable leaf-materialiser pin carried a usable offset, so the consumer-cursor branch was disabled entirely (orleans.lattice.wal.gc.passes, outcome=blocked). This is NOT the quiet tree that outcome=idle describes: a blocked tree cannot reclaim at all and its WAL grows without bound, whereas an idle tree simply has nothing above the trim floor. The two shared the idle label until issue #2702, and because the same observation also drove the scheduler's backoff, a blocked tree was relaxed toward LatticeOptions.WalGcInterval exactly like a quiet one - the tree needing the most frequent passes received the fewest, self-reinforcingly. A blocked tree is now held at LatticeOptions.WalGcMinInterval instead, so this panel's companion reading is the adaptive-interval panel pinned at the floor. Read it two ways: a sustained non-zero rate is a tree stranding WAL it cannot release, and a rate that falls to zero AND STAYS THERE is a repair that held. The series is deliberately zero-primed once per tree by the scheduler, so a tree that has never blocked reports a real zero rather than no series, and a tree that recovers keeps reporting zero rather than disappearing at exactly the moment a reader is confirming the recovery. For that reason this query intentionally omits the 'or vector(0)' fallback used elsewhere on this dashboard: fabricating a zero for an absent series would reintroduce the false zero the priming exists to remove, and here an absent series genuinely means the scheduler is not running on the selected silo.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 232 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_wal_gc_passes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\",outcome=\"blocked\"}[5m]))", "legendFormat": "{{tree}}" }
+      ]
+    },
+    {
+      "id": 71,
+      "title": "WAL GC blocked-leaf reactivations by outcome (ops/s) - issue #2710",
+      "description": "Reactivations of a dormant leaf whose durable materialiser pin was blocking its tree's WAL cursor floor (orleans.lattice.wal.gc.blocked_leaf_reactivations, issue #2710 Limitation 2). Read it against the blocked-passes panel beside it: that panel is the condition, this one is the remedy acting on it. A blocking consumer is by construction one whose leaf is NOT activated, because the floor skips every consumer present in the live cursor registry before it evaluates the pin - so no leaf-local trigger can reach this population and the retention path has to be the one to touch it. attempted = the scheduler reactivated a named blocking leaf, rate-limited by a minimum block age, a retry cooldown and a hard attempt budget; healed = a previously-touched consumer stopped blocking, which is evidence the sweep is working rather than proof it caused the heal, since ordinary traffic could have touched the leaf first; abandoned = a consumer stayed blocked across every permitted attempt and will not be swept again. ABANDONED IS THE ALARM: it means the block is not clearable by activation alone, so the leaf's snapshot capture is failing for a separate reason - an oversized leaf that cannot be serialised is the known case - and the WAL stays retained until that is fixed. All three outcomes share one instrument so a zero on healed is a measured zero rather than an unpublished series, which is what lets a reader tell a sweep that ran without effect from one that was never reached. Like the lagging-consumers panel this query omits the 'or vector(0)' fallback used elsewhere: this instrument is deliberately not zero-primed, so an absent series honestly means no tree has ever been blocked long enough to sweep, and fabricating a zero would present that healthy absence as a measured observation it is not. The blocking leaf is named on the paired warning log rather than as a tag here, because the leaf population is unbounded and would be an unbounded metric dimension.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 239 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_wal_gc_blocked_leaf_reactivations_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{outcome}}" }
       ]
     }
   ]

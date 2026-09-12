@@ -220,10 +220,16 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Fetches a single repository-context record by its full key - a structural node, a symbol, "
                     + "or an agent memory entry - and returns its flattened fields, tags, links, and remaining "
-                    + "life. For a memory entry it also evaluates link staleness: each structural link (to a file "
-                    + "or symbol) whose target's content digest has drifted since the link was made is reported "
-                    + "through 'stale' and 'staleLinks'. A key with no live entry returns 'exists=false' so the "
-                    + "caller can tell an absent or expired entry from an empty one. Read-only.",
+                    + "life. For a memory entry it also evaluates link staleness: every live structural link (to "
+                    + "a file or symbol) is checked against its target's present state, and one whose content "
+                    + "digest has drifted, whose target has no live record at all, or for which no digest was "
+                    + "ever captured is reported through 'stale' and 'staleLinks'. The subset of 'staleLinks' "
+                    + "that points at nothing is also named in 'danglingLinks' - always a subset, never a "
+                    + "partition - because the two states have opposite remedies: drift asks the caller to "
+                    + "re-read the file, whereas a dangling link (typically a note about code that has not "
+                    + "reached the indexed branch) asks it to wait and retry. A key with no live entry returns "
+                    + "'exists=false' so the caller can tell an absent or expired entry from an empty one. "
+                    + "Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
@@ -242,8 +248,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "an opaque continuation token. Expired and tombstoned entries are never returned. Because a "
                     + "scan is a bulk read it does not evaluate each entry's time-to-live or memory link staleness, "
                     + "so the expiry fields ('expires', 'hasExpired', 'expiresAtUtc', 'remainingSeconds') and the "
-                    + "staleness fields ('stale', 'staleLinks') are reported as null ('not evaluated'); call "
-                    + "'repocontext_recall' on a key for its authoritative expiry and staleness. Use the "
+                    + "staleness fields ('stale', 'staleLinks', 'danglingLinks') are reported as null ('not "
+                    + "evaluated'); call 'repocontext_recall' on a key for its authoritative expiry and "
+                    + "staleness. Use the "
                     + "returned token as the next call's 'continuationToken' to page through the whole range. "
                     + "Read-only.",
                 ReadOnly = true,
@@ -285,7 +292,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "brute-force scan instead (LATTICE_REPOCONTEXT_SEMANTIC_RETRIEVAL=exact), whose cost is "
                     + "proportional to the corpus. While the approximate index is still building - which is the "
                     + "state of any deployment that has not indexed itself yet - the exact scan answers, so "
-                    + "retrieval keeps working with complete recall throughout and the answer conservatively "
+                    + "retrieval keeps working with complete recall throughout, UNLESS a gather over that "
+                    + "repository has already stalled, in which case that fallback is withheld and keyword recall "
+                    + "serves; the answer conservatively "
                     + "reports the weaker (approximate) claim rather than over-promising. Without an embedder it "
                     + "degrades to a deterministic BM25 keyword/structural scan over record names and file content, "
                     + "so a query always returns the best available matches instead of failing. The result's 'mode' "
@@ -295,8 +304,11 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "vector search - the default), 'keyword.no_embedder' (no embedding provider is bound - an intended "
                     + "keyword-only deployment, not a fault), 'keyword.vector_plane_unavailable' (an embedder is "
                     + "bound but the vector plane could not serve: unreachable embedder, failed embedding, or no "
-                    + "vectors yet because the plane is still building or re-deriving), or 'keyword.index_degraded' "
-                    + "(the semantic index threw, or ranked candidates that no longer hydrate). Treat the last two "
+                    + "vectors yet because the plane is still building or re-deriving), 'keyword.index_degraded' "
+                    + "(the semantic index threw, or ranked candidates that no longer hydrate), or "
+                    + "'keyword.exact_fallback_suppressed' (the plane is not serving and the exact scan that would "
+                    + "answer with complete recall is being withheld because a gather already stalled; it retries "
+                    + "on its own). Treat the last three "
                     + "as a real capability loss and prefer distinctive identifier-like terms until they clear. "
                     + "Every hit carries a "
                     + "machine-readable 'reasons' list (server-derived, deterministic, ordinal-ordered, bounded, and "
@@ -345,8 +357,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "distinct neighbors have been collected, reporting 'truncated' when the cap was hit. A seed "
                     + "key with no live entry returns 'exists=false'; a dangling edge whose target has no live "
                     + "value is still returned with its own 'exists=false' so it is observable. Each walked memory "
-                    + "entry has its link staleness evaluated ('stale' / 'staleLinks'), as 'repocontext_recall' "
-                    + "does, so the walk surfaces which linked concepts point at drifted code. Use it to explore "
+                    + "entry has its link staleness evaluated ('stale' / 'staleLinks' / 'danglingLinks'), as "
+                    + "'repocontext_recall' does, so the walk surfaces which linked concepts point at drifted "
+                    + "code and which point at nothing. Use it to explore "
                     + "the curated concept graph an agent has captured across sessions. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
@@ -444,8 +457,8 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "detail level under the budget: 'paths' (path only), 'outline' (declared-symbol skeleton, "
                     + "reusing the outline projection), or 'slices' (bounded body text). The bundle carries the same "
                     + "additive 'retrievalPath' attribution as repocontext_search ('semantic.exact', "
-                    + "'semantic.approximate' - the default, 'keyword.no_embedder', 'keyword.vector_plane_unavailable', or "
-                    + "'keyword.index_degraded'), so a keyword bundle caused by a real capability loss is "
+                    + "'semantic.approximate' - the default, 'keyword.no_embedder', 'keyword.vector_plane_unavailable', "
+                    + "'keyword.index_degraded', or 'keyword.exact_fallback_suppressed'), so a keyword bundle caused by a real capability loss is "
                     + "distinguishable from one served by an intended keyword-only box. 'auto' (the default) packs "
                     + "the richest level that yields a non-empty bundle and reports the concrete level in 'detail'. "
                     + "Every entry carries its match 'reasons', its exact BPE 'tokenCount', and the whole-file "
@@ -670,7 +683,11 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Removes a repository-context entry. By default it hard-deletes the entry immediately; set "
                     + "'lapse' to true to instead re-write it with a short time-to-live (default 60 seconds) so it "
-                    + "lapses on its own, which lets concurrent readers drain gracefully. Fails closed: offered "
+                    + "lapses on its own, which lets concurrent readers drain gracefully. A lapse succeeds even "
+                    + "when the stored value is malformed and cannot be decoded - retiring a record does not "
+                    + "require reading it, so a corrupt entry is recoverable without the hard delete that would "
+                    + "destroy it - and that case is reported back as 'undecodable', so a store can never quietly "
+                    + "shed records it could not read. Fails closed: offered "
                     + "only to a caller who cleared the authorization gate and for whom the host opted writes in. "
                     + "Destructive.",
                 ReadOnly = false,
@@ -695,7 +712,10 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "is reported, not thrown: the result carries 'granted=false' with a 'reason' of "
                     + "'contended' (already claimed and no wait was requested), 'timeout' (the wait elapsed "
                     + "while queued), or 'missing' (no such record). Omit 'maxWaitSeconds' to fail fast, which "
-                    + "is what a work-stealing agent wants; supply it to queue. The granted lease is clamped to "
+                    + "is what a work-stealing agent wants; supply it to queue. Omitting 'leaseSeconds' requests "
+                    + "the cluster's configured default, which is deliberately short because a caller that named "
+                    + "no lease length is exactly the caller that should not hold a long one - pass an explicit "
+                    + "length for work that will outlast it. The granted lease is clamped to "
                     + "the cluster's configured maximum, so honour the returned 'leaseSeconds' and "
                     + "'leaseExpiresAtUtc' rather than the length you asked for, and renew before it lapses - "
                     + "an expired lease is reclaimed and the next claimant is granted a strictly higher token "
@@ -718,6 +738,12 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Extends the lease on a claim the caller already holds, without changing its fencing token, "
                     + "so a long-running agent keeps its claim alive rather than having it reclaimed mid-task. "
+                    + "ALWAYS pass 'leaseSeconds' explicitly: omitting it does not preserve the lease you are "
+                    + "holding, it requests the cluster's configured default, which is deliberately short, so "
+                    + "renewing a long claim without a length silently shortens it. That case is reported as "
+                    + "'leaseShortened=true' with the prior expiry in 'previousLeaseExpiresAtUtc', because it is "
+                    + "otherwise indistinguishable from a healthy renew - both are 'granted=true'. Treat it as a "
+                    + "signal to renew again with an explicit length, not as success. "
                     + "A renew presenting a token that no longer holds the lock returns 'granted=false' with "
                     + "reason 'superseded' rather than throwing: that is the authoritative signal the holder was "
                     + "fenced out - typically because its lease lapsed and the next waiter was granted a higher "

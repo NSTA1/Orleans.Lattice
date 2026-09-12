@@ -250,7 +250,9 @@ public class ChaosPredicateConditionalSetManyIntegrationTests
         // Loop with a bounded budget until all four invariants hold against a
         // converged topology; a genuine violation persists across the whole budget
         // and still trips the assertions below.
-        var matchMissing = new List<int>();      // completeness
+        var matchMissing = new List<int>();      // completeness (union of the two below)
+        var matchAbsent = new List<int>();       // completeness: key lost from the tree entirely
+        var matchUnstamped = new List<int>();    // completeness: key survived but the write skipped it
         var noMatchWritten = new List<int>();    // soundness
         var lowerLeaked = new List<int>();       // range bound
         var upperLeaked = new List<int>();       // range bound
@@ -271,9 +273,30 @@ public class ChaosPredicateConditionalSetManyIntegrationTests
 
             if (snapshot is not null)
             {
+                // Split completeness failures into two materially different
+                // faults so the next occurrence is self-diagnosing:
+                //   matchAbsent    - key is missing from the range-scan snapshot
+                //                    entirely: it was lost from the tree. Severe.
+                //   matchUnstamped - key is present at its seed score: it survived
+                //                    but the conditional write skipped stamping it.
+                // matchMissing stays the union so the existing completeness
+                // assertion below is unchanged.
                 matchMissing = new List<int>();
+                matchAbsent = new List<int>();
+                matchUnstamped = new List<int>();
                 for (int i = WriteBandStart; i < StickyMatchEnd; i++)
-                    if (!snapshot.TryGetValue(i, out var v) || v.Score != MarkerScore) matchMissing.Add(i);
+                {
+                    if (!snapshot.TryGetValue(i, out var v))
+                    {
+                        matchAbsent.Add(i);
+                        matchMissing.Add(i);
+                    }
+                    else if (v.Score != MarkerScore)
+                    {
+                        matchUnstamped.Add(i);
+                        matchMissing.Add(i);
+                    }
+                }
 
                 noMatchWritten = new List<int>();
                 for (int i = StickyMatchEnd; i < StickyNoMatchEnd; i++)
@@ -305,6 +328,20 @@ public class ChaosPredicateConditionalSetManyIntegrationTests
             Assert.That(matchMissing, Is.Empty,
                 "Completeness violated: guard-matching keys did not receive the marker (first 20): " +
                 string.Join(",", matchMissing.Take(20)));
+
+            // Diagnostic split of the completeness failure. These two lists
+            // partition matchMissing, so when completeness holds both are empty
+            // and these assertions are no-ops; when it fails they name which of
+            // the two materially different faults occurred.
+            Assert.That(matchAbsent, Is.Empty,
+                "Completeness violated (KEY LOST): guard-matching keys are absent from the tree "
+                + "entirely - the range scan did not surface them at all (first 20): "
+                + string.Join(",", matchAbsent.Take(20)));
+
+            Assert.That(matchUnstamped, Is.Empty,
+                "Completeness violated (WRITE SKIPPED): guard-matching keys survived in the tree "
+                + "at their seed score but the conditional write did not stamp the marker (first 20): "
+                + string.Join(",", matchUnstamped.Take(20)));
 
             Assert.That(noMatchWritten, Is.Empty,
                 "Soundness violated: guarded-out sticky-no-match keys were written (first 20): " +

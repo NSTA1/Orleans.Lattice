@@ -48,5 +48,15 @@ public sealed class RepoContextMetricsDocCoverageTests : MetricsDocCoverageTests
 
     /// <inheritdoc />
     protected override IEnumerable<string> DocRelativePaths { get; } =
-        ["docs/lattice.api.mcp.repocontext/retrieval-economics.md"];
+    [
+        "docs/lattice.api.mcp.repocontext/retrieval-economics.md",
+
+        // The dashboards panel map is enforced here as well as the package's own
+        // reference doc. Without it an instrument could be documented in prose yet
+        // never mapped to a panel, which is the omission issue #2369 records: the
+        // panel map is where an operator looks to find out whether a series is
+        // charted, so a gap there is invisible to everyone who is not reading the
+        // package's own documentation.
+        "docs/lattice.dashboards/metrics-to-panel-map.md",
+    ];
 }

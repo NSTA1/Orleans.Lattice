@@ -218,7 +218,7 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchResilienceTests
         var injector = new LatticeTreeFaultInjector
         {
             TreeId = RepoContextTrees.VectorMembership,
-            Method = nameof(ILattice.GetManyAsync),
+            Method = nameof(ILattice.GetManyWithGateAccountingAsync),
             FailFirst = 1,
         };
 
@@ -265,10 +265,27 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchResilienceTests
         // mode differs: embed the changed files, which need no coverage because
         // they are re-embedded regardless, and defer the gap sweep. Guessing
         // "uncovered" instead would re-embed the entire repository.
+        //
+        // Since the coverage digest landed (issue #2486) the membership probe is
+        // no longer the first choice - a built digest answers coverage without
+        // touching membership at all, which is the whole point of that change and
+        // means this fault would otherwise never be reached. The probe remains the
+        // fallback for an unbuilt digest, so to keep testing it we hold the digest
+        // unbuilt by faulting the coverage tree's write, which is what digest
+        // seeding needs to succeed. That leaves the membership probe reachable and
+        // this test measuring the path it was written to measure.
+        var digestSeedFault = new LatticeTreeFaultInjector
+        {
+            TreeId = RepoContextTrees.VectorCoverage,
+            Method = nameof(ILattice.SetAsync),
+            FailFirst = int.MaxValue,
+            IncludeShardGrains = true,
+        };
+
         var injector = new LatticeTreeFaultInjector
         {
             TreeId = RepoContextTrees.VectorMembership,
-            Method = nameof(ILattice.GetManyAsync),
+            Method = nameof(ILattice.GetManyWithGateAccountingAsync),
             FailFirst = 1,
         };
 
@@ -277,6 +294,7 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchResilienceTests
             Posture = RepoContextMcpAuthPosture.Writer,
             ConfigureSilo = silo =>
             {
+                silo.Services.AddSingleton(digestSeedFault);
                 silo.Services.AddSingleton(injector);
                 silo.Services.AddSingleton<IIncomingGrainCallFilter, LatticeTreeFaultInjectingFilter>();
             },

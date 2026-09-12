@@ -77,6 +77,34 @@ internal static class WalMaterialiserPinRouting
     }
 
     /// <summary>
+    /// Returns the index into <see cref="EnumerateReadKeys"/>'s result holding
+    /// the key the current build would write <paramref name="consumerId"/>'s
+    /// pin to - the consumer's <i>authoritative</i> key. A pin found at any
+    /// other index is a duplicate stranded by an earlier routing, because this
+    /// is the only key a write can land on.
+    /// </summary>
+    /// <remarks>
+    /// Returned as an index rather than a key so the WAL GC can classify a
+    /// read result without composing a string per consumer per key. The
+    /// coupling to <see cref="EnumerateReadKeys"/>'s layout (current-separator
+    /// shards first, in ordinal order) is guarded by a test asserting
+    /// <c>EnumerateReadKeys(t, n)[AuthoritativeKeyIndex(c, n)] ==
+    /// ShardKey(t, c, n)</c>, so the two cannot drift apart silently.
+    /// </remarks>
+    /// <param name="consumerId">The leaf-materialiser consumer id.</param>
+    /// <param name="shardCount">The configured shard count.</param>
+    /// <returns>The authoritative index into the read-key enumeration.</returns>
+    public static int AuthoritativeKeyIndex(string consumerId, int shardCount)
+    {
+        if (shardCount <= 1)
+        {
+            return 0;
+        }
+
+        return (int)(StableHash(consumerId) % (uint)shardCount);
+    }
+
+    /// <summary>
     /// Enumerates every grain key the WAL GC must read to reconstruct the full
     /// durable pin floor for <paramref name="treeName"/>: each shard key under
     /// the current separator, each under the legacy separator, and the legacy
@@ -84,12 +112,25 @@ internal static class WalMaterialiserPinRouting
     /// the legacy key.
     /// </summary>
     /// <remarks>
-    /// The dual read is what makes the separator change self-healing. A pin
-    /// written by an earlier build still participates in the trim floor, so no
-    /// WAL segment is stranded and no operator action is needed; new pins are
-    /// written under the storage-safe key and the old ones fall away as their
-    /// consumers re-pin. It is the same migration the pre-sharding legacy key
-    /// already relies on, widened by one separator.
+    /// <para>
+    /// The dual read is what keeps the separator change from stranding WAL. A
+    /// pin written by an earlier build still participates in the trim floor, so
+    /// no WAL segment is unreachable and no operator action is needed. It is the
+    /// same migration the pre-sharding legacy key already relies on, widened by
+    /// one separator.
+    /// </para>
+    /// <para>
+    /// A stranded pin does <b>not</b> fall away when its consumer re-pins. A
+    /// re-pin is written through <see cref="ShardKey"/>, which composes a
+    /// different grain key, so the row at the old key is never touched by any
+    /// write or removal path - the enumeration widens the read, it does not
+    /// migrate the state. An earlier revision of this remark claimed the
+    /// opposite, and that claim is what let a stranded pin floor a tree's WAL
+    /// trim indefinitely (issue #2433). The floor is instead resolved by
+    /// preferring the pin at <see cref="AuthoritativeKeyIndex"/> when one
+    /// exists, which is the "until its consumer re-pins" behaviour the
+    /// migration was specified to have.
+    /// </para>
     /// </remarks>
     public static IReadOnlyList<string> EnumerateReadKeys(string treeName, int shardCount)
     {

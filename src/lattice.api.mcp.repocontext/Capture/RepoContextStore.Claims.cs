@@ -108,7 +108,7 @@ internal sealed partial class RepoContextStore
     /// </summary>
     /// <param name="key">The full repository-context key of the claimed memory record.</param>
     /// <param name="fencingToken">The token from the original grant.</param>
-    /// <param name="leaseSeconds">The lease length to request in seconds, or <see langword="null"/> to defer to the configured default.</param>
+    /// <param name="leaseSeconds">The lease length to request in seconds, or <see langword="null"/> to defer to the configured default. Omitting it defers to the same short default a claim uses, so a renew that omits it shortens a longer-held lease; the outcome is reported in <see cref="RepoContextClaimResult.LeaseShortened"/>.</param>
     /// <param name="cancellationToken">Cancels the renew.</param>
     /// <returns>The renew outcome.</returns>
     /// <exception cref="McpException">The key is malformed or does not address a memory record, or a duration is not positive.</exception>
@@ -122,6 +122,14 @@ internal sealed partial class RepoContextStore
         var lease = ResolveDuration(leaseSeconds, "leaseSeconds");
         var lockName = RepoContextClaimNames.LockName(key);
         var padlock = _grainFactory.GetGrain<ILatticeLockGrain>(lockName);
+
+        // Read the lease this renew is about to replace, so a renew that SHORTENS it
+        // can be reported rather than passing as an ordinary grant. Diagnostic only:
+        // the authority for the new lease is the grant RenewAsync returns, exactly as
+        // GetStatusAsync documents about itself. The read cannot observe another
+        // holder's lease on the granted path, because a token that had been superseded
+        // in the interim fails the renew below and returns before this value is used.
+        var priorExpiry = (await padlock.GetStatusAsync().ConfigureAwait(false)).LeaseExpiresAt;
 
         LockLease renewed;
         try
@@ -144,6 +152,11 @@ internal sealed partial class RepoContextStore
             Region = state.Region ?? _replicaId,
             LeaseExpiresAtUtc = ToIso(renewed.ExpiresAt),
             LeaseSeconds = renewed.LeaseDuration.TotalSeconds,
+            PreviousLeaseExpiresAtUtc = priorExpiry is { } observed ? ToIso(observed) : null,
+
+            // Null means "not observed", never "nothing shrank": an absent prior lease
+            // must not be reported as a positive assurance.
+            LeaseShortened = priorExpiry is { } previous ? renewed.ExpiresAt < previous : null,
         };
     }
 
@@ -319,11 +332,64 @@ internal sealed partial class RepoContextStore
     }
 
     /// <summary>
+    /// Enforces the claim fence for a forget over a memory record whose stored value
+    /// cannot be decoded, by resolving the claim against the distributed lock rather
+    /// than the record's own fencing stamp.
+    /// </summary>    /// <param name="key">The key being written.</param>
+    /// <remarks>
+    /// <para>
+    /// The record's stamp is unreadable here, but it was never the authority for
+    /// whether a claim is live - the lock is, and the lock is a separate grain whose
+    /// state is entirely unaffected by the record's bytes. Resolving against it
+    /// therefore preserves the exclusion invariant rather than relaxing it: an unheld
+    /// lock entitles nobody, so no claim is in force and the retirement proceeds;
+    /// a held lock admits only its current holder's token.
+    /// </para>
+    /// <para>
+    /// Failing closed on the decode instead would be worse than useless. It would
+    /// refuse precisely the records no agent can read, renew, or write results
+    /// under - protecting a claim that cannot be exercised, at the cost of leaving
+    /// destruction as the record's only remedy.
+    /// </para>
+    /// </remarks>
+    /// <param name="key">The key being retired.</param>
+    /// <param name="fencingToken">The token the caller presented, or <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the lock read.</param>
+    /// <exception cref="RepoContextClaimConflictException">A live claim is held and the presented token does not entitle this write.</exception>
+    private async Task EnforceFenceOverUndecodableAsync(
+        string key, long? fencingToken, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var status = await _grainFactory
+            .GetGrain<ILatticeLockGrain>(RepoContextClaimNames.LockName(key))
+            .GetStatusAsync()
+            .ConfigureAwait(false);
+
+        if (!status.IsHeld || fencingToken == status.CurrentFencingToken)
+        {
+            return;
+        }
+
+        throw new RepoContextClaimConflictException(
+            $"The entry '{key}' carries a live claim held under fencing token "
+            + $"{status.CurrentFencingToken}, and its stored value cannot be decoded, so the claim was "
+            + "resolved against the lock rather than the record's own stamp. Present that token to retire "
+            + "the entry, or release the claim first.",
+            key,
+            fencingToken is null
+                ? RepoContextFenceVerdict.ClaimRequired
+                : RepoContextFenceVerdict.StaleToken,
+            fencingToken,
+            status.CurrentFencingToken,
+            owner: null,
+            region: null);
+    }
+
+    /// <summary>
     /// Rejects a fencing token presented against a record family that cannot carry a
     /// claim, rather than silently ignoring it and letting the caller believe its
     /// write was fenced.
-    /// </summary>
-    /// <param name="key">The key being written.</param>
+    /// </summary>    /// <param name="key">The key being written.</param>
     /// <param name="kind">The record family the key addresses.</param>
     /// <param name="fencingToken">The token the caller presented, or <see langword="null"/>.</param>
     /// <exception cref="McpException">A token was presented against a non-memory record.</exception>
@@ -343,7 +409,7 @@ internal sealed partial class RepoContextStore
     /// </summary>
     private async Task<MemoryRecord?> ReadMemoryAsync(ILattice tree, string key, CancellationToken cancellationToken)
         => RepoContextMemoryCodec.Fold(
-            await tree.GetAsync(key, cancellationToken).ConfigureAwait(false), _serializer);
+            await tree.GetAsync(key, cancellationToken).ConfigureAwait(false), _serializer, key);
 
     /// <summary>Reads just the claim state at <paramref name="key"/>.</summary>
     private async Task<RepoContextClaimState> ReadClaimStateAsync(string key, CancellationToken cancellationToken)
@@ -363,7 +429,7 @@ internal sealed partial class RepoContextStore
         ILattice tree, string key, Action<MemoryRecord> mutate, CancellationToken cancellationToken)
     {
         var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
-        if (RepoContextMemoryCodec.Fold(versioned.Value, _serializer) is not { } record)
+        if (RepoContextMemoryCodec.Fold(versioned.Value, _serializer, key) is not { } record)
         {
             return false;
         }

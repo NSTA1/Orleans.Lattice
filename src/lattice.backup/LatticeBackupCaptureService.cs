@@ -698,6 +698,18 @@ internal sealed class LatticeBackupCaptureService(
                 var consistencyCut = BuildConsistencyCut(coordinate, collector.PerOriginHighWater, walPartitionOffsets);
                 var provenance = BuildProvenance(collector.PerOriginHighWater);
 
+                // An empty provenance is expected on a local-only tree and alarming on a
+                // replicated one, and the two are indistinguishable from the manifest
+                // alone. State which one this was, so an absence is never read as a
+                // silent loss of origin attribution (#2621).
+                if (provenance.Count == 0 && collector.UnstampedOriginEntryCount > 0)
+                {
+                    logger.LogInformation(
+                        "Backup capture for tree {TreeId} recorded no origin provenance: all {UnstampedCount} captured entries were locally authored (no origin stamp). This is expected for a single-cluster tree.",
+                        treeId,
+                        collector.UnstampedOriginEntryCount);
+                }
+
                 var contentDescriptor = new BackupContentDescriptor(
                     artifactId,
                     collector.ContentHash,
@@ -953,9 +965,41 @@ internal sealed class LatticeBackupCaptureService(
     private static string IncrementalConsumerId(string treeId) => $"backup:{treeId}";
 
     /// <summary>
+    /// <summary>
     /// Builds the per-origin provenance list from the captured entries'
     /// per-origin causal high-water, in origin-id order. Empty for a
     /// single-origin (local-only) tree.
+    /// <para>
+    /// <b>Decision (#2621): a locally-authored entry on a host with no cluster
+    /// identity contributes no per-origin provenance.</b> The core stamps such
+    /// entries with <see cref="string.Empty"/> - see
+    /// <c>DefaultLatticeOriginClusterIdResolver</c>, which returns
+    /// <see cref="string.Empty"/> for every tree and documents that downstream
+    /// consumers ignore it - so "unstamped" is a real state, not a corrupt one,
+    /// and it is the state of every write on a deployment without the
+    /// replication package.
+    /// </para>
+    /// <para>
+    /// The alternative, synthesising a sentinel origin such as "local", was
+    /// rejected. The core deliberately holds no local cluster identity
+    /// (<c>TxRegistryGrain</c> and <c>LatticeGrain.ReplicationApply</c> both
+    /// reason explicitly about why a comparison built on the resolver would
+    /// "pass vacuously" on a non-replicated host), so inventing one here would
+    /// put a fabricated id into a wire-format manifest, where it could collide
+    /// with a real cluster genuinely named "local" and would split one tree's
+    /// history across two origins the moment replication was configured.
+    /// </para>
+    /// <para>
+    /// Nothing is lost by omitting it. For a single-origin tree the per-origin
+    /// high-water is by definition the tree-wide high-water, which the manifest
+    /// already records unconditionally as
+    /// <see cref="BackupConsistencyCut.HlcTimestamp"/>. Incremental capture
+    /// resumes from <see cref="BackupConsistencyCut.WalPartitionOffsets"/> via
+    /// <c>ResolveBaseOffsets</c> and from that HLC pin - never from this
+    /// list or from <see cref="BackupConsistencyCut.PerOriginFrontier"/>, both of
+    /// which are descriptive metadata. Omitting an unstamped origin therefore
+    /// cannot cost a resumption point.
+    /// </para>
     /// </summary>
     private static IReadOnlyList<BackupOriginProvenance> BuildProvenance(
         IReadOnlyDictionary<string, long> perOriginHighWater)
@@ -968,6 +1012,23 @@ internal sealed class LatticeBackupCaptureService(
         var provenance = new List<BackupOriginProvenance>(perOriginHighWater.Count);
         foreach (var originId in perOriginHighWater.Keys.OrderBy(k => k, StringComparer.Ordinal))
         {
+            // Collectors normalize an unstamped origin to null and never key the
+            // map by it, so an empty key here means a collector regression rather
+            // than an ordinary local write. Fail with an attributable message: the
+            // bare ArgumentException from the BackupOriginProvenance constructor
+            // named only 'originId' and cost a production outage's worth of
+            // diagnosis in #2621. Do NOT "fix" this by skipping the entry - a real
+            // origin silently dropped from a successful backup is the failure mode
+            // this guard exists to prevent.
+            if (string.IsNullOrEmpty(originId))
+            {
+                throw new InvalidOperationException(
+                    "Backup capture produced a per-origin high-water entry keyed by an empty origin id. "
+                    + "Collectors must normalize an unstamped OriginClusterId to null (see "
+                    + "RawEntryCollector.RecordEntry and IncrementalDeltaCollector.OnEntry); "
+                    + "an empty key means that normalization was bypassed.");
+            }
+
             provenance.Add(new BackupOriginProvenance(originId, perOriginHighWater[originId]));
         }
 

@@ -221,6 +221,45 @@ public class LatticeOptions
     public int MaxLeafEntriesBeforeForcedCompaction { get; set; } = DefaultMaxLeafEntriesBeforeForcedCompaction;
 
     /// <summary>
+    /// Maximum live state size, in bytes, that a single leaf may hold before a
+    /// split is triggered, measured as the leaf's running
+    /// <c>StateBytes</c> total (UTF-8 key length plus stored value length per
+    /// entry). Complements the structural
+    /// <see cref="ResolvedLatticeOptions.MaxLeafKeys"/> bound: the key count
+    /// bounds how many entries a leaf holds, and this bounds how large those
+    /// entries are allowed to be in aggregate.
+    /// <para>
+    /// A key-count bound alone cannot keep a leaf snapshottable. A tree whose
+    /// values are large (an approximate-nearest-neighbour index storing a
+    /// chunk of vectors per key, say) reaches a multi-hundred-megabyte leaf
+    /// while still holding fewer keys than
+    /// <see cref="ResolvedLatticeOptions.MaxLeafKeys"/>, so it never splits.
+    /// Capturing that leaf's snapshot has to materialise the payload in one
+    /// contiguous buffer, which fails with
+    /// <see cref="OutOfMemoryException"/> under ambient heap pressure. A failed
+    /// capture leaves the leaf without durable snapshot coverage, its
+    /// durable-materialiser pin unusable, and - because the tree's WAL trim
+    /// floor is a minimum across every pin - the whole tree's WAL untrimmable.
+    /// One oversized leaf is therefore enough to stop a tree reclaiming any WAL
+    /// at all.
+    /// </para>
+    /// <para>
+    /// Set to <c>0</c> to disable the byte bound and restore pure key-count
+    /// splitting. The default is armed rather than disabled because the failure
+    /// it prevents is silent, unbounded WAL growth that no operator action
+    /// short of a re-index recovers from.
+    /// </para>
+    /// <para>
+    /// The bound is advisory in one direction only: a leaf holding a single
+    /// entry larger than the bound is irreducible, because a split pivots on a
+    /// median key and cannot divide one entry. Such a leaf is left intact
+    /// rather than split into an empty donor forever, and is reported on
+    /// <c>leaf_byte_overflow_total</c> with an <c>irreducible</c> outcome.
+    /// </para>
+    /// </summary>
+    public long MaxLeafBytes { get; set; } = DefaultMaxLeafBytes;
+
+    /// <summary>
     /// Minimum interval between consecutive out-of-cycle compaction passes
     /// for the same <c>(treeId, shardIndex)</c> when triggered by
     /// <see cref="MinTombstoneRatioForCompaction"/> or
@@ -451,6 +490,33 @@ public class LatticeOptions
     /// </para>
     /// </summary>
     public const int DefaultMaxLeafEntriesBeforeForcedCompaction = 0;
+
+    /// <summary>
+    /// Default value for <see cref="MaxLeafBytes"/> (64 MiB).
+    /// <para>
+    /// Armed by default, unlike the other leaf-size valve
+    /// <see cref="DefaultMaxLeafEntriesBeforeForcedCompaction"/>, because the
+    /// two guard opposite kinds of failure. Leaving ratio-based compaction off
+    /// costs only some deferred tombstone reclamation, which the reminder-driven
+    /// pass performs anyway. Leaving the byte bound off costs a tree that can
+    /// never trim its WAL again, because one uncapturable leaf zeroes the
+    /// tree-wide trim floor, and the tree does not recover on its own.
+    /// </para>
+    /// <para>
+    /// The value is chosen so that a capture stays far inside a modest process
+    /// heap rather than merely inside the largest single array the runtime
+    /// permits. Capturing a leaf materialises its payload several times over
+    /// concurrently: the exact-sized encoded frame, the deep copy taken when
+    /// the blob crosses the grain call boundary, and the serializer's growth
+    /// buffer, which doubles from a small initial capacity and so holds both
+    /// the old and new arrays at each step. A 64 MiB leaf therefore costs on
+    /// the order of a few hundred megabytes transiently, which a default
+    /// container tolerates, while leaving ordinary trees (whose leaves are
+    /// kilobytes) entirely unaffected: they never approach the bound and so
+    /// never split on it.
+    /// </para>
+    /// </summary>
+    public const long DefaultMaxLeafBytes = 64L * 1024 * 1024;
 
     /// <summary>Default value for <see cref="CompactionTriggerCooldown"/> (5 minutes).</summary>
     public static readonly TimeSpan DefaultCompactionTriggerCooldown = TimeSpan.FromMinutes(5);

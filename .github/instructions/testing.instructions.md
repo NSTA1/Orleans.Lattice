@@ -77,6 +77,118 @@ Assert.That(result, Is.True);
 
 Do **not** use classic assert (`Assert.AreEqual`, `Assert.IsNull`, etc.).
 
+## False greens - a green check that never exercised its property
+
+A false green is worse than a red. A red is a defect to fix; a green that never
+ran the property it names is a defect *plus* a standing claim that there is no
+defect, which is why these survive for so long. Two shapes have cost real time on
+this repository and both are cheap to avoid once named. A third - an
+emulator-gated run that prints `Passed!` while 89 tests silently vanish - is
+documented under Tier 3 above.
+
+The common structure is worth holding onto, because it generalises past testing:
+**an artefact produced by an action cannot be validated by a check that runs
+before that action.** Every false green below is an instance of checking the
+wrong side of a boundary.
+
+### Reflection past the public seam proves the unit and exempts the wiring
+
+A fixture that reaches its subject through
+`BindingFlags.Instance | BindingFlags.NonPublic` and `MethodInfo.Invoke` proves
+the member behaves correctly **when called**. It proves nothing about whether
+anything calls it. Those are two different claims and only the first is tested.
+
+This has already shipped a defect here. A leaf-split helper was covered by a
+fixture that invoked it directly, and its single production call site was gated
+behind a predicate that declined on every tree large enough to need the split.
+The fixture stayed green while a deployment sat on an unsplit 21.3 GB tree. The
+helper was never broken. The wiring was, and the wiring was exactly what the
+reflection stepped over.
+
+**The discriminator is not "is the member non-public". It is "who calls it, and
+can that caller regress?"** Non-public alone is a red herring: several fixtures
+in this repository reach a non-public member perfectly safely. Judge the caller
+instead.
+
+- **Framework-owned caller - no exposure.** `ExecuteAsync` on a
+  `BackgroundService` is reached by `BackgroundService.StartAsync` in the .NET
+  runtime. Invoking it by reflection is the ordinary way to drive a hosted
+  service deterministically, and there is no call site of *ours* that could
+  regress. `ViewActivationServiceTests` and `ReplicationDriverActivationServiceTests`
+  are both this shape.
+- **Our own caller - cover it.** If the path from a public entry point to the
+  member runs through a predicate, a branch, or an options value we own, then
+  that predicate is the single most likely thing to break, and a reflected test
+  is blind to precisely it.
+
+When you do reach past the public seam:
+
+1. **Cover the path as well as the unit.** Keep the reflected test for the
+   precision it buys, and add at least one test that reaches the same member
+   through a public entry point, under conditions that make the production call
+   site actually fire. That second test is the one that fails when the wiring
+   regresses; the first one never will.
+2. **If that is genuinely impractical, name the production call site in a
+   comment beside the reflection** - one sentence, so the next reader can check
+   the claim instead of re-deriving it. `RawEntryCollectorTests` carries the
+   idiom: its comment records that the helper "is proved reachable here rather
+   than assumed".
+3. **Prefer arranging by reflection over asserting by it.** Reading or writing a
+   private field to construct a state that is otherwise unreachable, and then
+   driving the real public method, keeps the wiring inside the test.
+   `WalCommitLogWriterWedgeDiagnosticsTests` is the model: it reaches a private
+   static tracker to wedge a partition, then asserts through the public
+   `AppendAsync`.
+4. **Assert the member resolved, with a message that says what to do.**
+   `Assert.That(method, Is.Not.Null, "X was renamed; update this guard test.")`.
+   Without it, a rename degrades the fixture into a `NullReferenceException`
+   whose message names no cause - or, when the lookup sits in a helper that
+   returns early, into a silent pass.
+
+### Restoring a perturbed source file with Copy-Item keeps the perturbed binary
+
+Deliberately breaking something to watch a check go red is the only way to know
+the check works, and it is prescribed by the bug-hunter agent's "demonstrate the
+predicted failure first" step. The restore is where it goes wrong.
+
+**`Copy-Item` propagates the source file's `LastWriteTime` to the copy.** So
+restoring a file from a backup taken before the perturbation writes back the
+*original, older* timestamp. MSBuild's up-to-date check compares source
+timestamps against build outputs, sees a source older than the assembly that was
+just built from the perturbed text, decides nothing needs doing, and **keeps the
+perturbed binary**. The next run reports on code you believe you reverted.
+
+The asymmetry is what makes it dangerous. Measured:
+
+| step | resulting `LastWriteTime` |
+| --- | --- |
+| original file | `01:32:33.609` |
+| perturb with `[IO.File]::WriteAllText` | `07:32:34.921` (now) |
+| restore with `Copy-Item` | `01:32:33.609` (six hours stale) |
+
+`WriteAllText` stamps the current time, so the **perturbed** arm always rebuilds
+correctly and behaves exactly as expected. Only the **restored baseline** is
+wrong. That is the more misleading direction: the arm you trust is the arm that
+lies, so the reverted run keeps showing the perturbed result and you go looking
+for a defect in code that is already correct.
+
+Remedies, in order of preference:
+
+1. **Restore with `git checkout -- <path>` or `git restore <path>`.** Git writes
+   the file fresh and stamps it now. This is also the only restore that cannot
+   drift from the committed text.
+2. **If you must restore from a copy, stamp it afterwards**:
+   `(Get-Item <path>).LastWriteTime = Get-Date`.
+3. **Never diagnose a surprising post-restore result before confirming the
+   rebuild happened.** `dotnet build` printing no compile line for the project
+   you perturbed is the tell.
+
+Prefer perturbing a **copy of the input** over perturbing the source at all.
+Several guards here take that route already: `MeterFieldDeclarationOrderTests`
+runs its ordering logic against a synthetic in-memory probe type rather than
+reordering a real metrics class, so nothing on disk is ever perturbed and there
+is nothing to restore.
+
 ## File Organization
 
 - One test class per file, mirroring the source layout:
@@ -163,7 +275,9 @@ You can skip Tier 3 and go straight from Tier 2 to Tier 4 if you're about to do 
 
 ### Tier 4 - before opening a PR (touched packages)
 
-Run the non-chaos suite for **each test project that covers a package the PR touches** - not the whole solution. Map each changed `src/<package>/` (or `test/<package>/`) to its `test/<package>/*.Tests.csproj`. The repo-level hygiene gates (em-dash, mojibake, docs-snippet) for `docs/`, `.github/`, `CHANGELOG.md`, `samples/`, and root files live in the **core** `Orleans.Lattice.Tests` project - but do not run its whole suite just for them. When the PR touches only repo-level paths (no `src/lattice/` code), run just the targeted hygiene filter against the core project instead; run the full core test project only when you changed `src/lattice/` code.
+Run the non-chaos suite for **each test project that covers a package the PR touches** - not the whole solution. Map each changed `src/<package>/` (or `test/<package>/`) to its `test/<package>/*.Tests.csproj`. The repo-level hygiene gates (em-dash, mojibake, docs-snippet) live in the **core** `Orleans.Lattice.Tests` project - but do not run its whole suite just for them. When the PR touches only repo-level paths (no `src/lattice/` code), run just the targeted hygiene filter against the core project instead; run the full core test project only when you changed `src/lattice/` code.
+
+**Run that core hygiene filter whichever package you touched.** It covers far more than `docs/`, `.github/`, `CHANGELOG.md`, `samples/`, and root files: it covers every `src/` and `test/` directory not registered in `CoreHygieneScope.AllPackageSliceRoots`, which is most of them. Skipping it because "my package has its own test project" is the single most common way a text-hygiene violation reaches CI - see "Hygiene gates" below for why a package-scoped `~Hygiene` run can report success having scanned nothing.
 
 ```powershell
 # Example: a PR scoped to src/lattice.replication/ (plus repo-level CHANGELOG/docs edits)
@@ -177,6 +291,33 @@ Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging t
 **Scope Tier 4 to the fixtures your change can plausibly break, not reflexively to whole projects.** CI re-runs the full non-chaos suite for every matched package on the PR anyway, so a second full local run of the same project buys nothing but wall-clock. The local pass exists to catch *your* mistake before it costs a CI cycle - so run the fixtures you touched (and their nearest neighbours) first, and widen only when the change is broad enough that you genuinely cannot predict the blast radius. A test-only or single-grain change is usually well served by a `--filter "FullyQualifiedName~<Fixture>"` pass plus the hygiene filter; a change to a widely-referenced core type warrants the whole project. When you are unsure of the blast radius, `repocontext_related <path>` lists the indexed dependents and covering test types for a file, which is a cheaper way to size the run than guessing.
 
 **Catching cross-project breakage is CI's job, not the local dev loop's.** CI runs the full cross-solution non-chaos suite on every PR (plus the `Chaos` and `AzureStorageEmulator` suites), so an `Orleans.Lattice` change that broke `Orleans.Lattice.Replication.Tests` is caught there. Only run the full cross-solution `dotnet test` (no project arg) locally when you have deliberately made a cross-cutting change to the core public surface that you expect to ripple through downstream projects - and even then, prefer running just the specific downstream test projects you expect to be affected.
+
+**Exception: the repository-wide gates scan every package, and they do not all live in one test project.** The scoping rule above is correct for ordinary tests and structurally blind to these. Five fixtures resolve the repository root and scan **all of `src/`** irrespective of which package they sit in, so a per-package pre-PR run passes green while the gate your change actually broke never runs at all. Note the set is defined by the **concern** (instruments), not by a directory: four sit in `test/lattice/` and one in `test/lattice.dashboards/`, so treating `test/lattice/` as the boundary reproduces the very blindness this exception exists to correct.
+
+| fixture | project | what it enrols, across every package |
+| --- | --- | --- |
+| `TenantMetricDimensionHygieneTests` | `test/lattice/` | each instrument's tenant dimension, including the `PlatformSentinelInstruments` list - which is keyed on the **C# field name**, not the metric name |
+| `MeterDashboardCoverageEnrolmentTests` | `test/lattice/` | that every **meter** is covered by some charting guard (meter-keyed, so it does not see an individual unpaneled instrument) |
+| `MetricsDocCoverageEnrolmentTests` | `test/lattice/` | that every instrument-publishing package is **enrolled** in the documentation guard, i.e. covered by *some* `MetricsDocCoverageTestsBase` subclass (package-keyed, so it does not see an individual undocumented instrument) |
+| `MeterFieldDeclarationOrderTests` | `test/lattice/` | the `Meter`-field-declared-above-every-instrument ordering |
+| `DashboardJsonTests` | `test/lattice.dashboards/` | that every **individual instrument** on `orleans.lattice` / `orleans.lattice.replication` is referenced by a bundled Grafana panel, or enrolled in `IntentionallyUnpaneledInstruments` with a justification |
+
+Note the last two dashboard entries are **two separate enrolment lists for adjacent concerns**, and neither implies the other: `MeterDashboardCoverageEnrolmentTests` asks "is this meter charted by something", `DashboardJsonTests` asks "is this instrument on a panel". A new instrument on an already-covered meter satisfies the first and can still fail the second.
+
+**The metrics-doc row is an enrolment gate too, and running it alone will not catch an undocumented instrument.** `MetricsDocCoverageEnrolmentTests` asks "does this package have a doc-coverage fixture at all"; the fixture that asserts **each instrument's row in its package reference doc** is the package's own `MetricsDocCoverageTestsBase` subclass - `MetricsDocCoverageTests` for `src/lattice`, `BackupMetricsDocCoverageTests` for `src/lattice.backup.azureblob`, and so on. Those are per-package, not repository-wide, which is why they are not in the table above and why the enrolment gate exists at all. Adding an instrument to an already-enrolled package satisfies the enrolment gate and can still fail its package's substantive fixture, so **run both**: the enrolment gate, and the `MetricsDocCoverage*Tests` of the package you touched.
+
+```powershell
+# enrolment (repository-wide) - is my package covered by a doc fixture?
+dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~MetricsDocCoverageEnrolmentTests"
+# substantive (per package) - does my instrument have a doc row?
+dotnet test test/<pkg>/<Project>.Tests.csproj --filter "FullyQualifiedName~MetricsDocCoverage"
+```
+
+So **a change that adds or removes a metric instrument in any package must also run these five**, alongside the six standard content gates, whichever package the instrument itself lives in. Budget for it: adding a single instrument costs at least four edits outside its own package, in two different test projects.
+
+**Run each gate as its own `--filter`, never several OR-ed into one.** OR-ing them crashes the vstest host and misattributes the failure to whichever fixture happened to be running. Confirm each run reports a non-zero discovered count, too: a gate fixture that does not exist in the project you ran it against asserts nothing and exits 0, which reads exactly like a pass. Treat such a vacuous green as evidence about *which project the gate lives in*, not merely about that one fixture.
+
+**Every emission site of an instrument must use one attribution rule, and zero-priming arms are emission sites.** An instrument primed with one tag set and recorded with another splits its own series and fails the mixed-attribution assertion, even though every individual call site looks correct on its own.
 
 ### Categorization conventions
 
@@ -615,7 +756,21 @@ Two things that filter does **not** cover, so do not treat it as "all gates":
   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~DocsSnippet"
   ```
 
-- The em-dash, mojibake, deletion-mandate, and integration-category gates now live as abstract bases in the shared `Orleans.Lattice.Testing` library and run in **every** test project via a thin concrete subclass under each project's `Hygiene/` folder. Each subclass scans only that project's own slice (`src/<package>` + `test/<package>`); the core project additionally owns the repo-level files no package owns (`docs/`, `.github/`, `benchmark/`, `samples/`, `tools/`, and root files). The single-project command above therefore only checks the core slice plus repo-level files; the other packages' slices are exercised by running each touched package's own test project before the PR (or that package's own `~Hygiene` filter), and by CI's full cross-solution run.
+- The em-dash, mojibake, deletion-mandate, and integration-category gates live as abstract bases in the shared `Orleans.Lattice.Testing` library, reached through a thin concrete subclass under a project's `Hygiene/` folder. **They do not all reach every package the same way, and the difference decides where you must run them.** The integration-category gate reflects over its *own assembly*, so it is genuinely per project. The three content gates scan a *slice of the filesystem*, and a slice is only scanned by its own project when that project declares one via `HygieneScanScope.ForSlice(...)` and registers it in `CoreHygieneScope.AllPackageSliceRoots`. Most packages do not. Everything not registered - the other `src/` and `test/` directories, plus `docs/`, `.github/`, `benchmark/`, `samples/`, `tools/`, and root files - falls to the **core** project's repo-level scan, which enumerates the whole repository minus the registered slices. Coverage is therefore complete either way; what varies is *which project's run* covers a given package.
+
+  The consequence for a pre-PR run, and it is the one that bites: **for a package with no registered slice, a package-scoped hygiene run checks none of its text, and says so in a way that reads like a pass.**
+
+  ```text
+  > dotnet test test/lattice.api.mcp.repocontext/... --filter "FullyQualifiedName~Hygiene"
+  No test matches the given testcase filter `FullyQualifiedName~Hygiene`   # exit code 0
+  ```
+
+  Treat that output as "this gate does not live here", never as "this package is clean". Two rules follow:
+
+  - **Always run the core project's hygiene filter before a PR, whichever package you touched.** For an unregistered package that is the run that covers your text; for a registered one it still covers your `docs/` and `.github/` edits. `CoreHygieneScope.AllPackageSliceRoots` is the authority on which is which - if your package is absent from it, the core run is the only one that sees it.
+  - **A non-zero discovered count is not sufficient evidence either.** Several projects carry a `Hygiene/` folder holding *only* the assembly-scoped integration-category gate. There, `~Hygiene` matches tests, passes, and still scans none of the package's files. What tells the two apart is the registry, not the count.
+
+  In CI none of this matters: the `content-gates` job runs the whole cross-solution set, and `run-text-gates.py` fails the job outright when the run executed no tests. The hazard is local-only, and it is why `HygieneDenominator.RequireExamined` guards the inside of each gate - a gate that ran but examined nothing fails loudly. Nothing inside a test can defend against the test not being selected, which is the gap these two rules close by hand.
 
 `SliceCoverageCompletenessTests` *is* matched, but only because its namespace was
 deliberately moved to `Orleans.Lattice.Tests.Hygiene` - its type name still has no

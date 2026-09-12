@@ -26,6 +26,14 @@
 
 Set-StrictMode -Version Latest
 
+# The host's own shutdown budget, in seconds: RepoContextHostBuilder.ShutdownBudget.
+# The container must be granted at least this long to stop, or the budget is
+# dead configuration - the host asks for 90s to deactivate its grains and flush
+# the WAL, and Docker's 10s default kills it a long way short of that. Kept as a
+# named constant so the resolved-compose guard can state the comparison rather
+# than embed a bare number.
+$script:RigHostShutdownBudgetSeconds = 90
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -505,6 +513,42 @@ function Test-RigVolumeName {
 
 <#
 .SYNOPSIS
+	Parses a Compose duration ("120s", "2m", "1m30s") to whole seconds.
+
+.DESCRIPTION
+	Returns $null when the value is absent or not a duration the Compose
+	specification would accept, so a caller can distinguish "not declared"
+	from "declared as zero". A bare number is seconds, matching Compose.
+#>
+function ConvertFrom-RigComposeDuration {
+	[CmdletBinding()]
+	param([AllowNull()] $Value)
+
+	$text = "$Value".Trim()
+	if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+
+	if ($text -match '^\d+$') { return [int] $text }
+
+	$matched = [regex]::Matches($text, '(?<n>\d+)(?<u>h|m|s)')
+	if ($matched.Count -eq 0) { return $null }
+	# Reject trailing junk: the units must account for the whole string, or a
+	# typo like "120sec onds" would silently parse as 120.
+	if (($matched | ForEach-Object { $_.Value }) -join '' -ne $text) { return $null }
+
+	$total = 0
+	foreach ($m in $matched) {
+		$n = [int] $m.Groups['n'].Value
+		switch ($m.Groups['u'].Value) {
+			'h' { $total += $n * 3600 }
+			'm' { $total += $n * 60 }
+			's' { $total += $n }
+		}
+	}
+	return $total
+}
+
+<#
+.SYNOPSIS
 	Refuses a RESOLVED compose document that could touch a live deployment.
 
 .DESCRIPTION
@@ -518,6 +562,22 @@ function Test-RigVolumeName {
 	never move a live tag), when a service runs an image outside the rig's own
 	two tags, when a published port is forbidden, when a bind mount is
 	writable, or when any named volume is outside the rig's own set.
+
+	It ALSO refuses a document that is not shutdown-ready, which is a
+	measurement guard rather than a safety guard. A cohort whose teardown
+	crashes the host banks no WAL, so the next scenario replays unbanked state
+	and its time-to-ready is not comparable with the run before it. That is not
+	hypothetical: it is what happened across the epic #2368 gate runs, and it
+	cost that gate its headline number.
+
+	Note WHERE this check sits, because it is the whole point. The equivalent
+	NUnit fixtures read the tracked compose files and compare them to each
+	other. Both tracked files were correct throughout those failed runs - the
+	deployment simply resolved a different document - so a file-to-file check
+	would have been green while the rig was broken. This runs on the document
+	Docker actually resolved, after interpolation and after every override is
+	merged, so it fails where the deployment is wrong rather than where the
+	repository is inconsistent.
 #>
 function Assert-RigComposeIsolation {
 	[CmdletBinding()]
@@ -612,6 +672,47 @@ function Assert-RigComposeIsolation {
 					if ($readOnly -ne $true) {
 						$violations.Add("service '$serviceName' binds host path '$source' writable; every rig bind mount must be read-only")
 					}
+				}
+			}
+
+			# --- Shutdown readiness (issue #2576) ---------------------------
+			#
+			# Every service must run an init process. Without it the
+			# application is PID 1 itself, which reaps no orphaned children and
+			# is subject to the kernel's rule that PID 1 takes no default
+			# action for a signal it has installed no handler for - so a
+			# process that is perfectly well-behaved as a child can be
+			# unkillable by SIGTERM purely by being PID 1. A gate-run container
+			# reached exactly that state and had to be SIGKILLed.
+			if ((Get-RigMember -Object $service -Name 'init') -ne $true) {
+				$violations.Add("service '$serviceName' does not set init: true, so PID 1 would be the application itself and may not honour SIGTERM")
+			}
+
+			# The host that holds durable state must additionally be given long
+			# enough to drain, and must be TOLD what it was given. Identify it
+			# by image rather than by service name so renaming a service cannot
+			# silently drop the check.
+			if ($image -eq (ConvertTo-RigNormalisedImage -Image "$($Config.McpImage)")) {
+				$grace = ConvertFrom-RigComposeDuration -Value (Get-RigMember -Object $service -Name 'stop_grace_period')
+				if ($null -eq $grace) {
+					$violations.Add("service '$serviceName' declares no stop_grace_period, so Docker's 10s default applies and every teardown is a crash teardown")
+				}
+				elseif ($grace -lt $script:RigHostShutdownBudgetSeconds) {
+					$violations.Add("service '$serviceName' allows ${grace}s to stop, which is less than the host's own $($script:RigHostShutdownBudgetSeconds)s shutdown budget")
+				}
+
+				# The host cannot read stop_grace_period - Docker does not
+				# expose it - so it derives its budget from an ASSUMED value
+				# unless the deployment states the grant explicitly. When the
+				# two disagree the host plans against a number nothing is
+				# holding it to.
+				$environment = Get-RigMember -Object $service -Name 'environment'
+				$declared = ConvertFrom-RigComposeDuration -Value (Get-RigMember -Object $environment -Name 'LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD')
+				if ($null -eq $declared) {
+					$violations.Add("service '$serviceName' does not declare LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD, so the host derives its budget from an assumed grace period rather than the granted one")
+				}
+				elseif ($null -ne $grace -and $declared -ne $grace) {
+					$violations.Add("service '$serviceName' grants ${grace}s but declares ${declared}s to the host; the host would plan against a budget nothing holds it to")
 				}
 			}
 		}
@@ -742,7 +843,8 @@ function Get-RigRetrievalMode {
 .DESCRIPTION
 	The vocabulary is S7's: semantic.exact, semantic.approximate,
 	keyword.no_embedder, keyword.vector_plane_unavailable,
-	keyword.index_degraded. `mode` says WHETHER the semantic plane answered;
+	keyword.index_degraded, keyword.exact_fallback_suppressed. `mode` says
+	WHETHER the semantic plane answered;
 	`retrievalPath` says WHICH path did, which is what makes an approximate
 	answer distinguishable from an exact one instead of silently substituted.
 #>

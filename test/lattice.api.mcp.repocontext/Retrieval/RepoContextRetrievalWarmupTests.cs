@@ -41,7 +41,7 @@ public sealed class RepoContextRetrievalWarmupTests
             Substitute.For<IRepoContextSemanticIndex>(),
             store,
             TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance);
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter());
 
     [Test]
     public void Rejects_null_dependencies()
@@ -180,7 +180,7 @@ public sealed class RepoContextRetrievalWarmupTests
         using var readiness = new RepoContextRetrievalReadinessState(new SettableTimeProvider());
         var search = new RepoContextSearchService(
             grainFactory, Serializer, index, store, TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance, AvailableEmbedder(), readiness);
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(), AvailableEmbedder(), readiness);
         var warmup = new RepoContextRetrievalWarmup(
             store, search, readiness, NullLogger<RepoContextRetrievalWarmup>.Instance);
 
@@ -220,7 +220,7 @@ public sealed class RepoContextRetrievalWarmupTests
         using var readiness = new RepoContextRetrievalReadinessState(new SettableTimeProvider());
         var search = new RepoContextSearchService(
             grainFactory, Serializer, index, store, TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance, AvailableEmbedder(), readiness);
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(), AvailableEmbedder(), readiness);
         var warmup = new RepoContextRetrievalWarmup(
             store, search, readiness, NullLogger<RepoContextRetrievalWarmup>.Instance);
 
@@ -280,7 +280,7 @@ public sealed class RepoContextRetrievalWarmupTests
         using var readiness = new RepoContextRetrievalReadinessState(new SettableTimeProvider());
         var search = new RepoContextSearchService(
             grainFactory, Serializer, index, store, TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance, AvailableEmbedder(), readiness);
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(), AvailableEmbedder(), readiness);
         var warmup = new RepoContextRetrievalWarmup(
             store, search, readiness, NullLogger<RepoContextRetrievalWarmup>.Instance);
 

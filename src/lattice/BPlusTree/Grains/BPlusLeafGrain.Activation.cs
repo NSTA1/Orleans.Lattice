@@ -145,6 +145,139 @@ internal sealed partial class BPlusLeafGrain
     internal static SemaphoreSlim? ReplayConcurrencyGateForTest => Volatile.Read(ref _replayConcurrencyGate);
 
     /// <summary>
+    /// The ceiling <see cref="_replayConcurrencyGate"/> was sized to, or
+    /// <c>0</c> before it is sized. Captured because a <see cref="SemaphoreSlim"/>
+    /// does not expose its own maximum, and the withholding floor below is
+    /// expressed relative to it.
+    /// </summary>
+    private static int _replayConcurrencyCeiling;
+
+    /// <summary>
+    /// Count of permits currently <b>withheld</b> from
+    /// <see cref="_replayConcurrencyGate"/> by the memory-adaptive backpressure of
+    /// issue #2781, so the effective ceiling is
+    /// <c>_replayConcurrencyCeiling - _withheldReplayPermits</c>.
+    /// <para>
+    /// Withholding is not a resize. The gate is sized once and never re-created,
+    /// so backpressure works by <b>declining to return</b> a permit the failing
+    /// replay already holds, and recovery works by returning one extra permit on a
+    /// clean replay. That gives the mechanism its load-bearing property: it can
+    /// only ever put <b>fewer</b> permits into circulation than the configured
+    /// ceiling, never more, for <b>any</b> sequence of inputs.
+    /// </para>
+    /// <para>
+    /// This matters beyond tidiness. Issues #2278/#2279 settled that the core
+    /// library must not silently defeat an operator's
+    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> or
+    /// <c>DOTNET_PROCESSOR_COUNT</c>, and a reviewer who remembers that will reach
+    /// for the objection on sight. A dynamic floor <b>beneath</b> the configured
+    /// ceiling is not an override of it: the operator sets the headroom this
+    /// process may take, and this mechanism declines headroom the heap cannot
+    /// currently afford. It never takes headroom the operator did not grant.
+    /// </para>
+    /// </summary>
+    private static int _withheldReplayPermits;
+
+    /// <summary>
+    /// Test-only view of <see cref="_withheldReplayPermits"/>.
+    /// </summary>
+    internal static int WithheldReplayPermitsForTest => Volatile.Read(ref _withheldReplayPermits);
+
+    /// <summary>
+    /// Test-only view of <see cref="_replayConcurrencyCeiling"/>. Exposed so a
+    /// fixture can assert the gate is <b>quiescent</b> before it perturbs it -
+    /// a withholding test whose baseline was already depressed would compare
+    /// against the wrong number and could pass for the wrong reason.
+    /// </summary>
+    internal static int ReplayConcurrencyCeilingForTest => Volatile.Read(ref _replayConcurrencyCeiling);
+
+    /// <summary>
+    /// Resets the memory-adaptive backpressure state. Test-only: the gate and its
+    /// withholding are process-wide statics, so a fixture that exercises one must
+    /// be able to return the process to its unsized state.
+    /// </summary>
+    internal static void ResetReplayConcurrencyGateForTest()
+    {
+        lock (_replayConcurrencyGateLock)
+        {
+            _replayConcurrencyGate = null;
+            _replayConcurrencyCeiling = 0;
+            Volatile.Write(ref _withheldReplayPermits, 0);
+        }
+    }
+
+    /// <summary>
+    /// Decides whether the caller's replay permit should be <b>withheld</b> rather
+    /// than returned, because the replay failed for memory pressure (issue #2781).
+    /// Returns <see langword="true"/> when the caller must <b>not</b> release.
+    /// </summary>
+    /// <remarks>
+    /// At least one permit always stays in circulation. Withholding the last one
+    /// would convert a memory stall into a total stall, and a gate that admits
+    /// nothing can never observe the clean replay that recovers it - the mechanism
+    /// would latch, exactly the defect issue #2783 reports elsewhere.
+    /// </remarks>
+    internal static bool TryWithholdReplayPermitOnPressure()
+    {
+        var ceiling = Volatile.Read(ref _replayConcurrencyCeiling);
+        while (true)
+        {
+            var withheld = Volatile.Read(ref _withheldReplayPermits);
+
+            // The floor. `ceiling - 1` is the most that may ever be withheld, so
+            // this comparison - not the caller, and not the configuration - is
+            // what makes over-withholding unreachable.
+            if (withheld >= ceiling - 1)
+                return false;
+
+            if (Interlocked.CompareExchange(ref _withheldReplayPermits, withheld + 1, withheld) == withheld)
+            {
+                LatticeMetrics.WalReplayPermitAdaptations.Add(
+                    1,
+                    LatticeMetrics.PermitAdaptationWithheld,
+                    LatticeTenantLabel.Platform);
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Decides whether a clean replay should return one <b>extra</b> permit to the
+    /// gate, restoring capacity previously withheld under pressure (issue #2781).
+    /// Returns <see langword="true"/> when the caller must release one more than it
+    /// acquired.
+    /// </summary>
+    /// <remarks>
+    /// The guard is <c>withheld &gt; 0</c>, and it is the invariant rather than a
+    /// nicety. Each withheld permit is one the gate never got back, so the gate's
+    /// count is at most <c>ceiling - withheld</c> and returning exactly
+    /// <c>withheld</c> extras restores it to <c>ceiling</c> and no further. Should
+    /// that accounting ever be wrong in the dangerous direction, the
+    /// <see cref="SemaphoreSlim"/> was constructed with a maximum and throws
+    /// <see cref="SemaphoreFullException"/> rather than silently over-admitting -
+    /// the failure mode is loud, which is why the ceiling is passed to the
+    /// constructor at all.
+    /// </remarks>
+    internal static bool TryRestoreWithheldReplayPermit()
+    {
+        while (true)
+        {
+            var withheld = Volatile.Read(ref _withheldReplayPermits);
+            if (withheld <= 0)
+                return false;
+
+            if (Interlocked.CompareExchange(ref _withheldReplayPermits, withheld - 1, withheld) == withheld)
+            {
+                LatticeMetrics.WalReplayPermitAdaptations.Add(
+                    1,
+                    LatticeMetrics.PermitAdaptationRestored,
+                    LatticeTenantLabel.Platform);
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
     /// Lazily resolves the per-silo replay concurrency gate from
     /// <paramref name="options"/>. A non-positive
     /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> resolves
@@ -202,8 +335,15 @@ internal sealed partial class BPlusLeafGrain
             {
                 max = options.WalMaterialiserMaxConcurrentReplays;
                 if (max <= 0)
+                    // The core library deliberately does not read the cgroup grant itself
+                    // (issues #2278/#2279); an operator pins WalMaterialiserMaxConcurrentReplays
+                    // or DOTNET_PROCESSOR_COUNT on a constrained host, and the disagreement is
+                    // surfaced by LogResolvedReplayConcurrencyGate below rather than resolved here.
+                    // grant-exempt: the library sizes this gate from Environment.ProcessorCount by design (issues #2278/#2279).
                     max = Environment.ProcessorCount;
                 _replayConcurrencyGate = new SemaphoreSlim(max, max);
+                _replayConcurrencyCeiling = max;
+                Volatile.Write(ref _withheldReplayPermits, 0);
                 sizedHere = true;
             }
             else
@@ -213,7 +353,23 @@ internal sealed partial class BPlusLeafGrain
         }
 
         if (sizedHere)
+        {
             LogResolvedReplayConcurrencyGate(max, options.WalMaterialiserMaxConcurrentReplays, loggerAccessor);
+
+            // Zero-prime both arms of the backpressure counter (issue #2781,
+            // discipline of #2764). This is the one site that proves the gate was
+            // created, so priming here - and nowhere earlier - distinguishes
+            // "backpressure is present and has never engaged" from "this build
+            // has no backpressure", which an absent series cannot.
+            LatticeMetrics.WalReplayPermitAdaptations.Add(
+                0,
+                LatticeMetrics.PermitAdaptationWithheld,
+                LatticeTenantLabel.Platform);
+            LatticeMetrics.WalReplayPermitAdaptations.Add(
+                0,
+                LatticeMetrics.PermitAdaptationRestored,
+                LatticeTenantLabel.Platform);
+        }
 
         return Volatile.Read(ref _replayConcurrencyGate)!;
     }
@@ -268,6 +424,7 @@ internal sealed partial class BPlusLeafGrain
                 + "per process and is never re-created or topped up.",
                 max,
                 configured,
+                // grant-exempt: reporting the resolved processor count in a diagnostic, not sizing a pool.
                 Environment.ProcessorCount);
         }
         catch
@@ -295,11 +452,68 @@ internal sealed partial class BPlusLeafGrain
         if (string.IsNullOrEmpty(state.State.TreeId))
             return null;
 
+        // Phase tracking for issue #2770. This method has TWO awaits and only
+        // the second is the permit queue; the classifier downstream used to
+        // infer the phase from `replayPermit is null`, which is true for both
+        // and so reported a cancellation in the options resolve as one queued
+        // for a permit. Recording the phase as it is entered is what makes the
+        // two distinguishable, and it has to be recorded here because this is
+        // the only frame that knows which await it is sitting in.
+        _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
         var options = await GetOptionsAsync();
         var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
+
+        _replayAdmissionPhase = ReplayAdmissionPhase.QueuedForPermit;
         await gate.WaitAsync(cancellationToken);
+
+        _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
         return gate;
     }
+
+    /// <summary>
+    /// How far this activation got through replay admission, so a cancellation
+    /// can be attributed to the phase it actually landed in (issue #2770).
+    /// </summary>
+    internal enum ReplayAdmissionPhase
+    {
+        /// <summary>Admission has not been entered yet.</summary>
+        NotStarted,
+
+        /// <summary>
+        /// Inside <c>GetOptionsAsync</c>, which on a miss is an
+        /// <c>ILatticeRegistry</c> grain call. The replay permit has not been
+        /// requested, so the gate is not contended on this activation's behalf.
+        /// </summary>
+        ResolvingOptions,
+
+        /// <summary>Queued on the replay concurrency gate itself.</summary>
+        QueuedForPermit,
+
+        /// <summary>Holds a permit; any cancellation from here is mid-replay.</summary>
+        HoldsPermit,
+
+        /// <summary>
+        /// Inside Step 0, the snapshot rehydrate, which runs before replay
+        /// admission is entered at all (issue #2770).
+        /// <para>
+        /// Deliberately NOT folded into <see cref="ResolvingOptions"/> even
+        /// though Step 0 resolves options itself on the
+        /// <c>SnapshotLoadHintBytes &lt;= 0</c> arm. This value covers the
+        /// whole of Step 0 - the lease's own options resolve and the snapshot
+        /// read alike - and does not separate them; saying so is the point,
+        /// because folding an arm into a neighbour on the grounds that it
+        /// sometimes does the same work is precisely the error #2770 exists to
+        /// correct.
+        /// </para>
+        /// </summary>
+        RehydratingSnapshot,
+    }
+
+    /// <summary>
+    /// This activation's replay-admission phase. Per-activation state on a
+    /// single-threaded grain, so it needs no synchronisation.
+    /// </summary>
+    private ReplayAdmissionPhase _replayAdmissionPhase = ReplayAdmissionPhase.NotStarted;
 
     /// <summary>
     /// Activation hook. Runs the WAL materialiser to bring the
@@ -320,7 +534,9 @@ internal sealed partial class BPlusLeafGrain
         // (snapshot, head] suffix. When no snapshot is present (or it
         // is older than the persisted checkpoint), this step is a
         // no-op and the existing WAL-tail-replay path runs unchanged.
-        var rehydratedFromSnapshot = await TryRehydrateFromSnapshotAsync(cancellationToken);
+        //
+        // Executed inside the try below; see the declaration of
+        // replayCheckpointOverride for why it moved (issue #2770).
 
         // Step 0.5 - cache/checkpoint coherence reset. The entry
         // cache is per-activation only; it is rebuilt
@@ -346,8 +562,8 @@ internal sealed partial class BPlusLeafGrain
         // attach, or a test seeding the cache for unit-test purposes)
         // has already populated the cache, the checkpoint is by
         // definition coherent with it and must not be overridden.
-        long? replayCheckpointOverride =
-            (!rehydratedFromSnapshot && Cache.Count == 0) ? -1L : null;
+        //
+        // Also executed inside the try below (issue #2770).
 
         // Step 1 - drive the dormant ILeafProjection.Apply seam over
         // the WAL slice between the persisted checkpoint and the
@@ -364,8 +580,38 @@ internal sealed partial class BPlusLeafGrain
         // permit caps how many leaf replays run concurrently so a
         // reactivation storm degrades into a bounded queue. A no-op
         // activation (no tree id) takes no permit.
+        // Step 0 and Step 0.5 are declared here and executed INSIDE the try
+        // below (issue #2770). They used to run ahead of it, so a cancellation
+        // delivered during the snapshot rehydrate escaped the observation block
+        // entirely and incremented no counter under any reason. That is the
+        // same blindness the #2280 comment further down describes for the
+        // permit queue, and it is worse: an arm that is missing from the total
+        // cannot even be found by noticing the total is too large.
+        //
+        // The cold/warm discriminator starts at the COLD sentinel rather than
+        // null. A cancellation before Step 0.5 has established an anchor is by
+        // definition an activation with no anchor, so reporting it as warm -
+        // which a null default would - would be false.
+        long? replayCheckpointOverride = -1L;
+
         bool advanced;
         SemaphoreSlim? replayPermit = null;
+
+        // Memory-adaptive backpressure state for this activation (issue #2781).
+        // Both are read only in the finally, and both default to the inert value
+        // so that every path which does not explicitly set them - including one
+        // that never reaches the replay at all - leaves the gate exactly as it
+        // found it.
+        bool withholdReplayPermitOnPressure = false;
+        bool replayCompletedCleanly = false;
+
+        // Declared here rather than at its assignment inside the try because
+        // the resident-footprint registration at step 1.35 (issue #2767) reads
+        // it after the guarded region has closed, and issue #2280 moved the
+        // rehydrate inside that region. It shares the COLD-by-default reasoning
+        // of replayCheckpointOverride above: an activation that fails before
+        // step 0 completes has, by definition, not rehydrated from a snapshot.
+        bool rehydratedFromSnapshot = false;
 
         // The acquisition sits INSIDE the try, whose finally is the only thing
         // that returns the permit (issue #2256). The observation block below
@@ -394,6 +640,14 @@ internal sealed partial class BPlusLeafGrain
         // reproduce in the instrument the same blindness it was built to end.
         try
         {
+            // Step 0 (see above).
+            _replayAdmissionPhase = ReplayAdmissionPhase.RehydratingSnapshot;
+            rehydratedFromSnapshot = await TryRehydrateFromSnapshotAsync(cancellationToken);
+
+            // Step 0.5 (see above).
+            replayCheckpointOverride =
+                (!rehydratedFromSnapshot && Cache.Count == 0) ? -1L : null;
+
             replayPermit = await AcquireReplayPermitAsync(cancellationToken);
 
             if (replayPermit is not null)
@@ -465,9 +719,35 @@ internal sealed partial class BPlusLeafGrain
             }
 
             advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
+
+            // The reset half of the cold-replay-loop streak (issue #2280). This
+            // site is the exact complement of the catch below: the guarded
+            // replay region completed, so this leaf is out of the loop and its
+            // run of consecutive cancellations ends here.
+            //
+            // Unconditional, including on the warm arm and on a leaf with no
+            // tree id. Any successful activation is an intervening success, and
+            // a leaf that never recorded a streak removes nothing.
+            ForgetColdReplayCancellations(this.GetGrainId());
+
+            // Recovery evidence for the replay gate (issue #2781). Set last, so
+            // it can only be true when the whole guarded region completed - a
+            // partial replay is not evidence the heap has room again.
+            replayCompletedCleanly = true;
         }
         catch (Exception ex)
         {
+            // Memory-adaptive backpressure (issue #2781). Decided here, applied
+            // in the finally.
+            //
+            // Guarded on `replayPermit is not null` because a permit that was
+            // never acquired cannot be withheld, and incrementing the withheld
+            // count without a matching unreleased permit would overstate the
+            // reduction - and, on recovery, return a permit the gate never lost,
+            // which SemaphoreSlim would raise as SemaphoreFullException.
+            if (replayPermit is not null && IsReadMemoryPressure(ex))
+                withholdReplayPermitOnPressure = TryWithholdReplayPermitOnPressure();
+
             // Activation-failure observation (issue #2280). OBSERVE AND
             // RETHROW - never swallow. "Failures propagate" above is
             // load-bearing: an activation that ate its cancellation would come
@@ -501,9 +781,22 @@ internal sealed partial class BPlusLeafGrain
                 // above.
                 var reason = ex is not OperationCanceledException
                     ? LatticeMetrics.ActivationFailureFaulted
-                    : replayPermit is null
-                        ? LatticeMetrics.ActivationFailureCanceledAwaitingPermit
-                        : LatticeMetrics.ActivationFailureCanceled;
+                    : _replayAdmissionPhase switch
+                    {
+                        // Issue #2770. The phase is recorded as each await is
+                        // entered, so these are the arm the cancellation
+                        // actually landed in rather than an inference from
+                        // `replayPermit is null` - which was true for the
+                        // options resolve and the permit queue alike, and so
+                        // reported a registry stall as replay-gate saturation.
+                        ReplayAdmissionPhase.ResolvingOptions =>
+                            LatticeMetrics.ActivationFailureCanceledResolvingOptions,
+                        ReplayAdmissionPhase.RehydratingSnapshot =>
+                            LatticeMetrics.ActivationFailureCanceledRehydratingSnapshot,
+                        ReplayAdmissionPhase.QueuedForPermit =>
+                            LatticeMetrics.ActivationFailureCanceledAwaitingPermit,
+                        _ => LatticeMetrics.ActivationFailureCanceled,
+                    };
 
                 LatticeMetrics.LeafActivationFailures.Add(
                     1,
@@ -511,14 +804,106 @@ internal sealed partial class BPlusLeafGrain
                     replayCheckpointOverride == -1L ? LatticeMetrics.ActivationTemperatureCold : LatticeMetrics.ActivationTemperatureWarm,
                     reason,
                     LatticeTenantLabel.ForTree(failedTreeId));
+
+                // Loop detection and escalation (issue #2280, direction 4).
+                //
+                // The counter above is an AGGREGATE. It cannot distinguish one
+                // leaf cancelled five times from five leaves cancelled once,
+                // and those are a defect and a cost respectively - the first is
+                // a leaf whose cancellation reproduces exactly the condition
+                // that caused it, which is the self-reinforcing loop this issue
+                // is about. Only a per-leaf run of CONSECUTIVE cancellations
+                // separates them, so that is what is tracked here.
+                //
+                // Restricted to the COLD arm on purpose: a warm activation
+                // resumed above a snapshot or cache anchor, so its cancellation
+                // does not reproduce coldness and is not this pathology.
+                if (replayCheckpointOverride == -1L && ex is OperationCanceledException)
+                {
+                    // The whole escalation is observation, and an observation
+                    // must NEVER replace the fault it observes. Without this
+                    // guard a throwing logging sink - transient, environmental,
+                    // and the exact fault the #2256 permit leak was caused by -
+                    // would escape this catch in place of the
+                    // OperationCanceledException, rewriting a cancelled
+                    // activation as a faulted one upstream and destroying the
+                    // very signal this change exists to create.
+                    try
+                    {
+                        EscalateColdReplayCancellation(
+                            failedTreeId,
+                            this.GetGrainId(),
+                            phase: _replayAdmissionPhase,
+                            Stopwatch.GetTimestamp());
+                    }
+                    catch
+                    {
+                        // Intentionally swallowed. See above: losing the
+                        // diagnostic is a bounded loss, losing the exception is
+                        // not.
+                    }
+                }
             }
 
             throw;
         }
         finally
         {
-            replayPermit?.Release();
+            if (replayPermit is not null)
+            {
+                // Memory-adaptive backpressure (issue #2781).
+                //
+                // Withholding is expressed here, at the single release site,
+                // rather than as a resize: the gate is sized once and never
+                // re-created, so the only lever available is whether this permit
+                // goes back. Declining to return one is a strictly subtractive
+                // act, which is what makes it incapable of exceeding the
+                // operator's ceiling for any input - see _withheldReplayPermits.
+                //
+                // The condition is deliberately narrower than "the replay
+                // failed". A cancelled or faulted replay is not evidence the
+                // heap is short; only IsReadMemoryPressure is, and withholding
+                // on anything else would shrink the gate for faults that have
+                // nothing to do with memory.
+                if (withholdReplayPermitOnPressure)
+                {
+                    // Not released, by design: this permit is now withheld, and
+                    // _withheldReplayPermits was incremented to account for it.
+                }
+                else
+                {
+                    replayPermit.Release();
+
+                    // Recovery. A replay that completed without memory pressure
+                    // is the evidence that the heap can afford more concurrency
+                    // again, so exactly one withheld permit returns per such
+                    // replay - gradually, so a single lucky replay cannot undo a
+                    // sustained reduction in one step.
+                    if (replayCompletedCleanly && TryRestoreWithheldReplayPermit())
+                        replayPermit.Release();
+                }
+            }
         }
+
+        // Step 1.35 - account this activation's resident footprint against the
+        // per-silo working set, shedding older leaves if it puts the silo over
+        // budget (issue #2767).
+        //
+        // Placed here, after the replay region and before anything that can
+        // return early, because this is the first point at which the activation
+        // is both online and done growing: the snapshot frame is attached, the
+        // replay has applied, and every remaining step is bookkeeping. Every
+        // path out of this method from here on is a success path, so a
+        // registration taken here is matched one-for-one by the release in
+        // OnDeactivateAsync.
+        //
+        // Registering BOTH classes is deliberate and is what makes the ordering
+        // rule mean anything. A cold activation holds decoded rows and no frame;
+        // a warm one holds a frame it may never read. Counting only the second
+        // would leave the first unbounded while reporting the silo as within
+        // budget, and would make the banked-before-unbanked preference vacuous
+        // by construction, since every registration would then be banked.
+        RegisterResidentFootprint(rehydratedFromSnapshot);
 
         // Step 1.4 - publish this activation's same-silo revision cookie
         // now that the in-memory projection has been rebuilt (issue #2151).
@@ -568,6 +953,61 @@ internal sealed partial class BPlusLeafGrain
         {
             _activationSnapshotPending = false;
             await TryCaptureSnapshotForAdvisoryAsync();
+        }
+
+        // Step 1.5b - zero-coverage repair (issue #2692). The advisory above
+        // fires only when the fall-off-log detector raised it, which is a
+        // proximity heuristic about the WAL TAIL and says nothing about whether
+        // a durable snapshot exists. A leaf can therefore come online holding a
+        // checkpointed partition with no snapshot coverage at all, resolve its
+        // durable pin to the Zero block value, and disable cursor-based WAL
+        // trimming for its ENTIRE tree for the whole life of the activation.
+        //
+        // This site is what makes the repair reach a tree that has stopped
+        // taking writes. The post-persist driver in
+        // MaybeRunPeriodicSnapshotRecheckAsync cannot: it hangs off
+        // CompleteCheckpointFlushTailAsync, so a leaf that never persists
+        // another checkpoint never reaches it, and a corpus that finishes
+        // ingesting leaves exactly that state behind - a large accumulated WAL,
+        // no further writes, and an activation that may never end. Evaluating
+        // the predicate once here, on a path every activation of a seeded leaf
+        // runs, means a quiesced tree heals on its next activation rather than
+        // never.
+        //
+        // Run on every activation of a SEEDED leaf rather than as an `else` on
+        // the advisory: when the advisory already captured, the predicate is
+        // false and this costs one array read per partition, and when the
+        // advisory capture FAILED this is the retry. Coverage is read from the
+        // snapshot rehydrated in Step 0, so it is already populated by the time
+        // control reaches here.
+        //
+        // The TreeId guard is NOT an optimisation and must not be removed. It
+        // is this hook's documented contract ("No-op when the leaf has not been
+        // seeded with a tree id"), and without it this site deadlocks the silo
+        // on first use of any tree. GetOptionsAsync() reads as a local field
+        // read but is a lazily-populated cache whose miss path is
+        // LatticeOptionsResolver.ResolveAsync, and for any id that does not
+        // carry LatticeConstants.SystemTreePrefix - which includes the EMPTY id
+        // an unseeded leaf resolves with - that path calls ILatticeRegistry.
+        // AcquireReplayPermitAsync returns before its own GetOptionsAsync() when
+        // TreeId is empty, so on an unseeded leaf the cache is cold and this
+        // await becomes a registry RPC. LatticeRegistryGrain is a non-reentrant
+        // singleton that implements itself over its own system tree, so
+        // registering a tree for the first time is already executing a turn on
+        // that grain while its Registry.SetAsync activates a newborn system-tree
+        // leaf - and a registry call from here queues behind that turn forever,
+        // exactly as the two-hop cycle documented at LatticeRegistryGrain.cs:286
+        // does. The guard also makes the await below provably a cache hit (a
+        // non-empty TreeId means AcquireReplayPermitAsync already warmed it), so
+        // this step issues no grain call at all. It forfeits no repair: a leaf
+        // with no tree id has no WAL, no checkpoint and no coverage, so the
+        // predicate would be false anyway.
+        if (!string.IsNullOrEmpty(state.State.TreeId))
+        {
+            var coverageRepairOptions = await GetOptionsAsync();
+            await TryRepairZeroCoverageAsync(
+                Math.Max(1, coverageRepairOptions.WalPartitions),
+                cancellationToken);
         }
 
         // Step 2 - eagerly publish the cursor IFF the materialiser did
@@ -654,6 +1094,91 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// This activation's claim on the per-silo resident leaf working set
+    /// (issue #2767). <see cref="LeafResidencyRegistration.None"/> until the
+    /// activation registers, so the release path needs no null check.
+    /// </summary>
+    private LeafResidencyRegistration _residency = LeafResidencyRegistration.None;
+
+    /// <summary>
+    /// The per-silo resident leaf working set this activation accounts against.
+    /// Resolved from activation services with the process-wide instance as the
+    /// fallback, exactly as
+    /// <c>SnapshotHydrationAdmission</c> is: production takes the shared
+    /// instance, and a test injects one with a small, deterministic budget so
+    /// the shedding policy can be driven without arranging a real heap limit.
+    /// </summary>
+    private LeafResidentWorkingSet ResidentWorkingSet
+        => context.ActivationServices?.GetService<LeafResidentWorkingSet>()
+            ?? LeafResidentWorkingSet.Shared;
+
+    /// <summary>
+    /// Accounts what this activation will keep resident against the per-silo
+    /// working set, which may shed older leaves to stay inside its derived
+    /// budget.
+    /// <para>
+    /// The footprint is read once, here, rather than tracked live. A live
+    /// figure would be more accurate and is not worth what it costs: it would
+    /// put a callback on the cache's hot mutation path to bound a quantity whose
+    /// dominant term - the retained snapshot frame - is fixed for the life of
+    /// the activation and is known exactly at this point. An activation that
+    /// later grows past its registered figure is under-counted until it
+    /// deactivates, which errs towards retaining leaves rather than shedding
+    /// them, and the periodic re-registration that would fix it would trade a
+    /// bounded under-count for an unbounded amount of sweeping.
+    /// </para>
+    /// <para>
+    /// A leaf with no tree id never registers. It has no snapshot, no replay and
+    /// no rows, so it retains nothing worth accounting and would only add an
+    /// unsheddable entry to the ledger.
+    /// </para>
+    /// </summary>
+    /// <param name="rehydratedFromSnapshot">
+    /// Whether this activation came up off a durable snapshot. Carried into the
+    /// ledger as the shed-ordering class: a banked leaf reloads by re-attaching
+    /// its snapshot, an unbanked one by replaying the whole readable WAL window
+    /// behind a replay permit.
+    /// </param>
+    private void RegisterResidentFootprint(bool rehydratedFromSnapshot)
+    {
+        if (state.State.TreeId is not { Length: > 0 } treeId)
+        {
+            return;
+        }
+
+        _residency = ResidentWorkingSet.Register(
+            treeId,
+            Cache.ResidentFootprintBytes,
+            rehydratedFromSnapshot,
+            // Graceful, so the deactivation runs this leaf's
+            // capture-on-deactivate seam. That matters more than it looks:
+            // shedding an unbanked leaf gracefully is what lets it bank a
+            // snapshot on the way out, so the very act of shedding moves it into
+            // the cheap class for next time and the expensive class drains
+            // rather than recirculating.
+            () => context.Deactivate(new DeactivationReason(
+                DeactivationReasonCode.ApplicationRequested,
+                "Leaf shed to keep the silo's resident leaf working set within budget")),
+            // A split is persisted state, so it spans turns - and a batched
+            // transfer spans many. Orleans defers a requested deactivation to
+            // the end of the current turn, which protects a turn-local
+            // operation and does nothing for a multi-turn one, so the exclusion
+            // has to be explicit.
+            () => state.State.SplitState == Primitives.SplitState.SplitInProgress);
+    }
+
+    /// <summary>
+    /// Returns this activation's bytes to the per-silo resident working set.
+    /// Idempotent, so the teardown path can call it without tracking whether the
+    /// activation ever registered.
+    /// </summary>
+    private void ReleaseResidentFootprint()
+    {
+        _residency.Dispose();
+        _residency = LeafResidencyRegistration.None;
+    }
+
+    /// <summary>
     /// Minimum interval, in ticks, between activation cursor-publish-failure
     /// warning logs across the whole silo. Bounds the log rate during a
     /// reactivation storm (issue #1030) while every failure is still counted by
@@ -719,6 +1244,148 @@ internal sealed partial class BPlusLeafGrain
     /// dropped (defensive forward-compat).
     /// </remarks>
     private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ReplayWalSinceCheckpointCoreAsync(checkpointOverride, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Bank whatever this replay absorbed before it was cut short. This
+            // is the ONLY reachable banking point on this path: Orleans does not
+            // run OnDeactivateAsync when OnActivateAsync throws, and a cancelled
+            // replay leaves activation BY throwing, so the graceful-deactivation
+            // durability hooks never see it. Without this, everything the replay
+            // absorbed is discarded and the next activation re-enters from the
+            // same persisted offset - the stalled-replay livelock that
+            // orleans.lattice.leaf.activation_stalled_replays names.
+            //
+            // The two arms bank DIFFERENT things and must not be merged. A cold
+            // rebuild (issue #2280) re-read the WAL from the start, so its
+            // durable claim is the frontier it actually reached, which
+            // TryBankColdReplayProgressAsync computes fail-closed per partition;
+            // stamping checkpoint-derived coverage there would over-claim for a
+            // partition the cancelled pass never re-read. A warm activation
+            // rehydrated from a snapshot and applied only the tail, so its claim
+            // is exactly the pending checkpoint advance the coalescing window
+            // was still holding - the same pair OnDeactivateAsync banks.
+            //
+            // CancellationToken.None throughout, deliberately: the incoming
+            // token is already cancelled, so passing it through would abandon
+            // the very writes that make the cancellation survivable. A failure
+            // to bank must not mask the cancellation, so every fault is
+            // swallowed explicitly and the original cancellation is rethrown.
+            if (_cacheRebuiltFromWalStartThisActivation)
+            {
+                try
+                {
+                    await TryBankColdReplayProgressAsync(CancellationToken.None);
+                }
+                catch (Exception bankFault)
+                {
+                    ResolveLogger()?.LogWarning(
+                        bankFault,
+                        "Failed to bank cold-replay progress for leaf '{LeafId}' of tree '{TreeId}' after the "
+                        + "replay was cancelled. The activation still fails as it did before; the only loss is "
+                        + "that the next activation re-reads the prefix this one had already absorbed.",
+                        context.GrainId.ToString(),
+                        state.State.TreeId ?? "<unset>");
+                }
+            }
+            else
+            {
+                await BankCancelledWarmReplayProgressAsync();
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Banks the durable progress a cancelled WARM tail replay had already
+    /// absorbed: persists the pending checkpoint advance the coalescing window
+    /// was still holding, then captures the snapshot coverage that lets the next
+    /// activation resume warm from it. Best-effort by construction - every fault
+    /// is swallowed so it cannot mask the cancellation being rethrown.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the warm counterpart to <see cref="TryBankColdReplayProgressAsync"/>
+    /// and closes the arm that had no rescue at all. A warm activation's replay
+    /// advances its checkpoint through <c>SetCheckpointOffsetAsync</c> at every
+    /// slice boundary, but that call is NOT a durable write: it records the
+    /// advance in the in-memory pending map and defers the persist behind the
+    /// coalescing window (<see cref="LatticeOptions.MaterialiserCheckpointInterval"/>,
+    /// whose clock restarts at every activation, and
+    /// <see cref="LatticeOptions.MaterialiserCheckpointEntries"/>). An activation
+    /// cancelled inside that window - which is what runtime idle collection
+    /// (<c>DeactivationReasonCode.RuntimeRequested</c>) produces, at volume -
+    /// discarded the entire pending advance, so the next activation re-entered
+    /// replay at the identical persisted offset and the leaf never converged.
+    /// </para>
+    /// <para>
+    /// The pair mirrors <c>OnDeactivateAsync</c> exactly, and both halves are
+    /// required. Persisting the checkpoint alone would be safe but useless: the
+    /// entry cache is per-activation and never persisted, so a checkpoint
+    /// advanced past the snapshot that hydrated it forces the NEXT activation to
+    /// take the -1 cold-rebuild override instead of rehydrating, trading a warm
+    /// stall for a cold one. Capturing the covering snapshot is what makes the
+    /// advance resumable.
+    /// </para>
+    /// <para>
+    /// Nothing here can over-claim. The pending offsets were produced by
+    /// <see cref="TryFlushRecoveredCeilingAsync"/>, already clamped below every
+    /// unresolved deferred terminal and saga prepare, so they never run ahead of
+    /// an applied offset; and
+    /// <see cref="TryCaptureSnapshotOnDeactivateAsync"/> re-applies the #1535
+    /// no-loss gate itself, capturing only over cache-resident applies. A warm
+    /// activation's cache is the rehydrated snapshot plus exactly the tail
+    /// entries this replay applied, so every offset it stamps as covered is one
+    /// the cache holds. Should the capture fail, coverage simply does not
+    /// advance, the WAL prefix is retained rather than trimmed, and the worst
+    /// case is the pre-existing behaviour.
+    /// </para>
+    /// </remarks>
+    private async Task BankCancelledWarmReplayProgressAsync()
+    {
+        try
+        {
+            await ((ILeafProjection)this).FlushCheckpointAsync(CancellationToken.None);
+        }
+        catch (Exception flushFault)
+        {
+            ResolveLogger()?.LogWarning(
+                flushFault,
+                "Failed to persist the pending checkpoint advance for leaf '{LeafId}' of tree '{TreeId}' "
+                + "after the warm tail replay was cancelled. The activation still fails as it did before; "
+                + "the loss is that the next activation re-enters replay at the same persisted offset.",
+                context.GrainId.ToString(),
+                state.State.TreeId ?? "<unset>");
+
+            // No checkpoint landed, so there is nothing for a snapshot to
+            // cover; capturing here could only stamp coverage the persisted
+            // checkpoint does not back.
+            return;
+        }
+
+        try
+        {
+            await TryCaptureSnapshotOnDeactivateAsync(CancellationToken.None);
+        }
+        catch (Exception captureFault)
+        {
+            ResolveLogger()?.LogWarning(
+                captureFault,
+                "Failed to capture snapshot coverage for leaf '{LeafId}' of tree '{TreeId}' after the warm "
+                + "tail replay was cancelled. The checkpoint advance did persist, so no work is lost; the "
+                + "next activation rebuilds its cache from the WAL start rather than resuming warm.",
+                context.GrainId.ToString(),
+                state.State.TreeId ?? "<unset>");
+        }
+    }
+
+    /// <inheritdoc cref="ReplayWalSinceCheckpointAsync"/>
+    private async Task<bool> ReplayWalSinceCheckpointCoreAsync(long? checkpointOverride, CancellationToken cancellationToken)
     {
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
@@ -2174,6 +2841,343 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// How many cold activations of one leaf must be cancelled IN A ROW, with no
+    /// successful activation in between, before the self-reinforcing cold replay
+    /// loop of issue #2280 is escalated.
+    /// <para>
+    /// <b>Calibrated from the measured distribution, not chosen.</b> The field
+    /// measurement on issue #2278 recorded 79 runtime cancellations over roughly
+    /// 40 minutes, all on <c>bplusleaf</c>, across 67 distinct leaves: 55 leaves
+    /// cancelled ONCE, 12 cancelled TWICE, and NONE more than twice. That is
+    /// leaves occasionally repeating, not leaves trapped. A threshold of 2 would
+    /// therefore fire on 12 of 67 leaves - roughly a fifth of the population -
+    /// in a NORMAL 40-minute window, and a warning that fires always is a
+    /// warning that gets muted, taking the real signal with it. 3 sits one above
+    /// the highest value the field has produced, so this diagnostic is not
+    /// expected to fire at all in healthy operation, which is what lets a single
+    /// occurrence be treated as a finding.
+    /// </para>
+    /// <para>
+    /// It is also robust to a real ambiguity in that evidence: the log never
+    /// recorded whether the 12 twice-cancelled leaves activated successfully in
+    /// between, so each reads as either two streaks of 1 or one streak of 2 -
+    /// and NEITHER reading reaches 3. A threshold of 2 would have had to guess.
+    /// </para>
+    /// <para>
+    /// (If you are re-deriving this: the figures originally published on #2278 -
+    /// "27 cancelled more than once, one four times" - were impossible on their
+    /// own arithmetic, since 79 cancellations spread over 67 distinct leaves
+    /// leaves a surplus of only 12. Use the corrected distribution above.)
+    /// </para>
+    /// </summary>
+    internal const int ColdReplayLoopThreshold = 3;
+
+    /// <summary>
+    /// The most leaves whose cold-cancellation streaks are tracked at once,
+    /// sized like <see cref="DistinctColdLeafCapacity"/> to bound silo-static
+    /// memory.
+    /// <para>
+    /// The saturation behaviour is deliberately ASYMMETRIC: at capacity the map
+    /// stops admitting NEW leaves, while leaves already tracked keep counting.
+    /// So saturation can only ever cause a false negative - the diagnostic is a
+    /// floor, never an overstatement. That is the right way round for a signal
+    /// whose entire value is that it can be believed when it fires.
+    /// </para>
+    /// </summary>
+    private const int ColdReplayLoopStreakCapacity = 4096;
+
+    /// <summary>
+    /// Minimum interval between cold-replay-loop warnings for the same leaf.
+    /// The counter is not throttled: a log line has a flood to prevent and a
+    /// counter does not.
+    /// </summary>
+    private static readonly TimeSpan ColdReplayLoopLogInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Per-leaf runs of consecutive cold cancellations, silo-scoped.
+    /// <para>
+    /// <b>Why consecutive, and why the reset exists.</b> A CUMULATIVE count with
+    /// a fixed threshold is not merely noisier - it is guaranteed to fire
+    /// falsely given enough uptime. At the measured rate of 79 cancellations per
+    /// 40 minutes a perfectly healthy leaf that is occasionally cancelled
+    /// accumulates without bound, so it reaches ANY fixed threshold eventually.
+    /// That makes the threshold a function of PROCESS AGE rather than of leaf
+    /// health, which is precisely the property a diagnostic must not have.
+    /// Resetting on a successful activation is what makes the count mean "this
+    /// leaf cannot escape under its own power" instead of "this process has been
+    /// up a while".
+    /// </para>
+    /// <para>
+    /// The reset is therefore load-bearing, and it is also the part a later
+    /// simplifier is most likely to remove as redundant bookkeeping. It is not.
+    /// </para>
+    /// <para>
+    /// Static for the same reason the stamp maps are: the entire point is to
+    /// remember across activations, and a failed activation destroys its grain
+    /// instance, so per-activation state would reset every time and observe
+    /// nothing.
+    /// </para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<GrainId, ColdReplayCancellationStreak> ColdReplayCancellationStreaks = new();
+
+    /// <summary>
+    /// Last-emitted timestamps for the cold-replay-loop warning, keyed by leaf.
+    /// </summary>
+    private static readonly ConcurrentDictionary<GrainId, long> ColdReplayLoopLogStamps = new();
+
+    /// <summary>
+    /// One leaf's run of consecutive cold cancellations, split by whether the
+    /// activation had begun replaying or was still queued for the replay permit.
+    /// </summary>
+    /// <param name="ConsecutiveCancellations">
+    /// Cold cancellations since this leaf last activated successfully.
+    /// </param>
+    /// <param name="DuringReplay">
+    /// How many of them cancelled a replay already in progress, losing work.
+    /// </param>
+    /// <param name="AwaitingPermit">
+    /// How many of them were cancelled while still queued for the replay permit,
+    /// having done no work to lose. Carried separately because the two call for
+    /// different remedies - a leaf starved at the gate is a concurrency problem,
+    /// a leaf cut off mid-replay is a bounding problem - and a single total would
+    /// let one masquerade as the other.
+    /// </param>
+    /// <param name="ResolvingOptions">
+    /// How many of them were cancelled before the permit was even requested,
+    /// while resolving the tree's options (issue #2770). These used to be
+    /// counted under <paramref name="AwaitingPermit"/>, which made a stall on
+    /// the shared registry singleton read as replay-gate saturation - a third
+    /// remedy again, and the one the field measurement turned out to need.
+    /// </param>
+    internal readonly record struct ColdReplayLoopSample(
+        int ConsecutiveCancellations,
+        int DuringReplay,
+        int AwaitingPermit,
+        int ResolvingOptions);
+
+    /// <summary>
+    /// One leaf's mutable streak. Updated under its own lock: the three fields
+    /// must advance together or a reader could observe a total that disagrees
+    /// with its own split.
+    /// </summary>
+    private sealed class ColdReplayCancellationStreak
+    {
+        private int _consecutive;
+        private int _duringReplay;
+        private int _awaitingPermit;
+        private int _resolvingOptions;
+
+        public ColdReplayLoopSample Record(ReplayAdmissionPhase phase)
+        {
+            lock (this)
+            {
+                _consecutive++;
+                switch (phase)
+                {
+                    case ReplayAdmissionPhase.ResolvingOptions:
+                    case ReplayAdmissionPhase.RehydratingSnapshot:
+                        _resolvingOptions++;
+                        break;
+                    case ReplayAdmissionPhase.QueuedForPermit:
+                        _awaitingPermit++;
+                        break;
+                    default:
+                        _duringReplay++;
+                        break;
+                }
+
+                return new ColdReplayLoopSample(
+                    _consecutive, _duringReplay, _awaitingPermit, _resolvingOptions);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records one cold cancellation against <paramref name="leafId"/>'s streak
+    /// and returns the streak as observed immediately afterwards, or
+    /// <see langword="null"/> when the streak map is saturated and this leaf was
+    /// not already being tracked (see
+    /// <see cref="ColdReplayLoopStreakCapacity"/>).
+    /// </summary>
+    /// <param name="leafId">The leaf whose activation was cancelled.</param>
+    /// <param name="phase">
+    /// The replay-admission phase the cancellation landed in, which decides
+    /// which of the sample's three buckets it is recorded under.
+    /// </param>
+    /// <returns>The streak after recording, or <see langword="null"/>.</returns>
+    internal static ColdReplayLoopSample? ObserveColdReplayCancellation(
+        GrainId leafId, ReplayAdmissionPhase phase)
+    {
+        if (!ColdReplayCancellationStreaks.TryGetValue(leafId, out var streak))
+        {
+            if (ColdReplayCancellationStreaks.Count >= ColdReplayLoopStreakCapacity)
+            {
+                return null;
+            }
+
+            streak = ColdReplayCancellationStreaks.GetOrAdd(
+                leafId, static _ => new ColdReplayCancellationStreak());
+        }
+
+        return streak.Record(phase);
+    }
+
+    /// <summary>
+    /// Clears <paramref name="leafId"/>'s cold-cancellation streak because the
+    /// leaf activated successfully. This is the half of the mechanism that makes
+    /// the count consecutive rather than cumulative - see
+    /// <see cref="ColdReplayCancellationStreaks"/> for why that distinction
+    /// decides whether the threshold measures leaf health or process age.
+    /// <para>
+    /// The warning's throttle stamp is dropped with it, so a leaf that recovers
+    /// and later falls back into the loop warns immediately instead of being
+    /// silenced by the interval left over from its previous run.
+    /// </para>
+    /// </summary>
+    /// <param name="leafId">The leaf that activated successfully.</param>
+    internal static void ForgetColdReplayCancellations(GrainId leafId)
+    {
+        ColdReplayCancellationStreaks.TryRemove(leafId, out _);
+        ColdReplayLoopLogStamps.TryRemove(leafId, out _);
+    }
+
+    /// <summary>
+    /// True when the cold-replay-loop warning is due again for
+    /// <paramref name="leafId"/>. Same shape as the activation-temperature
+    /// throttle: a sibling stamp map, its own interval, and the same aged-out
+    /// sweep at capacity.
+    /// </summary>
+    /// <param name="leafId">The leaf the warning would name.</param>
+    /// <param name="now">The timestamp to evaluate the interval against.</param>
+    /// <returns><see langword="true"/> when the line should be emitted.</returns>
+    private static bool ShouldLogColdReplayLoop(GrainId leafId, long now)
+    {
+        if (!ColdReplayLoopLogStamps.TryGetValue(leafId, out var last))
+        {
+            if (ColdReplayLoopLogStamps.Count >= ColdReplayLoopStreakCapacity)
+            {
+                PruneColdReplayLoopLogStamps(now);
+            }
+
+            return ColdReplayLoopLogStamps.TryAdd(leafId, now);
+        }
+
+        if (Stopwatch.GetElapsedTime(last, now) < ColdReplayLoopLogInterval)
+        {
+            return false;
+        }
+
+        return ColdReplayLoopLogStamps.TryUpdate(leafId, now, last);
+    }
+
+    /// <summary>
+    /// Drops every <see cref="ColdReplayLoopLogStamps"/> entry that has already
+    /// aged past <see cref="ColdReplayLoopLogInterval"/>. Such an entry would
+    /// permit the next line anyway, so removing it is semantically free. The
+    /// streaks themselves are a separate map and are never swept - dropping one
+    /// would silently forgive a leaf that has not recovered.
+    /// </summary>
+    /// <param name="now">The timestamp the calling check is evaluated at.</param>
+    private static void PruneColdReplayLoopLogStamps(long now)
+    {
+        foreach (var stamp in ColdReplayLoopLogStamps)
+        {
+            if (Stopwatch.GetElapsedTime(stamp.Value, now) >= ColdReplayLoopLogInterval)
+            {
+                ColdReplayLoopLogStamps.TryRemove(stamp);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records one cold cancellation against this leaf's streak and, once the
+    /// streak reaches <see cref="ColdReplayLoopThreshold"/>, emits the counter
+    /// and the throttled warning that name the self-reinforcing cold replay loop
+    /// of issue #2280.
+    /// <para>
+    /// The counter fires on EVERY cancellation at or above the threshold, so a
+    /// leaf that stays stuck carries a rate rather than a single edge; the
+    /// warning is throttled per leaf because a log line does have a flood to
+    /// prevent and a counter does not.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree the cancelled leaf belongs to.</param>
+    /// <param name="leafId">The cancelled leaf.</param>
+    /// <param name="phase">
+    /// The replay-admission phase the cancellation landed in. Replaces the old
+    /// `awaitingPermit` flag, which was derived from `replayPermit is null` and
+    /// so collapsed the options-resolve and permit-queue arms into one (issue
+    /// #2770).
+    /// </param>
+    /// <param name="now">
+    /// The <see cref="Stopwatch.GetTimestamp"/> reading to evaluate the warning
+    /// throttle at. Supplied by the caller so a test can advance time
+    /// deterministically instead of waiting out the interval.
+    /// </param>
+    private void EscalateColdReplayCancellation(
+        string treeId, GrainId leafId, ReplayAdmissionPhase phase, long now)
+    {
+        var streak = ObserveColdReplayCancellation(leafId, phase);
+        if (streak is not { } sample || sample.ConsecutiveCancellations < ColdReplayLoopThreshold)
+        {
+            return;
+        }
+
+        LatticeMetrics.LeafColdReplayLoop.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            LatticeTenantLabel.ForTree(treeId));
+
+        if (!ShouldLogColdReplayLoop(leafId, now))
+        {
+            return;
+        }
+
+        var logger = ResolveLogger();
+        if (logger is null || !logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        // The line names the pathology in full, because the deployed host
+        // exposes no metrics endpoint (issue #2148) and because this loop
+        // previously ran for the entire life of a container without emitting a
+        // single line that named it - it was found by correlating two unrelated
+        // counters, which is not a thing an operator can be expected to do.
+        logger.LogWarning(
+            "SELF-REINFORCING COLD REPLAY LOOP: leaf '{LeafId}' of tree '{TreeId}' has now had "
+            + "{ConsecutiveCancellations} cold activations cancelled in a row with no successful "
+            + "activation in between ({DuringReplay} cancelled mid-replay, {AwaitingPermit} cancelled "
+            + "while queued for a replay permit, {ResolvingOptions} cancelled while resolving tree "
+            + "options, before the permit was requested), which is at or past the escalation threshold "
+            + "of {Threshold}. A cold activation replays the whole readable WAL window; when it is "
+            + "cancelled it latches neither signal the snapshot capture gate requires, so no snapshot is "
+            + "banked, the next activation finds no anchor and replays the whole window again. The "
+            + "condition that causes the cancellation is therefore REPRODUCED BY the cancellation, and "
+            + "this leaf is not expected to escape on its own. The count is CONSECUTIVE and resets on "
+            + "any successful activation, so it measures this leaf's health and not how long this "
+            + "process has been up. The threshold is set one above the highest value seen in the field "
+            + "measurement behind issue #2280, so this line is not expected to appear in normal "
+            + "operation. READ THE SPLIT BY ARM, and note that the third arm was added by issue #2770 "
+            + "after the first two were folded together and a cold-start stall on the shared registry "
+            + "singleton was misreported for six deployments as replay-gate saturation: a high "
+            + "options-resolving share means activations are serialised behind a shared dependency and "
+            + "the replay gate may be entirely idle (issue #2768); a high queued-for-permit share means "
+            + "the gate itself is saturated (issues #2279, #2256); a high mid-replay share means a "
+            + "single replay is too long to finish inside the deadline (issue #2411). Do NOT infer gate "
+            + "saturation from a cancellation that never reached the gate. "
+            + "This is a DIAGNOSTIC: nothing here changes the leaf's behaviour, and the activation "
+            + "still fails as it did before.",
+            leafId,
+            treeId,
+            sample.ConsecutiveCancellations,
+            sample.DuringReplay,
+            sample.AwaitingPermit,
+            sample.ResolvingOptions,
+            ColdReplayLoopThreshold);
+    }
+
+    /// <summary>
     /// Silo-scoped record of the persisted checkpoint each leaf partition was
     /// last seen replaying from, used to tell a slow replay from a STALLED one
     /// (issue #2149, fault shape of issue #2165).
@@ -2362,6 +3366,8 @@ internal sealed partial class BPlusLeafGrain
         OverBudgetLogStamps.Clear();
         StalledReplayLogStamps.Clear();
         ReplayCheckpointObservations.Clear();
+        ColdReplayCancellationStreaks.Clear();
+        ColdReplayLoopLogStamps.Clear();
     }
 
     /// <summary>
@@ -2536,6 +3542,17 @@ internal sealed partial class BPlusLeafGrain
             ceiling = minDeferred - 1;
         if (MinUnresolvedPrepareOffsetForPartition(partition) is long minPrepare && minPrepare - 1 < ceiling)
             ceiling = minPrepare - 1;
+
+        // Record the re-read frontier BEFORE the monotonic short-circuit below.
+        // On a cold rebuild the checkpoint still sits at its persisted value
+        // while this activation re-reads from offset 0, so every ceiling below
+        // that value is real progress the checkpoint cannot express - and the
+        // `return false` below is exactly where it was being discarded (issue
+        // #2280). Recording it here banks nothing on its own; it makes the
+        // progress REPRESENTABLE so a mid-replay snapshot capture can bank it.
+        // The checkpoint itself is untouched and stays strictly monotonic.
+        if (_cacheRebuiltFromWalStartThisActivation)
+            RecordColdReplayFrontier(partition, ceiling, partition + 1);
 
         if (ceiling <= GetCurrentCheckpointForPartition(partition))
             return false;
@@ -2759,12 +3776,60 @@ internal sealed partial class BPlusLeafGrain
         var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
             $"{treeId}/{partition}");
 
+        // Issue #2756. Zero-prime the deferred-terminal drop counter before any
+        // drop can happen. A Counter exports no series at all until its first
+        // Add, so without this a partition that has never dropped a terminal is
+        // indistinguishable from a build in which the instrument was never
+        // wired - which is exactly the ambiguity this counter exists to remove,
+        // and the signal this repository has most often misread. Adding zero
+        // mints the series with the precise tag set a later drop will carry and
+        // cannot perturb the value.
+        LatticeMetrics.LeafDeferredTerminalsDroppedAtCap.Add(
+            0,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+            LatticeTenantLabel.ForTree(treeId));
+
         // Reuse the head the sweep-order pre-pass already probed when it has
         // one, so ordering the sweep costs no extra grain call. A head probed
         // moments ago can only be behind the true head, which simply leaves
         // the newest entries for the materialiser or the next replay.
         var head = probedHead ?? await coordinator.GetHeadOffsetAsync(cancellationToken);
-        if (head <= checkpoint)
+
+        // The offset of the NEWEST entry that actually exists on this partition
+        // (issue #2668). These two quantities are measured from different
+        // origins and must be reconciled before they can be compared.
+        // GetHeadOffsetAsync is documented as "the next sequence number that
+        // will be assigned to a future append", so head is EXCLUSIVE and sits
+        // one past the last real entry. checkpoint is the highest offset this
+        // leaf has SCANNED and is INCLUSIVE - it is assigned from entry.Offset
+        // of an entry the loop below actually read, so it can never reach head.
+        // A leaf that has read the whole partition therefore sits at head - 1.
+        //
+        // Comparing them directly (head <= checkpoint) tested an exclusive bound
+        // against an inclusive one, so it was false for EVERY converged leaf.
+        // Each one skipped this return, entered replay, read the empty range
+        // (head - 1, head], applied nothing, correctly did not advance its
+        // checkpoint, and was then reported by the stall detector below as a
+        // leaf for which "writes routed to it are being lost" - 6,632 samples
+        // across four trees on the measured deployment, every one of them at a
+        // reported partition gap of exactly 1, which is the arithmetic signature
+        // of this boundary (head - (head - 1)) rather than of any backlog.
+        //
+        // The condition is self-sustaining, which is what separates it from a
+        // leaf that entered replay because a SIBLING wrote. That leaf reads the
+        // sibling's entry, and the checkpoint advance at the bottom of the scan
+        // loop sits deliberately OUTSIDE the ShouldApplyDuringReplay filter so
+        // that an entry skipped as another leaf's work still moves the
+        // checkpoint; it therefore advances and stops reporting. At this
+        // boundary there is no entry to read at all, so nothing ever moves.
+        //
+        // The guard that should have caught this encoded "fully caught up" as
+        // checkpoint == head, a state the checkpoint cannot occupy, so it passed
+        // against an unreachable input while the reachable neighbour shipped.
+        // BPlusLeafGrainTests.ReplayStallHeadBoundary pins the reachable one.
+        var newestOffset = head - 1;
+        if (newestOffset <= checkpoint)
         {
             // Nothing to replay, so this leaf applied zero entries: the
             // cleanest possible in-budget activation. It ends the run for the
@@ -2814,9 +3879,9 @@ internal sealed partial class BPlusLeafGrain
         // "a frozen checkpoint whose partition gap fits inside the budget is an
         // idle leaf, not a livelock". The second claim is false, and the code a
         // few lines above is what refutes it: an idle leaf returns on the
-        // head <= checkpoint check and never arrives here, so past this point
-        // there is unreplayed work by construction and a frozen checkpoint is a
-        // livelock at ANY gap.
+        // newestOffset <= checkpoint check and never arrives here, so past this
+        // point there is unreplayed work by construction and a frozen checkpoint
+        // is a livelock at ANY gap.
         //
         // The first claim was true but bought the wrong thing. The gap is
         // partition-wide and pre-filter, shared with ~1,350 sibling leaves,
@@ -2993,18 +4058,122 @@ internal sealed partial class BPlusLeafGrain
         // deletes or atomic multi-key writes. With the ledger the ceiling
         // recovers the moment a deferred offset drains, here or in pass 2.
 
+        // Slice width is a LOCAL, not the constant (issue #2742). The read
+        // that fills a slice is the allocation this deployment could no
+        // longer afford, and the previous loop had exactly one response to
+        // that: unwind the whole partition replay. The next activation then
+        // re-read the identical window, failed identically, and banked
+        // nothing - 3,080 stalled replays on one tree, with the checkpoint
+        // frozen for the entire census. Width is now something the loop can
+        // spend to keep going.
+        var sliceBudget = ReplaySliceBudget;
+
         while (fromExclusive < head)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var slice = await coordinator.ReadSliceAsync(
-                fromExclusive,
-                head,
-                ReplaySliceBudget,
-                cancellationToken);
+            IReadOnlyList<CommitLogSliceEntry> slice;
+            try
+            {
+                slice = await coordinator.ReadSliceAsync(
+                    fromExclusive,
+                    head,
+                    sliceBudget,
+                    cancellationToken);
+            }
+            catch (Exception ex) when (sliceBudget > 1 && IsReadMemoryPressure(ex))
+            {
+                // The read was unaffordable, not wrong. Narrow and retry the
+                // SAME range: a quarter of the width is a quarter of the
+                // bytes the storage provider must find, and the narrower
+                // range is also a different key on the coordinator's slice
+                // cache, so the retry cannot be served the failed attempt.
+                // Everything applied so far is already durable - the
+                // incremental flush at the foot of this loop banked it - so
+                // the retry resumes rather than repeats.
+                var narrowed = sliceBudget / 4;
+                sliceBudget = narrowed < 1 ? 1 : narrowed;
+                ReplayLogger(context)?.LogWarning(
+                    ex,
+                    "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford a commit-log "
+                    + "read from offset {FromExclusive}; narrowing the slice budget to {SliceBudget} entries and "
+                    + "retrying. Progress up to offset {MaxApplied} is already banked.",
+                    context.GrainId,
+                    treeId,
+                    partition,
+                    fromExclusive,
+                    sliceBudget,
+                    maxApplied);
+                continue;
+            }
+            catch (Exception ex) when (IsReadMemoryPressure(ex))
+            {
+                // A single entry is the narrowest read there is, so there is
+                // no smaller retry to make. Let the failure surface: the
+                // activation must not come up serving a partition it did not
+                // finish replaying. What makes this an exit rather than the
+                // old livelock is that the checkpoint has MOVED - the next
+                // activation replays a strictly shorter gap, which is a
+                // strictly cheaper read.
+                //
+                // No flush is issued here, and the reason is narrower than
+                // "the foot of the loop already flushed". The foot-of-loop
+                // flush (issue #1513) is CALLED unconditionally after every
+                // non-empty slice, but calling it is not the same as banking:
+                // it clamps to the recovered ceiling and is skipped unless it
+                // strictly advances the partition's position. What makes a
+                // flush here pointless is that this path adds no progress the
+                // foot of the loop has not already offered - the slice that
+                // threw applied nothing. So a flush on this path can only
+                // repeat an offer already made, at the single moment the
+                // process is most starved. A perturbation arm that removed it
+                // reddened nothing, which is the evidence rather than the
+                // argument.
+                //
+                // That the absorbed prefix survives an interruption mid-replay
+                // is pinned independently by
+                // Cancellation_at_each_slice_boundary_banks_the_absorbed_prefix,
+                // which interrupts at each slice boundary and asserts the
+                // prefix banked. This throw is that same shape.
+                //
+                // One shape is exempt, and it is not this path's to repair:
+                // when the ledger is unavailable and a deferred terminal sits
+                // at the HEAD of the window, the ceiling clamps to the current
+                // checkpoint and nothing banks, for an interrupted replay of
+                // any kind. That is issue #2746, it predates this path (plain
+                // cancellation reproduces it with none of this code present),
+                // and it is unfixable here because the checkpoint is a single
+                // watermark: an unapplied head offset admits no correct
+                // checkpoint above the current one, however much of the rest
+                // of the window was absorbed.
+                ReplayLogger(context)?.LogError(
+                    ex,
+                    "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford even a "
+                    + "single-entry commit-log read from offset {FromExclusive}. Progress up to offset "
+                    + "{MaxApplied} has been banked; this activation will fail and the next will resume from "
+                    + "the shorter gap.",
+                    context.GrainId,
+                    treeId,
+                    partition,
+                    fromExclusive,
+                    maxApplied);
+                throw;
+            }
 
             if (slice.Count == 0)
                 break;
+
+            // Widen back on success. Without this a single pressure blip
+            // would pin the partition at one entry per slice for the rest of
+            // a multi-million-entry gap, which converges so slowly it is
+            // indistinguishable from the stall being fixed. Doubling recovers
+            // full width in a handful of slices while still backing off
+            // immediately if pressure returns.
+            if (sliceBudget < ReplaySliceBudget)
+            {
+                var widened = sliceBudget * 2;
+                sliceBudget = widened > ReplaySliceBudget ? ReplaySliceBudget : widened;
+            }
 
             foreach (var entry in slice)
             {
@@ -3192,10 +4361,40 @@ internal sealed partial class BPlusLeafGrain
                         // when the ledger is full does the offset go back on
                         // the in-memory clamp, which is the pre-#2165
                         // behaviour.
+                        //
+                        // Issue #2746. maxApplied has not yet taken THIS entry
+                        // into account (it advances at the foot of the loop),
+                        // so it is exactly "the highest offset already consumed
+                        // below this one". Handing it and the window's opening
+                        // checkpoint to the ledger is what lets the ledger tell
+                        // a refusal that merely slows this partition down from
+                        // one that freezes it outright - see
+                        // RefusalWouldFreezePartition.
                         if (!TryRecordUnresolvedReplayWork(
-                                partition, entry.Offset, entry.Mutation, maxDurableUnresolvedWork))
+                                partition,
+                                entry.Offset,
+                                entry.Mutation,
+                                maxDurableUnresolvedWork,
+                                consumedBelowOffset: maxApplied,
+                                windowStartCheckpoint: checkpoint))
                         {
                             deferredOffsets.Add(partition, entry.Offset);
+
+                            // Issue #2756. The fall-back above is the only clamp
+                            // that can fire on a tree running no sagas, and it
+                            // can pin this partition's checkpoint and so block
+                            // WAL reclamation for the whole tree - yet it was
+                            // previously silent. Without this a frozen tree is
+                            // indistinguishable between "the clamp is pinning
+                            // the checkpoint" and "the clamp never fired". The
+                            // prepare-path counter is not a proxy: it is a
+                            // different ledger arm and is blind at exactly the
+                            // resting-at-cap value this drop implies.
+                            LatticeMetrics.LeafDeferredTerminalsDroppedAtCap.Add(
+                                1,
+                                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                                new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+                                LatticeTenantLabel.ForTree(treeId));
                         }
                     }
                     else
@@ -3259,8 +4458,24 @@ internal sealed partial class BPlusLeafGrain
                             }
                             else
                             {
+                                // Issue #2183's control seam, reproducing the
+                                // pre-#2183 behaviour in which a prepare went
+                                // through the capped path and was DROPPED once
+                                // the ledger filled. It is deliberately opted
+                                // OUT of issue #2746's liveness-priority
+                                // admission: the arm exists to reproduce the
+                                // old drop, so admitting the offer here would
+                                // silently disarm the control and the two arms
+                                // would stop differing in the fix. The operands
+                                // below make RefusalWouldFreezePartition false
+                                // by construction.
                                 TryRecordUnresolvedReplayWork(
-                                    partition, entry.Offset, entry.Mutation, maxDurableUnresolvedWork);
+                                    partition,
+                                    entry.Offset,
+                                    entry.Mutation,
+                                    maxDurableUnresolvedWork,
+                                    consumedBelowOffset: long.MaxValue,
+                                    windowStartCheckpoint: long.MinValue);
                             }
                         }
                     }
@@ -3344,6 +4559,59 @@ internal sealed partial class BPlusLeafGrain
         _replayEntriesAppliedThisActivation += appliedEntries;
 
         return (Advanced: maxApplied > checkpoint, MaxApplied: maxApplied);
+    }
+
+    private static ILogger? ReplayLogger(IGrainContext context) =>
+        context.ActivationServices?
+            .GetService<ILoggerFactory>()?
+            .CreateLogger<BPlusLeafGrain>();
+
+    /// <summary>
+    /// Reports whether a failed commit-log read means "this machine cannot
+    /// afford this read right now" rather than "this read is wrong".
+    /// </summary>
+    /// <remarks>
+    /// The distinction decides whether narrowing the window is a sensible
+    /// response, and it is the only reason narrowing is safe to do
+    /// automatically: a corrupt log, a missing offset, or a cancelled
+    /// activation would fail identically at every width, so retrying them
+    /// smaller would just spend the activation window discovering that. A
+    /// resource verdict is the one failure class where a smaller attempt is
+    /// genuinely a different attempt.
+    /// <para>
+    /// The chain is walked rather than matched on the outermost type
+    /// because the read crosses a grain boundary and is wrapped on the way
+    /// back, and <see cref="OutOfMemoryException"/> is accepted alongside the
+    /// typed verdict because a provider that has not been taught to raise
+    /// the typed one still fails for exactly this reason. Matching only the
+    /// typed exception would quietly restrict the fix to the file provider.
+    /// </para>
+    /// </remarks>
+    internal static bool IsReadMemoryPressure(Exception? exception)
+    {
+        for (var depth = 0; exception is not null && depth < 16; depth++)
+        {
+            switch (exception)
+            {
+                case WalReadUnderPressureException:
+                case OutOfMemoryException:
+                    return true;
+                case AggregateException aggregate:
+                    foreach (var inner in aggregate.InnerExceptions)
+                    {
+                        if (IsReadMemoryPressure(inner))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+            }
+
+            exception = exception.InnerException;
+        }
+
+        return false;
     }
 
     /// <summary>

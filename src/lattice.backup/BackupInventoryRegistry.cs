@@ -109,6 +109,28 @@ internal sealed class BackupInventoryRegistry
         }
     }
 
+    /// <summary>
+    /// Registers a scope for observation without recording a run, so a scope that
+    /// has a schedule but has not yet completed a cycle is published as a
+    /// <see cref="BackupScopeRunOutcome.None"/> series rather than as no series at
+    /// all. Without this, "never run" and "not scheduled" are both absence, and
+    /// the per-scope status gauge cannot report the state its own description
+    /// promises (issue #2645).
+    /// </summary>
+    /// <remarks>
+    /// Idempotent, and deliberately non-destructive: a scope that already has a
+    /// recorded outcome keeps it, so re-registering a schedule on an existing
+    /// scope can never reset a recorded failure back to
+    /// <see cref="BackupScopeRunOutcome.None"/>.
+    /// </remarks>
+    /// <param name="scopeKey">The scope key. Must not be <c>null</c> or empty.</param>
+    public void EnsureScopeRegistered(string scopeKey)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(scopeKey);
+
+        _scopes.GetOrAdd(scopeKey, static _ => new ScopeRuntimeRecord());
+    }
+
     /// <summary>Increments the aggregate capture-failure tally.</summary>
     public void IncrementCaptureFailures() => Interlocked.Increment(ref _captureFailures);
 
@@ -194,7 +216,14 @@ internal sealed class BackupInventoryRegistry
     }
 
     /// <summary>Enumerates a stable snapshot of every scope's cached run status, keyed by scope key.</summary>
-    /// <returns>One entry per scope that has a recorded run.</returns>
+    /// <returns>
+    /// One entry per scope that has been registered by
+    /// <see cref="EnsureScopeRegistered"/> or has a recorded run. A registered
+    /// scope with no completed cycle enumerates as
+    /// <see cref="BackupScopeRunOutcome.None"/>, which is what lets the per-scope
+    /// status gauge distinguish "scheduled, nothing has completed yet" from an
+    /// unscheduled scope's absent series.
+    /// </returns>
     public IReadOnlyList<KeyValuePair<string, BackupScopeRuntime>> EnumerateScopes()
     {
         var list = new List<KeyValuePair<string, BackupScopeRuntime>>(_scopes.Count);

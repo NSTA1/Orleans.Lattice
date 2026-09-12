@@ -139,6 +139,14 @@ internal sealed partial class BPlusLeafGrain(
             // OnActivateAsync (issue #2151), so the cache is forced onto
             // the refresh path as soon as the leaf is back.
             RemoveLeafRevision(context.GrainId);
+
+            // Return this activation's bytes to the per-silo resident working
+            // set (issue #2767). In the finally, beside the other teardown
+            // bookkeeping, so a storage failure in the try above cannot leak a
+            // registration: a leaked registration is permanent, consumes budget
+            // no live leaf is using, and drives the silo to shed leaves that are
+            // actually in use.
+            ReleaseResidentFootprint();
         }
     }
 
@@ -950,9 +958,9 @@ internal sealed partial class BPlusLeafGrain(
             // any stale migration provenance from a prior migrated
             // entry on the same key automatically - the flag rides
             // with the value, not in a side-channel map.
-            if (Cache.Count > options.MaxLeafKeys)
+            if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
-                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys);
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
             }
         }
         RecordCommitStep("apply", applyStartTicks);
@@ -1431,9 +1439,9 @@ internal sealed partial class BPlusLeafGrain(
             {
                 StoreEntry(entries[i].Key, values[i]);
             }
-            if (Cache.Count > options.MaxLeafKeys)
+            if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
-                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys);
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
             }
         }
         RecordCommitStep("apply", applyStartTicks);
@@ -2119,28 +2127,27 @@ internal sealed partial class BPlusLeafGrain(
             HighKeyExclusive = state.State.HighKeyExclusive,
         });
 
-    public Task SetCheckpointOffsetHintAsync(long offset)
-    {
-        // Routes through the existing ILeafProjection seam so the
-        // unresolved-prepare clamp is honoured. For a freshly-created
-        // sibling at birth there are no unresolved prepares so the
-        // clamp is a no-op; the seam's monotonic-non-decrease guard
-        // makes a re-call with a smaller offset a silent no-op.
-        return ((ILeafProjection)this).SetCheckpointOffsetAsync(offset, CancellationToken.None);
-    }
-
     public async Task SetCheckpointOffsetHintsAsync(long[] offsetsByPartition)
     {
         ArgumentNullException.ThrowIfNull(offsetsByPartition);
 
-        // Batched companion to SetCheckpointOffsetHintAsync: apply one
-        // hint per WAL partition under that partition's apply-offset
-        // scope so the per-partition clamp targets the right offset
-        // space. The donor used to issue one cross-grain RPC per
-        // partition with the scope stamped on the wire; folding the
-        // loop into the callee collapses the split fast-path's
-        // sibling-checkpoint cost to a single round-trip while keeping
-        // the per-partition scoping identical.
+        // Apply one hint per WAL partition under that partition's apply-offset
+        // scope so the per-partition clamp targets the right offset space.
+        //
+        // The scope is opened HERE, inside the callee, and that is the whole
+        // point of the signature. The removed singular form took only an offset
+        // and let the callee resolve its partition from
+        // LatticeApplyOffsetContext.CurrentPartition ?? 0; that context is an
+        // AsyncLocal and does not flow across an Orleans grain call, so the
+        // scope was always absent at the callee and every hint silently landed
+        // on partition 0 (issue #2699). Carrying the partition in the argument
+        // is what makes the scoping something the caller cannot fail to supply.
+        //
+        // Routes through the ILeafProjection seam so the unresolved-prepare
+        // clamp is honoured. For a freshly-created sibling at birth there are
+        // no unresolved prepares so the clamp is a no-op; the seam's
+        // monotonic-non-decrease guard makes a re-call with a smaller offset a
+        // silent no-op.
         for (var p = 0; p < offsetsByPartition.Length; p++)
         {
             var offset = offsetsByPartition[p];
@@ -3101,9 +3108,10 @@ internal sealed partial class BPlusLeafGrain(
         await MergeIntoStateAsync(entries, isCrossShardMigration);
 
         SplitResult? splitResult = null;
-        if (Cache.Count > (await GetOptionsAsync()).MaxLeafKeys)
+        var mergeOptions = await GetOptionsAsync();
+        if (IsLeafOverCapacity(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes))
         {
-            splitResult = await SplitIfNeededUnderGateAsync((await GetOptionsAsync()).MaxLeafKeys);
+            splitResult = await SplitIfNeededUnderGateAsync(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes);
         }
 
         return splitResult;

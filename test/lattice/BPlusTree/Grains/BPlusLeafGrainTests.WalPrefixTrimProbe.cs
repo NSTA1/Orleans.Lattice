@@ -1,6 +1,7 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -157,6 +158,18 @@ public partial class BPlusLeafGrainTests
 
         var grain = BuildFlushCeilingLeaf(state, [p0, p1, p2], store.Stub, reclassifyEveryN: 1);
 
+        // Issue #2278 gated the decline on a NON-EMPTY cache, so the trim probe
+        // is only consulted when there is a live cache the decline could
+        // protect. Seeding one is what keeps this test pointed at the rule it
+        // exists to defend - that a fault on one partition must not mask a
+        // genuine trim on another - rather than silently passing through the
+        // empty-cache path where the probe is not consulted at all.
+        grain.CacheForTest.StoreRow("seed", new LwwValue<byte[]>
+        {
+            Value = [7],
+            Timestamp = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+        });
+
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
         await Assert.MultipleAsync(async () =>
@@ -175,14 +188,13 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task An_untrimmed_wal_still_declines_the_rehydrate()
+    public async Task An_untrimmed_wal_still_declines_the_rehydrate_when_a_live_cache_would_be_replaced()
     {
         // Durability semantics are deliberately unchanged. A snapshot at or
-        // behind the persisted checkpoint is only worth rehydrating when a
-        // prefix was actually trimmed; against an intact WAL it is redundant
-        // and the leaf must replay instead. Confining faults to their own
-        // partition must not weaken that, so every partition here is probed
-        // successfully and honestly reports a tail of zero.
+        // behind the persisted checkpoint is redundant against an intact WAL,
+        // and the leaf must not replace a live cache with it. Confining faults
+        // to their own partition must not weaken that, so every partition here
+        // is probed successfully and honestly reports a tail of zero.
         //
         // The "could not probe" branch declines through the SAME return, so
         // it is safe by construction: the fix only distinguishes the two in
@@ -191,6 +203,16 @@ public partial class BPlusLeafGrainTests
         // fall-off guard, which probes the same coordinator and deliberately
         // does NOT tolerate a fault - a different call site with its own
         // fail-closed contract.
+        //
+        // Issue #2278 narrowed the decline to the case this test names: a
+        // populated cache. "Redundant against an intact WAL" is a claim about
+        // DURABILITY and it remains true, but it was also being read as a claim
+        // about COST, where it is inverted - with an EMPTY cache, declining
+        // does not avoid a cache replace, it forces the whole readable window
+        // to be replayed instead of loading a blob that already covers a prefix
+        // of it. That empty-cache case is covered by
+        // Activation_hydrates_empty_cache_from_snapshot_at_equal_offset and by
+        // the warm-arm metric test; this test holds the other half of the rule.
         var state = NewFlushCeilingState();
         var store = new InMemorySnapshotStore();
         BankACoveringSnapshotAtOffsetFour(state, store);
@@ -204,12 +226,41 @@ public partial class BPlusLeafGrainTests
 
         var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub, reclassifyEveryN: 1);
 
+        // A faithful stand-in for a converged leaf at checkpoint 4: it already
+        // holds the checkpointed prefix k01..k04, which is exactly why replay
+        // resumes at 4 rather than at the from-oldest sentinel. The extra
+        // "seed" row is the DISCRIMINATOR - the snapshot contains k01..k04 too,
+        // so the prefix alone cannot distinguish a decline from an accept,
+        // whereas the accept path clears the cache before loading the blob and
+        // would therefore destroy "seed".
+        for (var i = 1; i <= 4; i++)
+        {
+            grain.CacheForTest.StoreRow($"k{i:D2}", new LwwValue<byte[]>
+            {
+                Value = [(byte)i],
+                Timestamp = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+            });
+        }
+
+        grain.CacheForTest.StoreRow("seed", new LwwValue<byte[]>
+        {
+            Value = [7],
+            Timestamp = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+        });
+
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
-        // Replayed the intact WAL from its oldest readable offset rather than
-        // rehydrating, and still converged. -1 is the from-oldest sentinel,
-        // and it is exactly the read the rehydrating tests must NOT make.
-        await p0.Received().ReadSliceAsync(-1L, 12L, Arg.Any<int>(), Arg.Any<CancellationToken>());
+        // The discriminating assertion: the live cache row survived, which is
+        // only possible if the snapshot was declined rather than loaded (the
+        // accept path clears the cache before loading the blob's rows).
+        Assert.That(grain.EntriesForTest.ContainsKey("seed"), Is.True,
+            "the intact WAL must still decline the redundant snapshot, leaving the live cache intact");
+
+        // Every partition was genuinely probed, so the decline is the outcome
+        // of a real sweep and not of the probe being skipped.
+        await p0.Received().GetTailOffsetAsync(Arg.Any<CancellationToken>());
+        await p1.Received().GetTailOffsetAsync(Arg.Any<CancellationToken>());
+
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(12L));
         Assert.That(await grain.GetAsync("k01"), Is.Not.Null,
             "the intact WAL rebuilds the prefix when no partition reports a trimmed one");

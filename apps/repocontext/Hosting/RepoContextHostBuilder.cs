@@ -18,7 +18,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// <summary>
 /// Assembles the RepoContext MCP container host: a single ASP.NET Core web
 /// application whose <b>only application listener is the MCP endpoint</b> (plus
-/// HTTP health probes, and in the azure profile the scaling scrape). It composes
+/// HTTP health probes, the Prometheus scrape endpoint, and in the azure profile
+/// the scaling scrape). It composes
 /// the already-shipped seams - the core silo, the file/Azure WAL, the MCP binding
 /// with the repository-context tool module, the Onyx embedding provider, and the
 /// membership/auth stack - behind an environment-selected durability profile with
@@ -38,11 +39,87 @@ public static class RepoContextHostBuilder
     /// <summary>The readiness probe path (silo joined, replay done, stores reachable, MCP serving).</summary>
     public const string ReadinessPath = "/health/ready";
 
+    /// <summary>
+    /// The backup probe path: whether the durable agent-memory tree is actually
+    /// being captured.
+    /// </summary>
+    /// <remarks>
+    /// Served apart from liveness and readiness on purpose. A failing backup must not
+    /// restart the container or pull it out of rotation - that would convert a
+    /// durability fault into an availability outage - but it does have to be probeable
+    /// by something other than a human reading logs, which is what issue #2640
+    /// records was missing.
+    /// </remarks>
+    public const string BackupPath = "/health/backup";
+
+    /// <summary>
+    /// The grain-liveness probe path: whether the local silo's membership is active
+    /// and the grain layer answers a trivial call. This is the endpoint the
+    /// container's Docker healthcheck targets.
+    /// </summary>
+    /// <remarks>
+    /// Served apart from <see cref="LivenessPath"/> because that probe is always
+    /// green - it proves only that the process is up - and apart from
+    /// <see cref="ReadinessPath"/> because readiness is a latched one-shot that never
+    /// re-checks the silo once it has flipped. Neither can go red for a silo that
+    /// reaches readiness and then dies while the process keeps listening, which is
+    /// the outage recorded by issue #2666. This probe re-exercises the grain layer on
+    /// every call, so it can. It is three-valued (healthy / starting / unhealthy);
+    /// see <see cref="RepoContextSiloHealthCheck"/>.
+    /// </remarks>
+    public const string SiloPath = "/health/silo";
+
+    /// <summary>
+    /// The Prometheus scrape path. Serves every instrument published on a
+    /// Lattice-owned meter in the process, in the standard text exposition format.
+    /// </summary>
+    /// <remarks>
+    /// The image is distroless, so there is no shell to read a counter from inside
+    /// the container; without this endpoint every instrument the host publishes is
+    /// unreadable in the one deployment that needs it, which is what issue #2363
+    /// records. The path is unauthenticated for the same reason the health probes
+    /// are: it is reachable only on the container's own listener, and it carries
+    /// aggregate counters rather than repository content.
+    /// </remarks>
+    public const string MetricsPath = "/metrics";
+
     /// <summary>The health-check tag identifying the liveness probe.</summary>
     public const string LivenessTag = "live";
 
     /// <summary>The health-check tag identifying the readiness probe.</summary>
     public const string ReadinessTag = "ready";
+
+    /// <summary>The health-check tag identifying the backup probe.</summary>
+    public const string BackupTag = "backup";
+
+    /// <summary>The health-check tag identifying the grain-liveness (silo) probe.</summary>
+    public const string SiloTag = "silo";
+
+    /// <summary>
+    /// The host's shutdown budget when the deployment declares no container grant:
+    /// how long the generic host will wait for every hosted service - the silo, and
+    /// with it the WAL commit-log drainer - to stop before it abandons the drain and
+    /// exits.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This value is <b>only reachable if the container grants at least this long
+    /// between SIGTERM and SIGKILL</b>. Docker's default <c>stop_grace_period</c> is
+    /// 10 seconds, which is a ninth of it, so a deployment that leaves the default
+    /// in place can never exercise this budget: every teardown is a crash teardown,
+    /// the graceful deactivation path never completes, and the documented behaviour
+    /// silently does not hold. That is the defect recorded as issue #2389.
+    /// </para>
+    /// <para>
+    /// It is a <b>default</b> rather than the budget itself because the budget is
+    /// derived from the grant the deployment declares - see
+    /// <see cref="RepoContextShutdownBudget"/>, which also explains why raising a
+    /// budget above its grant is strictly worse than leaving it alone. A deployment
+    /// that declares nothing gets exactly this value, so nothing moves for a
+    /// container that does not opt in.
+    /// </para>
+    /// </remarks>
+    public static readonly TimeSpan ShutdownBudget = RepoContextShutdownBudget.DefaultShutdownBudget;
 
     /// <summary>
     /// Builds the fully-wired <see cref="WebApplication"/> from the ambient
@@ -83,15 +160,102 @@ public static class RepoContextHostBuilder
         // interfaces so it is reachable on the container network.
         builder.WebHost.UseUrls($"http://0.0.0.0:{config.McpPort}");
 
-        // A generous shutdown budget so the silo's WAL commit-log drainer can flush
-        // buffered records before the process exits on SIGTERM.
+        // The shutdown budget is derived from the grant the deployment declares, not
+        // fixed independently of it: a budget above the container's stop_grace_period
+        // is not merely unreachable, it silences the drain-abandoned alarm by arming
+        // it for an instant the process never lives to reach. See
+        // RepoContextShutdownBudget. The same resolved value feeds the host timeout
+        // and the drain signal, so the alarm cannot report against a different
+        // ceiling from the one actually enforced.
+        var shutdown = RepoContextShutdownBudget.Resolve(builder.Configuration);
+
         builder.Services.Configure<HostOptions>(options =>
-            options.ShutdownTimeout = TimeSpan.FromSeconds(90));
+            options.ShutdownTimeout = shutdown.ShutdownBudget);
 
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton<RepoContextReadinessState>();
 
+        // The seam the grain-liveness health check exercises: a trivial point-read of
+        // the reserved policy tree, which can only complete when silo membership is
+        // active and the grain layer answers. Registered as the production probe; the
+        // tests substitute a fake to pin all four health states deterministically.
+        builder.Services.AddSingleton<IRepoContextSiloProbe, RepoContextSiloProbe>();
+
+        // The resident activation count, read from the gauge Orleans already
+        // publishes rather than through a grain call. Both moments it is wanted are
+        // the worst moments to make one: a periodic poll would put avoidable load on
+        // the silo, and a call at the start of a drain would compete with the very
+        // teardown it is measuring.
+        var census = new RepoContextActivationCensus();
+        builder.Services.AddSingleton(census);
+
+        // The drain record is carried across the restart on the data mount, because
+        // the measurement is taken at a point where the scrape endpoint is closing
+        // and nothing is polling it. The next process is the only consumer that
+        // reliably exists after a drain.
+        var historyPath = RepoContextDrainHistory.PathIn(config.DataRoot);
+        var lastDrain = RepoContextDrainHistory.Read(historyPath);
+
+        builder.Services.AddSingleton(sp => new RepoContextDrainSignal(
+            sp.GetRequiredService<ILogger<RepoContextDrainSignal>>(),
+            shutdown.ShutdownBudget,
+            // The production process-exit-code reporter, supplied explicitly because
+            // the signal deliberately defaults to reporting nothing: this is the one
+            // composition root where assigning the real Environment.ExitCode is
+            // correct, and every test host that drives a deliberate overrun would be
+            // poisoned by a default that did it everywhere (issue #2401).
+            reportExitCode: RepoContextExitCode.SetProcessExitCode,
+            residentActivations: census.TrySample,
+            recordObservation: observation => RepoContextDrainHistory.TryWrite(historyPath, observation)));
+
+        // The forecast: the budget this process derived, compared with the drain the
+        // previous one measured, and then with the drain the live resident set
+        // implies. It changes no budget - it cannot, since the budget is bounded from
+        // outside by a grant this process cannot see - it removes the property that
+        // made the mismatch a surprise, which is that it was only ever observable at
+        // the moment it was too late to act on (issue #2598).
+        builder.Services.AddSingleton(sp => new RepoContextDrainForecastService(
+            sp.GetRequiredService<ILogger<RepoContextDrainForecastService>>(),
+            shutdown,
+            lastDrain,
+            census.TrySample));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<RepoContextDrainForecastService>());
+
+        // Constructed here rather than resolved lazily on the first scrape: the
+        // listener starts accumulating from this point, so an instrument that
+        // records during startup (index replay, the ANN sweep) is already counted
+        // when the first scrape arrives. A lazily-created collector would silently
+        // report those as zero, which reads as a measured negative rather than as
+        // the absence of measurement it actually is.
+        var metricsCollector = new RepoContextMetricsCollector();
+        builder.Services.AddSingleton(metricsCollector);
+
+        // Constructed eagerly, for the same reason and immediately after the
+        // collector: an observable instrument that nobody resolves is never
+        // published, so a lazily-registered singleton here would produce exactly the
+        // failure this instrument exists to remove - a measurand that is present in
+        // the source, absent from the exposition, and whose silence reads as zero
+        // pause (issues #2605 and #2515). Registered after the collector so the
+        // listener is already running when the instruments publish.
+        var gcMeter = new RepoContextGarbageCollectionMeter();
+        builder.Services.AddSingleton(gcMeter);
+
+        // The ceiling the collector above is measured against. Constructed eagerly
+        // for the same reason as its two neighbours. Without it the subscribed
+        // runtime family reports what the process is USING and nothing reports what
+        // it may use, so heap-ceiling adherence - the claimed effect of the heap
+        // fixes in this epic - stays an inference drawn from outside the container
+        // (issues #2543, #2765, #2767).
+        var heapCeilingMeter = new RepoContextHeapCeilingMeter();
+        builder.Services.AddSingleton(heapCeilingMeter);
+
         var isAzure = config.Profile == DurabilityProfile.Azure;
+
+        // Resolve the backup settings once, before the silo lambda, so an unusable
+        // value fails the host at startup rather than at the first capture an hour
+        // later. See RepoContextBackup for why capture refuses to run against the
+        // default in-cluster sink.
+        var backupSettings = RepoContextBackup.Resolve(builder.Configuration);
 
         builder.Host.UseOrleans(silo =>
         {
@@ -141,6 +305,13 @@ public static class RepoContextHostBuilder
             });
             silo.Services.AddSingleton<ILatticeCredentialAuthenticator, LocalTrustedAuthenticator>();
             silo.AddLatticeAuthApi();
+
+            // Capture the durable agent-memory tree into an external blob sink so a
+            // gesture that destroys the primary store does not destroy its only
+            // copy. Registered after AddLattice (ConfigureDurability, above), which
+            // AddLatticeBackup requires. Inert unless an external sink is
+            // configured - see RepoContextBackup.
+            silo.ConfigureRepoContextBackup(backupSettings);
 
             // Scaling signal is azure-only; never wired in the local topology.
             if (isAzure)
@@ -229,6 +400,44 @@ public static class RepoContextHostBuilder
         // waiting for traffic an orchestrator will not route to a not-ready box.
         builder.Services.AddHostedService<RepoContextRetrievalWarmupService>();
 
+        // Backup cadence for the durable agent-memory tree: one full baseline at
+        // startup, then incrementals on the configured interval. The status is a
+        // singleton whether or not backup is enabled, so the health surface can
+        // always state positively what is (or is not) being captured rather than
+        // saying nothing when nothing is wired.
+        builder.Services.AddSingleton(backupSettings);
+        var backupStatus = new RepoContextBackupStatus(backupSettings.Enabled, RepoContextHostTrees.Memory);
+        builder.Services.AddSingleton(backupStatus);
+
+        // Constructed eagerly, for the same reason as the GC meter above: an
+        // observable instrument that nobody resolves is never published, so a lazily
+        // registered singleton would leave these series absent from /metrics
+        // entirely. The existing orleans_lattice_backup_* family does reach the
+        // exposition, but it reports a zero-entry capture as success and cannot
+        // distinguish "never succeeded" from "failing after an earlier success",
+        // which is the gap issue #2640 records. Constructed unconditionally, and not
+        // under the Enabled guard below, so the disabled deployment reports state 0
+        // as a value rather than reporting nothing.
+        var backupMeter = new RepoContextBackupMeter(backupStatus);
+        builder.Services.AddSingleton(backupMeter);
+
+        // The status is registered unconditionally and the service is not, and the
+        // asymmetry is deliberate rather than an oversight. The status is what lets
+        // the health surface say "backup is DISABLED" positively instead of falling
+        // silent, so it must exist in exactly the deployment that has no backup. The
+        // service depends on ILatticeBackupScheduler, which only exists once
+        // AddLatticeBackup has run - and that only happens when an external sink is
+        // configured. Registering the service unconditionally therefore fails the
+        // whole host at startup ("Unable to resolve service for type
+        // ILatticeBackupScheduler") in the DEFAULT configuration, where no sink is
+        // set. That is the failure mode this guard exists to prevent, and it is
+        // covered by RepoContextHostBuilderTests: a host that cannot boot without a
+        // backup sink would make an optional durability feature mandatory.
+        if (backupSettings.Enabled)
+        {
+            builder.Services.AddHostedService<RepoContextBackupService>();
+        }
+
         var healthChecks = builder.Services.AddHealthChecks();
         healthChecks.AddCheck<RepoContextLivenessHealthCheck>(
             RepoContextLivenessHealthCheck.Name,
@@ -244,6 +453,38 @@ public static class RepoContextHostBuilder
         healthChecks.AddCheck<RepoContextRetrievalReadinessHealthCheck>(
             RepoContextRetrievalReadinessHealthCheck.Name,
             tags: new[] { ReadinessTag });
+
+        // The backup component, on its own tag. Registered unconditionally, exactly
+        // as the status it reads is: the deployment with no sink is the one whose
+        // probe most needs to answer, and a component that only exists when backup is
+        // enabled would fall silent in the case where nothing is protected at all.
+        // Deliberately carries neither LivenessTag nor ReadinessTag - see
+        // RepoContextBackupHealthCheck for why a failing backup must not restart the
+        // container or stop traffic to it.
+        healthChecks.AddCheck<RepoContextBackupHealthCheck>(
+            RepoContextBackupHealthCheck.Name,
+            tags: new[] { BackupTag });
+
+        // The grain-liveness check on its own tag. Deliberately carries neither
+        // LivenessTag nor ReadinessTag: it must NOT restart a replaying box (that is
+        // liveness) and it is not part of the readiness conjunction. It exists to be
+        // the one probe that re-checks the silo on every call, so the container's
+        // Docker healthcheck can go red for a silo that died after reaching
+        // readiness - the outage of issue #2666. Registered through a factory rather
+        // than AddCheck<T> so its drain-grace window tracks the SAME resolved
+        // stop_grace_period grant the shutdown budget above is derived from: a drain
+        // that outlives the grant can only be a hung self-initiated shutdown, and the
+        // check reports it Unhealthy instead of green-forever. Passing the resolved
+        // grant here (not the compile-time default) keeps the two visibly one value.
+        healthChecks.Add(new HealthCheckRegistration(
+            RepoContextSiloHealthCheck.Name,
+            sp => new RepoContextSiloHealthCheck(
+                sp.GetRequiredService<IRepoContextSiloProbe>(),
+                sp.GetRequiredService<RepoContextReadinessState>(),
+                shutdown.StopGracePeriod,
+                TimeProvider.System),
+            failureStatus: null,
+            tags: new[] { SiloTag }));
         if (isAzure)
         {
             healthChecks.AddLatticeScalingHealthCheck(tags: new[] { ReadinessTag });
@@ -260,6 +501,71 @@ public static class RepoContextHostBuilder
         {
             Predicate = registration => registration.Tags.Contains(ReadinessTag),
         });
+        app.MapHealthChecks(BackupPath, new HealthCheckOptions
+        {
+            Predicate = registration => registration.Tags.Contains(BackupTag),
+        });
+
+        // The grain-liveness endpoint the container's --healthcheck self-probe hits.
+        // Degraded (silo still starting) and Unhealthy both map to 503 so a plain
+        // curl-style success check treats either as failure; the three-way verdict is
+        // carried in the response BODY, which the self-probe classifies and echoes
+        // into the Docker health log for an operator. The options are built by a
+        // shared factory so this mapping and the tests that exercise it cannot drift.
+        app.MapHealthChecks(SiloPath, RepoContextSiloHealthEndpoint.CreateOptions(SiloTag));
+
+        app.MapGet(MetricsPath, (RepoContextMetricsCollector collector) =>
+            Results.Text(collector.Render(), RepoContextPrometheusExposition.ContentType));
+
+        // The derivation, stated once at startup. Without it the relationship between
+        // the budget the host enforces and the grant it was derived from is only
+        // recoverable by reading two files, one of which is not in the image. The
+        // declared/defaulted distinction is carried because a stale declaration is
+        // undetectable at run time, so a reader has to be able to see which of the
+        // two the process believed.
+        if (shutdown.GrantWasDeclared)
+        {
+            app.Logger.LogInformation(
+                "RepoContext shutdown budget {ShutdownBudgetSeconds:F0}s, derived from the declared container "
+                + "stop_grace_period of {StopGracePeriodSeconds:F0}s ({Key}). The remainder is reserve for the "
+                + "host to unwind and report a cut-short drain before SIGKILL. This value is the deployment's "
+                + "DECLARATION of the grant: if it disagrees with the container's real stop_grace_period the "
+                + "budget is derived from a stale figure, and that cannot be detected from inside the process.",
+                shutdown.ShutdownBudget.TotalSeconds,
+                shutdown.StopGracePeriod.TotalSeconds,
+                RepoContextShutdownBudget.StopGracePeriodKey);
+        }
+        else
+        {
+            app.Logger.LogInformation(
+                "RepoContext shutdown budget {ShutdownBudgetSeconds:F0}s, derived from an assumed container "
+                + "stop_grace_period of {StopGracePeriodSeconds:F0}s because {Key} is unset. Docker's own "
+                + "default grace period is 10s, which would kill this drain long before the budget expires "
+                + "and without emitting the drain-abandoned line; declare the grant beside stop_grace_period "
+                + "so the budget is derived from what the deployment actually grants.",
+                shutdown.ShutdownBudget.TotalSeconds,
+                shutdown.StopGracePeriod.TotalSeconds,
+                RepoContextShutdownBudget.StopGracePeriodKey);
+        }
+
+        // Dispose is idempotent, so registering it here is safe whether or not the
+        // service provider also disposes the instance it did not create.
+        app.Lifetime.ApplicationStopped.Register(metricsCollector.Dispose);
+
+        // Disposed after the drain rather than during it: the drain signal samples
+        // residency when an overrun latches, and a census torn down first would turn
+        // the count of stranded activations into "unknown" in the one line that
+        // needs it.
+        app.Lifetime.ApplicationStopped.Register(
+            app.Services.GetRequiredService<RepoContextActivationCensus>().Dispose);
+
+        // The observable drain-complete signal. Registered here rather than as a
+        // hosted service so its ApplicationStopped callback is not itself one of the
+        // services being waited on: it must be able to report the duration of a stop
+        // sequence it is not part of.
+        app.Services
+            .GetRequiredService<RepoContextDrainSignal>()
+            .Bind(app.Lifetime);
 
         if (isAzure)
         {
@@ -335,6 +641,21 @@ public static class RepoContextHostBuilder
         // and through Error-level Orleans messaging problems, which these filters
         // keep. Raise them back to Warning when diagnosing a hang that does NOT
         // clear on its own.
+        //
+        // If you do raise them: those lines are a CENSORED channel, and the
+        // "NonReentrancyQueueSize=" clause they carry must not be used to decide
+        // whether anything is queueing. Orleans emits the line only for a request
+        // already approaching the 30s deadline, and the clause describes that
+        // request's own wait, so a grain type whose calls queue deeply but which
+        // does not itself trip the timeout contributes NO rows at all. On gate
+        // run 2 the grain type with the deepest queues in this container
+        // contributed 0 of 154 samples, and two independent extractions from
+        // those samples agreed exactly - and wrongly - that queueing was
+        // refuted. Agreement between two extractions applying the same selection
+        // predicate validates the arithmetic, not the sampling frame. For queue
+        // depth, read the orleans.lattice.grain.call.outstanding_depth histogram
+        // (enabled in DurabilitySelector via AddLatticeGrainCallObservation),
+        // which records at dispatch on every call and needs no timeout to exist.
         logging.AddFilter("Orleans.Runtime.CallbackData", LogLevel.Error);
         logging.AddFilter("Orleans.Messaging", LogLevel.Error);
 

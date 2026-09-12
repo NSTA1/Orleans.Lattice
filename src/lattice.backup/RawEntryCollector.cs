@@ -22,12 +22,23 @@ internal sealed class RawEntryCollector(Serializer serializer, BackupKeyMergeMod
     private long _byteLength;
     private int _chunkCount;
     private string? _contentHash;
+    private int _unstampedOriginEntryCount;
 
     /// <summary>The per-key descriptors captured, in scan (ascending key) order.</summary>
     public IReadOnlyList<BackupKeyDescriptor> KeyDescriptors => _keyDescriptors;
 
     /// <summary>The per-origin causal high-water of the captured entries.</summary>
     public IReadOnlyDictionary<string, long> PerOriginHighWater => _perOriginHighWater;
+
+    /// <summary>
+    /// The number of captured entries that carried no origin stamp. Non-zero on a
+    /// local-only (single-cluster) tree, whose rows are stamped with
+    /// <see cref="string.Empty"/> by the core default origin resolver. Recorded so
+    /// an empty <see cref="PerOriginHighWater"/> can be reported as the positive
+    /// fact "every captured entry was locally authored" rather than as an
+    /// indistinguishable absence.
+    /// </summary>
+    public int UnstampedOriginEntryCount => _unstampedOriginEntryCount;
 
     /// <summary>The total serialized byte length streamed to the sink.</summary>
     public long ByteLength => _byteLength;
@@ -103,22 +114,41 @@ internal sealed class RawEntryCollector(Serializer serializer, BackupKeyMergeMod
                 : BackupKeyMergeMode.Crdt)
             : treeMergeMode;
 
+        // An unstamped origin arrives as string.Empty, NOT null. The core default
+        // resolver (DefaultLatticeOriginClusterIdResolver) returns string.Empty for
+        // every tree on a single-cluster host, and its contract says downstream
+        // consumers ignore it - so normalize here, exactly as the incremental path
+        // (IncrementalDeltaCollector.OnEntry) already does.
+        //
+        // Guarding the raw value with `is { }` filters null but admits "", which
+        // then becomes a per-origin high-water key, and those keys become
+        // BackupOriginProvenance.OriginId - which rejects empty. That threw on every
+        // full capture of any tree without replication configured (#2621), i.e. the
+        // default local deployment. It also silently seeded a ""-keyed frontier into
+        // BackupConsistencyCut, and wrote "" into BackupKeyDescriptor.OriginId,
+        // which is documented as null for a single-origin tree.
+        var origin = string.IsNullOrEmpty(entry.OriginClusterId) ? null : entry.OriginClusterId;
+
         _keyDescriptors.Add(new BackupKeyDescriptor(
             entry.Key,
             mergeMode,
-            entry.OriginClusterId));
+            origin));
 
-        if (entry.OriginClusterId is { } origin)
+        if (origin is { } originId)
         {
             var ticks = entry.Timestamp.WallClockTicks;
             if (ticks < 0)
             {
                 ticks = 0;
             }
-            if (!_perOriginHighWater.TryGetValue(origin, out var current) || ticks > current)
+            if (!_perOriginHighWater.TryGetValue(originId, out var current) || ticks > current)
             {
-                _perOriginHighWater[origin] = ticks;
+                _perOriginHighWater[originId] = ticks;
             }
+        }
+        else
+        {
+            _unstampedOriginEntryCount++;
         }
     }
 }

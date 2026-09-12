@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -22,13 +23,27 @@ namespace Orleans.Lattice.Tests;
 /// consequence is data loss, not an upgrade wart.
 /// </para>
 /// <para>
-/// The fan-in therefore reads every legacy shard key alongside every new one and
-/// takes the lowest pin per consumer, so a pre-upgrade pin keeps holding the floor
-/// until its consumer re-pins under the safe key. These tests drive that through
+/// The fan-in therefore reads every legacy shard key alongside every new one.
+/// Per consumer it prefers the pin at the key the CURRENT build would write to -
+/// the only key a write can land on - and folds the remaining, stranded pins to
+/// the lowest only when that key holds nothing. So a pre-upgrade pin keeps
+/// holding the floor until its consumer re-pins under the safe key, and stops
+/// holding it once the consumer has. These tests drive that through
 /// the real <see cref="LatticeWalGc"/> with a KEY-AWARE grain factory: the sibling
 /// <c>LatticeWalGcDurablePinFloorTests</c> returns one substitute for any key and
 /// therefore cannot tell the two shapes apart, which is precisely the distinction
 /// under test here.
+/// </para>
+/// <para>
+/// The fan-in originally folded every key shape to the lowest pin
+/// unconditionally. That was chosen believing it was self-limiting - the
+/// originating pull request (#1704) recorded the intent as "a pin written by an
+/// earlier build keeps holding the trim floor until its consumer re-pins" - but
+/// a re-pin is written through <see cref="WalMaterialiserPinRouting.ShardKey"/>
+/// and composes a DIFFERENT grain key, so the stranded row was never superseded
+/// and floored the tree's trim indefinitely (issue #2433). Preferring the
+/// authoritative key implements the terminating condition that was already
+/// specified; it is not a new policy.
 /// </para>
 /// </remarks>
 [TestFixture]
@@ -109,6 +124,26 @@ public sealed class LatticeWalGcPinKeyMigrationRecoveryTests
             $"Expected a sharded key at {PinShards} shards but got '{current}'.");
         var shard = current[(idx + WalMaterialiserPinRouting.ShardSeparator.Length)..];
         return Tree + HistoricalLegacySeparator + shard;
+    }
+
+    /// <summary>
+    /// A current-separator shard key that is NOT this consumer's own. A pin lands
+    /// here when the shard count is raised: the modulus moves the consumer to a
+    /// different ordinal and its old pin is stranded under a key that is still
+    /// current-SHAPED but is no longer the key any write addresses. Derived from
+    /// the current key rather than composed from the routing function, on the same
+    /// reasoning as <see cref="LegacyKeyForSameShard"/>.
+    /// </summary>
+    private static string OtherCurrentShardKey()
+    {
+        var current = CurrentKey();
+        var idx = current.LastIndexOf(WalMaterialiserPinRouting.ShardSeparator, StringComparison.Ordinal);
+        Assert.That(idx, Is.GreaterThanOrEqualTo(0),
+            $"Expected a sharded key at {PinShards} shards but got '{current}'.");
+        var shard = int.Parse(
+            current[(idx + WalMaterialiserPinRouting.ShardSeparator.Length)..],
+            CultureInfo.InvariantCulture);
+        return Tree + WalMaterialiserPinRouting.ShardSeparator + ((shard + 1) % PinShards);
     }
 
     /// <summary>
@@ -223,12 +258,29 @@ public sealed class LatticeWalGcPinKeyMigrationRecoveryTests
     }
 
     [Test]
-    public async Task A_legacy_and_a_current_pin_resolve_to_the_most_conservative_floor()
+    public async Task A_re_pin_at_the_authoritative_key_supersedes_the_stranded_legacy_pin()
     {
-        // Mid-migration: the consumer has re-pinned under the safe key at a higher
-        // frontier while its legacy pin is still present. The lower (older) pin must
-        // win - retaining more WAL is always safe, trimming past a live checkpoint
-        // never is.
+        // DELIBERATE INVERSION of the behaviour this fixture originally asserted
+        // (issue #2433). It previously required Hlc(10) here - the lowest pin
+        // across both shapes - under the heading "most conservative floor".
+        //
+        // Why that expectation was wrong rather than merely conservative: the
+        // originating pull request (#1704) recorded the rule as "a pin written by
+        // an earlier build keeps holding the trim floor UNTIL ITS CONSUMER
+        // RE-PINS". An unconditional min has no such terminating condition. A
+        // re-pin is written through ShardKey, which composes a different grain
+        // key, so the legacy row is never overwritten, never removed, and holds
+        // the floor forever - the WAL cannot trim past it for the life of the
+        // tree. The old expectation encoded that permanence as if it were the
+        // intent.
+        //
+        // Preferring the authoritative key is safe on exactly the assumption the
+        // steady state already rests on: that a pin at the key the current build
+        // writes to is a truthful statement of that consumer's durable
+        // checkpoint. It introduces no assumption the no-legacy-state case below
+        // does not already make, and in particular assumes nothing about the
+        // frontier being monotone in real time - a rolled-back consumer re-pins
+        // LOWER, and prefer-authoritative keeps that lower value.
         var provider = await SeededProviderAsync();
         var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
@@ -242,8 +294,84 @@ public sealed class LatticeWalGcPinKeyMigrationRecoveryTests
 
         var report = await sut.RunOnceAsync(Tree);
 
+        Assert.That(report.MinCursor, Is.EqualTo(Hlc(30)),
+            "Once the consumer has re-pinned under the authoritative key, the stranded legacy "
+            + "pin must stop holding the floor - otherwise it holds it forever, because no write "
+            + "or removal path addresses the legacy key.");
+    }
+
+    [Test]
+    public async Task A_pin_stranded_at_another_current_shaped_shard_key_stops_holding_the_floor()
+    {
+        // The case a separator-only rule would miss, and the reason the fix keys
+        // off the routing function rather than off the separator: raising the
+        // shard count moves a consumer to a different ordinal, stranding its old
+        // pin at a key that is still CURRENT-shaped. Nothing about its spelling
+        // marks it as stale; only the routing function knows it is no longer the
+        // key a write would address.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+
+        var sut = new LatticeWalGc(
+            ServicesWithPinsByKey(
+                PinsAt((OtherCurrentShardKey(), Hlc(10)), (CurrentKey(), Hlc(30))),
+                provider),
+            registry,
+            Monitor());
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.MinCursor, Is.EqualTo(Hlc(30)),
+            "A pin stranded by a shard-count change is as stale as one stranded by the "
+            + "separator change, and must be superseded by the authoritative pin the same way.");
+    }
+
+    [Test]
+    public async Task A_pin_stranded_at_another_current_shaped_shard_key_still_holds_the_floor_alone()
+    {
+        // The absent case for the test above, and the property that makes the
+        // rule safe: with NO pin at the authoritative key nothing is discarded.
+        // Every pin is stranded, the fold is the same lowest-wins it always was,
+        // and a consumer with no current-key evidence keeps flooring the WAL.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+
+        var sut = new LatticeWalGc(
+            ServicesWithPinsByKey(PinsAt((OtherCurrentShardKey(), Hlc(10))), provider),
+            registry,
+            Monitor());
+
+        var report = await sut.RunOnceAsync(Tree);
+
         Assert.That(report.MinCursor, Is.EqualTo(Hlc(10)),
-            "Per consumer the lowest pin across both key shapes must win.");
+            "With no authoritative pin every pin is stranded and the lowest must still hold "
+            + "the floor, or a shard-count change would discard a live consumer's only pin.");
+    }
+
+    [Test]
+    public async Task Two_stranded_pins_and_no_authoritative_pin_still_fold_to_the_lowest()
+    {
+        // The pre-fix fold, preserved verbatim for the case it was right about.
+        // Both shapes present, neither authoritative: the rule must fall through
+        // to lowest-wins rather than picking arbitrarily by enumeration order.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+
+        var sut = new LatticeWalGc(
+            ServicesWithPinsByKey(
+                PinsAt((OtherCurrentShardKey(), Hlc(20)), (LegacyKeyForSameShard(), Hlc(10))),
+                provider),
+            registry,
+            Monitor());
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.MinCursor, Is.EqualTo(Hlc(10)),
+            "With nothing at the authoritative key the fan-in must still take the lowest "
+            + "stranded pin, independently of the order the keys are enumerated in.");
     }
 
     [Test]

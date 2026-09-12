@@ -112,6 +112,48 @@ public sealed class WalMaterialiserPinRoutingTests
         }
     }
 
+    [Test]
+    public void AuthoritativeKeyIndex_points_at_the_key_a_write_would_land_on()
+    {
+        // The WAL GC classifies a read result by INDEX rather than by composing
+        // and comparing a key string per consumer per shard, so the two must
+        // agree exactly. If EnumerateReadKeys ever reordered its output - putting
+        // the legacy keys first, say - the index would silently address a stale
+        // shape and the GC would treat a stranded pin as authoritative, which is
+        // the defect in issue #2433 with the sign flipped. Nothing else observes
+        // the ordering, so only this assertion catches it.
+        foreach (var shards in new[] { 2, 3, 6, 8 })
+        {
+            var keys = WalMaterialiserPinRouting.EnumerateReadKeys(Tree, shards);
+            for (var i = 0; i < 100; i++)
+            {
+                var consumerId = $"_lattice_materialiser_tree-1_leaf-{i}";
+                var index = WalMaterialiserPinRouting.AuthoritativeKeyIndex(consumerId, shards);
+
+                Assert.That(index, Is.InRange(0, keys.Count - 1));
+                Assert.That(
+                    keys[index],
+                    Is.EqualTo(WalMaterialiserPinRouting.ShardKey(Tree, consumerId, shards)),
+                    $"Read-key index {index} at {shards} shards must be consumer '{consumerId}'s write key.");
+            }
+        }
+    }
+
+    [Test]
+    public void AuthoritativeKeyIndex_is_always_a_current_separator_shard()
+    {
+        // The GC skips the authoritative test entirely for indices at or above
+        // the shard count, on the strength of the legacy and bare-tree keys
+        // occupying that tail. That is an optimisation resting on a layout claim,
+        // so the claim is asserted rather than assumed.
+        const int shards = 8;
+        for (var i = 0; i < 200; i++)
+        {
+            var index = WalMaterialiserPinRouting.AuthoritativeKeyIndex($"consumer-{i}", shards);
+            Assert.That(index, Is.LessThan(shards));
+        }
+    }
+
     // ----- Storage safety and the self-healing separator migration -----
 
     [Test]

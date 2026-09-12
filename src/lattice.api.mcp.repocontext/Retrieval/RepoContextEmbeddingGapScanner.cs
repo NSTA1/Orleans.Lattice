@@ -101,6 +101,23 @@ internal sealed class RepoContextEmbeddingGapScanner
             .ProbeCoveredSourceIdsAsync(repoId, pageKeys, cancellationToken)
             .ConfigureAwait(false);
 
+        if (!covered.AbsenceIsConclusive)
+        {
+            // The store's read-path access gate removed keys from the probe, so a
+            // file's absence from the covered set is not evidence that its embedding
+            // is missing (issue #2277). Reporting a gap on that basis would re-drive
+            // the WHOLE repository index on every sweep, forever, healing nothing -
+            // the sweep's own re-drive is what makes a false negative here so much
+            // more expensive than a missed page. Report no gap and end the walk, and
+            // flag the page so the caller says why rather than recording a clean
+            // sweep this scan did not earn.
+            return new GapScanPage(GapFound: false, HasMore: false, NextResumeKey: null)
+            {
+                CoverageUnavailable = true,
+                PrunedByAccessGate = covered.PrunedByAccessGate,
+            };
+        }
+
         foreach (var key in pageKeys)
         {
             if (!covered.Contains(VectorCodec.SourceId(key)))
@@ -118,6 +135,127 @@ internal sealed class RepoContextEmbeddingGapScanner
         var nextResumeKey = hasMore ? pageKeys[^1] + "\u0000" : null;
         return new GapScanPage(GapFound: false, HasMore: hasMore, NextResumeKey: nextResumeKey);
     }
+
+    /// <summary>
+    /// Re-derives the coverage digest from an authoritative whole-set membership
+    /// scan. This is the exhaustive O(sources) read that
+    /// <see cref="ScanWithDigestAsync"/> replaced on the detection path, retained as
+    /// a slow-cadence correctness backstop that bounds how far the digest can drift
+    /// from the membership tree it mirrors.
+    /// </summary>
+    /// <param name="repoId">The repository to audit. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the audit.</param>
+    /// <returns><see langword="true"/> when the digest was re-derived.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public Task<bool> AuditCoverageDigestAsync(string repoId, CancellationToken cancellationToken)
+        => _writer.AuditCoverageDigestAsync(repoId, cancellationToken);
+
+    /// <summary>
+    /// Detects coverage gaps across the <b>whole</b> repository from the per-page
+    /// coverage digest, and returns the identity of every uncovered file rather than
+    /// only the fact that one exists (issue #2486).
+    /// <para>
+    /// This replaces two costs at once. Detection no longer point-probes membership
+    /// per source, so it reads a fixed
+    /// <see cref="RepoContextCoveragePage.PageCount"/> digest rows whatever the
+    /// corpus size, and it touches the membership tree - the write-ahead-log
+    /// replay-debt hotspot of issue #2071 - not at all. And repair is no longer a
+    /// whole-repository re-ingest: the returned keys <b>are</b> the repair queue, so
+    /// one missing vector costs one embed.
+    /// </para>
+    /// <para>
+    /// The repair queue is derived from the digest on every pass rather than
+    /// persisted as a durable work list. A persisted queue would be a third thing to
+    /// keep consistent with membership and the digest, and would drift silently when
+    /// an entry was enqueued and then covered by an ordinary reconcile; a derived set
+    /// cannot drift, because it is recomputed from the two sources of truth each time
+    /// and is empty exactly when nothing is missing.
+    /// </para>
+    /// <para>
+    /// When no digest is available - not yet built, unreadable, or pruned by the
+    /// read-path access gate - the scan reports
+    /// <see cref="CoverageDigestScan.DigestAvailable"/> false and asserts nothing, so
+    /// the caller keeps its existing probe-based behaviour instead of treating an
+    /// absent digest as a repository-wide gap.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository to scan. Must not be <see langword="null"/>.</param>
+    /// <param name="maxMissing">The maximum number of missing file keys to return. Must be positive.</param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxMissing"/> is not positive.</exception>
+    public async Task<CoverageDigestScan> ScanWithDigestAsync(
+        string repoId, int maxMissing, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxMissing);
+
+        var digest = await _writer.LoadCoverageDigestAsync(repoId, cancellationToken).ConfigureAwait(false);
+        if (!digest.IsBuilt)
+        {
+            return new CoverageDigestScan(false, [], 0, 0, false);
+        }
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
+        var filesPrefix = RepoContextKeys.FilesPrefix(repoId);
+        var end = RepoContextPortability.PrefixUpperBound(filesPrefix);
+
+        var missing = new List<string>();
+        var considered = 0;
+        var truncated = false;
+        await foreach (var key in tree
+            .ScanKeysAsync(filesPrefix, end, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            considered++;
+            if (digest.IsCovered(VectorCodec.SourceId(key)))
+            {
+                continue;
+            }
+
+            if (missing.Count == maxMissing)
+            {
+                truncated = true;
+                break;
+            }
+
+            missing.Add(key);
+        }
+
+        return new CoverageDigestScan(true, missing, considered, digest.PagesRead, truncated);
+    }
+}
+
+/// <summary>
+/// The outcome of a whole-repository coverage scan served from the per-page
+/// coverage digest: which files are uncovered, how the scan was paid for, and
+/// whether the digest could be used at all.
+/// </summary>
+/// <param name="DigestAvailable">
+/// Whether a usable digest answered the scan. When false, every other field is
+/// meaningless and the caller must fall back to the membership probe rather than
+/// read an empty <paramref name="MissingFileKeys"/> as "no gap" or a full structural
+/// range as "all missing".
+/// </param>
+/// <param name="MissingFileKeys">The structural file keys with no coverage - the targeted repair queue, in key order.</param>
+/// <param name="FilesConsidered">How many structural file keys the scan classified.</param>
+/// <param name="DigestRowsRead">
+/// How many digest rows the scan read. This is the detection cost the item exists to
+/// bound, reported so a caller (and a test) can compare it against
+/// <paramref name="FilesConsidered"/> at two corpus sizes and see that it does not
+/// move with the corpus.
+/// </param>
+/// <param name="Truncated">Whether the missing set was capped, so more uncovered files remain for the next pass.</param>
+internal readonly record struct CoverageDigestScan(
+    bool DigestAvailable,
+    IReadOnlyList<string> MissingFileKeys,
+    int FilesConsidered,
+    int DigestRowsRead,
+    bool Truncated)
+{
+    /// <summary>Whether the scan found at least one uncovered file.</summary>
+    public bool GapFound => DigestAvailable && MissingFileKeys.Count > 0;
 }
 
 /// <summary>
@@ -127,4 +265,25 @@ internal sealed class RepoContextEmbeddingGapScanner
 /// <param name="GapFound">Whether the page contained a file with no live embedding.</param>
 /// <param name="HasMore">Whether more files remain to scan after this page.</param>
 /// <param name="NextResumeKey">The inclusive key to resume the next page from, or <see langword="null"/> when the walk is complete or a gap ended it.</param>
-internal readonly record struct GapScanPage(bool GapFound, bool HasMore, string? NextResumeKey);
+internal readonly record struct GapScanPage(bool GapFound, bool HasMore, string? NextResumeKey)
+{
+    /// <summary>
+    /// Whether this page could not be classified because the store's read-path
+    /// access gate pruned keys from the coverage probe (issue #2277), so
+    /// <see cref="GapFound"/> being <see langword="false"/> means "not measured"
+    /// rather than "clean".
+    /// <para>
+    /// Reported separately rather than by returning a gap, because the caller's
+    /// response to a gap is to re-drive the entire repository index: a false gap
+    /// here costs a full re-index on every sweep and heals nothing, which is a
+    /// strictly worse failure than declining to classify one page.
+    /// </para>
+    /// </summary>
+    public bool CoverageUnavailable { get; init; }
+
+    /// <summary>
+    /// How many of the page's probed keys the access gate removed. Zero unless
+    /// <see cref="CoverageUnavailable"/> is <see langword="true"/>.
+    /// </summary>
+    public int PrunedByAccessGate { get; init; }
+}

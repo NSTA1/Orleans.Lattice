@@ -400,6 +400,11 @@
           "refId": "L",
           "expr": "sum by (tree) (rate(orleans_lattice_leaf_splits_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60 or vector(0)",
           "legendFormat": "leaf {{tree}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_byte_overflow_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60 or vector(0)",
+          "legendFormat": "byte-overflow {{outcome}} {{tree}}"
         }
       ]
     },
@@ -979,13 +984,13 @@
     {
       "id": 23,
       "title": "Storage footprint by tree",
-      "description": "Byte-accurate retained footprint per tree, broken down by surface: WAL bytes, snapshot blob bytes, and summed leaf/shard-root state bytes. Sourced from the observable storage-usage gauges; a tree on an unsupported provider reports no data rather than a misleading zero. Each tree's footprint is published by a single per-tree aggregator on whichever one silo currently hosts it, so this panel deliberately ignores the $silo selector and sums across all silos in the selected cluster - filtering by silo would hide every tree whose aggregator lives elsewhere.",
+      "description": "Byte-accurate retained footprint per tree, broken down by surface: WAL bytes, snapshot blob bytes, and summed leaf/shard-root state bytes. Sourced from the observable storage-usage gauges; a tree on an unsupported provider reports no data rather than a misleading zero. The snapshot and leaf-state series additionally report no data until the tree has had a deep storage-usage publish, which only an explicit ILatticeAdmin.RefreshStorageUsageAsync or ILattice.GetStorageUsageAsync call drives - the continuous background poller measures WAL bytes only. So a tree showing a WAL line and no snapshot or leaf-state line has not been measured on those surfaces; consult 'Storage usage measurement depth by tree' before reading their absence as emptiness (issue #2693). Each tree's footprint is published by a single per-tree aggregator on whichever one silo currently hosts it, so this panel deliberately ignores the $silo selector and sums across all silos in the selected cluster - filtering by silo would hide every tree whose aggregator lives elsewhere.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 68 },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 68 },
       "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
       "targets": [
         {
@@ -1008,7 +1013,7 @@
     {
       "id": 24,
       "title": "Cluster total retained bytes",
-      "description": "Single stat summing orleans_lattice_storage_total_bytes across every tree and silo: the cluster-wide byte-accurate footprint of all Lattice storage surfaces. Storage gauges are emitted on exactly one silo per tree, so this stat ignores the $silo selector and sums across all silos in the selected cluster.",
+      "description": "Single stat summing orleans_lattice_storage_total_bytes across every tree and silo: the cluster-wide byte-accurate footprint of all Lattice storage surfaces. Storage gauges are emitted on exactly one silo per tree, so this stat ignores the $silo selector and sums across all silos in the selected cluster. A tree contributes nothing here until it has had a deep storage-usage publish, because the total omits two of its three terms otherwise; check 'Storage usage measurement depth by tree' to tell an unmeasured tree from an empty one (issue #2693).",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -1021,6 +1026,25 @@
           "refId": "TOTAL",
           "expr": "sum(orleans_lattice_storage_total_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
           "legendFormat": "cluster total"
+        }
+      ]
+    },
+    {
+      "id": 67,
+      "title": "Storage usage measurement depth by tree",
+      "description": "1 when the tree's last storage-usage report came from the deep path that actually measures snapshot and leaf-state bytes, 0 when only the cheap WAL-only background poller has reported (orleans.lattice.storage.usage_deep_published). Read this panel BEFORE reading the snapshot / leaf-state / total series above: those three report no data rather than a synthesised 0 until a deep publish has run, and the deep path runs only on an explicit ILatticeAdmin.RefreshStorageUsageAsync or ILattice.GetStorageUsageAsync call. A tree sitting at 0 here means those panels are 'not measured', not 'measured empty'. Before issue #2693 the poller seeded them to 0 without measuring them, and a reader took that zero as a measurement and concluded no leaf state or snapshots were ever written while 137 MB of snapshot state was on disk (issue #2692). Published by the same single per-tree aggregator as the storage-footprint panels, so it lands on one silo per tree and this panel ignores the $silo selector.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": { "h": 7, "w": 4, "x": 8, "y": 68 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "DEEP",
+          "expr": "max by (tree) (orleans_lattice_storage_usage_deep_published{tree=~\"$tree\",cluster=~\"$cluster\"})",
+          "legendFormat": "{{tree}}"
         }
       ]
     },
@@ -1275,7 +1299,7 @@
     {
       "id": 40,
       "title": "Snapshot pins (current)",
-      "description": "Current number of pinned snapshots (orleans.lattice.snapshot.pins up/down counter). Pins hold a snapshot alive against trimming; a monotonically climbing value can indicate a pin leak.",
+      "description": "Current number of pinned snapshots (orleans.lattice.snapshot.pins observable gauge, derived from the WAL cursor registry). Pins hold a snapshot alive against trimming. The gauge reports only the pins held now, so a value that climbs and does not come back down is a real pin leak rather than accumulated metric drift.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 124 },
@@ -1512,6 +1536,56 @@
         { "refId": "P50", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_atomic_action_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p50" },
         { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_atomic_action_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p95" },
         { "refId": "P99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_atomic_action_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 64,
+      "title": "Grain-call contention (uncensored)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 191 },
+      "panels": []
+    },
+    {
+      "id": 65,
+      "title": "Outstanding calls per target activation, by grain type",
+      "description": "Per-grain-type contention from orleans_lattice_grain_call_outstanding_depth, recorded at dispatch on EVERY outgoing grain call by the LatticeGrainCallObservationFilter (enable with ISiloBuilder.AddLatticeGrainCallObservation). The value is how many calls this silo had already issued to the same target activation and not yet seen complete, so on a non-reentrant target it is the depth the new call queues behind. Read this instead of the NonReentrancyQueueSize= clause of the Orleans near-timeout diagnostic: that clause is emitted only for a request already approaching the 30s deadline and describes only that request's own wait, so a grain type that queues deeply without tripping the timeout contributes nothing to it. Two known limits: the count is per-silo, so cluster-wide contention is under-stated (treat it as a floor), and on a reentrant or AlwaysInterleave target a high value means pipelining rather than queueing.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 192 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "MEAN", "expr": "sum by (grain_type) (rate(orleans_lattice_grain_call_outstanding_depth_sum{cluster=~\"$cluster\"}[5m])) / clamp_min(sum by (grain_type) (rate(orleans_lattice_grain_call_outstanding_depth_count{cluster=~\"$cluster\"}[5m])), 1)", "legendFormat": "{{grain_type}} mean" },
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le, grain_type) (rate(orleans_lattice_grain_call_outstanding_depth_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "{{grain_type}} p95" }
+      ]
+    },
+    {
+      "id": 66,
+      "title": "Grain-call duration by grain type and outcome",
+      "description": "orleans_lattice_grain_call_duration_milliseconds, recorded by the same filter for every outgoing grain call and tagged outcome = completed | faulted. Split by outcome deliberately: the faulted series carries the 30s message timeouts, which would otherwise pile up at the deadline and dominate any quantile taken over the combined population - the same censoring that makes the near-timeout log diagnostic unusable for sizing a queue. Compare against the outstanding-depth panel: rising duration WITH rising depth is contention on the target; rising duration with flat depth is the target itself getting slower.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 192 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le, grain_type, outcome) (rate(orleans_lattice_grain_call_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "{{grain_type}} {{outcome}} p95" },
+        { "refId": "RATE", "expr": "sum by (grain_type, outcome) (rate(orleans_lattice_grain_call_duration_milliseconds_count{cluster=~\"$cluster\"}[5m]))", "legendFormat": "{{grain_type}} {{outcome}} calls/s" }
+      ]
+    },
+    {
+      "id": 68,
+      "title": "Coordinator phase-tick failures (rate)",
+      "description": "Rate of coordinator phase-timer ticks that threw and were swallowed by the phase loop (orleans_lattice_coordinator_phase_tick_failures_total), split by the coordinator kind and the tree it drives. Each such tick is a phase of work the coordinator began and discarded: the loop absorbs the fault and re-arms, so throughput degrades silently and no other series moves. Before this counter existed the only trace was a log line, and 35 failures over 516 minutes on the acceptance rig left every exported series flat - which is what issue #2705 was filed for. The counter is zero-primed for every coordinator when its phase timer starts, so a flat line at zero is a positive reading that ticks are succeeding, NOT an absent series; 'No data' here means the coordinator never started, which is itself worth investigating. Any sustained non-zero rate is operator-actionable, and the emitting grain escalates its own log from warning to error after three consecutive failures - so correlate a step here with the error-level log to find the failing coordinator.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1007 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, kind) (rate(orleans_lattice_coordinator_phase_tick_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "{{tree}} {{kind}}"
+        }
       ]
     }
   ]

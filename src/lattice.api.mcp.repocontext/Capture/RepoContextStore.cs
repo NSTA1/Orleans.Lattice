@@ -97,11 +97,14 @@ internal sealed partial class RepoContextStore
     /// Fetches the live record at <paramref name="key"/> and projects it, optionally
     /// evaluating the link staleness of a memory entry. When
     /// <paramref name="evaluateStaleness"/> is <see langword="true"/> and the key
-    /// addresses a memory record, each captured structural link digest is compared
-    /// against the target's current digest and the result is surfaced through
+    /// addresses a memory record, every live structural link is checked against its
+    /// target's present state - a target that has drifted, that has no live record
+    /// at all, or for which no digest was ever captured is reported through
     /// <see cref="RepoContextEntryView.Stale"/> and
-    /// <see cref="RepoContextEntryView.StaleLinks"/>; otherwise those fields stay
-    /// <see langword="null"/> ("not evaluated"), the bulk-read convention.
+    /// <see cref="RepoContextEntryView.StaleLinks"/>, with the subset that points at
+    /// nothing also named in <see cref="RepoContextEntryView.DanglingLinks"/>;
+    /// otherwise those fields stay <see langword="null"/> ("not evaluated"), the
+    /// bulk-read convention.
     /// </summary>
     /// <param name="key">The full repository-context key. Must be a well-formed key.</param>
     /// <param name="evaluateStaleness">Whether to evaluate memory link staleness on this read.</param>
@@ -121,7 +124,7 @@ internal sealed partial class RepoContextStore
         if (evaluateStaleness
             && parsed.Kind == RepoContextRecordKind.Memory
             && versioned.Value is { } bytes
-            && RepoContextMemoryCodec.Fold(bytes, _serializer) is { } record)
+            && RepoContextMemoryCodec.Fold(bytes, _serializer, key) is { } record)
         {
             view = await EvaluateStalenessAsync(view, record, cancellationToken)
                 .ConfigureAwait(false);
@@ -131,58 +134,92 @@ internal sealed partial class RepoContextStore
     }
 
     /// <summary>
-    /// Compares each captured structural link digest of <paramref name="record"/>
-    /// against its target's current digest and returns <paramref name="view"/> with
-    /// <see cref="RepoContextEntryView.Stale"/> and
-    /// <see cref="RepoContextEntryView.StaleLinks"/> populated. Only targets that are
-    /// both currently linked and carry a captured digest are evaluated, so an
-    /// unlinked-but-still-recorded digest never produces a phantom flag.
+    /// Evaluates each live structural link of <paramref name="record"/> against its
+    /// target's present state and returns <paramref name="view"/> with
+    /// <see cref="RepoContextEntryView.Stale"/>,
+    /// <see cref="RepoContextEntryView.StaleLinks"/>, and
+    /// <see cref="RepoContextEntryView.DanglingLinks"/> populated.
+    /// <para>
+    /// The walk is driven by the <em>live link set</em>, not by the captured-digest
+    /// map, so an unlinked-but-still-recorded digest can never produce a phantom
+    /// flag and - the point of issue #2654 - a link whose target was absent when
+    /// the edge was written cannot escape evaluation merely because nothing was
+    /// captured for it. Only file and symbol targets are evaluated, the same set
+    /// <see cref="CaptureLinkDigestsAsync"/> captures for; a package or
+    /// memory-to-memory edge carries no digest by design and is outside the
+    /// measurand.
+    /// </para>
+    /// <para>
+    /// A live structural link is fresh only when a digest was captured for it,
+    /// the target still has a live record, and the two digests are ordinal-equal.
+    /// Every other outcome is reported, so the answer follows the target's present
+    /// state rather than unobservable link-time history: a target that never
+    /// reached the corpus and one deleted after the edge was written now give the
+    /// same answer, where previously only the second was flagged.
+    /// </para>
     /// </summary>
     private async Task<RepoContextEntryView> EvaluateStalenessAsync(
         RepoContextEntryView view, MemoryRecord record, CancellationToken cancellationToken)
     {
-        HashSet<string>? linked = null;
+        List<string>? stale = null;
+        List<string>? dangling = null;
+        HashSet<string>? seen = null;
+
         foreach (var (_, targets) in view.Links)
         {
             foreach (var target in targets)
             {
-                (linked ??= new HashSet<string>(StringComparer.Ordinal)).Add(target);
-            }
-        }
+                if (!(seen ??= new HashSet<string>(StringComparer.Ordinal)).Add(target))
+                {
+                    continue;
+                }
 
-        List<string>? stale = null;
-        foreach (var target in record.LinkDigests.Keys())
-        {
-            if (linked is null || !linked.Contains(target))
-            {
-                continue;
-            }
+                if (!RepoContextKeys.TryParse(target, out var parsedTarget)
+                    || parsedTarget.Kind is not (RepoContextRecordKind.File or RepoContextRecordKind.Symbol))
+                {
+                    continue;
+                }
 
-            var register = record.LinkDigests.Get(target);
-            var captured = register is null ? null : RepoContextValues.ReadString(register);
-            if (captured is null)
-            {
-                continue;
-            }
+                var register = record.LinkDigests.Get(target);
+                var captured = register is null ? null : RepoContextValues.ReadString(register);
 
-            var targetView = await RecallAsync(target, cancellationToken).ConfigureAwait(false);
-            string? current = null;
-            if (targetView.Exists)
-            {
-                targetView.Fields.TryGetValue("digest", out current);
-            }
+                var targetView = await RecallAsync(target, cancellationToken).ConfigureAwait(false);
+                if (!targetView.Exists)
+                {
+                    // The link points at nothing: either the target was deleted, or
+                    // it never reached the indexed corpus at all. Both are reported,
+                    // and the dangling list names them so a caller can tell "re-read
+                    // the file" from "wait for the target to be indexed".
+                    (dangling ??= new List<string>()).Add(target);
+                    (stale ??= new List<string>()).Add(target);
+                    continue;
+                }
 
-            if (!string.Equals(captured, current, StringComparison.Ordinal))
-            {
-                (stale ??= new List<string>()).Add(target);
+                if (captured is null)
+                {
+                    // The target has a live record but no digest was ever captured
+                    // for this edge, so drift is not measurable here. Reporting that
+                    // as fresh would render an absence of evidence as a positive
+                    // finding; the edge becomes evaluable again when it is rewritten.
+                    (stale ??= new List<string>()).Add(target);
+                    continue;
+                }
+
+                targetView.Fields.TryGetValue("digest", out var current);
+                if (!string.Equals(captured, current, StringComparison.Ordinal))
+                {
+                    (stale ??= new List<string>()).Add(target);
+                }
             }
         }
 
         stale?.Sort(StringComparer.Ordinal);
+        dangling?.Sort(StringComparer.Ordinal);
         return view with
         {
             Stale = stale is { Count: > 0 },
             StaleLinks = stale,
+            DanglingLinks = dangling,
         };
     }
 
@@ -538,7 +575,7 @@ internal sealed partial class RepoContextStore
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
 
         var existing = RepoContextMemoryCodec.Fold(
-            await tree.GetAsync(key, cancellationToken).ConfigureAwait(false), _serializer);
+            await tree.GetAsync(key, cancellationToken).ConfigureAwait(false), _serializer, key);
         await EnforceFenceAsync(key, existing, fencingToken, cancellationToken).ConfigureAwait(false);
         var created = existing is null;
 
@@ -712,7 +749,7 @@ internal sealed partial class RepoContextStore
         byte[] patchInput;
         if (parsed.Kind == RepoContextRecordKind.Memory)
         {
-            var folded = RepoContextMemoryCodec.Fold(existing, _serializer)!;
+            var folded = RepoContextMemoryCodec.Fold(existing, _serializer, key)!;
             await EnforceFenceAsync(key, folded, fencingToken, cancellationToken).ConfigureAwait(false);
             patchInput = _serializer.SerializeToArray(folded);
         }
@@ -807,11 +844,21 @@ internal sealed partial class RepoContextStore
 
         if (parsed.Kind == RepoContextRecordKind.Memory)
         {
-            await EnforceFenceAsync(
-                key,
-                await ReadMemoryAsync(tree, key, cancellationToken).ConfigureAwait(false),
-                fencingToken,
-                cancellationToken).ConfigureAwait(false);
+            // A forget is fenced exactly as a patch is, but it is also the only
+            // remedy for a record whose stored value cannot be decoded, so the fence
+            // here must not be the thing that forecloses it. When the value folds,
+            // the fence is resolved off the record as usual; when it does not, it is
+            // resolved against the lock instead - which preserves the exclusion
+            // invariant rather than relaxing it (see the fallback's remarks).
+            var stored = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+            if (RepoContextMemoryCodec.TryFold(stored, _serializer, key, out var existing))
+            {
+                await EnforceFenceAsync(key, existing, fencingToken, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await EnforceFenceOverUndecodableAsync(key, fencingToken, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         if (!lapse)
@@ -845,6 +892,7 @@ internal sealed partial class RepoContextStore
             };
         }
 
+        var undecodable = false;
         if (parsed.Kind == RepoContextRecordKind.Memory)
         {
             // Lapse a memory record through the multi-value-register accessor so the
@@ -852,11 +900,34 @@ internal sealed partial class RepoContextStore
             // soft-delete converges across clusters instead of racing an LWW rewrite.
             // Fold first so the lapse re-authors the merged record, not one arm of a
             // conflict set.
-            var accessor = RepoContextMemoryCodec.Accessor(tree, key);
-            var folded = RepoContextMemoryCodec.Fold(value, _serializer);
+            //
+            // A malformed stored value must not foreclose the retirement. The
+            // fallback below already anticipated "nothing folded, so lapse the stored
+            // bytes as they are"; an undecodable value takes that same path rather
+            // than throwing, because a record that cannot be read is exactly the
+            // record that most needs retiring, and refusing here would leave a hard
+            // delete as the only remedy - losing the entry rather than its formatting.
+            // The tolerance is scoped to this path alone: every other read-modify-write
+            // still fails loudly, so this cannot quietly absorb an unrelated decode
+            // fault. It is reported on the result so the shedding is never silent.
+            undecodable = !RepoContextMemoryCodec.TryFold(value, _serializer, key, out var folded);
             var lapseBytes = folded is null ? value : _serializer.SerializeToArray(folded);
-            await accessor.SetAsync(_replicaId, lapseBytes, TimeSpan.FromSeconds(seconds), cancellationToken)
-                .ConfigureAwait(false);
+
+            if (undecodable)
+            {
+                // The accessor's own read-modify-write would re-decode the same
+                // malformed bytes, so the register path cannot carry this lapse.
+                // A direct write of the stored bytes under the short time-to-live
+                // retires the entry without ever decoding it.
+                await tree.SetAsync(key, lapseBytes, TimeSpan.FromSeconds(seconds), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                var accessor = RepoContextMemoryCodec.Accessor(tree, key);
+                await accessor.SetAsync(_replicaId, lapseBytes, TimeSpan.FromSeconds(seconds), cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         else
         {
@@ -871,6 +942,7 @@ internal sealed partial class RepoContextStore
             Mode = "lapse",
             Existed = true,
             ExpiresAtUtc = ToExpiryIso(lapsed.ExpiresAtTicks),
+            Undecodable = undecodable,
         };
     }
 
@@ -1076,13 +1148,85 @@ internal sealed partial class RepoContextStore
     {
         RequireNonEmpty(repoId, "repoId");
 
+        var resetStopwatch = System.Diagnostics.Stopwatch.StartNew();
         await TearDownIndexingControlAsync(repoId).ConfigureAwait(false);
+
+        // Mark the reset observable BEFORE any deletion. TearDownIndexingControlAsync
+        // above cleared the job grain (it cancels and clears any in-flight index
+        // run), so index_status would otherwise report None - indistinguishable
+        // from a never-onboarded repository - for the whole of a sweep that can run
+        // for minutes. BeginResetAsync re-populates that same surface with a
+        // running teardown (status Running, phase Resetting), so a caller that
+        // loses this call's response can still poll index_status and see the reset
+        // in flight rather than nothing at all. The completion signal is written
+        // only by CompleteResetAsync after the sweep finishes, never here.
+        var jobGrain = _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId);
+        await jobGrain.BeginResetAsync().ConfigureAwait(false);
 
         var scanPrefix = RepoContextKeys.RepoScanPrefix(repoId);
         var end = RepoContextPortability.PrefixUpperBound(scanPrefix)
             ?? throw new McpException("The repository id produced an unbounded delete range.");
 
+        var structural = Tree(RepoContextTrees.Structural);
+        var markerKey = RepoContextKeys.Repo(repoId);
+
+        // Clear the marker's index-derived registers BEFORE the sweep, not after.
+        //
+        // The sweep below can run for minutes on a large corpus, and for the whole
+        // of that window list_repos is the surface an operator consults to ask
+        // "did the reset work?". Clearing afterwards meant it answered that
+        // question with the complete PRE-reset census - a stale lastIngested, a
+        // stale fileCount, a stale indexedCommit - stated with full confidence and
+        // indistinguishable from a healthy index. That does not read as "no
+        // information yet"; it reads as "the reset did nothing", which is the one
+        // conclusion that prompts an operator to run a destructive operation
+        // AGAIN. The documented post-reset signature (three nulls) was implemented
+        // correctly and simply could not be observed during the only window in
+        // which anyone looks for it, so the documentation described an outcome
+        // that never appeared - worse than describing none, because it licenses
+        // trusting a field that is stale.
+        //
+        // Moving it is safe, and the ordering constraint that kept it here was
+        // never real for THIS write. The marker sits at repo/{repoId} with no
+        // trailing separator; the sweep is a range delete over repo/{repoId}/ and
+        // its start bound sorts strictly after the marker key. The marker is
+        // outside the swept range, so writing it first cannot be re-deleted. (The
+        // re-derive branch after the sweep is a different case and genuinely must
+        // stay there: it is conditioned on the deletion count, which is not known
+        // until the sweep finishes.)
+        //
+        // Under a mid-sweep failure this also fails in the safer direction. The
+        // marker then reports "registered, no index" while some index records
+        // survive - understating coverage for a partially deleted index, which is
+        // true and prompts a retry. The old order overstated it, claiming a full
+        // census for an index that was being deleted underneath the claim.
+        var markerBytes = await structural.GetAsync(markerKey, cancellationToken).ConfigureAwait(false);
+        var censusCleared = false;
+        if (markerBytes is not null)
+        {
+            // The three index-derived fields are cleared rather than carried across.
+            // Keeping them would have list_repos report a file count and an ingest
+            // timestamp for an index that no longer exists - a confident, precise
+            // lie, which is worse than the absence it replaces. BuildRepoSummaryAsync
+            // already tolerates unset registers and renders them as nulls, which is
+            // exactly the "registered, no index" state a caller needs to distinguish
+            // a just-reset repository from a never-onboarded one. Authored metadata
+            // (display name, default branch, tags) is not index-derived, so it is
+            // carried across untouched.
+            var node = _serializer.Deserialize<RepoNode>(markerBytes) with
+            {
+                LastIngested = new BoundedRegister(),
+                FileCount = new BoundedRegister(),
+                IndexedCommit = new BoundedRegister(),
+            };
+
+            await structural.SetAsync(markerKey, _serializer.SerializeToArray(node), cancellationToken)
+                .ConfigureAwait(false);
+            censusCleared = true;
+        }
+
         long deleted = 0;
+        var treesSwept = 0;
         foreach (var treeName in RepoContextTrees.CodeIndexTrees)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1100,6 +1244,14 @@ internal sealed partial class RepoContextStore
             deleted += await Tree(treeName)
                 .DeleteRangeAsync(scanPrefix, end, DeleteStepSize, maxAttempts: null, cancellationToken)
                 .ConfigureAwait(false);
+
+            // Report progress after each tree drains, so index_status shows the
+            // teardown advancing (evidence of progress, not merely a "resetting"
+            // flag). A wedged sweep stops advancing these counters, which is the
+            // signal a caller needs; the completion marker is still withheld until
+            // the whole loop finishes.
+            treesSwept++;
+            await jobGrain.ReportResetProgressAsync(treesSwept, checked((int)deleted)).ConfigureAwait(false);
         }
 
         // The root marker sits at repo/{repoId} with no trailing separator, so it
@@ -1111,20 +1263,6 @@ internal sealed partial class RepoContextStore
         // from list_repos while its deliberately-preserved memory survives
         // underneath, reachable only by an agent that already knows the id -
         // which defeats the reason this verb exists.
-        //
-        // Rewriting it must happen AFTER the sweep above, not before: the sweep
-        // is a range delete over repo/{repoId}/ and would otherwise simply
-        // re-delete anything written first.
-        //
-        // The three index-derived fields are cleared rather than carried across.
-        // Keeping them would have list_repos report a file count and an ingest
-        // timestamp for an index that no longer exists - a confident, precise
-        // lie, which is worse than the absence it replaces. BuildRepoSummaryAsync
-        // already tolerates unset registers and renders them as nulls, which is
-        // exactly the "registered, no index" state a caller needs to distinguish
-        // a just-reset repository from a never-onboarded one. Authored metadata
-        // (display name, default branch, tags) is not index-derived, so it is
-        // carried across untouched.
         //
         // A reset must not invent a registration for a repository that was never
         // onboarded. The condition that establishes "never onboarded" is that the
@@ -1143,22 +1281,7 @@ internal sealed partial class RepoContextStore
         // two: it is direct evidence this repository had a code index a moment
         // ago. A zero-deletion reset still writes nothing, which keeps the
         // never-onboarded guarantee exactly as strong as it was.
-        var structural = Tree(RepoContextTrees.Structural);
-        var markerKey = RepoContextKeys.Repo(repoId);
-        var markerBytes = await structural.GetAsync(markerKey, cancellationToken).ConfigureAwait(false);
-        if (markerBytes is not null)
-        {
-            var node = _serializer.Deserialize<RepoNode>(markerBytes) with
-            {
-                LastIngested = new BoundedRegister(),
-                FileCount = new BoundedRegister(),
-                IndexedCommit = new BoundedRegister(),
-            };
-
-            await structural.SetAsync(markerKey, _serializer.SerializeToArray(node), cancellationToken)
-                .ConfigureAwait(false);
-        }
-        else if (deleted > 0)
+        if (markerBytes is null && deleted > 0)
         {
             // Re-derived, not invented: every index-derived register is left unset,
             // which is the same "registered, no index" shape the preserve branch
@@ -1170,7 +1293,26 @@ internal sealed partial class RepoContextStore
                 .ConfigureAwait(false);
         }
 
-        return new RepoContextIndexResetResult { RepoId = repoId, EntriesDeleted = checked((int)deleted) };
+        resetStopwatch.Stop();
+
+        // The sole completion signal, written only now the sweep has finished.
+        // Everything above this line ran with the job surface reporting a running
+        // teardown; this is what flips it to Completed, so a caller can distinguish
+        // "reset in progress" from "reset done" and, critically, an interrupted
+        // reset (which never reaches this line) never reports itself complete.
+        await jobGrain
+            .CompleteResetAsync(resetStopwatch.ElapsedMilliseconds, treesSwept, checked((int)deleted))
+            .ConfigureAwait(false);
+
+        return new RepoContextIndexResetResult
+        {
+            RepoId = repoId,
+            EntriesDeleted = checked((int)deleted),
+            ElapsedMilliseconds = resetStopwatch.ElapsedMilliseconds,
+            TreesSwept = RepoContextTrees.CodeIndexTrees,
+            MemoryPreserved = true,
+            CensusCleared = censusCleared,
+        };
     }
 
     /// <summary>

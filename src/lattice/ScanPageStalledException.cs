@@ -28,6 +28,18 @@ namespace Orleans.Lattice;
 /// rather than racing them.
 /// </para>
 /// <para>
+/// <b>Since issue 2585 the ceiling only throws when it caught the walk holding
+/// nothing.</b> A page fill whose sortable rows had already accumulated banks
+/// them as an ordinary short page (<c>HasMore = true</c>, no
+/// <c>ResumeFromKey</c>) instead of faulting, so the work is not discarded and
+/// the caller's next request starts past it. This exception therefore names the
+/// strictly narrower case where the ceiling fired before any row was read, or
+/// on a path (counts, deletes, diagnostics) whose result carries no
+/// continuation to bank into. That is why a repeated stall used to be a
+/// livelock - every attempt re-walked and re-discarded the same leaves - and no
+/// longer is.
+/// </para>
+/// <para>
 /// Derives from <see cref="System.TimeoutException"/> so existing catch
 /// handlers that match on <see cref="System.TimeoutException"/> continue to
 /// work; the typed slots carry the per-occurrence attribution that makes the

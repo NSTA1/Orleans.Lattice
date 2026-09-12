@@ -38,11 +38,20 @@ public partial class BPlusLeafGrainTests
         long persistedCheckpoint = 0,
         long walHead = 0,
         int reClassifyEveryN = LatticeOptions.DefaultLeafSnapshotReClassifyEveryNCheckpoints,
-        FallOffLogDecision? periodicDecision = null)
+        FallOffLogDecision? periodicDecision = null,
+        long? durableCoverage = null)
     {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<LeafSnapshotBlob?>(null));
+            .Returns(Task.FromResult(durableCoverage is null
+                ? null
+                : new LeafSnapshotBlob
+                {
+                    SnapshotOffset = durableCoverage.Value,
+                    Rows = new List<LeafSnapshotRow>(),
+                    CapturedAtTicks = DateTime.UtcNow.Ticks,
+                    SnapshotOffsetsByPartition = new[] { durableCoverage.Value },
+                }));
 
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
         coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(walHead));
@@ -139,10 +148,20 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task Activation_TailReplay_decision_does_not_capture()
     {
+        // The subject is the fall-off-log ADVISORY driver: a TailReplay
+        // classification must not drive a capture. Issue #2692 added a second,
+        // independent driver (the zero-coverage repair), so the leaf is given
+        // durable coverage at its checkpoint to keep this test isolated to the
+        // driver it is about. Without that the repair would fire - correctly,
+        // for its own reason - and a bare save-count assertion could no longer
+        // tell the two drivers apart. Coverage present means the repair's
+        // predicate is false by construction, so any capture observed here is
+        // necessarily the advisory's.
         var (grain, _, snapshotStub, _) = CreateGrainForProactiveCapture(
             activationDecision: FallOffLogDecision.TailReplay,
             persistedCheckpoint: 5,
-            walHead: 5);
+            walHead: 5,
+            durableCoverage: 5);
 
         grain.EntriesForTest["k"] = new LwwValue<byte[]>
         {
@@ -265,7 +284,36 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(classifyCallsAfter, Is.EqualTo(classifyCallsAtActivation),
             "Periodic recheck must not call ClassifyAsync when the cadence option is 0.");
-        await snapshotStub.DidNotReceive().SaveAsync(
+
+        // The original assertion here was DidNotReceive().SaveAsync(...) - a
+        // claim strictly stronger than the option's documented contract, which
+        // is that it "disables the periodic re-classification entirely". That
+        // contract is still honoured exactly: ClassifyAsync is not called, as
+        // asserted above.
+        //
+        // What does now save is the zero-coverage repair (issue #2692), which
+        // is deliberately NOT governed by this cadence. The ten persists below
+        // leave partition 0 checkpointed with no durable snapshot covering it,
+        // which resolves its materialiser pin to the Zero block value and
+        // disables cursor WAL trimming for the whole tree. Making that reachable
+        // by setting a tuning knob to 0 would turn a cadence option into an
+        // unbounded-disk failure mode.
+        //
+        // The independent witness for that placement is the pre-existing
+        // coverage-deficit escape, which predates this fix and was written for a
+        // different issue. BPlusLeafGrain.Snapshot.cs:909 states it outright -
+        // "This escape deliberately sits ABOVE the cadence gate below" - and
+        // :920 gives the reason in the same terms used here: with the cadence at
+        // 0 "a frozen leaf could NEVER escape, so its WAL pin would never lift
+        // and its WAL would grow without bound". The ordering is structural, not
+        // a matter of reading: LeafSnapshotReClassifyEveryNCheckpoints is not
+        // read until :993, below both escapes, so neither can be disabled by it.
+        //
+        // Asserting EXACTLY one save keeps a real failure mode rather than
+        // relaxing to "at least none": the repair is budgeted and fires once
+        // here, whereas a cadence that had started firing would drive several
+        // across ten persists.
+        await snapshotStub.Received(1).SaveAsync(
             Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
     }
 

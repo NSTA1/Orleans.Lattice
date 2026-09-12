@@ -124,6 +124,67 @@ internal sealed partial class ShardRootGrain(
     private ResolvedLatticeOptions? _cachedOptions;
 
     /// <summary>
+    /// Consecutive failures a coalescing flush loop tolerates before suspending
+    /// itself for the remainder of the activation.
+    /// <para>
+    /// Both flush loops re-arm on failure and would otherwise retry for the life of
+    /// the activation. That is correct for a transient fault and useless for a
+    /// permanent one: a shard root whose in-memory ETag no longer matches its stored
+    /// row fails identically on every tick, and no number of retries repairs it.
+    /// Issue 2419 measured that shape in production - thirteen shard roots retrying
+    /// on a 30 s cadence with a byte-identical ETag for over twenty-five minutes.
+    /// </para>
+    /// <para>
+    /// Five is deliberately generous relative to the cause it bounds. At the 30 s
+    /// leaf-access cadence it spends about two and a half minutes before giving up,
+    /// which rides out a storage blip comfortably, while at the 50 ms dirty-leaf
+    /// cadence it costs a quarter of a second. Suspension never discards pending
+    /// work: the in-memory state is retained, the deactivation flush still attempts
+    /// a final best-effort write, and both subsystems document their own recovery
+    /// (dirty marks are re-discovered by the chain-walk fallback, and the
+    /// leaf-access model rebuilds from live traffic).
+    /// </para>
+    /// <para>
+    /// Suspension bounds wasted writes and makes the condition visible. It is not a
+    /// repair: a grain timer does not extend an activation's lifetime
+    /// (<c>GrainTimerCreationOptions.KeepAlive</c> defaults to <see langword="false"/>),
+    /// so stopping the loop does not by itself hasten collection, and a shard root
+    /// held active by inbound traffic stays poisoned until it is collected and a
+    /// later activation re-reads its state.
+    /// </para>
+    /// </summary>
+    internal const int MaxConsecutiveFlushFailures = 5;
+
+    /// <summary>
+    /// Reports a coalescing flush loop suspending itself after
+    /// <see cref="MaxConsecutiveFlushFailures"/> consecutive failures. Emits the
+    /// operator-visible warning and the metric; the caller disposes its own timer
+    /// and latches its own suspension flag.
+    /// </summary>
+    /// <param name="kind">The loop that gave up, used as the metric's kind tag.</param>
+    /// <param name="ex">The failure observed on the final attempt.</param>
+    /// <remarks>
+    /// The tenant dimension is named inline via
+    /// <see cref="LatticeTenantLabel.ForTree(string)"/> rather than taken from the
+    /// activation-cached tag set, matching <c>LeafAccessMetricTags()</c>: the site
+    /// fires at most twice per activation, so the allocation is immaterial, and
+    /// naming it here keeps it directly verifiable by the tenant-dimension hygiene
+    /// gate instead of needing an allow-list entry.
+    /// </remarks>
+    private void ReportFlushRetriesSuspended(string kind, Exception ex)
+    {
+        logger.LogWarning(ex,
+            "Shard {ShardKey} suspended its {FlushKind} flush loop after {FailureCount} consecutive failures; retries are stopped for this activation and pending state will not reach storage until it is re-read. A repeating version conflict here means this shard root's ETag no longer matches its stored row.",
+            context.GrainId.Key.ToString(), kind, MaxConsecutiveFlushFailures);
+
+        LatticeMetrics.ShardRootFlushRetriesSuspended.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, kind),
+            LatticeTenantLabel.ForTree(TreeId));
+    }
+
+    /// <summary>
     /// Returns the effective options for this tree. Cached for the grain's
     /// lifetime. Structural sizing is sourced from the tree registry pin;
     /// non-structural fields flow through from <see cref="LatticeOptions"/>.
@@ -2871,7 +2932,7 @@ internal sealed partial class ShardRootGrain(
         // flag could have steered the traversal onto an internal node; if so
         // re-descend to the leftmost leaf rather than blind-casting it.
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
-        var keys = new List<string>(pageSize);
+        var keys = BeginScanPageRows<string>(scan, pageSize);
         HashSet<int>? movedSet = null;
         scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
@@ -2882,14 +2943,14 @@ internal sealed partial class ShardRootGrain(
             // at the source - avoids transferring keys that would be
             // discarded here. The optional predicate is evaluated inside the
             // leaf so non-matching values never cross the wire.
-            var leafKeys = await leafGrain.GetKeysAsync(effectiveStart, endExclusive, afterExclusive: continuationToken, predicate: predicate);
+            var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             foreach (var key in leafKeys)
             {
                 if (TryGetMovedAwaySlot(key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 keys.Add(key);
@@ -3018,7 +3079,7 @@ internal sealed partial class ShardRootGrain(
         // flag steered the traversal onto an internal node, re-descend to the
         // rightmost leaf rather than blind-casting it (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: true);
-        var keys = new List<string>(pageSize);
+        var keys = BeginScanPageRows<string>(scan, pageSize);
         HashSet<int>? movedSet = null;
         scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
@@ -3028,7 +3089,7 @@ internal sealed partial class ShardRootGrain(
             // Pass the effective upper boundary as beforeExclusive so the leaf
             // filters at the source - avoids transferring keys that would be
             // discarded here.
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: effectiveBefore, predicate: predicate);
+            var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, startInclusive, endExclusive, afterExclusive: null, beforeExclusive: effectiveBefore, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             // Walk the leaf's keys in reverse order.
@@ -3037,7 +3098,7 @@ internal sealed partial class ShardRootGrain(
                 var key = leafKeys[i];
                 if (TryGetMovedAwaySlot(key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 keys.Add(key);
@@ -3147,7 +3208,7 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToLeftmostLeafAsync();
         }
 
-        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
         HashSet<int>? movedSet = null;
         // Guard: the start node must be a leaf; re-descend to the leftmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
@@ -3161,14 +3222,14 @@ internal sealed partial class ShardRootGrain(
             // Pass continuationToken as afterExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(effectiveStart, endExclusive, continuationToken, predicate: predicate);
+            var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             foreach (var entry in leafEntries)
             {
                 if (TryGetMovedAwaySlot(entry.Key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 entries.Add(entry);
@@ -3282,7 +3343,7 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToRightmostLeafAsync();
         }
 
-        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
         HashSet<int>? movedSet = null;
         // Guard: the start node must be a leaf; re-descend to the rightmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
@@ -3296,7 +3357,7 @@ internal sealed partial class ShardRootGrain(
             // Pass continuationToken as beforeExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: effectiveBefore, predicate: predicate);
+            var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, startInclusive, endExclusive, afterExclusive: null, beforeExclusive: effectiveBefore, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             for (int i = leafEntries.Count - 1; i >= 0; i--)
@@ -3304,7 +3365,7 @@ internal sealed partial class ShardRootGrain(
                 var entry = leafEntries[i];
                 if (TryGetMovedAwaySlot(entry.Key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 entries.Add(entry);
@@ -3426,7 +3487,7 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToLeftmostLeafAsync();
         }
 
-        var keys = new List<string>(pageSize);
+        var keys = BeginScanPageRows<string>(scan, pageSize);
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
@@ -3435,7 +3496,7 @@ internal sealed partial class ShardRootGrain(
         {
             StandDownIfCeilingFired(scan, leafId);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafKeys = await leafGrain.GetKeysAsync(effectiveStart, endExclusive, afterExclusive: continuationToken, predicate: predicate);
+            var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             foreach (var key in leafKeys)
@@ -3542,7 +3603,7 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToLeftmostLeafAsync();
         }
 
-        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
@@ -3551,7 +3612,7 @@ internal sealed partial class ShardRootGrain(
         {
             StandDownIfCeilingFired(scan, leafId);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafEntries = await leafGrain.GetEntriesAsync(effectiveStart, endExclusive, continuationToken, predicate: predicate);
+            var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             foreach (var entry in leafEntries)

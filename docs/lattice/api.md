@@ -244,8 +244,8 @@ no duplicates, no gaps, original ordering preserved.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live keys in strict lexicographic order. `prefetch=true` (or `null` with `LatticeOptions.PrefetchKeysScan = true`) overlaps the next page fetch with the current page consumption. `maxAttempts` overrides the wrapper's reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`). A concurrent `SetManyAtomicAsync` is observed atomically across every page of a single enumeration. |
-| `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live key-value entries in strict lexicographic key order. `prefetch` is gated by `LatticeOptions.PrefetchEntriesScan` (separate flag from keys because entry pages also carry `byte[]` values). Same atomic-visibility and reconnect guarantees as `ScanKeysAsync`. |
+| `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live keys in strict lexicographic order. `prefetch=true` (or `null` with `LatticeOptions.PrefetchKeysScan = true`) overlaps the next page fetch with the current page consumption. `maxAttempts` overrides the wrapper's reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`) and, capped at `LatticeExtensions.DefaultScanStallResumeAttempts = 2`, its budget for resuming a `ScanPageStalledException`; `maxAttempts: 0` disables both. A stalled scan resumes from its last yielded key and refuses to resume when it has not advanced since the previous stall, so it either yields the full range or rethrows the stall - it never returns a short prefix as though the range were complete. A concurrent `SetManyAtomicAsync` is observed atomically across every page of a single enumeration. |
+| `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live key-value entries in strict lexicographic key order. `prefetch` is gated by `LatticeOptions.PrefetchEntriesScan` (separate flag from keys because entry pages also carry `byte[]` values). Same atomic-visibility, reconnect, and stall-resume guarantees as `ScanKeysAsync`. |
 | `DeleteRangeAsync` | `Task<long> DeleteRangeAsync(this ILattice, string startInclusive, string endExclusive, int stepSize = 256, int? maxAttempts = null, CancellationToken cancellationToken = default)` | Resiliently drains a delete-range cursor over the half-open range `[startInclusive, endExclusive)` to completion, returning the total number of keys tombstoned. Deletes in batches of `stepSize` and, if the durable enumerator is lost mid-drain (`EnumerationAbortedException`), transparently reopens a fresh cursor over the same range and continues; already-tombstoned keys are skipped on reopen so the count never double-counts. `maxAttempts` overrides the reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`). Both bounds are required. Authorization is all-or-nothing across the span (`LatticeOperation.RangeDelete`): a caller who may not delete the whole range is denied and nothing is removed. Prefer this one-shot helper over hand-rolling an `OpenDeleteRangeCursorAsync` / `DeleteRangeStepAsync` loop when you simply need a range gone. |
 
 Prefer the resilient `DeleteRangeAsync` drain helper over an
@@ -920,6 +920,49 @@ A host that registers an `ILatticeAccessGate` receives one `LatticeOperation` fl
 
 `Telemetry`, `Replication`, and `TreeLifecycle` are deliberately separate from `Admin`; granting one does not imply any other capability.
 
+### Reading an empty range read under a gate
+
+A denied **point** read throws. A denied **range** read does not: it resolves to a
+reject-all key filter and returns a clean, successful, **empty** result. So
+`KeysAsync`, `EntriesAsync`, their predicate overloads, both `CountAsync`
+overloads, and the snapshot cursors all report "you may not look here" and "there
+is nothing here" identically - no exception, no log, every instrument healthy.
+
+That is deliberate. A denied scan stays cheap and non-fatal, and making it throw
+would break every existing caller. The cost is that **emptiness alone is
+uninterpretable under a gate**, so a caller that draws a conclusion from an empty
+range read must confirm the range was actually readable:
+
+```csharp verify
+static async Task<bool> RangeIsGenuinelyEmptyAsync(
+    ILattice tree, string startInclusive, string endExclusive, CancellationToken ct)
+{
+    await foreach (var key in tree.KeysAsync(startInclusive, endExclusive, cancellationToken: ct))
+    {
+        return false; // Not empty at all.
+    }
+
+    // Empty. Ask whether that is a fact about the store or about authorization.
+    var coverage = await tree.GetRangeReadGateCoverageAsync(startInclusive, endExclusive, ct);
+    return coverage == LatticeRangeReadGateCoverage.Unrestricted;
+}
+```
+
+`GetRangeReadGateCoverageAsync` reports `Unrestricted`, `Filtered`, or `Denied`.
+Only `Unrestricted` licenses reading emptiness as absence: under `Filtered` an
+unknown subset of keys is withheld, and under `Denied` every key is. It is a
+coverage classification and never names the withheld keys, for the same reason
+`GatedMultiReadResult.PrunedByAccessGate` is a count - identities would make any
+range read an authorization oracle.
+
+Call it **only when a range read came back empty** and you are about to act on
+that emptiness. The scan hot path pays nothing.
+
+A background component is the classic victim, because its turn carries no caller
+credential at all: under a fail-closed gate every one of its scans returns empty,
+so it concludes the store is empty and does nothing, forever, with a healthy log
+at every layer. If a component reads on a background turn, give it a credential
+(see the trusted system-origin scope below) rather than relying on this check.
 ### Trusted system-origin scope
 
 A co-hosted infrastructure extension that must run a trusted, gate-bypassing

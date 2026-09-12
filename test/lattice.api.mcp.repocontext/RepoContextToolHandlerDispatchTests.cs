@@ -118,17 +118,18 @@ public sealed class RepoContextToolHandlerDispatchTests
             Substitute.For<IRepoContextSemanticIndex>(),
             store,
             TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance,
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(),
             embeddingProvider: null);
 
         return new RepoContextBundleService(
             search,
-            new RepoContextGraphService(grainFactory, Serializer, Counter, new RepoContextWorkspaceGuard([])),
+            new RepoContextGraphService(grainFactory, Serializer, Counter, new RepoContextWorkspaceGuard([]), new RepoContextRetrievalLatencyReporter()),
             new RepoContextSessionStore(grainFactory, Serializer),
             grainFactory,
             Serializer,
             Counter,
-            NoOpUsageRecorder.Instance);
+            NoOpUsageRecorder.Instance,
+            new RepoContextRetrievalLatencyReporter());
     }
 
     private static Task<ModelContextProtocol.Server.RequestContext<ModelContextProtocol.Protocol.CallToolRequestParams>>
@@ -320,7 +321,7 @@ public sealed class RepoContextToolHandlerDispatchTests
         var workspace = NewWorkspace();
         var outside = NewWorkspace();
         var graph = new RepoContextGraphService(
-            EmptyTrees(), Serializer, Counter, new RepoContextWorkspaceGuard([workspace]));
+            EmptyTrees(), Serializer, Counter, new RepoContextWorkspaceGuard([workspace]), new RepoContextRetrievalLatencyReporter());
         var context = await ContextWith(s => s.AddSingleton(graph));
 
         Assert.That(
@@ -338,7 +339,7 @@ public sealed class RepoContextToolHandlerDispatchTests
         var jobGrain = JobGrainWithNoRequest();
         grainFactory.GetGrain<IRepoIndexJobGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(jobGrain);
         var graph = new RepoContextGraphService(
-            grainFactory, Serializer, Counter, new RepoContextWorkspaceGuard([]));
+            grainFactory, Serializer, Counter, new RepoContextWorkspaceGuard([]), new RepoContextRetrievalLatencyReporter());
         var context = await ContextWith(s => s.AddSingleton(graph));
 
         Assert.That(

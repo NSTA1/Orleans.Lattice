@@ -15,16 +15,39 @@ internal sealed class LatticeTreeCallCountingFilter(LatticeTreeCallCounter count
     public Task Invoke(IIncomingGrainCallContext context)
     {
         var method = context.InterfaceMethod;
-        if (method?.DeclaringType == typeof(ILattice)
-            && (counter.TreeId is null
-                || string.Equals(
-                    context.TargetContext.GrainId.Key.ToString(),
-                    counter.TreeId,
-                    StringComparison.Ordinal)))
+        if (method?.DeclaringType == typeof(ILattice))
         {
-            counter.Record(method.Name);
+            var treeId = context.TargetContext.GrainId.Key.ToString() ?? string.Empty;
+            if (counter.TreeId is null
+                || string.Equals(treeId, counter.TreeId, StringComparison.Ordinal))
+            {
+                counter.Record(method.Name, treeId, KeysIn(context));
+            }
         }
 
         return context.Invoke();
+    }
+
+    /// <summary>
+    /// Infers how many keys a call addresses from its first argument, so a batched
+    /// call is charged its batch size rather than one. A point call whose first
+    /// argument is the key, and any shape not recognised, is charged one - the
+    /// conservative direction for an assertion that a path got <b>cheaper</b>.
+    /// </summary>
+    private static int KeysIn(IIncomingGrainCallContext context)
+    {
+        var arguments = context.Request?.GetArgumentCount() > 0 ? context.Request : null;
+        if (arguments is null)
+        {
+            return 1;
+        }
+
+        var first = arguments.GetArgument(0);
+        return first switch
+        {
+            string => 1,
+            System.Collections.ICollection collection => collection.Count,
+            _ => 1,
+        };
     }
 }

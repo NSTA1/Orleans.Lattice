@@ -398,7 +398,8 @@ mid-task.
 - **Expiry and link staleness are not evaluated by a bulk read.** A `scan` (and a
   degraded `keyword`-mode `search`) enumerates key+value only, so its expiry
   fields (`expires`, `hasExpired`, `expiresAtUtc`, `remainingSeconds`) and its
-  memory link-staleness fields (`stale`, `staleLinks`) come back `null`
+  memory link-staleness fields (`stale`, `staleLinks`, `danglingLinks`) come
+  back `null`
   ("not evaluated") - this is by design, not a durable claim. A scan still yields
   only live (non-expired, non-tombstoned) entries. To read an entry's authoritative
   TTL or link staleness, `recall` it (or, for TTL, use a `semantic` `search`,
@@ -414,12 +415,22 @@ mid-task.
   and remaining TTL - not live file content; per guardrail 1, `view` the file for
   the current body.
 - **`recall` evaluates memory link staleness.** For a memory entry, `recall`
-  compares each structural link (to a file or symbol) against the target's
-  current content digest, captured when the link was made, and reports drift
-  through `stale` (any linked target changed or was deleted) and `staleLinks`
-  (the specific target keys). A `stale` link is a cue to re-read the target and
-  refresh or retire the note. `neighbors` evaluates the same per walked entry.
-  Bulk reads do not (see below), so `stale`/`staleLinks` come back `null` there.
+  walks the live link set and checks every structural target (a file or symbol)
+  against its present state. A link is fresh only when a digest was captured for
+  it, the target still has a live record, and the two digests match. Every other
+  outcome is reported through `stale` and `staleLinks` (the specific target
+  keys): the target **drifted**, the target has **no live record** (deleted, or
+  never present in the corpus at all), or **no digest was ever captured** so
+  drift was never measurable. The subset whose target has no live record is also
+  named in `danglingLinks` - always a subset of `staleLinks`, never a partition
+  of it, so reading only `staleLinks` still gives full coverage. Mind the
+  difference, because the remedies are opposite: a drifted link is a cue to
+  re-read the target now, whereas a dangling one - typically a note written about
+  code that has not yet reached the indexed branch - is a cue to wait and
+  re-check once the target is indexed, not to go looking for a file that was
+  never there. `neighbors` evaluates the same per walked entry. Bulk reads do
+  not (see below), so `stale`/`staleLinks`/`danglingLinks` come back `null`
+  there.
 - A missing or expired key returns `exists: false`, so you can tell an absent
   entry from an empty one.
 
@@ -439,8 +450,9 @@ mid-task.
   target has no live value is still returned as a neighbor with its own
   `exists: false`, so you can see broken links.
 - Each walked neighbor that is a memory entry is returned with its link staleness
-  evaluated (`stale` / `staleLinks`), exactly as `recall` does, so a graph walk
-  surfaces which linked concepts point at drifted code.
+  evaluated (`stale` / `staleLinks` / `danglingLinks`), exactly as `recall`
+  does, so a graph walk surfaces which linked concepts point at drifted code and
+  which point at nothing.
 
 ### Graph navigation - outline / related / changed
 
@@ -838,8 +850,37 @@ while `filesEmbedded` / `filesScanned` is the slower **embedding** phase that
 follows it, so chunks reaching completion while `filesEmbedded` still climbs is
 normal, not a contradiction (embeddings also require a healthy vector projection
 - see "Health and degraded mode"). A still-`Running` job whose `filesEmbedded` or
-`updatedAt` keeps advancing is healthy; only a stalled `updatedAt` or
-`status: Failed` warrants giving up on it.
+`updatedAt` keeps advancing is healthy.
+
+**A stalled `updatedAt` is NOT on its own grounds to give up, and treating it as
+such prescribes a destructive action against a healthy index.** An earlier
+revision of this file said a stalled `updatedAt` or `status: Failed` warranted
+giving up on a run. Half of that is wrong. `updatedAt` advances only when some
+arm of the ingest reports progress, and until this was fixed only the **file**
+arm reported at all: the symbol and memory arms embedded in complete silence. On
+a steady-state repository whose file coverage is already complete the file arm
+legitimately embeds **zero** and finishes early, after which the symbol arm can
+run for an hour or more with `updatedAt` frozen and `filesEmbedded: 0` - the
+exact reading of a dead job, produced by a job converging at hundreds of vectors
+a minute.
+
+So before concluding a run is stuck, **check the one counter that is independent
+of the progress channel**: `embeddedVectorCount` on `repocontext_list_repos`. It
+counts landed embeddings for **sources** - files *and* captured symbols - so it
+rises while the symbol arm works whether or not anything is reporting. Two
+readings a few minutes apart settle it:
+
+- `embeddedVectorCount` rising, `updatedAt` frozen -> the job is **alive** and
+  working an arm that is not the file arm. Wait; do not re-onboard.
+- `embeddedVectorCount` flat AND `updatedAt` frozen across several minutes ->
+  genuinely stalled.
+- `status: Failed` -> give up on the run regardless of the counters.
+
+Newer builds also report `symbolsEmbedded` alongside `filesEmbedded`, and the
+symbol arm now reports progress, so `updatedAt` advances through it. Where that
+counter is present the three read as one picture: `embeddedVectorCount` is the
+**sum** over sources, and `filesEmbedded` is only one of its terms. Reading the
+sum against a single term is what made a working index look dead.
 
 ## Health and degraded mode
 
@@ -865,6 +906,12 @@ normal, not a contradiction (embeddings also require a healthy vector projection
     not-yet-embedded files. For **completeness** while an ingest runs, do not
     trust a single `search` - also `scan` the relevant `pathPrefix` (or `grep`),
     and re-run the `search` once `filesEmbedded` reaches `filesScanned`.
+  - **Live but silent (a non-file arm is working):** `status: Running`,
+    `updatedAt` frozen, and `filesEmbedded` static - often at `0` - while
+    `embeddedVectorCount` on `list_repos` keeps rising. The job is **healthy**
+    and embedding symbols or memory, not files. Do not re-onboard on this
+    reading; see "Freshness and re-ingest" above for the two-reading check that
+    distinguishes it from a real stall.
   - **Stale content projection (body-text ranking only):** the per-file content
     projection is a separate, rebuildable tree from the vector index. If it is
     terminally stale (its leaf checkpoint fell off the write-ahead log awaiting an

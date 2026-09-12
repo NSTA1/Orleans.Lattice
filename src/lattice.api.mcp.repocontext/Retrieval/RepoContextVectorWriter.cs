@@ -172,6 +172,7 @@ internal sealed class RepoContextVectorWriter
     private readonly RepoContextVectorCache _cache;
     private readonly RepoContextVectorPlaneReDeriver _reDeriver;
     private readonly IRepoContextAnnIndex? _annIndex;
+    private readonly RepoContextCoverageDigestStore? _coverageDigest;
     private readonly ILogger<RepoContextVectorWriter> _logger;
 
     /// <summary>
@@ -251,7 +252,8 @@ internal sealed class RepoContextVectorWriter
         RepoContextVectorCache cache,
         RepoContextVectorPlaneReDeriver reDeriver,
         IRepoContextAnnIndex? annIndex = null,
-        ILogger<RepoContextVectorWriter>? logger = null)
+        ILogger<RepoContextVectorWriter>? logger = null,
+        RepoContextCoverageDigestStore? coverageDigest = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -264,6 +266,7 @@ internal sealed class RepoContextVectorWriter
         _cache = cache;
         _reDeriver = reDeriver;
         _annIndex = annIndex;
+        _coverageDigest = coverageDigest;
         _logger = logger ?? NullLogger<RepoContextVectorWriter>.Instance;
     }
 
@@ -651,6 +654,19 @@ internal sealed class RepoContextVectorWriter
 
         await EnableMembershipManyAsync(keys, cancellationToken).ConfigureAwait(false);
 
+        // Membership FIRST, digest second (issue #2486). The digest is allowed to
+        // trail membership - that under-reports coverage and costs a redundant,
+        // idempotent embed - but must never lead it, which would report a source as
+        // covered before its embedding landed and mask a real gap permanently.
+        if (_coverageDigest is not null)
+        {
+            await _coverageDigest.RecordCoveredAsync(
+                repoId,
+                sourceKeys.Select(VectorCodec.SourceId),
+                contentlessSourceIds: null,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         // Membership does not feed the gather, but a batch's membership write always
         // trails its StoreAsync vectors, so invalidate defensively to keep the cache
         // consistent with any future gather that consults membership.
@@ -854,15 +870,27 @@ internal sealed class RepoContextVectorWriter
     /// <param name="Passes">How many calls this walk of the range has already taken.</param>
     private sealed record MemoryKeyMarkerCursor(IReadOnlySet<string> Keys, string? ContinuationToken, int Passes);
 
-    private Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
-        => GuardMembershipAsync(async () =>        {
+    private async Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
+    {
+        // Digest FIRST, membership second (issue #2486) - the mirror image of the add
+        // ordering, and for the same reason: an interleaving or a crash between the
+        // two must leave the digest a subset of membership, never a superset.
+        if (_coverageDigest is not null)
+        {
+            await _coverageDigest.RecordUncoveredAsync(
+                repoId, [sourceId], contentlessSourceIds: null, cancellationToken).ConfigureAwait(false);
+        }
+
+        await GuardMembershipAsync(async () =>
+        {
             var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
             var key = RepoContextKeys.VectorMembership(repoId, sourceId);
 
             // Disable rather than delete so the removal carries causal history and
             // converges add-wins against a concurrent enable on another cluster.
             await tree.OrFlag(key).DisableAsync(cancellationToken).ConfigureAwait(false);
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Records a "considered, no passages" marker for each contentless source in a
@@ -898,6 +926,19 @@ internal sealed class RepoContextVectorWriter
         }
 
         await EnableMembershipManyAsync(keys, cancellationToken).ConfigureAwait(false);
+
+        // Membership first, digest second - see AddMembersAsync for the ordering
+        // invariant. A contentless marker is coverage exactly as an embedding is, so
+        // the digest carries it in its own run rather than conflating the two: the
+        // ingest path still has to tell an embedded file from a marked-empty one.
+        if (_coverageDigest is not null)
+        {
+            await _coverageDigest.RecordCoveredAsync(
+                repoId,
+                embeddedSourceIds: null,
+                sourceKeys.Select(VectorCodec.SourceId),
+                cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -910,18 +951,25 @@ internal sealed class RepoContextVectorWriter
     /// <param name="sourceId">The 16-character source identifier whose marker to clear. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="sourceId"/> is null.</exception>
-    public Task UnmarkContentlessAsync(
+    public async Task UnmarkContentlessAsync(
         string repoId, string sourceId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(sourceId);
 
-        return GuardMembershipAsync(() =>
+        // Digest first, membership second - see RemoveMemberAsync for the ordering.
+        if (_coverageDigest is not null)
+        {
+            await _coverageDigest.RecordUncoveredAsync(
+                repoId, embeddedSourceIds: null, [sourceId], cancellationToken).ConfigureAwait(false);
+        }
+
+        await GuardMembershipAsync(() =>
         {
             var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
             var key = RepoContextKeys.VectorMembership(repoId, ContentlessMarkerPrefix + sourceId);
             return tree.OrFlag(key).DisableAsync(cancellationToken);
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -961,16 +1009,16 @@ internal sealed class RepoContextVectorWriter
     /// <param name="repoId">The repository whose embedded members to probe. Must not be <see langword="null"/>.</param>
     /// <param name="candidateSourceKeys">The bounded set of canonical record keys to probe. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the probe.</param>
-    /// <returns>The live embedded source identifiers restricted to the probed candidates.</returns>
+    /// <returns>The live embedded source identifiers restricted to the probed candidates, with the gate-prune count that qualifies their absence.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="candidateSourceKeys"/> is null.</exception>
-    public async Task<IReadOnlySet<string>> ProbeEmbeddedMembersAsync(
+    public async Task<RepoContextProbedSourceIds> ProbeEmbeddedMembersAsync(
         string repoId, IReadOnlyList<string> candidateSourceKeys, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(candidateSourceKeys);
         var coverage = await ProbeMembershipAsync(
             repoId, candidateSourceKeys, includeContentless: false, cancellationToken).ConfigureAwait(false);
-        return coverage.Embedded;
+        return new RepoContextProbedSourceIds(coverage.Embedded, coverage.PrunedByAccessGate);
     }
 
     /// <summary>
@@ -984,9 +1032,9 @@ internal sealed class RepoContextVectorWriter
     /// <param name="repoId">The repository whose covered set to probe. Must not be <see langword="null"/>.</param>
     /// <param name="candidateSourceKeys">The bounded set of canonical record keys to probe. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the probe.</param>
-    /// <returns>The union of embedded and contentless-marker source identifiers restricted to the probed candidates.</returns>
+    /// <returns>The union of embedded and contentless-marker source identifiers restricted to the probed candidates, with the gate-prune count that qualifies their absence.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="candidateSourceKeys"/> is null.</exception>
-    public async Task<IReadOnlySet<string>> ProbeCoveredSourceIdsAsync(
+    public async Task<RepoContextProbedSourceIds> ProbeCoveredSourceIdsAsync(
         string repoId, IReadOnlyList<string> candidateSourceKeys, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
@@ -995,19 +1043,21 @@ internal sealed class RepoContextVectorWriter
             repoId, candidateSourceKeys, includeContentless: true, cancellationToken).ConfigureAwait(false);
         if (coverage.Contentless.Count == 0)
         {
-            return coverage.Embedded;
+            return new RepoContextProbedSourceIds(coverage.Embedded, coverage.PrunedByAccessGate);
         }
 
         var covered = new HashSet<string>(coverage.Embedded, StringComparer.Ordinal);
         covered.UnionWith(coverage.Contentless);
-        return covered;
+        return new RepoContextProbedSourceIds(covered, coverage.PrunedByAccessGate);
     }
 
     /// <summary>
     /// Shared bounded point-probe: reduces the candidate keys to distinct source
-    /// identifiers, batches them through <see cref="ILattice.GetManyAsync(System.Collections.Generic.List{string}, CancellationToken)"/>
+    /// identifiers, batches them through <see cref="ILattice.GetManyWithGateAccountingAsync(System.Collections.Generic.List{string}, CancellationToken)"/>
     /// in <see cref="MembershipProbeBatchSize"/>-sized chunks, and decodes each
-    /// returned row exactly as a whole-set scan would.
+    /// returned row exactly as a whole-set scan would. The gate-accounting read seam
+    /// is used rather than the plain multi-get so a key the store's access gate
+    /// pruned is distinguishable from one that was never written (issue #2277).
     /// </summary>
     private Task<RepoContextEmbeddingCoverage> ProbeMembershipAsync(
         string repoId,
@@ -1020,6 +1070,15 @@ internal sealed class RepoContextVectorWriter
             var contentless = new HashSet<string>(StringComparer.Ordinal);
             if (candidateSourceKeys.Count == 0)
             {
+                // A probe with no candidates still EXECUTED, and returning from here
+                // without a word is what made that execution byte-identical in the
+                // log to a probe that never ran (issue #2679). This is the reachable
+                // zero: both symbol-arm callers build their page keys by filtering
+                // out null-valued records with no empty guard, so a page whose rows
+                // all read null arrives here. Route it through the same reporting
+                // seam as every other execution, so the zero lands as a value rather
+                // than as an absence.
+                ReportProbeAccounting(repoId, new MembershipProbeAccounting());
                 return new RepoContextEmbeddingCoverage(embedded, contentless);
             }
 
@@ -1054,23 +1113,81 @@ internal sealed class RepoContextVectorWriter
             }
 
             ReportProbeAccounting(repoId, accounting);
-            return new RepoContextEmbeddingCoverage(embedded, contentless);
+            return new RepoContextEmbeddingCoverage(embedded, contentless)
+            {
+                PrunedByAccessGate = accounting.Pruned,
+            };
         }, cancellationToken);
 
     /// <summary>
     /// Emits the probe's per-key accounting (issue #2287).
     /// <para>
-    /// At debug level on every non-empty probe, because the gain this item was opened
+    /// At debug level on <b>every</b> execution, because the gain this item was opened
     /// for is that a gap count now arrives with its denominator and its breakdown
     /// instead of on its own. At warning level only when the probe saw something with
     /// no benign reading - see <see cref="MembershipProbeAccounting.IsAnomalous"/>,
     /// which deliberately excludes the not-returned count.
     /// </para>
+    /// <para>
+    /// "Every execution" includes the one that asked for nothing, which is the repair
+    /// made for issue #2679. A zero-request probe reports a short line of its own
+    /// rather than returning silently: silence there is not a smaller version of the
+    /// ordinary reading, it is the same bytes an operator sees when the probe never
+    /// ran at all, so the state they most want to confirm - it ran and the membership
+    /// was clean - is the one the log could not evidence.
+    /// </para>
     /// </summary>
     private void ReportProbeAccounting(string repoId, MembershipProbeAccounting accounting)
     {
-        if (accounting.Requested == 0)
+        if (accounting.Requested == 0 && !accounting.IsAnomalous)
         {
+            // Deliberately NOT a silent return (issue #2679). A probe that ran and
+            // asked for nothing made a real finding - there was nothing on this page
+            // to ask about - and suppressing it collapsed three distinct states onto
+            // one empty log: the probe ran and found a clean membership, the probe
+            // ran and requested zero keys, and the probe never executed. An operator
+            // enabling debug on this category to investigate vector-writer
+            // dispositions would read the first from evidence that equally supports
+            // the third, and the first reads as a pass.
+            //
+            // The line deliberately keeps the shared "Repo-context membership probe"
+            // prefix and a literal requested=0, so it joins the population an
+            // operator already greps for and is positively identifiable AS a zero
+            // rather than merely being some line.
+            //
+            // Conditioned on IsAnomalous so the warning arm below cannot be bypassed.
+            // A zero-request accounting cannot presently be anomalous - nothing was
+            // probed, so nothing can have been pruned, unparseable, or unrequested -
+            // which means this conjunct is, today, unreachable as false.
+            //
+            // That is deliberate, and the symmetry is worth naming before someone
+            // else notices it: this change deletes an unreachable guard and adds an
+            // unreachable conjunct in the same breath. The difference is DIRECTION.
+            // The guard that was removed SUPPRESSED AN OBSERVATION, so being
+            // unreachable it hid a state an operator needed to see. This one only
+            // PRESERVES AN ALARM PATH, so if it ever begins to matter it can only
+            // make the system louder. A dead branch that can only ever add signal is
+            // not the defect class issue #2679 is about, so do not cite #2679 to
+            // delete it - that would use the issue's own reasoning to undo the
+            // issue's own fix.
+            //
+            // No test covers this conjunct and none can: an anomalous zero-request
+            // accounting is not constructible through any path that reaches this
+            // method. A coverage audit must therefore record it as UNVERIFIED, not
+            // as checked and clean. Telling those two apart is the whole subject of
+            // this issue, and it would be poor form to ship a predicate that blurs
+            // them without saying so here.
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogDebug(
+                    "Repo-context membership probe for '{RepoId}': requested=0. The probe ran and had no "
+                    + "candidate keys, so it asked the store for nothing: this is neither a clean membership "
+                    + "nor a gap, and no disposition should be read from it. It is reported rather than "
+                    + "skipped because a silent zero is byte-identical in the log to a probe that never "
+                    + "executed, and those two call for opposite actions.",
+                    repoId);
+            }
+
             return;
         }
 
@@ -1079,9 +1196,15 @@ internal sealed class RepoContextVectorWriter
             + "requested={Requested} returned={Returned} accounted={Accounted} "
             + "embedded={Embedded} contentless={Contentless} memoryMarker={MemoryMarker} "
             + "disabled={Disabled} unparseable={Unparseable} notReturned={NotReturned} "
-            + "unrequested={Unrequested}. "
-            + "A not-returned key is read as an absent presence flag, so an incomplete read is "
-            + "indistinguishable from a genuinely unembedded source and re-selects it for embedding; "
+            + "pruned={Pruned} unrequested={Unrequested}. "
+            + "A not-returned key is one the store did not answer with: it was either never "
+            + "written - a genuinely unembedded source, the normal and expected state of any "
+            + "corpus with a real gap - or it was removed from the read by the store's access "
+            + "gate before fan-out, and those two are byte-identical in the read's output; "
+            + "pruned is that second population counted by the gate itself, so genuinely "
+            + "absent = notReturned - pruned, and a non-zero pruned count (possible only on a "
+            + "gated deployment) means this probe is INCOMPLETE rather than negative and its "
+            + "absences must not be classified as missing embeddings; "
             + "an unparseable key was written by this writer and cannot be read back; "
             + "an unrequested row is one the store returned that this probe never asked for.";
 
@@ -1099,6 +1222,7 @@ internal sealed class RepoContextVectorWriter
                 accounting.Disabled,
                 accounting.Unparseable,
                 accounting.NotReturned,
+                accounting.Pruned,
                 accounting.Unrequested);
             return;
         }
@@ -1120,6 +1244,7 @@ internal sealed class RepoContextVectorWriter
             accounting.Disabled,
             accounting.Unparseable,
             accounting.NotReturned,
+            accounting.Pruned,
             accounting.Unrequested);
     }
 
@@ -1132,7 +1257,18 @@ internal sealed class RepoContextVectorWriter
         CancellationToken cancellationToken)
     {
         accounting.Requested += keys.Count;
-        var found = await tree.GetManyAsync(keys, cancellationToken).ConfigureAwait(false);
+        var gated = await tree.GetManyWithGateAccountingAsync(keys, cancellationToken).ConfigureAwait(false);
+        var found = gated.Values;
+
+        // The distinction this item was opened on, obtained from the only layer that
+        // has it (issue #2277). A key the read-path access gate pruned is absent from
+        // `found` for a reason that has nothing to do with whether it was embedded,
+        // and it is byte-identical there to a key that was never written - so no
+        // comparison of `found` against `keys` in this method could ever separate the
+        // two. The grain reports the COUNT (never the identities, which would name
+        // the keys the caller was refused and make this probe an authorization
+        // oracle), which is exactly enough: genuinely absent = NotReturned - Pruned.
+        accounting.Pruned += gated.PrunedByAccessGate;
         var requested = new HashSet<string>(keys, StringComparer.Ordinal);
         var seen = new HashSet<string>(keys.Count, StringComparer.Ordinal);
         var returned = 0;
@@ -1283,9 +1419,33 @@ internal sealed class RepoContextVectorWriter
 
         /// <summary>
         /// Keys the store did not return. Read as "no presence flag exists" by every
-        /// caller, which is correct only if the store is complete.
+        /// caller, which is correct only if the read was complete - see
+        /// <see cref="Pruned"/> for the population that makes it incomplete.
         /// </summary>
         public int NotReturned { get; set; }
+
+        /// <summary>
+        /// Keys the store's read-path access gate removed before fan-out, so the read
+        /// never looked for them (issue #2277).
+        /// <para>
+        /// An overlay counter like <see cref="Unrequested"/> and deliberately NOT one
+        /// of the partition categories: a pruned key is a requested key the store did
+        /// not answer with, so it is already counted in <see cref="NotReturned"/> and
+        /// folding it into <see cref="Accounted"/> would break the identity. It is a
+        /// SUBSET of <see cref="NotReturned"/>, which is what makes the subtraction
+        /// meaningful: genuinely absent = <see cref="NotReturned"/> - <see cref="Pruned"/>.
+        /// </para>
+        /// <para>
+        /// The count is reported and the identities are not, and that asymmetry is the
+        /// design rather than an economy. Naming the pruned keys would tell a caller
+        /// exactly which keys it was refused, which is precisely the fact the gate
+        /// exists to withhold, and would turn every coverage probe into an
+        /// authorization oracle - a strictly worse defect than the one this counter
+        /// fixes. The count is enough: no consumer needs to know WHICH key was hidden,
+        /// only that this probe's silence is not evidence of absence.
+        /// </para>
+        /// </summary>
+        public int Pruned { get; set; }
 
         /// <summary>
         /// Rows the store returned whose key was not in the requested batch.
@@ -1328,8 +1488,20 @@ internal sealed class RepoContextVectorWriter
         /// level on every probe, because the diagnostic gain of issue #2287 is the
         /// DENOMINATOR and the breakdown, not an alarm.
         /// </para>
+        /// <para>
+        /// <see cref="Pruned"/> IS part of this test, and the contrast with
+        /// <see cref="NotReturned"/> is the point rather than an inconsistency. The
+        /// argument for excluding not-returned is that it is the ordinary healthy
+        /// case, so warning on it fires always and gets muted. Pruned has no healthy
+        /// case at all: the ingestor probes its own membership keys, so a gate that
+        /// hides them from it is a misconfiguration in every deployment, gated or
+        /// not, and one that silently stops the back-fill from ever healing the
+        /// repository. It will repeat on every pass for as long as that
+        /// misconfiguration stands, which is the intended behaviour for a condition
+        /// that is never benign and never self-corrects.
+        /// </para>
         /// </summary>
-        public bool IsAnomalous => Unparseable > 0 || Unrequested > 0;
+        public bool IsAnomalous => Unparseable > 0 || Unrequested > 0 || Pruned > 0;
     }
 
     /// <summary>
@@ -1361,6 +1533,98 @@ internal sealed class RepoContextVectorWriter
             token = page.HasMore ? page.ContinuationToken : null;
         }
         while (token is not null);
+    }
+
+    /// <summary>
+    /// Loads the repository's coverage digest, building it from a one-time whole-set
+    /// membership scan when it does not exist yet (issue #2486).
+    /// <para>
+    /// This is the seam every gap-detection caller goes through, and the bootstrap is
+    /// the reason it exists. On a deployment whose membership predates the digest, a
+    /// naive read of an absent digest would report every source uncovered and
+    /// re-embed the entire repository - the exact whole-repository pass this item was
+    /// opened to remove. So an unbuilt digest is seeded once from the authoritative
+    /// membership scan, and every pass after that reads
+    /// <see cref="RepoContextCoveragePage.PageCount"/> rows regardless of corpus size.
+    /// </para>
+    /// <para>
+    /// A bootstrap failure is not fatal and is not retried here: the digest stays
+    /// unbuilt, the caller falls back to the membership probe it used before, and the
+    /// next pass tries again.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository whose digest to load. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the load.</param>
+    /// <returns>The built digest, or <see cref="RepoContextCoverageDigest.Unbuilt"/> when no digest is available.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public async Task<RepoContextCoverageDigest> LoadCoverageDigestAsync(
+        string repoId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        if (_coverageDigest is null)
+        {
+            return RepoContextCoverageDigest.Unbuilt;
+        }
+
+        var digest = await _coverageDigest.LoadAsync(repoId, cancellationToken).ConfigureAwait(false);
+        if (digest.IsBuilt)
+        {
+            return digest;
+        }
+
+        try
+        {
+            var coverage = await LoadCoverageAsync(repoId, cancellationToken).ConfigureAwait(false);
+            if (!await _coverageDigest.RebuildAsync(repoId, coverage, cancellationToken).ConfigureAwait(false))
+            {
+                // The seed read was gate-pruned, so the digest was deliberately left
+                // unbuilt. Return that directly rather than re-loading: the re-load
+                // would return the same unbuilt digest after a second full page sweep.
+                return RepoContextCoverageDigest.Unbuilt;
+            }
+
+            return await _coverageDigest.LoadAsync(repoId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Repo {RepoId}: could not seed the vector-coverage digest from membership; this pass falls " +
+                "back to the per-source membership probe and the next pass retries.",
+                repoId);
+            return RepoContextCoverageDigest.Unbuilt;
+        }
+    }
+
+    /// <summary>
+    /// Re-derives the repository's coverage digest from an authoritative whole-set
+    /// membership scan, whatever its current state. This is the periodic exhaustive
+    /// audit that bounds digest drift: it is the only remaining O(sources) read on
+    /// the coverage path, which is why it runs on a long cadence while detection runs
+    /// every pass.
+    /// </summary>
+    /// <param name="repoId">The repository to audit. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the audit.</param>
+    /// <returns>
+    /// <see langword="true"/> when the digest was re-derived. <see langword="false"/>
+    /// when there is no digest configured, or when the authoritative scan came back
+    /// gate-pruned and was refused - the audit is the repair path, so mirroring a
+    /// pruned read here would not merely fail to fix a corrupt digest, it would
+    /// re-corrupt a healthy one while reporting success.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public async Task<bool> AuditCoverageDigestAsync(string repoId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        if (_coverageDigest is null)
+        {
+            return false;
+        }
+
+        var coverage = await LoadCoverageAsync(repoId, cancellationToken).ConfigureAwait(false);
+        return await _coverageDigest.RebuildAsync(repoId, coverage, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1416,7 +1680,28 @@ internal sealed class RepoContextVectorWriter
                 }
             }
 
-            return new RepoContextEmbeddingCoverage(embedded, contentless);
+            return new RepoContextEmbeddingCoverage(embedded, contentless)
+            {
+                // Ask the gate what it withheld, and do it UNCONDITIONALLY rather than
+                // only when the scan came back empty. The documented guidance on
+                // GetRangeReadGateCoverageAsync is to consult it only on an empty read,
+                // and that guidance is right for the hot scan path it was written for -
+                // an extra grain call per empty read is a real tax there.
+                //
+                // This is not that path. It is the O(sources) whole-set read that seeds
+                // and audits the DURABLE coverage digest, so one round trip is rounding
+                // error against a scan that already walks every source. And the
+                // only-when-empty rule is blind to the more dangerous case: a PARTIAL
+                // prune leaves a non-empty result, so it would be skipped, yet it is
+                // strictly worse than a total one. A total prune at least yields an
+                // empty set, which is an anomaly something might notice; a partial
+                // prune yields a populated, plausible, slightly-wrong coverage that
+                // looks exactly like a healthy one. Marked built, that becomes a
+                // durable lie about precisely the sources the gate hid.
+                RangeGateCoverage = await tree
+                    .GetRangeReadGateCoverageAsync(prefix, endExclusive, cancellationToken)
+                    .ConfigureAwait(false),
+            };
         }, cancellationToken);
     }
 

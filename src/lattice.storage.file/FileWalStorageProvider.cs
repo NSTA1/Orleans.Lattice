@@ -50,6 +50,8 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
 {
     private readonly FileWalStorageOptions _options;
     private readonly Serializer<WalRecord> _serializer;
+    private readonly Func<ReadOnlySequence<byte>, WalRecord> _decode;
+    private readonly IWalReadPressureGovernor _governor;
     private readonly ConcurrentDictionary<(string TreeId, int ShardIndex), FileWalShard> _shards = new();
     private bool _disposed;
 
@@ -63,9 +65,18 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
     /// <see cref="WalRecord"/> stored on disk, matching the Azure Table
     /// provider's on-disk format. Must not be <see langword="null"/>.</param>
     public FileWalStorageProvider(IOptions<FileWalStorageOptions> options, Serializer<WalRecord> serializer)
+        : this(options, serializer, GcWalReadPressureGovernor.Instance)
+    {
+    }
+
+    internal FileWalStorageProvider(
+        IOptions<FileWalStorageOptions> options,
+        Serializer<WalRecord> serializer,
+        IWalReadPressureGovernor governor)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(serializer);
+        ArgumentNullException.ThrowIfNull(governor);
         _options = options.Value ?? throw new ArgumentException(
             $"{nameof(IOptions<FileWalStorageOptions>)}.{nameof(IOptions<FileWalStorageOptions>.Value)} returned null.",
             nameof(options));
@@ -76,7 +87,26 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
                 nameof(options));
         }
 
+        // Checked here as well as in FileWalStorageOptionsValidator, because
+        // a host (or a test) may construct the provider directly from
+        // Options.Create and never run the registration-time validator. A
+        // zero or negative read budget would otherwise reach the shard and
+        // throw per-read, far from the misconfiguration.
+        if (_options.MaxReadBatchBytes < 1L)
+        {
+            throw new ArgumentException(
+                $"{nameof(FileWalStorageOptions)}.{nameof(FileWalStorageOptions.MaxReadBatchBytes)} must be at least 1; "
+                + $"was {_options.MaxReadBatchBytes}.",
+                nameof(options));
+        }
+
         _serializer = serializer;
+        _governor = governor;
+
+        // Cached so the decode path allocates no delegate per read: the one
+        // thing a memory-pressure fix must not do is allocate on the page it
+        // is trying to make affordable.
+        _decode = _serializer.Deserialize;
     }
 
     /// <inheritdoc />
@@ -178,14 +208,26 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
 
         ThrowIfDisposed();
 
-        var (offsets, payloads) = await GetShard(treeId, shardIndex)
-            .SnapshotAsync(fromOffsetExclusive, maxEntries, cancellationToken)
+        // Decode straight from the pooled chunk sequence: the caller wants
+        // WalEntry, never the bytes, so a contiguous byte[] per entry would
+        // be allocated only to be discarded - and it is precisely that
+        // contiguous request that fails first on a fragmented, nearly-full
+        // heap (issue #2742). This keeps the page's peak footprint at the
+        // decoded records plus a few pooled 64 KiB chunks.
+        var shard = GetShard(treeId, shardIndex);
+        var (offsets, records) = await shard
+            .SnapshotDecodedAsync(
+                fromOffsetExclusive,
+                maxEntries,
+                _options.MaxReadBatchBytes,
+                _decode,
+                cancellationToken)
             .ConfigureAwait(false);
 
         for (var i = 0; i < offsets.Length; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var record = _serializer.Deserialize(new ReadOnlyMemory<byte>(payloads[i]));
+            var record = records[i];
             yield return new WalEntry
             {
                 Offset = offsets[i],
@@ -220,8 +262,9 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
         // segments are returned verbatim - no per-entry WalRecord
         // materialisation and re-encode. Each payload is a freshly-owned
         // array read from disk, so it outlives the synchronous return.
-        var (offsets, payloads) = await GetShard(treeId, shardIndex)
-            .SnapshotAsync(fromOffsetExclusive, maxEntries, cancellationToken)
+        var shard = GetShard(treeId, shardIndex);
+        var (offsets, payloads) = await shard
+            .SnapshotAsync(fromOffsetExclusive, maxEntries, _options.MaxReadBatchBytes, cancellationToken)
             .ConfigureAwait(false);
 
         var segments = new ArraySegment<byte>[payloads.Length];
@@ -290,14 +333,14 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
     /// </summary>
     private FileWalShard GetShard(string treeId, int shardIndex)
     {
-        return _shards.GetOrAdd((treeId, shardIndex), static (key, options) =>
+        return _shards.GetOrAdd((treeId, shardIndex), static (key, state) =>
         {
             var directory = Path.Combine(
-                options.RootDirectory,
+                state.Options.RootDirectory,
                 EncodePathSegment(key.TreeId),
                 "shard-" + key.ShardIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            return new FileWalShard(directory, options);
-        }, _options);
+            return new FileWalShard(directory, state.Options, key.TreeId, key.ShardIndex, state.Governor);
+        }, (Options: _options, Governor: _governor));
     }
 
     /// <summary>

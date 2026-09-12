@@ -33,6 +33,13 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     private readonly IRepoContextAnnBackingFactory _backing;
     private readonly RepoContextAnnOptions _options;
     private readonly ILogger<RepoContextAnnIndexRegistry> _logger;
+
+    // Owned here rather than injected, following RepoContextAnnIndexSweepService:
+    // the instrument partitions a state only a handle can observe, and every handle
+    // is created here, so this is the one place that can guarantee no plane is
+    // built without it.
+    private readonly RepoContextAnnPartitioningReporter _partitioning = new();
+
     private bool _disposed;
 
     /// <summary>Creates the registry.</summary>
@@ -82,6 +89,12 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
 
         return handle.SearchAsync(query, k, cancellationToken);
     }
+
+    /// <summary>
+    /// The reporter metering whether each plane holds a partitioning. Exposed so a
+    /// test can read the arms without a meter listener.
+    /// </summary>
+    internal RepoContextAnnPartitioningReporter Partitioning => _partitioning;
 
     /// <inheritdoc />
     public bool TryGetProgress(string repoId, EmbeddingSpaceTag space, out VectorIndexBuildProgress progress)
@@ -224,6 +237,7 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
         }
 
         _entries.Clear();
+        _partitioning.Dispose();
     }
 
     private RepoContextAnnIndexHandle GetOrCreate(string repoId, EmbeddingSpaceTag space)
@@ -241,7 +255,8 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
             _backing.CreateStore(repoId, space),
             _options,
             LatticeRepoContextAnnBackingFactory.KeyPrefix(repoId, space),
-            _logger);
+            _logger,
+            _partitioning);
 
         var winner = _entries.GetOrAdd(key, created);
         if (!ReferenceEquals(winner, created))

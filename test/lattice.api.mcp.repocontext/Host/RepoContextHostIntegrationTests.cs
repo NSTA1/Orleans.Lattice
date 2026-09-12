@@ -450,6 +450,68 @@ public sealed class RepoContextHostIntegrationTests
         }
     }
 
+    /// <summary>
+    /// The scrape endpoint must be mapped in both durability profiles. The unit
+    /// tests prove the collector renders correctly, but a correct collector behind
+    /// an unmapped route is still a 404 - which is precisely the state issue #2363
+    /// records - so the route itself is asserted separately.
+    /// </summary>
+    [Test]
+    public void Metrics_endpoint_is_mapped_in_the_local_profile()
+    {
+        var app = BuildLocalHost(LocalConfig());
+        try
+        {
+            Assert.That(MappedRoutes(app), Does.Contain(RepoContextHostBuilder.MetricsPath));
+        }
+        finally
+        {
+            app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+    }
+
+    /// <summary>
+    /// The end-to-end control, over the real host and the real HTTP route: a 200
+    /// with an empty or partial body would look exactly like success, so this
+    /// asserts a KNOWN production instrument's KNOWN value in the response text.
+    /// It deliberately does not wait for readiness first - an unready box is
+    /// exactly when an operator needs the counters, so the endpoint must serve
+    /// before <c>/health/ready</c> flips.
+    /// </summary>
+    [Test]
+    public async Task Metrics_endpoint_serves_a_recorded_production_instrument_value()
+    {
+        const string probeCommand = "repocontext_integration_probe";
+
+        var app = BuildLocalHost(LocalConfig());
+        await app.StartAsync(Ct);
+        try
+        {
+            using var recorder = new RepoContextUsageRecorder(TimeProvider.System);
+            recorder.Record(new RepoContextCallUsage(probeCommand, ResponseTokens: 123, ReplacedReadTokens: 456));
+
+            using var client = app.GetTestServer().CreateClient();
+            var response = await client.GetAsync(RepoContextHostBuilder.MetricsPath, Ct);
+            var body = await response.Content.ReadAsStringAsync(Ct);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+                Assert.That(response.Content.Headers.ContentType?.MediaType, Is.EqualTo("text/plain"));
+                Assert.That(body, Does.Contain("# TYPE repocontext_calls_total counter"));
+                Assert.That(body, Does.Contain($"command=\"{probeCommand}\""),
+                    "the scrape carried no series for the probe call: " + body);
+                Assert.That(body, Does.Contain($"repocontext_response_tokens_total{{command=\"{probeCommand}\""),
+                    "the recorded token figure must reach the scrape, not merely the call count");
+            });
+        }
+        finally
+        {
+            await app.StopAsync(Ct);
+            await app.DisposeAsync();
+        }
+    }
+
     private static IReadOnlyList<string> MappedRoutes(WebApplication app)
     {
         var routes = new List<string>();

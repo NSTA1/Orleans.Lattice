@@ -87,7 +87,7 @@ public sealed class RepoContextSearchServiceAnnRetrievalPathTests
             index,
             store,
             TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance,
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(),
             embeddingProvider);
     }
 
@@ -132,15 +132,122 @@ public sealed class RepoContextSearchServiceAnnRetrievalPathTests
         return index;
     }
 
+    private static bool Searched(IRepoContextSemanticIndex exact)
+        => exact.ReceivedCalls().Any(call => call.GetMethodInfo().Name == nameof(exact.SearchAsync));
+
     private static AnnRepoContextSemanticIndex Ann(
         IRepoContextAnnIndex plane, IRepoContextSemanticIndex exact)
+        => Ann(plane, exact, new RepoContextExactScanBreaker());
+
+    private static AnnRepoContextSemanticIndex Ann(
+        IRepoContextAnnIndex plane, IRepoContextSemanticIndex exact, RepoContextExactScanBreaker breaker)
         => new(
             plane,
             exact,
             RepoContextExactScanBudgets.Unbounded(),
-            new RepoContextExactScanBreaker(),
+            breaker,
             new RepoContextRetrievalGuardReporter(),
             NullLogger<AnnRepoContextSemanticIndex>.Instance);
+
+    [Test]
+    public async Task A_tripped_breaker_reports_keyword_exact_fallback_suppressed()
+    {
+        // The field shape this value exists for: the plane never finishes bootstrapping,
+        // so the exact scan is the only thing that could answer, and a stalled gather has
+        // already retired it for this repository.
+        using var fixture = new AnnPlaneFixture();
+        fixture.SeedRing(32);
+
+        var breaker = new RepoContextExactScanBreaker();
+        breaker.Trip(RepoId);
+
+        var exact = ExactReturning(RepoContextKeys.File(RepoId, "src/Widget.cs"));
+        var service = CreateService(Ann(fixture.Registry, exact, breaker), AvailableEmbedder());
+
+        var result = await service.SearchAsync(RepoId, "widget", 5, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.RetrievalPath, Is.EqualTo(RepoContextRetrievalPath.KeywordExactFallbackSuppressed),
+                "A guard inside this process is withholding the fallback. Reporting that as an unavailable plane "
+                + "sends an operator to look at the vector plane, which is not what stopped the query, and hides "
+                + "the one cause that clears on its own through the half-open probe.");
+            Assert.That(result.Mode, Is.EqualTo("empty"), "The legacy mode value is unchanged.");
+            Assert.That(Searched(exact), Is.False,
+                "The suppression is real, not merely reported: the gather the breaker is holding back must not "
+                + "run, or the value would name a cost that is still being paid.");
+        });
+    }
+
+    [Test]
+    public async Task An_untripped_breaker_over_the_same_plane_still_reports_vector_plane_unavailable()
+    {
+        // Identical to the case above in every respect except the breaker, so the two
+        // together isolate the breaker as the only thing the new value reports on. An
+        // empty plane with the fallback available is still an unavailable plane.
+        using var fixture = new AnnPlaneFixture();
+        await fixture.BuildAsync(Ct);
+
+        var service = CreateService(
+            Ann(fixture.Registry, ExactReturning()), AvailableEmbedder());
+
+        var result = await service.SearchAsync(RepoId, "widget", 5, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.RetrievalPath, Is.EqualTo(RepoContextRetrievalPath.KeywordVectorPlaneUnavailable),
+                "Nothing is suppressed here, so the older classification must survive unchanged. A change that "
+                + "reported every empty result as a suppressed fallback would be as wrong as the conflation it "
+                + "replaced, in the opposite direction.");
+            Assert.That(result.Mode, Is.EqualTo("empty"));
+        });
+    }
+
+    [Test]
+    public async Task A_gather_that_stalls_reports_the_suppression_from_the_query_that_causes_it()
+    {
+        // End to end over the real sequence: the first query pays the stall ceiling and
+        // trips the breaker, and every query including that one reports why the fallback
+        // is not available. Before this change all of them reported an unavailable plane
+        // and were indistinguishable from a plane that was merely still building.
+        using var fixture = new AnnPlaneFixture();
+        fixture.SeedRing(32);
+
+        var breaker = new RepoContextExactScanBreaker();
+        var exact = Substitute.For<IRepoContextSemanticIndex>();
+        exact.RetrievalPath.Returns(RepoContextRetrievalPath.SemanticExact);
+        exact.SearchAsync(
+                Arg.Any<string>(),
+                Arg.Any<ReadOnlyMemory<float>>(),
+                Arg.Any<EmbeddingSpaceTag>(),
+                Arg.Any<int>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<IReadOnlyList<RepoContextVectorMatch>>>(
+                _ => throw new ScanPageStalledException("the page fill exceeded the stall ceiling"));
+
+        var service = CreateService(Ann(fixture.Registry, exact, breaker), AvailableEmbedder());
+
+        var first = await service.SearchAsync(RepoId, "widget", 5, Ct);
+        var second = await service.SearchAsync(RepoId, "widget", 5, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.RetrievalPath, Is.EqualTo(RepoContextRetrievalPath.KeywordExactFallbackSuppressed),
+                "The trip happens inside the search, before the result is classified, so the query that "
+                + "establishes the evidence already reports the state it established. That is the useful "
+                + "reading: the value names a condition of the repository that will persist until the probe "
+                + "clears it, not a history of what this one query was allowed to attempt.");
+            Assert.That(second.RetrievalPath, Is.EqualTo(RepoContextRetrievalPath.KeywordExactFallbackSuppressed),
+                "And every query after it, which is the ongoing state an operator is diagnosing.");
+            Assert.That(breaker.IsTripped(RepoId), Is.True);
+            Assert.That(SearchCount(exact), Is.EqualTo(1),
+                "Only the first query ran the gather. The second is the one that would otherwise have paid "
+                + "another stall ceiling, which is the cost the breaker exists to stop.");
+        });
+    }
+
+    private static int SearchCount(IRepoContextSemanticIndex exact)
+        => exact.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(exact.SearchAsync));
 
     [Test]
     public async Task A_built_index_answers_and_the_response_reports_semantic_approximate()

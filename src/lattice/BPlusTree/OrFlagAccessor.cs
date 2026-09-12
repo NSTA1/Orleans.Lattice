@@ -139,15 +139,67 @@ public readonly record struct OrFlagAccessor
         return StageAsync(DisableDelta, cancellationToken);
     }
 
-    /// <summary>Mints the enable delta for <paramref name="replicaId"/> against <paramref name="flag"/>.</summary>
     /// <summary>
-    /// Mints the enable delta for <paramref name="flag"/>'s next unused dot on
-    /// <paramref name="replicaId"/>. Internal so the batched
-    /// <c>CrdtLatticeExtensions.EnableManyAsync</c> / <c>StageEnableManyAsync</c>
-    /// helpers can mint N deltas from one batched read instead of N per-key
-    /// reads, without duplicating the dot-allocation rule.
+    /// Mints an enable delta for <paramref name="replicaId"/> against a
+    /// <paramref name="flag"/> snapshot that may be <b>incomplete</b>. Internal so the
+    /// batched <c>CrdtLatticeExtensions.EnableManyAsync</c> /
+    /// <c>StageEnableManyAsync</c> helpers can mint N deltas from one batched
+    /// read instead of N per-key reads, without duplicating the dot-allocation
+    /// rule.
+    /// <para>
+    /// Unlike <see cref="EnableDelta"/>, which mints against a row this accessor
+    /// read by key, the counter here is <b>not</b> derived from the snapshot
+    /// alone. A batched read reports an absent key by omission, so a row it did
+    /// not return is indistinguishable from a row that does not exist, and both
+    /// decode as an empty flag whose next dot is counter 1. OR-Flag cancellation
+    /// is coverage-based (<see cref="OrSetDotCompaction.Covers"/>), so that dot
+    /// is cancelled outright by any tombstone the unread row already carries:
+    /// the write reports success and the flag stays disabled, permanently,
+    /// because the next attempt repeats the read and mints the same dead dot
+    /// (issue #2208).
+    /// </para>
+    /// <para>
+    /// Flooring the counter with a strictly increasing mint removes that
+    /// dependence on read completeness. A dot only has to be <i>unused</i> for
+    /// its replica, never dense, so raising it is free of semantic cost while
+    /// making an enable impossible to cancel by a tombstone authored before it.
+    /// </para>
     /// </summary>
-    internal static OrFlagDelta EnableDeltaFor(OrFlag flag, string replicaId) => EnableDelta(flag, replicaId);
+    internal static OrFlagDelta EnableDeltaFor(OrFlag flag, string replicaId)
+    {
+        var counter = Math.Max(NextCounter(flag, replicaId), NextFreshCounter());
+        return new OrFlagDelta
+        {
+            Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
+            Disables = Array.Empty<OrSetDot>(),
+        };
+    }
+
+    private static long _lastFreshCounter;
+
+    /// <summary>
+    /// Returns a counter strictly greater than every value this process has
+    /// already returned, floored by the wall clock so the sequence also advances
+    /// across a restart rather than replaying from zero.
+    /// <para>
+    /// The wall clock alone is not sufficient: two enables of the same key in
+    /// one tick would mint the same dot, so a disable interleaved between them
+    /// would cancel the second as well. The strict increment is what rules that
+    /// out; the clock floor is what survives losing the in-process state.
+    /// </para>
+    /// </summary>
+    private static long NextFreshCounter()
+    {
+        while (true)
+        {
+            var previous = Volatile.Read(ref _lastFreshCounter);
+            var candidate = Math.Max(previous + 1, DateTime.UtcNow.Ticks);
+            if (Interlocked.CompareExchange(ref _lastFreshCounter, candidate, previous) == previous)
+            {
+                return candidate;
+            }
+        }
+    }
 
     /// <summary>Decodes a stored OR-Flag row, treating an absent row as empty.</summary>
     internal static OrFlag DecodeFlag(byte[]? bytes) => Decode(bytes);

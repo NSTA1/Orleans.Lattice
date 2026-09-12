@@ -333,7 +333,8 @@ public sealed class RepoContextSelfIndexGrainTests
             string repoId,
             IReadOnlyCollection<string> changedSymbolKeys,
             IReadOnlyCollection<string> prunedSymbolKeys,
-            CancellationToken cancellationToken) => Task.FromResult(0);
+            CancellationToken cancellationToken,
+            Func<int, CancellationToken, ValueTask>? onProgress = null) => Task.FromResult(0);
 
         public Task<int> IngestMemoryAsync(
             string repoId,

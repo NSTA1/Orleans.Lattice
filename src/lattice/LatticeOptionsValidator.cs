@@ -143,6 +143,14 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 + "median shard rate in operations per second at or above which healing yields to foreground "
                 + "traffic).");
         }
+        if (options.MaxLeafBytes < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxLeafBytes)} must be non-negative "
+                + "(0 disables the byte bound so leaves split on key count alone; a positive value is the aggregate "
+                + "live state size at which a leaf splits, keeping its snapshot small enough to capture in one "
+                + "contiguous buffer).");
+        }
         if (options.MaxLiveKeys is { } maxLiveKeys && maxLiveKeys < 1)
         {
             return ValidateOptionsResult.Fail(

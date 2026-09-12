@@ -1,0 +1,162 @@
+# Tuned local deployment overlay - TRACKED, and OPT-IN.
+#
+# Layer this over the base compose file explicitly:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.tuning.yml up -d --no-build
+#
+# It is deliberately NOT named docker-compose.override.yml. An override file is
+# loaded AUTOMATICALLY and silently, so it changes what every reader of this
+# directory gets from a plain `docker compose up -d`. This file changes nothing
+# unless you name it, which is what makes it safe to track.
+#
+# WHY THIS FILE EXISTS (issue #2609). Every value below previously lived only in
+# an untracked, gitignored docker-compose.override.yml on one developer's
+# machine, and the instructions for operating the stack lived only in a wipeable
+# agent-memory entry. Both were load-bearing for epic #2368's gate, and neither
+# had review, history, or a diff. The rationale, the measurement behind each
+# value, and the recovery procedure are in the runbook:
+#
+#   docs/lattice.api.mcp.repocontext/local-deployment-runbook.md
+#
+# The runbook and this file are kept in step by
+# LocalDeploymentRunbookComposeParityTests, which resolves the two compose files
+# with `docker compose config` and asserts the runbook's settings table
+# enumerates exactly what the resolved document declares.
+#
+# WHAT THIS FILE IS NOT EVIDENCE OF. Agreement between this file and the runbook
+# says nothing whatsoever about any running container: `docker compose up` reads
+# the compose files in its OWN working directory, whichever checkout that is, and
+# nothing in its output names a branch or a commit. Epic #2368's gate runs 1 and
+# 2 both failed exactly there. To establish what a running container actually
+# received, read it from the container:
+#
+#   pwsh -File ./scripts/Assert-ContainerProvenance.ps1
+#
+# ---------------------------------------------------------------------------
+# Host these values were measured on: 16 logical CPUs, 55.7 GiB RAM.
+# Do not copy them onto a different host without re-measuring. In particular
+# DOTNET_PROCESSOR_COUNT below is a literal host core count, and a literal
+# copied from someone else's deployment is the failure mode the base compose
+# file's LATTICE_WAL_MAX_CONCURRENT_REPLAYS comment warns about at length.
+# ---------------------------------------------------------------------------
+
+services:
+  repocontext:
+    # The base file declares `build:` and no `image:`, so without this pin the
+    # documented `up -d --no-build` step cannot resolve an image at all. The
+    # build-and-tag ladder that produces it (candidate-<sha> -> local, with the
+    # displaced tag kept as rollback-<timestamp>) is in the runbook.
+    image: repocontext-mcp:local
+    environment:
+      # ---- Scan cadence -------------------------------------------------
+      # The base file's cadence makes the periodic reconcile effectively
+      # continuous, which is the right default for a sample demonstrating that
+      # an edit shows up within seconds. It is far more than a long-lived local
+      # deployment needs, and it is the source of the continuous embedder load.
+      #
+      # The periodic deadlines below are counted in PASSES, not wall clock
+      # (interval / (reconcile + jitter), rounded up), so the reconcile interval
+      # and the jitter had to move together with them or the pass counts would
+      # not change as intended.
+      #
+      # TRADE-OFF, stated because it is real: an in-place content edit that does
+      # not bump its directory's modification time is now noticed within about
+      # an hour instead of about two minutes. An edit that DOES touch a
+      # directory mtime is still picked up on the next reconcile.
+      LATTICE_SELFINDEX_TICK_SECONDS: "30"
+      LATTICE_RECONCILE_INTERVAL_SECONDS: "60"
+      # Non-zero jitter stops passes across repositories phase-locking into
+      # simultaneous walks, which is what produced the observed load spikes.
+      LATTICE_RECONCILE_JITTER_SECONDS: "15"
+      # The full re-stat of every file, and the single heaviest operation.
+      LATTICE_FULL_WALK_INTERVAL_SECONDS: "3600"
+      # Two membership reads per indexed source, so on a converged repository
+      # this dominates a pass. Costs no healing latency: finding an actual gap
+      # forces an immediate in-pass scan regardless of this interval.
+      LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS: "3600"
+
+      # ---- Runtime sizing -----------------------------------------------
+      # Server GC with an EXPLICIT heap count (issue #2596).
+      #
+      # This was DOTNET_gcServer: "0", commented "one heap instead of sixteen".
+      # That traded away parallel collection to protect the memory limit,
+      # because Server GC would otherwise size its heap count from
+      # DOTNET_PROCESSOR_COUNT below, which is pinned to 16 for a completely
+      # unrelated reason (the WAL replay concurrency gate). One variable, two
+      # jobs, opposite requirements.
+      #
+      # The cost of that trade went unmeasured until gate run 2, whose log
+      # measures it directly: 283 whole-process silence gaps of 5s or more,
+      # longest 29.3s, totalling 20.9% of wall-clock, against a 30s Orleans
+      # request timeout. Every timed-out call (127 of 127) began executing
+      # within 0.5s of enqueue and then froze, so this is a stop-the-world
+      # pause rather than queueing contention. Orleans logged "Silo not running
+      # with ServerGC turned on" at startup throughout.
+      #
+      # GCHeapCount decouples the collector from PROCESSOR_COUNT, so the
+      # footprint concern that motivated "0" is addressed directly instead of
+      # by giving up parallel collection. 6 matches the cpus cap below, NOT the
+      # 16 above.
+      DOTNET_gcServer: "1"
+      DOTNET_GCHeapCount: "6"
+      # DO NOT REMOVE. This decouples the WAL replay concurrency gate from the
+      # CPU cap below. BPlusLeafGrain sizes that process-wide gate from
+      # Environment.ProcessorCount when the option is left non-positive, once,
+      # as a structural constant. Environment.ProcessorCount is cgroup-aware, so
+      # the cpus limit below would otherwise shrink the gate silently and
+      # unattributably. Pinning the reported count holds the gate at the value
+      # every previous field measurement on this box was taken against, while
+      # the cgroup quota still bounds actual CPU consumption.
+      #
+      # This is also why the embedder derives its own thread count from the
+      # cgroup quota rather than from the processor count (issue #2610): this
+      # variable overrides Environment.ProcessorCount and wins over the quota,
+      # so a service that copied this environment block would be oversubscribed.
+      DOTNET_PROCESSOR_COUNT: "16"
+
+      # Diagnostic for issue #2252, NOT tuning, and so deliberately left
+      # commented out rather than tracked as a default. Uncomment only while
+      # investigating vector-writer disposition counts, and record it in the
+      # runbook's local-only deltas section while it is on.
+      # Logging__LogLevel__Orleans.Lattice.Api.Mcp.RepoContext.RepoContextVectorWriter: "Debug"
+
+    # Bounds a runaway without starving normal operation. This service measured
+    # about 92% of one core in steady state before any of these limits, so 6 is
+    # headroom rather than a working limit.
+    cpus: 6.0
+    # Sized above the measured steady-state plateau, not below it. See the
+    # runbook: a cap below the working set does not present as a resource event,
+    # because .NET sizes its heap hard limit from the cgroup limit and collects
+    # harder as it approaches it rather than being OOM-killed at it.
+    mem_limit: 12g
+
+  embedder:
+    environment:
+      # Workstation GC. Unlike the sibling service above, this one has no large
+      # managed heap worth collecting in parallel: its footprint is dominated by
+      # the resident ONNX model, which is native and outside the GC's control.
+      DOTNET_gcServer: "0"
+      # Pins the ONNX intra-op thread pool to the cgroup grant below.
+      #
+      # ONNX Runtime sizes that pool from HOST cores (16 here) and does not
+      # consult the cgroup quota, so under the 4.0-CPU grant the pool ran 4x
+      # oversubscribed and the kernel throttled it in 296 of 298 consecutive
+      # scheduling periods during vectorising. This is the third instance in
+      # this one deployment of a runtime sizing a pool from host cores under a
+      # fractional grant; see DOTNET_GCHeapCount and DOTNET_PROCESSOR_COUNT on
+      # the sibling service above.
+      #
+      # Issue #2610 derives this value from the cgroup automatically, so on an
+      # image built from that commit or later the pin only restates what the
+      # server would have chosen for itself. It is tracked anyway, because the
+      # deployment this file describes still runs a pre-#2610 image and because
+      # an explicit value is what the deployed configuration actually carries.
+      # Removing it is precisely how the derived path gets exercised, which has
+      # not happened yet on this box.
+      EMBED_INTRA_THREADS: "4"
+    # Leaves 12 of the host's 16 cores for interactive work. The embedder sizes
+    # its ONNX intra-op thread pool from this grant, read from the cgroup
+    # filesystem (issue #2610), so changing this number changes the pool.
+    cpus: 4.0
+    # The resident ONNX model needs room to work above its own footprint.
+    mem_limit: 5g

@@ -27,6 +27,7 @@ internal sealed class BackupSchedulerGrain(
     IOptionsMonitor<LatticeBackupScheduleOptions> optionsMonitor,
     ILogger<BackupSchedulerGrain> logger,
     BackupInventoryRegistry inventory,
+    BackupAccessAuthorizer authorizer,
     [PersistentState("backup-scheduler", LatticeOptions.StorageProviderName)]
     IPersistentState<BackupSchedulerState> state)
     : IGrainBase, IRemindable, ILatticeBackupSchedulerGrain
@@ -62,6 +63,8 @@ internal sealed class BackupSchedulerGrain(
     /// <inheritdoc />
     public async Task EnsureScheduleAsync(BackupScopeSelector scope)
     {
+        ArgumentNullException.ThrowIfNull(scope);
+        await AuthorizeScheduleAsync(scope);
         await PersistScopeAsync(scope);
         var opts = Options;
         await ApplyScheduleAsync(
@@ -76,6 +79,7 @@ internal sealed class BackupSchedulerGrain(
         ArgumentNullException.ThrowIfNull(scope);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(interval.Ticks);
 
+        await AuthorizeScheduleAsync(scope);
         await PersistScopeAsync(scope);
 
         var period = ClampInterval(interval);
@@ -189,6 +193,20 @@ internal sealed class BackupSchedulerGrain(
     /// retention). Unknown reminder names and firings before the scope has been
     /// configured are ignored.
     /// </summary>
+    /// <remarks>
+    /// The cycle runs inside an <see cref="LatticeAccessGateContext.EnterSystemOrigin"/>
+    /// scope. A reminder tick is authored by the Orleans runtime, not by a caller,
+    /// so it carries no subject: without the marker every gated read a capture
+    /// performs is refused on a host whose gate defaults to deny, and the scope
+    /// simply stops being backed up with no denial surfaced anywhere (issue #2608).
+    /// The marker is applied here rather than in <see cref="RunScheduledCycleAsync"/>
+    /// because that method is on <see cref="ILatticeBackupSchedulerGrain"/> and a
+    /// caller can invoke it directly; this handler is the narrowest seam that is
+    /// genuinely infrastructure-authored. The trust decision for a scheduled cycle
+    /// is taken where a caller asks for a schedule - see
+    /// <see cref="AuthorizeScheduleAsync"/> - so a reminder can only exist because
+    /// an authorized caller registered it.
+    /// </remarks>
     public async Task ReceiveReminder(string reminderName, TickStatus status)
     {
         if (reminderName is not (FullScheduleReminderName or IncrementalScheduleReminderName))
@@ -196,8 +214,27 @@ internal sealed class BackupSchedulerGrain(
             return;
         }
 
+        using var origin = LatticeAccessGateContext.EnterSystemOrigin();
         await RunScheduledCycleAsync(reminderName == IncrementalScheduleReminderName);
     }
+
+    /// <summary>
+    /// Authorizes a caller's request to create or update a schedule for
+    /// <paramref name="scope"/>, throwing
+    /// <see cref="LatticeAuthorizationDeniedException"/> when the
+    /// <see cref="LatticeOperation.Backup"/> capability is not granted.
+    /// </summary>
+    /// <remarks>
+    /// Registration is the seam that matters: a registered reminder later runs
+    /// system-origin (see <see cref="ReceiveReminder"/>), so an unauthorized
+    /// registration would otherwise buy a recurring gate-bypassed capture. The
+    /// API facade already authorizes before reaching this grain; this check closes
+    /// the in-process <see cref="ILatticeBackupScheduler"/> and direct-grain paths,
+    /// which the facade does not cover. It is deliberately NOT applied inside
+    /// <c>ApplyScheduleAsync</c>, which the grain's own housekeeping also reaches.
+    /// </remarks>
+    private ValueTask AuthorizeScheduleAsync(BackupScopeSelector scope) =>
+        authorizer.AuthorizeBackupAsync(scope, CancellationToken.None);
 
     private async Task<string?> RunCaptureAsync(bool incremental, BackupScopeSelector scope)
     {
@@ -263,11 +300,39 @@ internal sealed class BackupSchedulerGrain(
             inventory.RecordScopeOutcome(ScopeKey, BackupScopeRunOutcome.Success, succeededAt);
             return resultId;
         }
-        catch
+        catch (Exception ex)
         {
-            state.State.LastRunOutcome = BackupScopeRunOutcome.Failure;
+            // A denial is recorded distinctly from a generic fault. Without this,
+            // a gated host that refuses every scheduled capture presents as an
+            // absence of successful backups - the failure mode is silence, and
+            // silence is what nobody alerts on (issue #2608).
+            var reason = LatticeBackupMetrics.MapReason(ex);
+            var denied = ex is LatticeAuthorizationDeniedException;
+            var outcome = denied ? BackupScopeRunOutcome.Denied : BackupScopeRunOutcome.Failure;
+
+            if (denied)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Backup scope {Scope}: the {Kind} capture cycle was DENIED by the access gate. "
+                    + "The scope is not being backed up. This is a denial, not an empty backup set.",
+                    ScopeKey,
+                    incremental ? "incremental" : "full");
+            }
+            else
+            {
+                logger.LogWarning(
+                    ex,
+                    "Backup scope {Scope}: the {Kind} capture cycle faulted ({Reason}).",
+                    ScopeKey,
+                    incremental ? "incremental" : "full",
+                    reason);
+            }
+
+            state.State.LastRunOutcome = outcome;
             await state.WriteStateAsync();
-            inventory.RecordScopeOutcome(ScopeKey, BackupScopeRunOutcome.Failure, DateTimeOffset.UtcNow);
+            inventory.RecordScopeOutcome(ScopeKey, outcome, DateTimeOffset.UtcNow);
+            LatticeBackupMetrics.RecordSchedulerFailure(ScopeKey, reason);
             throw;
         }
         finally
@@ -461,6 +526,15 @@ internal sealed class BackupSchedulerGrain(
                     dueTime: period,
                     period: period),
                 logger, nameof(reminderRegistry.RegisterOrUpdateReminder), reminderName, ScopeKey);
+
+            // The scope now has a live schedule, so a cycle is expected of it.
+            // Publish it to the inventory registry here, after the reminder is
+            // actually registered, so the per-scope status gauge reports a
+            // measured "scheduled, nothing has completed yet" (0) rather than no
+            // series at all, which an operator cannot tell apart from a scope
+            // nobody ever scheduled. Non-destructive: a scope with a recorded
+            // outcome keeps it (issue #2645).
+            inventory.EnsureScopeRegistered(ScopeKey);
         }
         else
         {

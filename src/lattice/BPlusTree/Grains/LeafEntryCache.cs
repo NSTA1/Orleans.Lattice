@@ -20,7 +20,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// activation's lifetime and has no cross-activation sharing.
 /// </para>
 /// </summary>
-internal sealed class LeafEntryCache
+internal sealed partial class LeafEntryCache
 {
     // UTF-8 scratch size for a key seek. Comfortably covers every ordinary
     // Lattice key, so a seek stays allocation-free; a longer key rents.
@@ -662,6 +662,25 @@ internal sealed class LeafEntryCache
 
     /// <summary>Hydration blocks evicted under the resident-footprint budget.</summary>
     internal long EvictedBlockCount => _evictedBlocks;
+
+    /// <summary>
+    /// Total bytes this cache keeps resident for as long as its activation
+    /// lives: decoded rows, plus the encoded snapshot frame if one is still
+    /// attached.
+    /// <para>
+    /// The frame term is the one that matters and the one that is easy to miss.
+    /// An attached <see cref="LeafSnapshotHydrationSource"/> retains the
+    /// <b>entire</b> encoded snapshot so that not-yet-hydrated blocks stay
+    /// seekable, and it is released only when the snapshot becomes fully
+    /// hydrated or the cache is cleared. A leaf that attaches a snapshot and is
+    /// then never read therefore holds 100% of that snapshot having taken none
+    /// of its benefit, and <see cref="StateBytes"/> - which counts decoded rows
+    /// - reports that leaf as costing nothing. Measured on the activation path
+    /// this accounts for effectively all of the resident growth: 1.008x frame
+    /// size per retained activation at zero rows materialised (issue #2767).
+    /// </para>
+    /// </summary>
+    internal long ResidentFootprintBytes => StateBytes + (_hydration?.Frame.Length ?? 0L);
 
     /// <summary>
     /// Materialises every row a lazily hydrated snapshot still owns. A no-op

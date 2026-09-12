@@ -189,6 +189,16 @@ public static class LatticeBackupMetrics
         BackupMetrics.Meter.CreateCounter<long>("orleans.lattice.backup.scheduler.overruns", unit: "{run}",
             description: "Scheduled cycles that fired while a capture was still in flight for the scope, tagged by scope.");
 
+    /// <summary>
+    /// Counter of capture cycles that faulted, tagged with <see cref="TagScope"/>
+    /// and <see cref="TagReason"/>. A denial on a gated host lands here as
+    /// <see cref="ReasonPermissionDenied"/>, so a scope that is being refused is
+    /// a rising series rather than an absence of successes (issue #2608).
+    /// </summary>
+    public static readonly Counter<long> SchedulerFailures =
+        BackupMetrics.Meter.CreateCounter<long>("orleans.lattice.backup.scheduler.failures", unit: "{run}",
+            description: "Capture cycles that faulted, tagged by scope and classified reason.");
+
     // --- Inventory (observable gauges) ---------------------------------------
 
     private static readonly BackupInventoryRegistry Registry = BackupInventoryRegistry.Instance;
@@ -219,10 +229,20 @@ public static class LatticeBackupMetrics
             static () => LatticeTenantLabel.PlatformMeasurement(AgeSeconds(Registry.Snapshot().NewestCreatedAtUtc)), unit: "s",
             description: "Age in seconds of the newest tracked backup (0 when none).");
 
+    /// <summary>
+    /// Per-scope last-run outcome. A scope enters the registry at schedule
+    /// registration, so <c>0</c> is a measured "scheduled, nothing has completed
+    /// yet" rather than an unreachable placeholder, and an absent series means no
+    /// schedule is registered for the scope (issue #2645). The value is the
+    /// <see cref="BackupScopeRunOutcome"/> ordinal, so every member of that enum
+    /// is emittable and the description must enumerate all of them.
+    /// </summary>
     private static readonly ObservableGauge<long> ScopeLastRunStatus =
         BackupMetrics.Meter.CreateObservableGauge("orleans.lattice.backup.scope.last_run_status",
             ObserveScopeLastRunStatus, unit: "{status}",
-            description: "Per-scope last-run outcome (0=none, 1=success, 2=failure), tagged by scope.");
+            description: "Per-scope last-run outcome (0=scheduled with no completed cycle, 1=success, "
+                + "2=failure, 3=denied), tagged by scope. The series appears at schedule registration, so 0 is a "
+                + "measured 'not yet'; an absent series means no schedule is registered for the scope.");
 
     private static readonly ObservableGauge<double> ScopeLastSuccessAge =
         BackupMetrics.Meter.CreateObservableGauge("orleans.lattice.backup.scope.last_success_age",
@@ -342,6 +362,26 @@ public static class LatticeBackupMetrics
     {
         ArgumentException.ThrowIfNullOrEmpty(scopeKey);
         SchedulerOverruns.Add(1, new KeyValuePair<string, object?>(TagScope, scopeKey), LatticeTenantLabel.Platform);
+    }
+
+    /// <summary>
+    /// Records that a capture cycle for <paramref name="scopeKey"/> faulted, with
+    /// the reason classified from the fault by <see cref="MapReason"/>. A gate
+    /// denial therefore surfaces as a distinct, rising
+    /// <see cref="ReasonPermissionDenied"/> series instead of presenting as an
+    /// absence of successful captures.
+    /// </summary>
+    /// <param name="scopeKey">The scope key. Must not be <c>null</c> or empty.</param>
+    /// <param name="reason">The failure reason (a <c>Reason*</c> constant). Must not be <c>null</c> or empty.</param>
+    public static void RecordSchedulerFailure(string scopeKey, string reason)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(scopeKey);
+        ArgumentException.ThrowIfNullOrEmpty(reason);
+        SchedulerFailures.Add(
+            1,
+            new KeyValuePair<string, object?>(TagScope, scopeKey),
+            new KeyValuePair<string, object?>(TagReason, reason),
+            LatticeTenantLabel.Platform);
     }
 
     /// <summary>Records a capture retry / fallback with a classified reason.</summary>

@@ -32,6 +32,65 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns the values for the given <paramref name="keys"/> exactly as
+    /// <see cref="GetManyAsync"/> does, together with the number of keys the
+    /// read-path access gate pruned before fan-out.
+    /// <para>
+    /// Use this overload instead of <see cref="GetManyAsync"/> when the caller
+    /// draws a conclusion from a key's <em>absence</em> from the result. A pruned
+    /// key and a key that was never written are the same observation through
+    /// <see cref="GetManyAsync"/> - both are simply missing - so a caller that
+    /// reads absence as "no such entry" silently misclassifies every entry an
+    /// active gate hides from it. When
+    /// <see cref="GatedMultiReadResult.PrunedByAccessGate"/> is <c>0</c> that
+    /// reading is sound; when it is non-zero the caller must not classify on
+    /// absence at all.
+    /// </para>
+    /// <para>
+    /// The count never names the pruned keys. Identities would disclose the keys
+    /// the caller is not authorized to see.
+    /// </para>
+    /// </summary>
+    /// <param name="keys">The keys to read. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the routing and shard dispatch.</param>
+    Task<GatedMultiReadResult> GetManyWithGateAccountingAsync(List<string> keys, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reports how much of the half-open range
+    /// <c>[<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)</c>
+    /// the read-path access gate admits, so a caller can tell an <em>empty</em>
+    /// range read from a <em>restricted</em> one.
+    /// <para>
+    /// Every gated range read on this interface - <see cref="KeysAsync"/>,
+    /// <see cref="EntriesAsync"/>, their predicate overloads,
+    /// <see cref="CountAsync(CancellationToken)"/>,
+    /// <see cref="CountAsync(string, string, CancellationToken)"/> and the
+    /// snapshot cursors - reports a denial as a clean empty result rather than by
+    /// throwing, because a denied range resolves to a reject-all key filter. That
+    /// is deliberate and is not changed by this method: it keeps a denied scan
+    /// cheap and non-fatal. The cost is that emptiness alone is uninterpretable,
+    /// so a caller that concludes anything from "no rows" must call this to
+    /// confirm the range was
+    /// <see cref="LatticeRangeReadGateCoverage.Unrestricted"/> first.
+    /// </para>
+    /// <para>
+    /// Intended to be called <em>only when a range read came back empty</em> and
+    /// the caller is about to act on that emptiness. On the normal non-empty path
+    /// it is unnecessary, so the scan hot path pays nothing.
+    /// </para>
+    /// </summary>
+    /// <param name="startInclusive">
+    /// Inclusive lower bound, or <see langword="null"/> for unbounded. Must match
+    /// the bounds of the range read whose emptiness is being interpreted.
+    /// </param>
+    /// <param name="endExclusive">Exclusive upper bound, or <see langword="null"/> for unbounded.</param>
+    /// <param name="cancellationToken">Cancels the authorization call.</param>
+    Task<LatticeRangeReadGateCoverage> GetRangeReadGateCoverageAsync(
+        string? startInclusive = null,
+        string? endExclusive = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Inserts or updates the value for <paramref name="key"/>.</summary>
     Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default);
 

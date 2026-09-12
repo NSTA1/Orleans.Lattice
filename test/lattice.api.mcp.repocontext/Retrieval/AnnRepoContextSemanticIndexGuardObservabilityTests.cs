@@ -60,34 +60,40 @@ public sealed class AnnRepoContextSemanticIndexGuardObservabilityTests
     }
 
     [Test]
-    public async Task The_periodic_summary_distinguishes_never_reached_from_reached_and_declined()
+    public async Task The_periodic_summary_distinguishes_never_reached_from_reached_and_failed_open()
     {
         using var neverReachedLogs = new CapturingLoggerProvider();
-        using var declinedLogs = new CapturingLoggerProvider();
+        using var failedOpenLogs = new CapturingLoggerProvider();
 
         var serving = Create(
             neverReachedLogs,
             PlaneReturning(Answer(RepoContextAnnServingState.Approximate, "repo/acme/file/src/A.cs")),
             ExactReturning("repo/acme/file/src/A.cs"));
-        var declining = Create(
-            declinedLogs, BootstrappingPlaneWithCorpus(0), ExactReturning("repo/acme/file/src/A.cs"));
+        var failingOpen = Create(
+            failedOpenLogs, BootstrappingPlaneWithCorpus(0), ExactReturning("repo/acme/file/src/A.cs"));
 
         await serving.SearchAsync(RepoId, new float[] { 1f, 0f, 0f }, Space, 5, Ct);
-        await declining.SearchAsync(RepoId, new float[] { 1f, 0f, 0f }, Space, 5, Ct);
+        await failingOpen.SearchAsync(RepoId, new float[] { 1f, 0f, 0f }, Space, 5, Ct);
 
         var neverReached = Summary(neverReachedLogs);
-        var declined = Summary(declinedLogs);
+        var failedOpen = Summary(failedOpenLogs);
 
         Assert.Multiple(() =>
         {
             Assert.That(neverReached, Does.Contain("0 evaluation(s)"),
                 "The approximate plane answered, so the ladder below it never ran. Reporting zero evaluations "
                 + "says that positively instead of leaving it to be inferred from an absent line.");
-            Assert.That(declined, Does.Contain("1 evaluation(s)"));
-            Assert.That(declined, Does.Contain("1 declined for an uncounted corpus"),
-                "Both deployments skipped nothing. Only the evaluation count separates a guard that was never "
-                + "asked from one that was asked and declined, which is the distinction issue #2253 says "
-                + "could not be made from a deployed container.");
+            Assert.That(failedOpen, Does.Contain("1 evaluation(s)"));
+            Assert.That(
+                failedOpen,
+                Does.Contain("1 that read an uncounted corpus and so failed open and let the gather run"),
+                "Both deployments skipped nothing, and only the evaluation count separates a guard that was "
+                + "never asked from one that was asked - the distinction issue #2253 says could not be made "
+                + "from a deployed container. The verb matters as much as the count: this line said "
+                + "'declined' until issue #2362, and CorpusUnknown does not decline anything. It fails open "
+                + "and the gather runs, which is why the breaker rather than the budget is what holds the "
+                + "bootstrap window shut - and reading 'declined' here sends an operator to tune a budget "
+                + "that is not the thing suppressing their retrieval.");
         });
     }
 

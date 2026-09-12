@@ -55,9 +55,20 @@ bool isOn = await beta.IsEnabledAsync(cancellationToken);
 
 Enabling flags one at a time costs two round trips per key - a read to mint the
 enable dot, then the apply. `EnableManyAsync` reads every current flag in one
-batched call, mints all the deltas from that snapshot, and applies them through a
-single batched CRDT write, so a presence- or membership-marking pass costs one
+batched call, mints all the deltas against that snapshot, and applies them through
+a single batched CRDT write, so a presence- or membership-marking pass costs one
 round trip per leaf rather than two per key.
+
+The snapshot is treated as possibly incomplete. A batched read reports an absent
+key by omission, so a row it did not return is indistinguishable from a row that
+does not exist, and deriving the dot counter from the snapshot alone would mint
+counter 1 for both. Because OR-Flag cancellation is coverage-based, such a dot is
+cancelled outright by any tombstone the unread row already carries - the write
+would report success while the flag stayed off, permanently, since the next
+attempt would repeat the read and mint the same dead dot. The batched helpers
+therefore mint each dot from a strictly increasing source instead. A dot only has
+to be unused for its replica, never dense, so this costs nothing semantically and
+makes an enable impossible to cancel by a tombstone authored before it.
 
 ```csharp verify
 // Mark a whole batch of feature flags on in one write.
@@ -71,8 +82,8 @@ await tree.EnableManyAsync(keys, "cluster-A", cancellationToken);
 
 The batch is **not atomic**: a partial failure leaves it half-applied. When the
 marks must land all-or-nothing, stage them instead and hand the tokens to the
-cross-tree atomic builder, which mints every delta from the same single batched
-read:
+cross-tree atomic builder, which mints every delta the same way from the same
+single batched read:
 
 ```csharp verify
 IReadOnlyList<LatticeStagedCrdtWrite> staged =

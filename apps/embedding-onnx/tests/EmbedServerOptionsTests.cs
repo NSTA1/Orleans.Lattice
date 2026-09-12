@@ -37,7 +37,11 @@ public sealed class EmbedServerOptionsTests
             Assert.That(options.Provider, Is.EqualTo(EmbedExecutionProvider.Cpu));
             Assert.That(options.Port, Is.EqualTo(EmbedServerOptions.DefaultPort));
             Assert.That(options.MaxContextLength, Is.EqualTo(EmbedServerOptions.DefaultMaxContextLength));
-            Assert.That(options.IntraOpThreads, Is.EqualTo(0));
+            Assert.That(options.IntraOpThreads, Is.GreaterThanOrEqualTo(1),
+                "an undeclared intra-op count is now derived rather than left at zero, "
+                + "because zero lets ONNX Runtime size its pool from the host core count "
+                + "and ignore the container CPU quota.");
+            Assert.That(options.IntraOpThreadCount.Source, Is.Not.EqualTo(IntraOpThreadSource.Declared));
             Assert.That(options.DeviceId, Is.EqualTo(0));
         });
     }
@@ -59,6 +63,7 @@ public sealed class EmbedServerOptionsTests
             Assert.That(options.Provider, Is.EqualTo(EmbedExecutionProvider.Cuda));
             Assert.That(options.Port, Is.EqualTo(9500));
             Assert.That(options.IntraOpThreads, Is.EqualTo(4));
+            Assert.That(options.IntraOpThreadCount.Source, Is.EqualTo(IntraOpThreadSource.Declared));
             Assert.That(options.DeviceId, Is.EqualTo(1));
             Assert.That(options.MaxContextLength, Is.EqualTo(256));
         });
@@ -138,7 +143,11 @@ public sealed class EmbedServerOptionsTests
             Assert.That(options.Port, Is.EqualTo(EmbedServerOptions.DefaultPort));
             Assert.That(
                 options.MaxContextLength, Is.EqualTo(EmbedServerOptions.DefaultMaxContextLength));
-            Assert.That(options.IntraOpThreads, Is.EqualTo(0));
+            Assert.That(options.IntraOpThreads, Is.GreaterThanOrEqualTo(1));
+            Assert.That(options.IntraOpThreadCount.Source, Is.Not.EqualTo(IntraOpThreadSource.Declared),
+                "an unparseable declaration falls through to derivation rather than "
+                + "to zero, which would hand the pool back to ONNX Runtime and let it "
+                + "size itself from the host core count.");
         });
     }
 

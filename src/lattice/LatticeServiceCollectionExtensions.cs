@@ -57,6 +57,17 @@ public static class LatticeServiceCollectionExtensions
         Internal.GrainIdTypeConverterRegistration.EnsureRegistered();
 
         configureStorage(builder, LatticeOptions.StorageProviderName);
+
+        // Install the Lattice grain-storage serializer after the storage
+        // provider is registered, so it displaces the Orleans JSON default
+        // that a provider would otherwise be post-configured with. It writes
+        // only the state types marked ILatticeBinaryPersistedState through
+        // the Orleans binary serializer and delegates everything else to the
+        // serializer registered before it, so no other state type changes
+        // format. See LatticeGrainStorageSerializer for why the JSON path
+        // cannot write a large leaf snapshot without exhausting the heap.
+        builder.Services.AddLatticeGrainStorageSerializer();
+
         builder.Services.AddSingleton<IValidateOptions<LatticeOptions>, LatticeOptionsValidator>();
         builder.Services.AddSingleton<IValidateOptions<LatticeTagIndexReconciliationOptions>, LatticeTagIndexReconciliationOptionsValidator>();
         builder.Services.AddSingleton<LatticeOptionsResolver>();
@@ -126,6 +137,16 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.TryAddSingleton<BPlusTree.Grains.WalSaturationSignal>();
         builder.Services.TryAddSingleton<IWalSaturationSignal>(sp => sp.GetRequiredService<BPlusTree.Grains.WalSaturationSignal>());
         builder.Services.TryAddSingleton<BPlusTree.Grains.WalSaturationObserverDispatcher>();
+        // Per-silo census of the WAL retention pins held by snapshot cursors,
+        // and the source of the orleans.lattice.snapshot.pins observable gauge.
+        // Resolved lazily by the cursor grain and eagerly by the WAL GC
+        // scheduler (a hosted service), so the gauge is registered on the meter
+        // from silo start rather than only once a snapshot cursor is first
+        // opened. The cursor registry is resolved optionally: without one the
+        // census still reports the pins it was told about, it simply cannot
+        // re-derive them.
+        builder.Services.TryAddSingleton(sp => new BPlusTree.Grains.SnapshotPinCensus(
+            sp.GetService<IWalCursorRegistry>()));
         // Always-on in-memory consumer-cursor registry. The WAL is integral to
         // every Lattice deployment, so the registry that the saturation sampler
         // reads to compute materialiser drain lag must never be silently absent:
@@ -684,6 +705,63 @@ public static class LatticeServiceCollectionExtensions
         // Eager registration via a hosted-startup hook so the descriptor is
         // installed before the first producer emission or WAL apply runs.
         builder.Services.AddSingleton<IHostedService, CrdtShapeStartup>();
+        return builder;
+    }
+
+    /// <summary>
+    /// Installs the silo-wide grain-call observation filter, which records
+    /// <see cref="LatticeMetrics.GrainCallOutstandingDepth"/> and
+    /// <see cref="LatticeMetrics.GrainCallDuration"/> for every outgoing grain
+    /// call this silo makes, tagged by target grain type. Idempotent: calling it
+    /// more than once installs a single filter.
+    /// <para>
+    /// <b>What it is for.</b> Orleans describes its per-activation
+    /// non-reentrancy queue through exactly one channel out of the box - the
+    /// <c>NonReentrancyQueueSize=</c> clause of the
+    /// <c>Response did not arrive on time</c> timeout diagnostic - and that
+    /// channel is censored: it fires only for a request already approaching the
+    /// message timeout, and the clause describes that request's own wait, so a
+    /// grain type whose calls queue deeply but which never itself trips the
+    /// timeout contributes <b>no rows at all</b>. An operator reading only that
+    /// channel can therefore conclude, consistently and reproducibly, that
+    /// nothing is queueing while a grain type carries the deepest queues in the
+    /// cluster. This filter observes at dispatch instead, unconditionally, so
+    /// the depth of a grain type's queue is visible during a <em>healthy</em>
+    /// run with no timeout required.
+    /// </para>
+    /// <para>
+    /// <b>Why it is opt-in.</b> It runs on every outgoing grain call, so it is
+    /// not free: a dictionary lookup, a lock, and two histogram records per
+    /// call. A host that has not asked for the observation pays none of it.
+    /// Enable it on a host being investigated for saturation, or on one whose
+    /// operators want per-grain-type contention permanently visible.
+    /// </para>
+    /// <para>
+    /// Read <see cref="LatticeMetrics.GrainCallOutstandingDepth"/> for the
+    /// precise semantics of the recorded value, including the three limits that
+    /// make it a floor on contention rather than a measurement of Orleans' own
+    /// queue: it counts only calls issued from this silo, it counts dispatch
+    /// rather than admission, and on a reentrant grain type outstanding calls
+    /// interleave rather than queue.
+    /// </para>
+    /// <para>Example:</para>
+    /// <code>
+    /// silo.AddLattice((silo, name) =&gt; silo.AddMemoryGrainStorage(name))
+    ///     .AddLatticeGrainCallObservation();
+    /// </code>
+    /// </summary>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <returns>The same <paramref name="builder"/>, for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder"/> is <c>null</c>.</exception>
+    public static ISiloBuilder AddLatticeGrainCallObservation(this ISiloBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        // TryAddEnumerable keyed on the implementation type, so repeated calls
+        // (a host that enables it and a package that also does) install one
+        // filter rather than double-counting every call.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IOutgoingGrainCallFilter, LatticeGrainCallObservationFilter>());
         return builder;
     }
 

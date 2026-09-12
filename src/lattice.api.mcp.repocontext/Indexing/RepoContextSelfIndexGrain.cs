@@ -59,6 +59,15 @@ internal sealed class RepoContextSelfIndexGrain(
     /// <summary>The maximum number of structural file keys inspected per tick.</summary>
     private const int PageSize = 512;
 
+    /// <summary>
+    /// The maximum number of uncovered file keys the digest-backed sweep collects in
+    /// one pass. The back-fill selects its own repair set from the same digest and is
+    /// not capped by this, so the bound only limits how much this grain holds and
+    /// logs; a repository with more gaps than this reports <c>truncated</c> and the
+    /// next sweep sees what the pass did not heal.
+    /// </summary>
+    private const int MaxDigestReportedGaps = 4096;
+
     IGrainContext IGrainBase.GrainContext => grainContext;
 
     private string RepoId => this.GetPrimaryKeyString();
@@ -284,13 +293,106 @@ internal sealed class RepoContextSelfIndexGrain(
             }
         }
 
+        // The exhaustive digest audit, on its own long cadence (issue #2486). Run
+        // BEFORE the digest-backed detection below so a pass that audits also detects
+        // against the freshly re-derived digest rather than the stale one it replaced.
+        // This is the only O(sources) membership read left on the coverage path, which
+        // is exactly why it is paced in hours while detection runs every sweep.
+        if (nowTicks >= state.State.NextCoverageAuditAfterTicks)
+        {
+            try
+            {
+                var audited = await gapScanner
+                    .AuditCoverageDigestAsync(RepoId, cancellationToken).ConfigureAwait(true);
+                if (audited)
+                {
+                    logger.LogInformation(
+                        "Repo {RepoId}: coverage digest re-derived from an authoritative membership scan.",
+                        RepoId);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort. The digest's write ordering keeps it a subset of
+                // membership, so a missed audit costs redundant idempotent embeds, not
+                // masked gaps - never worth failing the sweep for.
+                logger.LogWarning(
+                    ex, "Repo {RepoId}: the coverage-digest audit failed; the next cycle retries it.", RepoId);
+            }
+
+            var auditJitter = (long)(Random.Shared.NextDouble() * ScanCooldownJitter.Ticks);
+            state.State.NextCoverageAuditAfterTicks =
+                SaturatingAddTicks(SaturatingAddTicks(nowTicks, options.CoverageDigestAuditInterval.Ticks), auditJitter);
+        }
+
+        // Digest first (issue #2486). When the per-page coverage digest is built, one
+        // call classifies the WHOLE repository for a fixed number of digest rows on a
+        // tree that is not the membership hotspot, so the sweep no longer has to be
+        // rationed across N/PageSize ticks of per-source point-probes. That collapses
+        // worst-case gap-detection latency for a repository from a whole cycle of
+        // paged sweeps to a single tick.
+        //
+        // The paged probe below is kept, not replaced: it is what runs before the
+        // digest is built, and after a membership reset drops it.
+        var digestScan = await gapScanner
+            .ScanWithDigestAsync(RepoId, MaxDigestReportedGaps, cancellationToken)
+            .ConfigureAwait(true);
+
+        if (digestScan.DigestAvailable)
+        {
+            if (digestScan.GapFound)
+            {
+                var digestTriggered = await grainFactory
+                    .GetGrain<IRepoIndexJobGrain>(RepoId)
+                    .EnsureIndexedAsync(forceEmbeddingGapScan: true).ConfigureAwait(true);
+
+                // The identities are logged, not just the count. The re-driven pass
+                // derives the same set from the same digest and embeds exactly those
+                // files, so this line is the operator-visible form of the targeted
+                // repair queue: it says WHICH files are being repaired, where the
+                // whole-repository remedy could only say that something was.
+                logger.LogInformation(
+                    "Repo {RepoId}: coverage digest found {Missing} uncovered file(s) of {Considered} "
+                    + "considered, reading {Rows} digest row(s) (truncated={Truncated}, reDriven={Triggered}). "
+                    + "Back-fill embeds exactly these: {Sample}",
+                    RepoId,
+                    digestScan.MissingFileKeys.Count,
+                    digestScan.FilesConsidered,
+                    digestScan.DigestRowsRead,
+                    digestScan.Truncated,
+                    digestTriggered,
+                    string.Join(", ", digestScan.MissingFileKeys.Take(16)));
+            }
+
+            EndScan(nowTicks);
+            await state.WriteStateAsync().ConfigureAwait(true);
+            return;
+        }
+
         // Probe coverage for exactly this page's files with a bounded point-read, so
         // no read in the sweep scales with the membership tree size (issue #1556).
         var page = await gapScanner
             .ScanFilePageAsync(RepoId, state.State.ResumeKey, PageSize, cancellationToken)
             .ConfigureAwait(true);
 
-        if (page.GapFound)
+        if (page.CoverageUnavailable)
+        {
+            // The sweep could not classify this page: the coverage probe was pruned
+            // by the store's read-path access gate, so absence from it proves nothing
+            // (issue #2277). Deliberately NOT re-driven - a re-drive on an
+            // unclassifiable page would repeat on every sweep and heal nothing - and
+            // deliberately not recorded as a clean cycle either.
+            logger.LogWarning(
+                "Repo {RepoId}: self-index could not classify a file page because {Pruned} coverage key(s) "
+                + "were removed by the store's read-path access gate; no gap is claimed and no re-drive is "
+                + "triggered. This does not clear on the next sweep - the ingestor must be able to read its "
+                + "own membership keys for the self-heal sweep to work.",
+                RepoId,
+                page.PrunedByAccessGate);
+
+            EndScan(nowTicks);
+        }
+        else if (page.GapFound)
         {
             // A file has no live embedding: re-drive the whole repository index. The
             // back-fill re-embeds every missing file, so one trigger heals all of

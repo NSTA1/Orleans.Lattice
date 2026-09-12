@@ -408,15 +408,33 @@ internal sealed partial class BPlusLeafGrain
     /// every entry's contribution. Used for lazy backfill of legacy state
     /// and exposed (internal) as the regression-test oracle for the
     /// incremental fold.
+    /// <para>
+    /// Walks in bounded key windows rather than over the whole-cache view.
+    /// The fold is an XOR, so it is order-independent and the windows are
+    /// disjoint and exhaustive, which makes the result bit-for-bit identical
+    /// to the one-pass walk this replaced - the invariant the chained
+    /// internal-node fold depends on is preserved exactly. What changes is
+    /// peak footprint: the whole-cache view calls <c>HydrateAll</c>, which
+    /// ends in <c>DetachSnapshot</c> and leaves every row resident for the
+    /// life of the activation, so on a leaf rehydrated from a large snapshot
+    /// this backfill alone could exhaust the heap. That is not a hypothetical
+    /// path: <c>TryRehydrateFromSnapshotAsync</c> deliberately nulls
+    /// <c>ProjectionHash</c> to force this recompute, so <em>every</em>
+    /// rehydrated leaf runs it at its first mutation - including the oversized
+    /// leaf a division is trying to make smaller (issue #2771).
+    /// </para>
     /// </summary>
     internal byte[] ComputeFullProjectionHashFromState()
     {
         var hash = new byte[ProjectionHashSize];
         Span<byte> contribution = stackalloc byte[ProjectionHashSize];
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        foreach (var (startInclusive, endExclusive) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            ComputeEntryContribution(key, in lww, contribution);
-            for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= contribution[i];
+            foreach (var (key, lww) in Cache.EnumerateRange(startInclusive, endExclusive))
+            {
+                ComputeEntryContribution(key, in lww, contribution);
+                for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= contribution[i];
+            }
         }
         return hash;
     }

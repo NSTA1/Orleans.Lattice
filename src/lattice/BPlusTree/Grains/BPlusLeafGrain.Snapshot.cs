@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
@@ -141,6 +143,35 @@ internal sealed partial class BPlusLeafGrain
     private bool _snapshotCoverageDeficitAtActivation;
 
     /// <summary>
+    /// Per-activation budget for the zero-coverage repair path (issue #2692).
+    /// The repair is self-extinguishing on success - a capture stamps coverage
+    /// for every checkpointed partition, and coverage is monotone-max, so the
+    /// trigger predicate is false forever afterwards - which means this budget
+    /// is only ever consumed by captures that FAIL. Eight attempts absorbs a
+    /// transient snapshot-store fault without letting a persistently failing
+    /// store turn every checkpoint persist into a capture attempt.
+    /// </summary>
+    private const int MaxZeroCoverageRepairAttempts = 8;
+
+    /// <summary>
+    /// Number of zero-coverage repair captures attempted on this activation.
+    /// Reset implicitly on every activation because it is a plain instance
+    /// field, never persisted - which is correct, since a fresh activation
+    /// re-reads the durable snapshot and so re-derives the coverage the budget
+    /// is spent chasing.
+    /// </summary>
+    private int _zeroCoverageRepairAttempts;
+
+    /// <summary>
+    /// Whether this activation has already reported budget exhaustion on
+    /// <see cref="LatticeMetrics.LeafSnapshotCoverageRepairs"/>. Keeps the
+    /// exhaustion series a count of stuck ACTIVATIONS rather than of persists,
+    /// which would otherwise scale with write rate and say nothing about how
+    /// many leaves are stuck.
+    /// </summary>
+    private bool _zeroCoverageRepairExhaustionReported;
+
+    /// <summary>
     /// Byte-accurate footprint of the most recently persisted snapshot
     /// for this leaf, or <c>0</c> when no snapshot has been captured this
     /// activation. Mirrors the value written into
@@ -172,8 +203,162 @@ internal sealed partial class BPlusLeafGrain
     private long[]? _durableSnapshotOffsetsByPartition;
 
     /// <summary>
+    /// Per-partition RE-READ frontier of the cold rebuild in progress on this
+    /// activation: the highest offset this activation has actually re-read from
+    /// the WAL start and applied into the cache, or <c>-1</c> for a partition it
+    /// has not reached. <see langword="null"/> when no cold rebuild is running.
+    /// <para>
+    /// This is a DIFFERENT quantity from the projection checkpoint, and the
+    /// distinction is the whole of issue #2280. The checkpoint is the APPLIED
+    /// frontier - what the projection has durably absorbed - and it is strictly
+    /// monotonic because #1492 requires it to be. A cold rebuild re-reads from
+    /// offset 0 while that checkpoint still sits at its persisted value
+    /// <c>C_p</c>, so every offset it re-reads below <c>C_p</c> is real progress
+    /// that no monotonic scalar can express. Collapsing the two onto one number
+    /// is what makes a cancelled cold replay bank nothing: see the short-circuit
+    /// in <c>TryFlushRecoveredCeilingAsync</c>, which correctly refuses to lower
+    /// the checkpoint and thereby also refuses to record the re-read.
+    /// </para>
+    /// <para>
+    /// Recorded from the CLAMPED ceiling that
+    /// <c>TryFlushRecoveredCeilingAsync</c> already computes - <c>maxApplied</c>
+    /// bounded below the lowest unresolved deferred terminal and below any
+    /// unresolved saga prepare - and never from raw <c>maxApplied</c>. That
+    /// choice is load-bearing TWICE over, and a later reader must not
+    /// "simplify" it away:
+    /// </para>
+    /// <para>
+    /// (1) It makes over-claiming unrepresentable. The claim is the same
+    /// quantity already trusted to advance the durable checkpoint, so it
+    /// inherits a tested property instead of adding a new one.
+    /// </para>
+    /// <para>
+    /// (2) It keeps the un-restored pending-transaction set safe. Rehydrate
+    /// loads cache rows only and never repopulates <c>_pendingTx</c>, so a
+    /// banked frontier ABOVE an unresolved prepare would resume past a prepare
+    /// the next activation cannot reconstruct. Because the ceiling is clamped
+    /// below the earliest unresolved prepare, no unresolved prepare can ever lie
+    /// below a banked frontier and the re-read necessarily re-reads it.
+    /// </para>
+    /// </summary>
+    private long[]? _coldReplayFrontierByPartition;
+
+    /// <summary>
+    /// Records that the cold rebuild on this activation has re-read and applied
+    /// <paramref name="ceiling"/> for <paramref name="partition"/>. Monotonic
+    /// per partition within the activation; discarded when the activation ends.
+    /// </summary>
+    private void RecordColdReplayFrontier(int partition, long ceiling, int partitionCount)
+    {
+        if (partition < 0 || ceiling < 0)
+            return;
+
+        var slots = Math.Max(partitionCount, partition + 1);
+        var arr = _coldReplayFrontierByPartition;
+        if (arr is null || arr.Length < slots)
+        {
+            var grown = new long[slots];
+            for (var i = 0; i < grown.Length; i++)
+                grown[i] = arr is not null && i < arr.Length ? arr[i] : -1L;
+            _coldReplayFrontierByPartition = arr = grown;
+        }
+
+        if (ceiling > arr[partition])
+            arr[partition] = ceiling;
+    }
+
+    /// <summary>
+    /// Returns the cold-rebuild re-read frontier for <paramref name="partition"/>,
+    /// or <c>-1</c> when this activation has not re-read it.
+    /// </summary>
+    internal long ColdReplayFrontierForPartition(int partition)
+    {
+        var arr = _coldReplayFrontierByPartition;
+        if (arr is null || partition < 0 || partition >= arr.Length)
+            return -1L;
+        return arr[partition];
+    }
+
+    /// <summary>
+    /// Builds the ordinary per-partition coverage claim for a capture: each
+    /// partition's current checkpoint, with slot 0 mirroring the scalar.
+    /// </summary>
+    private long[] BuildCheckpointCoverage(int partitionCount, long checkpoint)
+    {
+        var offsets = new long[partitionCount];
+        offsets[0] = checkpoint;
+        for (var p = 1; p < partitionCount; p++)
+            offsets[p] = GetCurrentCheckpointForPartition(p);
+        return offsets;
+    }
+
+    /// <summary>
+    /// Banks the progress of an IN-FLIGHT cold rebuild as a durable snapshot
+    /// whose coverage claim is the re-read frontier rather than the checkpoint,
+    /// so that a cold activation torn down before it converges leaves an anchor
+    /// the next activation can resume from (issue #2280). Returns whether a blob
+    /// was written.
+    /// <para>
+    /// Banking is INLINE during replay and never on the way out. Orleans does
+    /// not run <c>OnDeactivateAsync</c> when <c>OnActivateAsync</c> throws, and
+    /// a cancelled cold replay leaves activation BY throwing, so a deactivation
+    /// hook is unreachable on exactly the path that needs it.
+    /// </para>
+    /// <para>
+    /// The claim is per-partition and is refused outright - fail closed - if ANY
+    /// partition would be claimed below coverage a durable snapshot already
+    /// holds. Declining a partial capture is always safe, because a partial
+    /// capture is a bonus and never a correctness requirement, whereas a
+    /// regressing claim would drive <c>LeafSnapshotStorageGrain.MergeMonotone</c>
+    /// off its fast path onto the element-wise merge whose row union retains a
+    /// key present in the stored blob and ABSENT from the incoming one with no
+    /// comparison at all - the resurrection shape flagged by issue #2436. This
+    /// keeps that hazard exactly as reachable as it is today and no more.
+    /// </para>
+    /// <para>
+    /// This is NOT the durable-offset design ruled unsound in the #2089
+    /// follow-up. That design extended a frontier ABOVE the clamped ceiling,
+    /// which would have authorised trimming past unapplied holes. This one
+    /// records a frontier strictly BELOW it - the opposite direction, and
+    /// strictly safer: the pin is <c>min(checkpoint, covered)</c>, so a claim
+    /// below the checkpoint can only ever LOWER the trim floor.
+    /// </para>
+    /// </summary>
+    private async Task<bool> TryBankColdReplayProgressAsync(CancellationToken cancellationToken)
+    {
+        if (!_cacheRebuiltFromWalStartThisActivation || state.State.TreeId is null)
+            return false;
+
+        var frontier = _coldReplayFrontierByPartition;
+        if (frontier is null)
+            return false;
+
+        var resolved = await GetOptionsAsync();
+        var partitionCount = Math.Max(1, resolved.WalPartitions);
+
+        var claim = new long[partitionCount];
+        var anyProgress = false;
+        for (var p = 0; p < partitionCount; p++)
+        {
+            var reRead = p < frontier.Length ? frontier[p] : -1L;
+            if (reRead < DurableSnapshotCoverageForPartition(p))
+                return false;
+
+            claim[p] = reRead;
+            if (reRead >= 0)
+                anyProgress = true;
+        }
+
+        if (!anyProgress)
+            return false;
+
+        await CaptureSnapshotCoreAsync(cancellationToken, claim);
+        return true;
+    }
+
+    /// <summary>
     /// Returns the highest WAL offset a durable snapshot is known to cover
-    /// for <paramref name="partition"/> this activation, or <c>-1</c> when no
+    /// for <paramref name="partition"/>, or <c>-1</c> when no
     /// durable snapshot covers it. Consumed by the coverage-gated durable-pin
     /// resolution.
     /// </summary>
@@ -183,6 +368,280 @@ internal sealed partial class BPlusLeafGrain
         if (arr is null || partition < 0 || partition >= arr.Length)
             return -1L;
         return arr[partition];
+    }
+
+    /// <summary>
+    /// Reports whether any partition holds a durable projection checkpoint that
+    /// no durable snapshot covers - the leaf-local form of the tree-wide WAL
+    /// retention stall of issue #2692.
+    /// <para>
+    /// <b>Why this state is not merely suboptimal.</b>
+    /// <c>ResolveDurablePinForPartition</c> computes
+    /// <c>min(checkpoint, covered)</c> and returns the Zero block pin whenever
+    /// that is negative. A partition matching this predicate therefore reports
+    /// the block value on every pin flush for the life of the activation, and
+    /// <c>ApplyDurableMaterialiserFloorAsync</c> abandons the cursor branch for
+    /// the WHOLE TREE on the first Zero pin it folds. One leaf in this state
+    /// retains every other leaf's WAL, without bound, for as long as it stays
+    /// in it.
+    /// </para>
+    /// <para>
+    /// <b>Both conjuncts are load-bearing; neither may be dropped.</b>
+    /// Requiring <c>covered &lt; 0</c> rather than <c>checkpoint &gt; covered</c>
+    /// is what separates this from the ordinary cadence debounce further down
+    /// <see cref="MaybeRunPeriodicSnapshotRecheckAsync"/>: coverage that merely
+    /// LAGS an advancing checkpoint still yields a usable (non-blocking) pin, so
+    /// it is a cadence concern and not an outage, and triggering on it would
+    /// capture on essentially every persist. Requiring <c>checkpoint &gt;= 0</c>
+    /// is what makes the repair TERMINATE: capture stamps coverage from
+    /// <see cref="BuildCheckpointCoverage"/>, which derives each partition's
+    /// coverage FROM its checkpoint, so a checkpointed partition necessarily
+    /// lands at a non-negative covered offset and (coverage being monotone-max)
+    /// can never return to -1. Drop that conjunct and a never-checkpointed
+    /// partition would be stamped -1 by its own capture, leaving the predicate
+    /// true and re-firing on every subsequent persist forever.
+    /// </para>
+    /// <para>
+    /// A partition holding live data but no checkpoint is deliberately NOT
+    /// matched here. That is the population Half A (#2692) already routes to
+    /// capture through <see cref="CaptureSnapshotCoreAsync"/>'s live-data
+    /// fall-through, and its coverage correctly stays at -1 so its Zero block
+    /// pin is RETAINED - there is no WAL offset it could honestly claim. This
+    /// predicate governs when to capture and never what to claim.
+    /// </para>
+    /// </summary>
+    internal bool HasCheckpointedPartitionWithoutCoverage(int partitionCount)
+    {
+        for (var p = 0; p < partitionCount; p++)
+        {
+            if (IsPartitionProvenCheckpointed(p)
+                && DurableSnapshotCoverageForPartition(p) < 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a partition carries POSITIVE evidence that it was actually
+    /// checkpointed, as opposed to merely reporting a non-negative offset.
+    /// <para>
+    /// Every partition reports the <c>-1</c> "nothing applied" sentinel until it
+    /// is genuinely checkpointed, so a non-negative offset IS the positive
+    /// evidence and this predicate is a thin, intention-revealing alias. That
+    /// holds for partition 0 only because
+    /// <c>GetPersistedCheckpointForPartition</c> resolves the born-<c>0</c>
+    /// scalar ambiguity described in issue #2703 at source; before that fix
+    /// partition 0 reported <c>0</c> for a leaf that had never checkpointed it,
+    /// and this predicate carried a compensating <c>&gt; 0</c> clamp of its own.
+    /// </para>
+    /// <para>
+    /// The clamp was deliberately removed rather than kept as defence in depth.
+    /// Two independent mechanisms enforcing one invariant means neither can be
+    /// shown to be load-bearing: mutating either leaves the tests green, so the
+    /// suite silently stops covering the property it was written for. One
+    /// mechanism, mutation-testable, is the stronger arrangement - and a second
+    /// clamp here would additionally be WRONG once the marker exists, rejecting
+    /// a leaf legitimately assigned offset 0.
+    /// </para>
+    /// <para>
+    /// What this predicate is for is unchanged, and is the reason it has a name
+    /// at all. Reading an unproven partition as checkpointed would let the
+    /// repair stamp a durable coverage offset for a partition that never
+    /// applied anything, turning the Zero block pin - correct, and deliberately
+    /// retained by <c>CaptureSnapshotAsync</c>'s live-data fall-through - into a
+    /// published trim entitlement. That is the silent-data-loss-on-upgrade shape
+    /// this fix must not introduce, arriving through a type default rather than
+    /// through advancing a pin.
+    /// </para>
+    /// </summary>
+    private bool IsPartitionProvenCheckpointed(int partition)
+        => GetCurrentCheckpointForPartition(partition) >= 0;
+
+    /// <summary>
+    /// Whether a caller-supplied per-partition coverage claim asserts coverage
+    /// for at least one partition, and so would produce a blob
+    /// <c>LeafSnapshotStorageGrain.HasCapturedPrefix</c> accepts.
+    /// <para>
+    /// A <see langword="null"/> argument reports <see langword="false"/>, and
+    /// that reading is correct ONLY at the one call site this helper has: the
+    /// never-checkpointed branch of <see cref="CaptureSnapshotCoreAsync"/>,
+    /// where a null override means the claim is derived by
+    /// <see cref="BuildCheckpointCoverage"/> from checkpoints the branch
+    /// condition has already proven are all negative. Do not reuse it anywhere
+    /// a null override could still yield a covering claim - outside that branch
+    /// a null override means "derive from the checkpoints", not "claim
+    /// nothing".
+    /// </para>
+    /// </summary>
+    private static bool SuppliedCoverageClaimsAnyPartition(long[]? coverageOverride)
+    {
+        if (coverageOverride is null)
+        {
+            return false;
+        }
+
+        foreach (var offset in coverageOverride)
+        {
+            if (offset >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Runs the zero-coverage repair capture (issue #2692) when this leaf holds
+    /// a checkpointed partition with no durable snapshot coverage, and reports
+    /// the outcome on
+    /// <see cref="LatticeMetrics.LeafSnapshotCoverageRepairs"/>. Returns whether
+    /// a capture was attempted.
+    /// <para>
+    /// Shared by the two drivers that must both be able to reach it: the
+    /// activation-time hook, which covers a leaf that entered the activation
+    /// already uncovered (including a tree that has stopped taking writes
+    /// entirely, and so will never reach the persist-driven hook again), and the
+    /// post-persist hook, which covers a leaf that becomes uncovered DURING an
+    /// activation - a newly split sibling being the case that matters, since it
+    /// is created mid-activation and would otherwise wait for a deactivation
+    /// that may never come. Between them a leaf cannot occupy this state
+    /// unobserved: it either holds it at activation, or acquires it by
+    /// persisting a checkpoint, and those are precisely the two call sites.
+    /// </para>
+    /// <para>
+    /// <b>Bound on concurrent uncancellable persists.</b> The post-persist
+    /// driver passes no cancellation token, because none exists anywhere on
+    /// that path - <c>CompleteCheckpointFlushTailAsync</c> takes none and
+    /// neither do its callers in <c>FlushPendingCheckpointAsync</c>. Since
+    /// issue #1965 is precisely about an uncancellable capture outrunning a
+    /// deactivation deadline, the exposure this adds is bounded as follows.
+    /// </para>
+    /// <para>
+    /// Per leaf the bound is ONE concurrent capture, and it holds even though
+    /// the leaf mutation surface is <c>[AlwaysInterleave]</c> so several write
+    /// turns run on one activation. <c>CaptureSnapshotCoreAsync</c> tests and
+    /// sets <c>_snapshotCaptureInFlight</c> in adjacent statements with no
+    /// await between them, and an Orleans activation yields only at an await,
+    /// so the check-and-set cannot be torn by an interleaved turn. The
+    /// per-activation ceiling is <see cref="MaxZeroCoverageRepairAttempts"/>
+    /// captures; the counter is likewise incremented before the first await, so
+    /// two interleaved turns cannot consume the same attempt.
+    /// </para>
+    /// <para>
+    /// Across leaves, the untokened population is only those completing a
+    /// checkpoint persist while still uncovered - bounded by write concurrency,
+    /// not by corpus size. It does NOT reproduce #1965's burst, whose shape is
+    /// the deactivation stampede at end of replay ("thousands of leaves go idle
+    /// together"): this repair never runs on the deactivation path. The one
+    /// mass-concurrency path it does run on is activation, and that driver
+    /// passes the activation token.
+    /// </para>
+    /// <para>
+    /// The population is also self-extinguishing, which is what keeps the cost
+    /// one-off rather than per-write: the predicate requires coverage &lt; 0,
+    /// the first successful capture moves coverage to 0 or above, and coverage
+    /// is monotone, so a leaf leaves the eligible set permanently.
+    /// </para>
+    /// <para>
+    /// Two residuals, stated rather than papered over. First, the cross-leaf
+    /// bound is application write concurrency, which is not a Lattice-configured
+    /// ceiling, so no constant in this repository names it. Second, a turn that
+    /// passes the guard below and then loses the race to set the in-flight flag
+    /// (the window is the <c>GetOptionsAsync</c> await inside the capture) burns
+    /// an attempt without doing work, so contention alone could exhaust the
+    /// budget. That is survivable precisely because exhaustion is a reported
+    /// state rather than silence - see
+    /// <see cref="ReportZeroCoverageRepairExhaustion"/>.
+    /// </para>
+    /// </summary>
+    private async Task<bool> TryRepairZeroCoverageAsync(
+        int partitionCount,
+        CancellationToken cancellationToken = default)
+    {
+        if (_snapshotCaptureInFlight || !HasCheckpointedPartitionWithoutCoverage(partitionCount))
+        {
+            return false;
+        }
+
+        if (_zeroCoverageRepairAttempts >= MaxZeroCoverageRepairAttempts)
+        {
+            ReportZeroCoverageRepairExhaustion();
+            return false;
+        }
+
+        _zeroCoverageRepairAttempts++;
+
+        // The byte-overflow pre-split that used to run here now runs inside
+        // CaptureSnapshotCoreAsync, which this method reaches through
+        // TryCaptureSnapshotForAdvisoryAsync below. Behaviour is unchanged for
+        // this path and is now extended to the other six capture routes, which
+        // had no size guard at all (issue #2733).
+        //
+        // Keeping a second call here would be worse than redundant. Two
+        // mechanisms enforcing one invariant means neither is mutation-testable:
+        // perturbing either leaves the suite green, so the fixtures silently
+        // stop covering the property they were written for. That is the same
+        // reasoning that removed the compensating clamp from
+        // IsPartitionProvenCheckpointed, and it applies here for the same
+        // reason.
+
+        // Honour a caller deadline wherever one exists. The activation driver
+        // passes the activation token, so a repair capture cannot outlive the
+        // activation that started it. The post-persist driver has no ambient
+        // caller token and passes none, exactly as the pre-existing cadence and
+        // coverage-deficit captures on that same path do.
+        await TryCaptureSnapshotForAdvisoryAsync(cancellationToken);
+
+        if (!HasCheckpointedPartitionWithoutCoverage(partitionCount))
+        {
+            RecordCoverageRepairOutcome(LatticeMetrics.CoverageRepairRepaired);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Emits the budget-exhaustion observation at most once per activation, on
+    /// both the counter and a warning carrying the leaf identity the counter
+    /// deliberately does not tag.
+    /// </summary>
+    private void ReportZeroCoverageRepairExhaustion()
+    {
+        if (_zeroCoverageRepairExhaustionReported)
+        {
+            return;
+        }
+
+        _zeroCoverageRepairExhaustionReported = true;
+        RecordCoverageRepairOutcome(LatticeMetrics.CoverageRepairExhausted);
+
+        ResolveLogger()?.LogWarning(
+            "Leaf {GrainId} on tree {TreeId} exhausted its zero-coverage snapshot repair budget ({Attempts} "
+            + "attempts) with a checkpointed partition still uncovered. Its durable materialiser pin stays at "
+            + "the block value, which disables cursor-based WAL trimming for the whole tree, so retained WAL "
+            + "will grow until the leaf reactivates or the snapshot store recovers (issue #2692).",
+            context.GrainId,
+            state.State.TreeId,
+            MaxZeroCoverageRepairAttempts);
+    }
+
+    private void RecordCoverageRepairOutcome(KeyValuePair<string, object?> outcome)
+    {
+        var treeId = state.State.TreeId;
+        if (treeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            outcome,
+            LatticeTenantLabel.ForTree(treeId));
     }
 
     /// <summary>
@@ -228,8 +687,16 @@ internal sealed partial class BPlusLeafGrain
     /// path (issue #1965) supplies Orleans' deactivation token instead, so a
     /// leaf that overruns the deactivation deadline abandons its blob write
     /// rather than being cancelled inside the runtime's own frame.
+    /// <para>
+    /// <paramref name="coverageOverride"/> supplies the per-partition coverage
+    /// claim instead of the current checkpoints. It is supplied only by
+    /// <see cref="TryBankColdReplayProgressAsync"/>, where the honest claim is
+    /// the cold re-read frontier and NOT the checkpoint - see that method.
+    /// </para>
     /// </summary>
-    private async Task CaptureSnapshotCoreAsync(CancellationToken cancellationToken)
+    private async Task CaptureSnapshotCoreAsync(
+        CancellationToken cancellationToken,
+        long[]? coverageOverride = null)
     {
         // No-op for an uninitialised leaf. TreeId is assigned during
         // SetTreeIdAsync (called by the shard root on first attach);
@@ -237,6 +704,7 @@ internal sealed partial class BPlusLeafGrain
         // there is no cache content worth persisting anyway.
         if (state.State.TreeId is null)
         {
+            ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNoTreeId);
             return;
         }
 
@@ -254,16 +722,161 @@ internal sealed partial class BPlusLeafGrain
         // partition has absorbed at least one entry.
         var resolved = await GetOptionsAsync();
         var partitionCount = Math.Max(1, resolved.WalPartitions);
-        var checkpoint = state.State.ProjectionCheckpointOffset;
-        var anyPartitionCheckpointed = checkpoint >= 0;
-        for (var p = 1; p < partitionCount && !anyPartitionCheckpointed; p++)
+
+        // Partition 0's coverage claim is read through the per-partition
+        // accessor rather than from the raw scalar, because BuildCheckpointCoverage
+        // stamps offsets[0] straight from this value. The scalar is born 0 rather
+        // than at the -1 sentinel (issue #2703), so reading it directly would
+        // publish an offset-0 coverage claim for a partition that never applied
+        // anything; the accessor resolves that ambiguity to the sentinel. Keeping
+        // the claim honest is what lets ResolveDurablePinForPartition go on
+        // computing min(checkpoint, covered) < 0 and retain the Zero block pin.
+        var checkpoint = GetCurrentCheckpointForPartition(0);
+
+        // The loop starts at partition 0 and reads it through the same predicate
+        // as every other partition. It previously started at 1, seeding the flag
+        // from a bare `checkpoint >= 0` on the raw scalar - which was ALWAYS true
+        // in production, because partition 0's only negative writer is the admin
+        // projection-rebuild path and the scalar is otherwise born 0 and positive
+        // thereafter (issue #2703). The short-circuit therefore fired on the
+        // first evaluation and the entire widening below was unreachable outside
+        // that one operator-driven path, while its own comment described
+        // partition 0 "staying at -1 forever" - a state the encoding cannot
+        // produce. With the born-0 ambiguity resolved in
+        // GetPersistedCheckpointForPartition, partition 0 now reports the
+        // sentinel exactly when it has nothing applied, and the widening becomes
+        // reachable for the population it was written for.
+        var anyPartitionCheckpointed = false;
+        for (var p = 0; p < partitionCount && !anyPartitionCheckpointed; p++)
         {
-            if (GetCurrentCheckpointForPartition(p) >= 0)
+            if (IsPartitionProvenCheckpointed(p))
                 anyPartitionCheckpointed = true;
         }
         if (!anyPartitionCheckpointed)
         {
-            return;
+            // ...but a checkpoint of -1 means "no WAL entry has been REPLAYED
+            // into this projection", which is NOT the same proposition as "the
+            // cache is empty". A leaf whose rows arrived as foreground writes,
+            // or via a split sibling's in-memory handoff, holds live committed
+            // data while every per-partition checkpoint sits at the sentinel.
+            // Reading the sentinel as emptiness starved exactly those leaves of
+            // capture forever: their Zero block pins never gained durable
+            // coverage, so the shared-shard WAL GC early-returned idle and the
+            // whole tree's retained WAL grew without bound (issue #2692). The
+            // retention invariant assumes "a block pin always has a bounded
+            // path to coverage", but that cadence is denominated in checkpoints
+            // this leaf never takes, so the path did not merely take a long
+            // time - it did not exist. Decide emptiness from the same signal
+            // the durable-pin half already uses, so both halves of the machine
+            // read the same quantity.
+            //
+            // This widens WHEN a blob is written and nothing else. A partition
+            // holding rows but no checkpoint still makes no offset claim:
+            // BuildCheckpointCoverage derives the coverage stamp FROM the
+            // checkpoint, so it records -1, ResolveDurablePinForPartition still
+            // computes min(checkpoint, covered) < 0 and retains the Zero block
+            // pin, and no WAL becomes trimmable. Crucially the two retention
+            // planes are coupled by a documented handoff -
+            // ComputeMaterialiserOffsetFloorAsync SKIPS a -1 pin precisely
+            // because "WAL retention is already enforced by the HLC block-pin
+            // branch" - so lifting the block on an un-replayed partition would
+            // drop BOTH protections at once and authorise trimming a prefix no
+            // consumer has read. Do not "complete" this fix by advancing the
+            // pin here.
+            var liveData = ComputePartitionsWithLiveData(partitionCount);
+            var anyPartitionHasLiveData = false;
+            for (var p = 0; p < liveData.Length; p++)
+            {
+                if (liveData[p])
+                {
+                    anyPartitionHasLiveData = true;
+                    break;
+                }
+            }
+            if (!anyPartitionHasLiveData)
+            {
+                ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNotEligible);
+                return;
+            }
+
+            // ...and the leaf holds rows, but a capture taken from here can
+            // make no coverage claim at all, so the blob it would write can
+            // never be read back. That is why this is a DECLINE and not a
+            // capture (issue #2725).
+            //
+            // The equivalence is exact rather than approximate, which is what
+            // makes declining safe to state as a rule. Control only reaches
+            // here when IsPartitionProvenCheckpointed is false for EVERY
+            // partition, i.e. GetCurrentCheckpointForPartition(p) < 0 for all
+            // p. BuildCheckpointCoverage builds its array from precisely those
+            // accessor reads (slot 0 from `checkpoint`, slot p from the
+            // accessor), so on this branch every slot it can produce is
+            // negative and NormalizeScalarOffset maps the scalar to null.
+            // LeafSnapshotStorageGrain.HasCapturedPrefix returns false for
+            // exactly that shape, so LoadAsync reports the blob absent on every
+            // subsequent read. The branch condition and the load gate's refusal
+            // condition are the same condition.
+            //
+            // An earlier revision of this comment claimed "durability of this
+            // leaf's rows is earned by writing the blob". That was false as
+            // written, and it is the reason this went unnoticed: a blob no
+            // reader will accept confers no durability. The write was not
+            // merely redundant, it was three separate costs -
+            // GetSnapshotByteSizeAsync also gates on HasUsableSnapshot and so
+            // reports the persisted bytes as 0, understating real storage
+            // consumption, and ClearAsync gates on HasCapturedPrefix and so
+            // short-circuits, leaving the row in the provider permanently
+            // unreclaimable even under an explicit clear.
+            //
+            // Nor is the remedy to widen the load gate. A blob whose coverage
+            // is negative on every partition authorises skipping no WAL, so a
+            // leaf rehydrating from it must still replay each partition from
+            // offset 0: it would buy a cold-path blob read - the very read that
+            // exhausts the heap on a large leaf in issue #2364 - for zero saved
+            // replay, while weakening the fail-closed gate the no-loss
+            // invariant of issue #1535 rests on. WAL replay already covers this
+            // leaf completely and remains the correct recovery path until it
+            // checkpoints something.
+            //
+            // What survives the decline is the SIGNAL, which is what issue
+            // #2692 actually needed: this population is now counted under its
+            // own reason instead of being buried in a successful-looking
+            // capture, so "leaf holds rows it cannot yet claim coverage for" is
+            // legible to an operator reading snapshot coverage.
+            //
+            // The override is the one exception, and it is DEFENSIVE rather
+            // than live - stated precisely, because the comment this fix
+            // replaced overstated exactly this kind of claim, and repeating
+            // that here would be the same defect in a new place.
+            //
+            // The cold-replay banking path (issue #2280) supplies its own
+            // claim, the re-read frontier, and it cannot in fact reach this
+            // branch. TryBankColdReplayProgressAsync returns early unless
+            // _cacheRebuiltFromWalStartThisActivation is set, and the replay
+            // sets that flag only for a partition whose PERSISTED checkpoint is
+            // already greater than zero. A partition with a persisted
+            // checkpoint above zero is proven checkpointed, and checkpoints are
+            // monotonic within an activation, so whenever an override is
+            // supplied at least one partition reports checkpointed and the
+            // enclosing branch is not entered. A leaf that starts at the
+            // sentinel is not on that arm at all: its replay advances the
+            // checkpoint through TryFlushRecoveredCeilingAsync before anything
+            // captures, so it too arrives here checkpointed.
+            //
+            // Gate on the claim regardless. The property that decides whether
+            // the blob can ever be read back is the claim it carries, not the
+            // branch that produced it, and those coincide today only because of
+            // the reachability argument above - which is one refactor away from
+            // being false. Written as the branch, a future override-supplying
+            // caller would lose its capture silently. The perturbation study for
+            // this change measures the clause by forcing the branch to be
+            // entered unconditionally: with the clause the banking captures
+            // survive, without it they are declined.
+            if (!SuppliedCoverageClaimsAnyPartition(coverageOverride))
+            {
+                ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNoCoverageClaim);
+                return;
+            }
         }
 
         // Single-flight guard. A second capture invocation that arrives
@@ -275,11 +888,80 @@ internal sealed partial class BPlusLeafGrain
         // slow.
         if (_snapshotCaptureInFlight)
         {
+            ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineAlreadyInFlight);
             return;
         }
         _snapshotCaptureInFlight = true;
+        // Attempt boundary. Everything above this line is a DECLINE (no tree,
+        // nothing checkpointed and no live data, or a capture already in
+        // flight); everything below is a genuine attempt that will either land
+        // a blob or throw. Counting and timing from here - rather than from
+        // method entry - is what makes both instruments readable: the gates
+        // return in microseconds and are taken far more often than a capture
+        // runs, so timing them would let near-zero no-ops dominate the sample
+        // count and report "captures are fast" precisely when none happen.
+        var captureStartedAt = Stopwatch.GetTimestamp();
+        var captureSucceeded = false;
         try
         {
+            // Divide an oversized leaf BEFORE materialising its payload, on
+            // EVERY route into capture rather than on one of them.
+            //
+            // This used to live in TryRepairZeroCoverageAsync, which is one of
+            // seven callers of this method and is BEHIND a predicate
+            // (HasCheckpointedPartitionWithoutCoverage) that a tree with no
+            // proven-checkpointed partition never satisfies. On such a tree no
+            // leaf was ever divided on the byte bound at all, and the remaining
+            // six routes - the grain seam, the activation advisory, the
+            // coverage-deficit escape, the cadence recheck, the deactivation
+            // hook, and cold-replay banking - each reached the capture below
+            // with no size guard whatsoever and threw OutOfMemoryException
+            // trying to allocate the payload contiguously (issue #2733).
+            //
+            // Ordering made it worse than the predicate alone: the activation
+            // advisory runs at Step 1.5 and the coverage-deficit escape above
+            // the repair call in MaybeRunPeriodicSnapshotRecheckAsync, so even
+            // on a tree where the predicate DOES hold, an earlier driver
+            // reached the unguarded capture first. Guarding any single driver
+            // would leave the other six open; this method is the one seam they
+            // all pass through, so the guard belongs here and only here.
+            //
+            // Placed INSIDE the single-flight window deliberately, and this is
+            // stricter than the call site it replaces, which split before the
+            // flag was set. With _snapshotCaptureInFlight already true, every
+            // route that could re-enter capture during the split's PersistAsync
+            // declines on its own guard: this method's single-flight check,
+            // TryRepairZeroCoverageAsync's first conjunct, and the
+            // coverage-deficit escape's !_snapshotCaptureInFlight.
+            //
+            // It is inside the try so that a throwing split still clears the
+            // in-flight flag through the finally; captureStartedAt is re-stamped
+            // afterwards so the duration histogram keeps measuring the capture
+            // proper, while a split that throws is still timed.
+            //
+            // Two routes are deliberately EXCLUDED, and neither exclusion
+            // weakens the self-healing property this guard exists for.
+            //
+            // A non-null coverageOverride means this is TryBankColdReplayProgressAsync,
+            // which runs from the OperationCanceledException handler of
+            // ReplayWalSinceCheckpointAsync - inside a FAILING activation, on
+            // its way to rethrowing. Its claim is a per-partition cold re-read
+            // frontier for rows a split would divide across two leaves, and the
+            // sibling would inherit the rows without inheriting the claim. That
+            // path exists to bank what a cancelled replay already absorbed, so
+            // doing structural work there is against its whole intent.
+            //
+            // An already-cancelled token means a deactivating leaf (issue
+            // #1965). Starting a multi-persist division that cannot finish
+            // before the deadline would leave a half-migrated split behind; the
+            // next activation re-enters this seam and divides then.
+            if (coverageOverride is null && !cancellationToken.IsCancellationRequested)
+            {
+                await TrySplitForByteOverflowAsync(resolved.MaxLeafKeys, resolved.MaxLeafBytes);
+            }
+
+            captureStartedAt = Stopwatch.GetTimestamp();
+
             // Single-threaded copy of the cache rows under the grain
             // turn. EnumerateRows yields the SortedDictionary's
             // key-ordered KeyValuePair sequence; the resulting buffer is
@@ -341,14 +1023,21 @@ internal sealed partial class BPlusLeafGrain
             // current checkpoint so the coverage-gated trim floor can
             // authorise trimming each partition's prefix independently. Slot
             // 0 mirrors the scalar SnapshotOffset for wire-compat.
-            var perPartitionOffsets = new long[partitionCount];
-            perPartitionOffsets[0] = checkpoint;
-            for (var p = 1; p < partitionCount; p++)
-                perPartitionOffsets[p] = GetCurrentCheckpointForPartition(p);
+            //
+            // The claim is about ROWS, not about the checkpoint scalar: it
+            // asserts "the rows in this blob cover [0, offset] for partition
+            // p". Stamping the checkpoint is an honest way to say that on a
+            // WARM capture, where the cache holds every checkpointed apply. It
+            // is NOT honest mid-COLD-rebuild, where the checkpoint still sits
+            // at its persisted value while the cache holds only what has been
+            // re-read so far - which is why the cold-progress banking path
+            // supplies the re-read frontier here instead (issue #2280).
+            var perPartitionOffsets = coverageOverride ?? BuildCheckpointCoverage(partitionCount, checkpoint);
+            var scalarOffset = perPartitionOffsets.Length > 0 ? perPartitionOffsets[0] : checkpoint;
 
             var blob = new LeafSnapshotBlob
             {
-                SnapshotOffset = LeafSnapshotBlob.NormalizeScalarOffset(checkpoint),
+                SnapshotOffset = LeafSnapshotBlob.NormalizeScalarOffset(scalarOffset),
                 Rows = legacyRows,
                 EncodedRows = encodedRows,
                 CapturedAtTicks = DateTime.UtcNow.Ticks,
@@ -364,6 +1053,18 @@ internal sealed partial class BPlusLeafGrain
                 context.GrainId.GetGuidKey());
             await snapshotGrain.SaveAsync(blob, cancellationToken);
             _lastCapturedSnapshotBytes = blob.SnapshotBytes;
+
+            // Bank the wire size this leaf will have to read back (issue #2765),
+            // so the next activation's admission claim is sized from what was
+            // actually written rather than from a generic bound. This is the
+            // cheapest possible place to learn it: the capture path is already
+            // about to persist state, so the hint rides a write that was
+            // happening anyway.
+            var capturedLoadBytes = MeasureSnapshotLoadBytes(blob);
+            if (capturedLoadBytes > 0)
+            {
+                state.State.SnapshotLoadHintBytes = capturedLoadBytes;
+            }
             // The blob is now durable, so the checkpointed prefix it covers
             // is recoverable independently of the WAL. Advance the coverage
             // view; the NEXT durable-pin flush will then authorise trimming
@@ -373,11 +1074,111 @@ internal sealed partial class BPlusLeafGrain
             // FlushPendingCheckpointAsync) keeps the pin conservative: it can
             // never license a trim ahead of durable coverage.
             RecordDurableSnapshotCoverage(blob);
+            captureSucceeded = true;
         }
         finally
         {
             _snapshotCaptureInFlight = false;
+            // Recorded in the finally so that the swallowed-exception paths are
+            // counted too. That is the whole point of issue #2696: the advisory
+            // handler catches every exception and only logs, so before this a
+            // deployment in which every capture failed exported nothing at all
+            // - not a spike, not a zero - and was indistinguishable from one
+            // that had never attempted a capture.
+            ObserveSnapshotCaptureAttempt(captureSucceeded, cancellationToken, captureStartedAt);
         }
+    }
+
+    /// <summary>
+    /// Records one leaf-snapshot capture attempt on
+    /// <see cref="LatticeMetrics.LeafSnapshotCaptures"/> and its wall-clock
+    /// duration on <see cref="LatticeMetrics.LeafSnapshotCaptureDuration"/>,
+    /// tagged by tree and outcome (issue #2696). Observation only: the caller's
+    /// control flow, and the exception it is propagating if any, are unchanged.
+    /// <para>
+    /// Called from the <c>finally</c> of the capture's single-flight block, so
+    /// it runs on the success path and on every throwing path alike. It must
+    /// therefore not throw: a metrics write that faulted here would replace the
+    /// capture's real exception with an observation defect. Both instrument
+    /// writes are allocation-light tag writes against a bounded tag set and
+    /// neither allocates per-leaf series - the tree is the finest label, which
+    /// keeps this family at trees x outcomes rather than at leaf cardinality.
+    /// </para>
+    /// <para>
+    /// A cancelled token is reported as <c>abandoned</c> rather than
+    /// <c>failed</c>, mirroring the predicate the advisory handler already uses
+    /// to swallow deactivation cancellations silently, so a fleet-wide
+    /// shutdown does not read as a storage-provider outage.
+    /// </para>
+    /// </summary>
+    private void ObserveSnapshotCaptureAttempt(
+        bool succeeded,
+        CancellationToken cancellationToken,
+        long startedAtTimestamp)
+    {
+        var treeId = state.State.TreeId;
+        if (treeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        var outcome = succeeded
+            ? LatticeMetrics.SnapshotCaptureSucceeded
+            : cancellationToken.IsCancellationRequested
+                ? LatticeMetrics.SnapshotCaptureAbandoned
+                : LatticeMetrics.SnapshotCaptureFailed;
+
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        LatticeMetrics.LeafSnapshotCaptures.Add(1, treeTag, outcome, tenantTag);
+        LatticeMetrics.LeafSnapshotCaptureDuration.Record(
+            Stopwatch.GetElapsedTime(startedAtTimestamp).TotalMilliseconds,
+            treeTag,
+            outcome,
+            tenantTag);
+    }
+
+    /// <summary>
+    /// Records a capture invocation that declined before the attempt boundary.
+    /// <para>
+    /// Declines are counted on their own instrument rather than as a fourth
+    /// value of the attempt counter's outcome tag, so that the attempt counter
+    /// and the duration histogram keep sharing a population exactly. A decline
+    /// is never timed, so folding it into the attempt counter would make the
+    /// two families silently differ.
+    /// </para>
+    /// <para>
+    /// A <c>no_tree_id</c> decline carries no <c>tree</c> tag - there is no tree
+    /// identity to report - but it still carries the derived <c>tenant</c>
+    /// dimension, which <see cref="LatticeTenantLabel.ForTree(string?)"/>
+    /// resolves to the platform sentinel for a null id. Emitting it with no
+    /// tenant dimension at all would make it invisible to every tenant-scoped
+    /// query, so an operator could not tell an unattributable measurement from
+    /// a missed one - which is the same ambiguity this instrument exists to
+    /// remove, reintroduced one dimension over. The uniform dimension also
+    /// keeps every site on this instrument under one attribution rule, so its
+    /// series never splits across two.
+    /// </para>
+    /// </summary>
+    private void ObserveSnapshotCaptureDecline(KeyValuePair<string, object?> reason)
+    {
+        // Normalise an empty id to null so it resolves to the platform sentinel
+        // rather than being adopted by the default tenant, matching the guard below.
+        var treeId = state.State.TreeId is { Length: > 0 } id ? id : null;
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        if (treeId is null)
+        {
+            LatticeMetrics.LeafSnapshotCaptureDeclines.Add(1, reason, tenantTag);
+            return;
+        }
+
+        LatticeMetrics.LeafSnapshotCaptureDeclines.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            reason,
+            tenantTag);
     }
 
     /// <summary>
@@ -510,6 +1311,43 @@ internal sealed partial class BPlusLeafGrain
             // cadence or another capture beat us): retire the latch and fall
             // through to normal cadence handling.
             _snapshotCoverageDeficitAtActivation = false;
+        }
+
+        // Zero-coverage repair (issue #2692), deliberately ABOVE the cadence
+        // gate below and above the option read, for the same reason the
+        // coverage-deficit escape above is: this is a retention OUTAGE and not a
+        // tuning concern, and it must not be disableable by a tuning knob.
+        //
+        // A partition that is checkpointed but holds no durable snapshot
+        // coverage resolves its durable pin to the Zero block value, and the WAL
+        // GC abandons the cursor branch for the entire tree on the first such
+        // pin - so ONE leaf in this state retains every other leaf's WAL without
+        // bound. The cadence path below cannot be relied on to clear it. Its
+        // counter (_checkpointPersistCountSinceRecheck) resets every activation,
+        // so a leaf that persists fewer than `threshold` checkpoints per
+        // activation never reaches it however long it lives; and with the option
+        // set to 0 the path does not exist at all, which would make an
+        // unbounded-disk failure mode reachable by a tuning value. Neither is an
+        // acceptable dependency for the only thing standing between a tree and
+        // unbounded WAL growth.
+        //
+        // This widens WHEN a blob is written and nothing else - it advances no
+        // pin and lifts no block. The coverage stamp still comes from
+        // BuildCheckpointCoverage, so a partition with no checkpoint still
+        // records -1 and still retains its Zero block pin; see
+        // HasCheckpointedPartitionWithoutCoverage for why both conjuncts of the
+        // predicate are load-bearing, and CaptureSnapshotCoreAsync's live-data
+        // fall-through for the population this one deliberately excludes.
+        //
+        // Termination is structural rather than scheduled: a capture stamps
+        // coverage for every checkpointed partition, coverage is monotone-max,
+        // so the predicate is false from then on and this path never fires again
+        // for this leaf. The attempt budget therefore bounds only repeated
+        // FAILURE, and its exhaustion is reported as its own state rather than
+        // being absorbed silently.
+        if (await TryRepairZeroCoverageAsync(Math.Max(1, resolved.WalPartitions)))
+        {
+            return;
         }
 
         var threshold = resolved.LeafSnapshotReClassifyEveryNCheckpoints;
@@ -680,6 +1518,136 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// True when <paramref name="error"/> is, or was caused by, an
+    /// <see cref="OutOfMemoryException"/> - walking <see cref="Exception.InnerException"/>
+    /// and every branch of an <see cref="AggregateException"/>.
+    /// <para>
+    /// The walk is necessary rather than defensive. The allocation that fails
+    /// is inside the storage provider's deserialiser, several frames below the
+    /// grain call this leaf issues, and it reaches the caller wrapped: Orleans
+    /// surfaces a failure to read a grain's persistent state as an activation
+    /// failure carrying the original as an inner exception. Testing the
+    /// outermost type alone would classify every real occurrence of this fault
+    /// as an ordinary storage fault - that is, it would report the exact wrong
+    /// answer for the one case the classifier exists to catch, rather than
+    /// reporting nothing.
+    /// </para>
+    /// <para>
+    /// Cycle-safe by bounded depth: a hand-constructed exception graph can be
+    /// cyclic, and this runs on the activation path, where a hang is a worse
+    /// outcome than a missed classification.
+    /// </para>
+    /// </summary>
+    internal static bool IsResourceExhaustion(Exception? error)
+    {
+        return Walk(error, 0);
+
+        static bool Walk(Exception? candidate, int depth)
+        {
+            const int MaxDepth = 16;
+
+            if (candidate is null || depth >= MaxDepth)
+            {
+                return false;
+            }
+
+            if (candidate is OutOfMemoryException)
+            {
+                return true;
+            }
+
+            if (candidate is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions)
+                {
+                    if (Walk(inner, depth + 1))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            return Walk(candidate.InnerException, depth + 1);
+        }
+    }
+
+    /// <summary>
+    /// Records a swallowed activation-time snapshot-load failure on
+    /// <see cref="LatticeMetrics.LeafSnapshotLoadFailures"/> and logs it
+    /// (issue #2364). Observation only: the caller's decline is unchanged, so
+    /// availability behaviour is exactly as it was.
+    /// <para>
+    /// Memory exhaustion is logged at <see cref="LogLevel.Error"/> and names
+    /// the real cause in the message, because the operator-visible evidence
+    /// otherwise names only the storage provider. The GC's own view of the heap
+    /// hard limit is included: under a container limit that ceiling is derived
+    /// from the cgroup, so it is the number that turns "a leaf failed to load"
+    /// into "this host is provisioned below its working set", and it is not
+    /// otherwise recoverable from the logs.
+    /// </para>
+    /// </summary>
+    private void ObserveSnapshotLoadFailure(Exception error)
+    {
+        var resourceExhaustion = IsResourceExhaustion(error);
+        var treeId = state.State.TreeId;
+
+        if (treeId is { Length: > 0 })
+        {
+            LatticeMetrics.LeafSnapshotLoadFailures.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                resourceExhaustion
+                    ? LatticeMetrics.SnapshotLoadFailureResourceExhausted
+                    : LatticeMetrics.SnapshotLoadFailureFaulted,
+                LatticeTenantLabel.ForTree(treeId));
+        }
+
+        var logger = context.ActivationServices?
+            .GetService<ILoggerFactory>()?
+            .CreateLogger<BPlusLeafGrain>();
+
+        if (logger is null)
+        {
+            return;
+        }
+
+        if (resourceExhaustion)
+        {
+            var memoryInfo = GC.GetGCMemoryInfo();
+            logger.LogError(
+                error,
+                "Leaf {GrainId} (tree '{TreeId}') could not load its snapshot because memory was exhausted, so "
+                + "this activation is DECLINED and will be retried once the cold-start storm has drained. It is "
+                + "deliberately not allowed to fall through to the whole-window WAL replay, which allocates more "
+                + "than the load that just failed and so drives the process into a restart loop (issue #2765). "
+                + "This is a MEMORY fault, not a storage-provider fault: the underlying exception is raised inside "
+                + "the provider's deserialise of the snapshot blob and is reported by the provider as a failure to "
+                + "read grain state, which names no memory anywhere. The managed heap is using {HeapBytes} bytes "
+                + "against a hard limit of {HeapHardLimitBytes} bytes (0 means unlimited); under a container memory "
+                + "limit that ceiling is sized from the cgroup. No operator action is required: hydration is "
+                + "admission-gated against that same ceiling and recovers on its own. A sustained rate here means "
+                + "the host is provisioned below this deployment's working set.",
+                context.GrainId,
+                treeId,
+                GC.GetTotalMemory(forceFullCollection: false),
+                memoryInfo.TotalAvailableMemoryBytes);
+        }
+        else
+        {
+            logger.LogWarning(
+                error,
+                "Leaf {GrainId} (tree '{TreeId}') could not load its snapshot; it will activate without "
+                + "rehydrating, which means a cold replay of its whole readable WAL window when the entry cache is "
+                + "empty. The activation itself is unaffected - the WAL can still recover the projection provided "
+                + "it has not trimmed past the checkpoint.",
+                context.GrainId,
+                treeId);
+        }
+    }
+
+    /// <summary>
     /// Activation-time rehydration seam. Consults the dedicated
     /// snapshot storage grain for a persisted blob and, when the blob
     /// is newer than the leaf's persisted
@@ -702,6 +1670,244 @@ internal sealed partial class BPlusLeafGrain
     /// to a from-zero replay.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// The admission gate this leaf reserves hydration budget from. Resolved
+    /// from the activation's services when one is registered - which is the seam
+    /// a test uses to drive a small, deterministic budget - and otherwise the
+    /// process-wide gate sized from the runtime's heap hard limit.
+    /// <para>
+    /// Resolution is per-activation rather than through a settable static
+    /// precisely because fixtures in this project run concurrently and share the
+    /// process: a static override would make one fixture's budget visible to
+    /// another's leaf, which is the kind of order-dependent coupling that
+    /// presents as a flake rather than as a failure.
+    /// </para>
+    /// </summary>
+    private LeafSnapshotHydrationAdmission SnapshotHydrationAdmission
+        => context.ActivationServices?.GetService<LeafSnapshotHydrationAdmission>()
+            ?? LeafSnapshotHydrationAdmission.Shared;
+
+    // Trees whose admission series has been primed to zero in this process.
+    private static readonly ConcurrentDictionary<string, byte> PrimedAdmissionTrees = new();
+
+    /// <summary>
+    /// Bytes a loaded blob costs to materialise. The binary frame is the figure
+    /// that matters: it is the array the provider read, the serializer copied,
+    /// and the cache may go on holding, whereas the logical row footprint
+    /// describes the decoded rows only and understates a frame the leaf is
+    /// carrying whole.
+    /// </summary>
+    private static long MeasureSnapshotLoadBytes(LeafSnapshotBlob blob)
+        => blob.EncodedRows is { Length: > 0 } frame
+            ? frame.Length
+            : Math.Max(blob.SnapshotBytes, 0L);
+
+    /// <summary>
+    /// The stored-byte estimate this activation's hydration claim is sized
+    /// from: the durable hint when one has been banked, and the leaf's own
+    /// configured size bound otherwise.
+    /// </summary>
+    /// <remarks>
+    /// Shared by the claim and by the failure-path escalation so the two cannot
+    /// drift. They must agree: the escalation's whole job is to raise the value
+    /// the claim will read next time, and if it escalated a different quantity
+    /// it would raise something nothing consults.
+    /// </remarks>
+    private async Task<long> ResolveSnapshotLoadEstimateBytesAsync()
+    {
+        // The durable hint is the whole point of persisting it: the first claim
+        // a restarted process makes is already sized from what the previous run
+        // measured. Without one, fall back to the leaf's own configured size
+        // bound, which is the largest a leaf is ever meant to be and therefore
+        // the right conservative guess - not a new knob, just the existing one
+        // read for a second purpose.
+        //
+        // That fallback is conditional on the leaf having a tree, and the
+        // condition is load-bearing rather than defensive. Resolving options
+        // consults the registry, and an UNSEEDED leaf is required to reach its
+        // registry not at all during activation - a guarantee this repository
+        // asserts directly, so widening it here would be caught as a behaviour
+        // change rather than as a performance one. It is also the correct
+        // estimate on its own terms: a leaf with no tree has never captured a
+        // snapshot, so there is nothing for this activation to hydrate and a
+        // zero claim is the true cost, not a shortcut.
+        var estimatedBytes = state.State.SnapshotLoadHintBytes;
+        if (estimatedBytes <= 0 && state.State.TreeId is { Length: > 0 })
+        {
+            var options = await GetOptionsAsync();
+            estimatedBytes = options.MaxLeafBytes;
+        }
+
+        return estimatedBytes;
+    }
+
+    /// <summary>
+    /// Banks a strictly larger durable hydration estimate after a load failed
+    /// for want of memory, so the next activation sizes its claim from what
+    /// this failure cost rather than repeating the estimate that just failed.
+    /// </summary>
+    private async Task BankUnaffordableLoadHintAsync()
+    {
+        // Every statement here is bookkeeping for a FUTURE activation, and the
+        // caller is on its way to rethrowing the fault that brought us here.
+        // An observation must never replace the fault it observes - the same
+        // rule the cold-replay cancellation escalation follows - so the whole
+        // body is swallowed. Losing the hint costs one more failed activation;
+        // losing the LeafSnapshotUnaffordableException would rewrite a
+        // diagnosed memory fault as whatever the bookkeeping happened to throw.
+        //
+        // That is not a hypothetical here. We are on the resource-exhaustion
+        // path, so the most likely thing to throw is another
+        // OutOfMemoryException, raised by the very write that is trying to
+        // record why the last one happened.
+        try
+        {
+            // STORED bytes, never the lease's HeldBytes.
+            //
+            // HeldBytes is a heap-cost figure - the gate multiplies every claim
+            // by its amplification on the way in - whereas
+            // SnapshotLoadHintBytes is a stored size, which is what the success
+            // path banks and what the next claim converts. Banking the held
+            // figure would read perfectly (both are bytes, it compiles) and be
+            // wrong by the amplification, compounding on every round because
+            // the inflated value is amplified again when it is next read. That
+            // is the second conversion site ToHeapCostBytes's placement exists
+            // to prevent, and this comment is here because the first draft of
+            // this method did exactly that and the arms caught it.
+            var basis = await ResolveSnapshotLoadEstimateBytesAsync();
+            if (basis <= 0)
+            {
+                return;
+            }
+
+            // Doubling, and NOT a configurable factor. The correct estimate is
+            // unknown by construction - the load failed, so nothing measured it
+            // - and the only fact in hand is that `basis` was too small. A knob
+            // here would have to be tuned per host, which is exactly the
+            // property this fix may not have; doubling reaches any true size in
+            // a logarithmic number of activations without naming one.
+            var ceiling = SnapshotHydrationAdmission.MaxClaimableStoredBytes;
+            var escalated = basis >= ceiling / 2 ? ceiling : basis * 2;
+
+            // Suppresses a redundant durable write once the guess has
+            // saturated the ceiling, which is the only way this condition can
+            // now hold: `basis` is derived from the hint itself, so `escalated`
+            // strictly exceeds it in every case except the clamped one, where
+            // the two are both `ceiling`.
+            //
+            // Without this, every subsequent failed activation of a saturated
+            // leaf would persist a value identical to the one already stored -
+            // an unbounded series of writes that change nothing, falling on
+            // precisely the leaves that are failing repeatedly, which is the
+            // population already under memory pressure. The arm that pins it
+            // asserts the WRITE COUNT rather than the value, because the value
+            // is correct either way and only the write is wasted.
+            //
+            // An earlier draft justified this clause as stopping two
+            // interleaved activations from talking each other back down to a
+            // failing estimate. That was true when the basis was the lease's
+            // held bytes, an externally-supplied quantity that could arrive
+            // smaller than the stored hint. It has not been true since the
+            // basis became the hint itself, and the comment outlived the
+            // mechanism it described - the clause is still needed, for a
+            // different reason than the one originally written down.
+            //
+            // None of this makes the escalation a one-way ratchet: the success
+            // path assigns the MEASURED size unconditionally, so the first load
+            // that completes replaces an inflated guess with the truth,
+            // downward if need be.
+            if (escalated <= state.State.SnapshotLoadHintBytes)
+            {
+                return;
+            }
+
+            state.State.SnapshotLoadHintBytes = escalated;
+
+            // Persisted here rather than stamped in memory, which is the one
+            // place this path must differ from the success path above.
+            //
+            // That path can stamp and leave the flush to whichever ordinary
+            // write comes next, because the activation continues and some write
+            // always does come. This one is about to throw, and the activation
+            // dies with it - so an in-memory stamp is discarded before anything
+            // can read it, and the hint would be lost precisely on the path
+            // whose entire purpose is to remember. The write is bounded by the
+            // number of FAILING leaves, not by the cold-start storm.
+            await PersistAsync();
+        }
+        catch
+        {
+            // Intentionally swallowed. See above: the fault in flight is worth
+            // more than this record of it.
+        }
+    }
+
+    /// <summary>
+    /// Reserves hydration budget for this activation, returning
+    /// <see langword="null"/> when the caller's deadline elapsed while queued.
+    /// </summary>
+    private async Task<LeafSnapshotHydrationLease?> AcquireSnapshotHydrationLeaseAsync(
+        CancellationToken cancellationToken)
+    {
+        var estimatedBytes = await ResolveSnapshotLoadEstimateBytesAsync();
+
+        var admission = SnapshotHydrationAdmission;
+        LeafSnapshotHydrationLease lease;
+        try
+        {
+            // The gate converts stored bytes to the peak heap a hydration of
+            // them actually costs; the claim is expressed in stored bytes so
+            // there is only one place that conversion can be got wrong.
+            lease = await admission.AcquireAsync(estimatedBytes, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+
+        ObserveSnapshotHydrationAdmission(lease.Queued);
+        return lease;
+    }
+
+    /// <summary>
+    /// Records that a hydration passed the gate, and on which arm.
+    /// <para>
+    /// Both arms are primed to zero the first time a tree is seen in this
+    /// process. A counter that is only ever incremented reads as an absent
+    /// series in three completely different situations - the gate never had to
+    /// queue, the build does not carry the gate at all, or nothing has activated
+    /// yet - and those call for opposite responses. Priming makes the healthy
+    /// steady state an explicit zero instead of a silence.
+    /// </para>
+    /// </summary>
+    private void ObserveSnapshotHydrationAdmission(bool queued)
+    {
+        var treeId = state.State.TreeId;
+        if (treeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        if (PrimedAdmissionTrees.TryAdd(treeId, 0))
+        {
+            LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
+                0, treeTag, LatticeMetrics.SnapshotHydrationAdmittedImmediately, tenantTag);
+            LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
+                0, treeTag, LatticeMetrics.SnapshotHydrationQueued, tenantTag);
+        }
+
+        LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
+            1,
+            treeTag,
+            queued
+                ? LatticeMetrics.SnapshotHydrationQueued
+                : LatticeMetrics.SnapshotHydrationAdmittedImmediately,
+            tenantTag);
+    }
+
     internal async Task<bool> TryRehydrateFromSnapshotAsync(CancellationToken cancellationToken)
     {
         if (state.State.TreeId is null)
@@ -711,26 +1917,172 @@ internal sealed partial class BPlusLeafGrain
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Resolve the leaf's own identity BEFORE the observed try block, and
+        // without throwing. A leaf that is not Guid-keyed has no snapshot grain
+        // to address at all, so declining here is the SAME arm as "this leaf has
+        // no snapshot" - it is a precondition, not a failed load.
+        //
+        // Keeping this inside the try below would be a new conflation of exactly
+        // the kind issue #2364 exists to remove: GetGuidKey throws
+        // ArgumentException on a non-Guid key, which would be caught by the
+        // observing catch and counted and logged as a snapshot LOAD failure. The
+        // counter would then answer "did the snapshot store fail?" with evidence
+        // about grain naming, which is a worse lie than the silence it replaced,
+        // because it is a confident one.
+        if (!context.GrainId.TryGetGuidKey(out var leafKey, out _))
+        {
+            return false;
+        }
+
+        // Admission gate (issue #2765). Everything from here to the end of the
+        // method materialises bytes - the provider's blob read, the serializer's
+        // copy of it, the payload validation, and the attach or full decode - and
+        // on a cold start every leaf Orleans activates is doing it at the same
+        // time. Reserving the estimated cost up front is what turns the aggregate
+        // transient allocation from a function of the activation storm into a
+        // function of this process's heap.
+        //
+        // `using var` scopes the reservation to the whole remainder of the
+        // method deliberately: every `return false` below is a path that has
+        // already spent some of those bytes, so releasing on each one
+        // individually would be one more place to forget.
+        using var lease = await AcquireSnapshotHydrationLeaseAsync(cancellationToken);
+        if (lease is null)
+        {
+            // Cancelled while queued. Identical to the cancellation arm around
+            // the load below, and swallowed for the same reason.
+            return false;
+        }
+
         LeafSnapshotBlob? blob;
         try
         {
-            var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
-                context.GrainId.GetGuidKey());
+            var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(leafKey);
             blob = await snapshotGrain.LoadAsync(cancellationToken);
         }
-        catch
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Deliberate abandonment on the caller's deadline, not a failure of
+            // the load. Swallowed without observation for the same reason the
+            // capture path swallows it: thousands of leaves standing down
+            // together would turn one signal into a flood.
+            return false;
+        }
+        catch (Exception ex)
         {
             // Snapshot load is best-effort: a transient storage failure
             // must not block the leaf coming online. The activation
             // path falls through to the existing WAL-tail replay,
             // which can still recover the projection as long as the
             // WAL has not trimmed past the checkpoint.
+            //
+            // The DECISION is unchanged; what changes is that it is no longer
+            // silent (issue #2364). Returning false here is indistinguishable
+            // at every call site from "this leaf has no snapshot": both decline
+            // the rehydrate, and OnActivateAsync then sees
+            // (!rehydratedFromSnapshot && Cache.Count == 0), takes the -1
+            // replay-start override, and replays the WHOLE readable WAL window.
+            // So a leaf whose snapshot exists and failed to load reported
+            // exactly what a leaf with no snapshot reports, and the cold-replay
+            // log line said "no snapshot rehydrate" - true, and read by every
+            // operator as "there was no snapshot". An absence rendering as a
+            // measured negative.
+            //
+            // That cost the deployment in issue #2364 an undiagnosed multi-hour
+            // window, because the failure was memory exhaustion wearing a
+            // storage fault's clothes: under a container memory limit the GC
+            // heap hard limit is sized from the cgroup limit, so the process is
+            // never OOM-killed (no restart, no exit code, no resource event) -
+            // it throws OutOfMemoryException inside the provider's deserialise
+            // of the blob, and the provider logs "Error reading grain state".
+            // Nothing in that names memory. Worse, it compounds: the forced
+            // cold replay allocates more than the load that just failed, so the
+            // same few leaves go cold repeatedly and pressure rises.
+            ObserveSnapshotLoadFailure(ex);
+
+            // ... and THAT is the loop this arm now breaks (issue #2765). The
+            // compounding described above is not a side effect of the fall-
+            // through, it IS the fall-through: a leaf that has just failed for
+            // want of heap responds by asking for strictly more heap, because
+            // the whole-window replay allocates more than the load did. Under a
+            // container memory limit that is positive feedback, and it ran the
+            // deployed process into a restart loop that banked no progress at
+            // all - the leaves stayed oversized, so nothing ever divided, so the
+            // next activation faced the same corpus.
+            //
+            // Declining ONE leaf is strictly less harm than losing EVERY leaf,
+            // which is what an OutOfMemoryException in the silo actually costs.
+            // So a resource verdict is fatal to this activation and Orleans
+            // retries it later, by which time the admission gate above will have
+            // let the storm drain. Nothing durable is lost: no coverage has been
+            // recorded and no state written at this point, so the retry sees
+            // exactly what this attempt saw.
+            //
+            // The two arms must stay distinct. An ordinary storage fault keeps
+            // the best-effort fall-through unchanged, because there is nothing
+            // self-defeating about replaying the WAL when the store is merely
+            // unreachable - the replay may well succeed. It is only the MEMORY
+            // arm where the remedy and the fault are the same resource.
+            if (IsResourceExhaustion(ex))
+            {
+                // ... but breaking the loop is not the same as escaping it, and
+                // until now this arm did neither (issue #2769 section 3).
+                //
+                // The claim this activation made was sized from
+                // SnapshotLoadHintBytes, and that field is written at exactly
+                // one place: after a load SUCCEEDS. A leaf whose load fails for
+                // want of heap therefore banks nothing, so the next activation
+                // sizes its claim from the same hint the last one did, gets
+                // admitted on the same terms, and fails the same way. The
+                // estimate is MEMORYLESS with respect to failure - every
+                // attempt is the first attempt - so a leaf too large to load
+                // under contention is not slow to converge, it does not
+                // converge at all.
+                //
+                // The remedy is to make the failure inform the next estimate.
+                // Banking a strictly larger hint TIGHTENS admission rather than
+                // relaxing it: the gate's claim is what it reserves on this
+                // leaf's behalf, so a bigger claim means fewer concurrent
+                // hydrations alongside it and, at the ceiling, sole occupancy
+                // and the whole budget. That is the opposite of admitting the
+                // leaf anyway - the #2766 decision is untouched, and the leaf
+                // still fails THIS activation. What changes is that the retry
+                // is made under conditions the previous failure paid to learn.
+                await BankUnaffordableLoadHintAsync();
+
+                throw new LeafSnapshotUnaffordableException(
+                    state.State.TreeId ?? string.Empty,
+                    lease.HeldBytes,
+                    SnapshotHydrationAdmission.BudgetBytes,
+                    ex);
+            }
+
             return false;
         }
 
         if (blob is null)
         {
             return false;
+        }
+
+        // The estimate got us admitted; the measurement is what keeps the gate
+        // honest. Correcting the reservation here tightens admission for every
+        // claim still queued in THIS cold start, rather than only informing the
+        // next one, which matters because an underestimate that is never
+        // reconciled lets the gate admit far past its budget and bound nothing.
+        var observedBytes = MeasureSnapshotLoadBytes(blob);
+        lease.Reconcile(observedBytes);
+
+        // Bank the measurement durably (issue #2765). Stamped in memory only and
+        // carried by whichever ordinary WriteStateAsync comes next: forcing a
+        // write per leaf during a cold-start storm would add exactly the kind of
+        // unbounded concurrent work this gate exists to remove. What it buys is
+        // that a restart begins from an observed size rather than a generic
+        // guess, so progress survives the activation instead of being re-learned
+        // by overshoot on every restart.
+        if (observedBytes > 0)
+        {
+            state.State.SnapshotLoadHintBytes = observedBytes;
         }
 
         // Reject a blob whose row payload cannot be read in full - a truncated
@@ -755,6 +2107,15 @@ internal sealed partial class BPlusLeafGrain
         // block pin from ever lifting (unbounded WAL).
         RecordDurableSnapshotCoverage(blob);
 
+        // Read deliberately from the raw scalar, not through
+        // GetPersistedCheckpointForPartition. This is a like-for-like comparison
+        // against the blob's OWN scalar offset - both sides come from the same
+        // legacy partition-0 wire slot - and it decides rehydration, not a
+        // retention claim, so the born-0 disambiguation of issue #2703 does not
+        // apply to it. Routing it through the accessor would turn an ambiguous 0
+        // into -1 and flip "decline, already absorbed" into "accept" for a blob
+        // at offset 0, changing snapshot-load semantics that issues #919 and
+        // #2278 pin, for no retention benefit.
         var checkpoint = state.State.ProjectionCheckpointOffset;
         if (blob.ScalarOffsetOrSentinel() <= checkpoint)
         {
@@ -774,7 +2135,50 @@ internal sealed partial class BPlusLeafGrain
             // Activation_ignores_snapshot_at_equal_offset intent for the
             // WAL-intact case). See the residual cold-restart prefix-loss
             // finding.
-            if (!await AnyPartitionWalPrefixTrimmedAsync(cancellationToken))
+            //
+            // The decline is gated on a NON-EMPTY cache (issue #2278). "The
+            // snapshot is redundant against an intact WAL" is a statement about
+            // DURABILITY, and it is true: the WAL still holds the prefix. It was
+            // being applied as though it were a statement about COST, and there
+            // it is exactly inverted. The only thing the decline saves is a cache
+            // replace, so it is a saving only when there is a live cache to
+            // preserve. On a fresh activation the cache is empty by construction,
+            // and declining then does not avoid work - it forces the most
+            // expensive path available: step 0.5 of OnActivateAsync sees
+            // (!rehydratedFromSnapshot && Cache.Count == 0), sets the -1
+            // replay-start override, and the leaf replays the WHOLE readable WAL
+            // window instead of bulk-loading a blob that already covers the
+            // checkpointed prefix.
+            //
+            // That is self-perpetuating rather than one-off. The converged
+            // steady state is precisely offset == checkpoint (a capture stamps
+            // the checkpoint it covers), so a leaf that reactivates, replays from
+            // zero and re-captures lands back on an at-or-behind snapshot and
+            // goes cold again on its NEXT activation, forever. The deployed
+            // signature is the cold total sitting far above the distinct-cold-leaf
+            // count - repo-context-vector-metadata measured 98 cold across 48
+            // distinct leaves (2.04 per leaf), against vector-membership's 13
+            // across 13 (1.00 per leaf, the benign one-time first activation) on
+            // three times the traffic.
+            //
+            // Accepting here is not a new trust assumption and not a new code
+            // path. RecordDurableSnapshotCoverage above already treats this same
+            // blob as durable coverage of [0, offset] - that is what authorises
+            // the coverage-gated WAL GC to TRIM that prefix. Refusing to let it
+            // fill an empty cache trusts the blob with the destructive decision
+            // and distrusts it for the cheap one. The accept path below is the
+            // one that already runs whenever a prefix HAS been trimmed; it
+            // handles an at-or-behind blob correctly by lowering each partition's
+            // checkpoint to exactly what the reloaded cache holds and letting the
+            // tail replay cover (offset, head]. Final state is identical to the
+            // from-zero rebuild; the window read is a subset of it.
+            //
+            // Short-circuit order matters: with an empty cache the probe is not
+            // consulted at all, which also removes a per-activation grain call
+            // INTO the tree being replayed - the call the #2082 note describes as
+            // most likely to fault on exactly the saturated tree where declining
+            // costs the most.
+            if (Cache.Count > 0 && !await AnyPartitionWalPrefixTrimmedAsync(cancellationToken))
             {
                 return false;
             }
@@ -849,43 +2253,69 @@ internal sealed partial class BPlusLeafGrain
         // [0, checkpoint_p] survives - the from-zero replay rebuilds it
         // intact. (Coverage is monotonic and we always load the latest blob,
         // so an ever-covered partition would carry perPartition[p] >= 0.)
+        //
+        // The reset must span the leaf's WHOLE partition space, not only the
+        // slots the blob happens to carry (#2404). LeafSnapshotStorageGrain's
+        // HasUsableSnapshot gate is sound and deliberately NOT tightened: it
+        // answers "can this blob be rehydrated at all", and must not also demand
+        // full coverage, because rejecting an under-covering blob would discard
+        // the sole durable copy of a prefix the coverage gate has already let
+        // the WAL GC trim. Usable therefore does not mean complete, and it is
+        // this consumer's job to honour that. A loop bounded by the blob's array
+        // left a partition the blob carries NO SLOT for holding its old, higher
+        // checkpoint over the cleared cache - the same silent skip of
+        // [0, checkpoint_p] the -1 sentinel reset above exists to prevent, just
+        // reached by an absent slot rather than a present one. Two shapes reach
+        // it: a legacy blob with a null array (multi-partition WALs predate the
+        // per-partition field, whose own doc notes the scalar describes
+        // partition 0 only), and a blob captured before WalPartitions was raised
+        // (the leaf's own checkpoint array never shrinks, so it is strictly
+        // longer). An absent slot is exactly as uncovered as a -1 one, so the
+        // same loss-free argument applies unchanged:
+        // DurableSnapshotCoverageForPartition reports -1 outside the recorded
+        // coverage array, so the partition held a Zero block pin and its full
+        // WAL survives for the from-zero replay.
         var perPartition = blob.SnapshotOffsetsByPartition;
-        if (perPartition is not null && perPartition.Length > 0)
+        var blobSlots = perPartition is { Length: > 0 } ? perPartition.Length : 0;
+        var resetSlots = Math.Max(
+            Math.Max(blobSlots, state.State.ProjectionCheckpointOffsetsByPartition?.Length ?? 0),
+            Math.Max(1, hydrationOptions.WalPartitions));
+        for (var p = 0; p < resetSlots; p++)
         {
-            for (var p = 0; p < perPartition.Length; p++)
+            // A slot the blob carries is authoritative. Beyond its array the
+            // blob claims nothing, so partition 0 falls back to the legacy
+            // scalar (which describes partition 0 alone) and every other
+            // partition is uncovered, hence -1.
+            var covered = p < blobSlots
+                ? perPartition![p]
+                : (p == 0 ? blob.ScalarOffsetOrSentinel() : -1L);
+            // Frozen-leaf livelock detector (#2220). When this partition's
+            // durable checkpoint sits AHEAD of the snapshot offset we are
+            // about to write, the leaf is activating with a durable
+            // checkpoint the snapshot does not cover - the snapshot froze
+            // behind the checkpoint (an over-budget leaf that never captured
+            // a fresh one). The rollback below is still REQUIRED for cache
+            // coherence (the Cache.Clear above dropped the (snapshot,
+            // checkpoint] rows, so the tail replay MUST resume from the
+            // snapshot offset to rebuild them; keeping the higher checkpoint
+            // over the cleared cache would silently skip them). But without
+            // banking fresh coverage this activation, the leaf reloads the
+            // same stale snapshot next activation and rolls this partition
+            // back forever - a livelock whose WAL pin never lifts. Latch the
+            // deficit so the first post-replay checkpoint flush captures a
+            // snapshot covering the re-advanced checkpoint off the periodic
+            // cadence (which a short over-budget activation never reaches)
+            // and off the deactivation deadline. Only a genuine lowering of
+            // a real (>= 0) prior checkpoint counts: resetting an uncovered
+            // partition to -1 is the loss-free reset the coverage gate
+            // already guarantees, not a deficit, and the ordinary cadence
+            // handles a busy partition that merely advanced past its
+            // coverage.
+            if (covered >= 0 && covered < GetPersistedCheckpointForPartition(p))
             {
-                // Frozen-leaf livelock detector (#2220). When this partition's
-                // durable checkpoint sits AHEAD of the snapshot offset we are
-                // about to write, the leaf is activating with a durable
-                // checkpoint the snapshot does not cover - the snapshot froze
-                // behind the checkpoint (an over-budget leaf that never captured
-                // a fresh one). The rollback below is still REQUIRED for cache
-                // coherence (the Cache.Clear above dropped the (snapshot,
-                // checkpoint] rows, so the tail replay MUST resume from the
-                // snapshot offset to rebuild them; keeping the higher checkpoint
-                // over the cleared cache would silently skip them). But without
-                // banking fresh coverage this activation, the leaf reloads the
-                // same stale snapshot next activation and rolls this partition
-                // back forever - a livelock whose WAL pin never lifts. Latch the
-                // deficit so the first post-replay checkpoint flush captures a
-                // snapshot covering the re-advanced checkpoint off the periodic
-                // cadence (which a short over-budget activation never reaches)
-                // and off the deactivation deadline. Only a genuine lowering of
-                // a real (>= 0) prior checkpoint counts: resetting an uncovered
-                // partition to -1 is the loss-free reset the coverage gate
-                // already guarantees, not a deficit, and the ordinary cadence
-                // handles a busy partition that merely advanced past its
-                // coverage.
-                if (perPartition[p] >= 0 && perPartition[p] < GetPersistedCheckpointForPartition(p))
-                {
-                    _snapshotCoverageDeficitAtActivation = true;
-                }
-                SetPersistedCheckpointForPartition(p, perPartition[p]);
+                _snapshotCoverageDeficitAtActivation = true;
             }
-        }
-        else
-        {
-            state.State.ProjectionCheckpointOffset = blob.ScalarOffsetOrSentinel();
+            SetPersistedCheckpointForPartition(p, covered);
         }
 
         // Invalidate the digest so EnsureProjectionHashInitialized's

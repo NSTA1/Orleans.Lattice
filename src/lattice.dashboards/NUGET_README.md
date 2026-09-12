@@ -20,6 +20,8 @@ For the underlying instruments and what each one measures, see the [metrics refe
        .WithMetrics(b => b
            .AddMeter("orleans.lattice")
            .AddMeter("orleans.lattice.replication")
+           .AddMeter("Microsoft.Orleans")  // Orleans runtime: activations, activation latency
+           .AddMeter("System.Runtime")     // .NET runtime: GC heap, working set, thread pool
            .AddPrometheusExporter());
    ```
 

@@ -6,7 +6,9 @@ namespace Orleans.Lattice.Tests;
 /// Unit tests for <see cref="LatticeStorageUsageMetrics"/>: the observable
 /// storage-usage gauge sink. Verifies that published reports surface on the
 /// byte gauges, that partial reports report no data rather than a wrong zero,
-/// and that the over-threshold flag drives the 0/1 policy gauge.
+/// that a surface which was never measured stays distinguishable from one
+/// measured at zero, and that the over-threshold flag drives the 0/1 policy
+/// gauge.
 /// </summary>
 [TestFixture]
 public sealed class LatticeStorageUsageMetricsTests
@@ -197,7 +199,7 @@ public sealed class LatticeStorageUsageMetricsTests
     }
 
     [Test]
-    public void PublishWal_without_prior_deep_publish_seeds_wal_bytes_only()
+    public void PublishWal_without_prior_deep_publish_reports_no_data_on_undeep_surfaces()
     {
         var sut = new LatticeStorageUsageMetrics();
         var tree = $"sg-{Guid.NewGuid():N}";
@@ -210,13 +212,119 @@ public sealed class LatticeStorageUsageMetricsTests
             SampledAt = DateTimeOffset.UtcNow,
         });
 
+        // This is the regression guard for issue #2693, and the assertion that
+        // would have caught it: before the fix these three read 0, which a
+        // reader took as a measurement and concluded no leaf state or snapshots
+        // existed. They did - 137 MB of them. Only the WAL surface was ever
+        // sampled on this path, so the other three must report no data at all.
         Assert.Multiple(() =>
         {
-            Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(500));
-            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, tree), Is.EqualTo(0));
-            Assert.That(Read(LatticeMetrics.StorageLeafStateBytesName, tree), Is.EqualTo(0));
-            Assert.That(Read(LatticeMetrics.StorageTotalBytesName, tree), Is.EqualTo(500));
+            Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(500),
+                "the WAL surface is the one this path actually measures");
+            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, tree), Is.Null,
+                "a snapshot byte count that was never taken must not be exported as zero");
+            Assert.That(Read(LatticeMetrics.StorageLeafStateBytesName, tree), Is.Null,
+                "a leaf-state byte count that was never taken must not be exported as zero");
+            Assert.That(Read(LatticeMetrics.StorageTotalBytesName, tree), Is.Null,
+                "a total omitting two of its three terms must not be exported at all");
         });
+    }
+
+    [Test]
+    public void Unmeasured_surface_is_distinguishable_from_a_measured_zero()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var walOnly = $"sg-{Guid.NewGuid():N}";
+        var deepZero = $"sg-{Guid.NewGuid():N}";
+
+        // Two trees that a pre-fix scrape rendered identically: one whose
+        // snapshot bytes were never measured, and one measured and genuinely
+        // empty. Telling them apart from /metrics alone is the whole
+        // requirement of issue #2693.
+        sut.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = walOnly,
+            WalRetainedBytes = 500,
+            Partial = false,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+        sut.Publish(Report(deepZero, wal: 500, snap: 0, leaf: 0));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, walOnly), Is.Null,
+                "never measured must be absent");
+            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, deepZero), Is.EqualTo(0),
+                "measured and empty must be an exported zero");
+            Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, walOnly), Is.EqualTo(0),
+                "the depth gauge must state the absence positively, not leave it to inference");
+            Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, deepZero), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void Deep_published_gauge_reports_no_data_for_unobserved_tree()
+    {
+        _ = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.Null,
+            "a tree never published at all must stay distinct from one published WAL-only");
+    }
+
+    [Test]
+    public void Deep_publish_after_wal_only_publish_restores_the_deep_surfaces()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = tree,
+            WalRetainedBytes = 500,
+            Partial = false,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+        sut.Publish(Report(tree, wal: 500, snap: 40, leaf: 25));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, tree), Is.EqualTo(40));
+            Assert.That(Read(LatticeMetrics.StorageLeafStateBytesName, tree), Is.EqualTo(25));
+            Assert.That(Read(LatticeMetrics.StorageTotalBytesName, tree), Is.EqualTo(565));
+            Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void Wal_only_publish_after_deep_publish_keeps_the_tree_deep()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.Publish(Report(tree, wal: 100, snap: 40, leaf: 25));
+        sut.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = tree,
+            WalRetainedBytes = 150,
+            Partial = false,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+
+        Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.EqualTo(1),
+            "the cheap path must not demote a tree whose deep values it is carrying forward");
+    }
+
+    [Test]
+    public void Deep_published_gauge_reports_no_data_for_a_partial_report()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.Publish(Report(tree, wal: 100, snap: 40, leaf: 25, partial: true));
+
+        Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.Null,
+            "a partial report publishes no byte surfaces, so it has no depth to report");
     }
 
     [Test]

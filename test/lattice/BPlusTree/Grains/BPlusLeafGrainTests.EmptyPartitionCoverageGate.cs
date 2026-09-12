@@ -305,6 +305,20 @@ public partial class BPlusLeafGrainTests
         // census). The invariant must still hold on the next cold restart.
         const int partitions = 2;
         var (warm, warmState, _, snapshotStub) = CreateResidualLeaf(partitions, reclassifyEveryN: 64);
+
+        // Issue #2692 added a capture driver that fires for exactly this state,
+        // so "nothing captured" can no longer be produced by simply staying
+        // under the cadence. Produce it the way the field produces it instead -
+        // an unavailable snapshot store - which reaches the same "zero
+        // snapshots" census the incident reported, and makes this a STRICTLY
+        // STRONGER statement of the same invariant: even with a capture driver
+        // actively trying on every persist, a leaf that never lands a durable
+        // snapshot must still retain its Zero block pin across a cold restart.
+        // TryCaptureSnapshotForAdvisoryAsync swallows the failure by design, so
+        // coverage stays at the sentinel and no offset claim is ever earned.
+        snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException(new InvalidOperationException("snapshot store unavailable")));
+
         var projection = AsProjection(warm);
         var (dataKey, dataPartition) = FirstKeyInNonZeroPartition(partitions);
 
@@ -318,8 +332,12 @@ public partial class BPlusLeafGrainTests
             await projection.FlushCheckpointAsync(default);
         }
 
-        // H2 precondition, asserted: the bursty cadence captured NOTHING.
-        await snapshotStub.DidNotReceive().SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+        // H2 precondition, asserted: every capture attempt FAILED, so no durable
+        // snapshot exists and no coverage was earned. Asserting the attempts
+        // happened (rather than that none did) is what keeps this a real
+        // precondition: it would fail loudly if the store stub silently started
+        // succeeding, which is the shape that would quietly void the test.
+        await snapshotStub.ReceivedWithAnyArgs().SaveAsync(default!, default);
 
         var scalar = warmState.State.ProjectionCheckpointOffset;
         var perPartition = warmState.State.ProjectionCheckpointOffsetsByPartition;

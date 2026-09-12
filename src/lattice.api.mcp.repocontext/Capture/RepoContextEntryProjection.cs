@@ -67,7 +67,10 @@ internal static class RepoContextEntryProjection
                     // The memory value is an MvRegister blob whose concurrent values
                     // are serialized MemoryRecords; unwrap and fold them so bulk scan,
                     // keyword search, and recall all project the converged record.
-                    var folded = RepoContextMemoryCodec.Fold(value, serializer);
+                    var folded = RepoContextMemoryCodec.Fold(
+                        value,
+                        serializer,
+                        RepoContextKeys.Memory(key.RepoId, key.Topic ?? string.Empty, key.Id ?? string.Empty));
                     if (folded is not null)
                     {
                         ProjectMemory(folded, fields, tags, links);

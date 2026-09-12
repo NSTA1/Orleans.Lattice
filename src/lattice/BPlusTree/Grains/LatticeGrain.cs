@@ -37,6 +37,23 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="_compactionEnsured"/>, <see cref="_monitorEnsured"/>) are
 /// activation-scoped and remain safe under multiple parallel activations.
 /// </para>
+/// <para>
+/// <b>The timeout diagnostic quoted above is a censored channel; do not size a
+/// queue from it.</b> Orleans emits that clause only for a request already
+/// approaching the 30 s response deadline, and the clause describes the
+/// <em>emitting</em> request's own wait, so a grain type whose calls queue
+/// deeply but which does not itself trip the timeout contributes no rows to it
+/// at all. A depth read from it is therefore conditioned on failure and biased
+/// towards requests that were not queued; on one real gate run the grain type
+/// with the deepest queues in the system contributed zero of the diagnostic's
+/// 154 samples, and two independent extractions agreed - consistently and
+/// wrongly - that nothing was queueing. It is evidence that <em>this</em>
+/// request waited, never evidence about the distribution. For an uncensored
+/// per-grain-type depth, enable
+/// <see cref="LatticeServiceCollectionExtensions.AddLatticeGrainCallObservation"/>
+/// and read <see cref="LatticeMetrics.GrainCallOutstandingDepth"/>, which
+/// records at dispatch on every call and requires no timeout to exist.
+/// </para>
 /// </remarks>
 [StatelessWorker(maxLocalWorkers: 32)]
 internal sealed partial class LatticeGrain(
@@ -1141,6 +1158,22 @@ internal sealed partial class LatticeGrain(
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default)
     {
+        var gated = await GetManyGatedAsync(keys, cancellationToken);
+        return gated.Values;
+    }
+
+    /// <summary>
+    /// The gate-accounting entry point (issue #2277). Identical read, and it
+    /// additionally reports how many requested keys the read-path filter removed,
+    /// which is the one fact a caller cannot recover from the returned rows: a
+    /// pruned key and a never-written key are the same observation there.
+    /// </summary>
+    public Task<GatedMultiReadResult> GetManyWithGateAccountingAsync(
+        List<string> keys, CancellationToken cancellationToken = default) =>
+        GetManyGatedAsync(keys, cancellationToken);
+
+    private async Task<GatedMultiReadResult> GetManyGatedAsync(List<string> keys, CancellationToken cancellationToken)
+    {
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
         ArgumentNullException.ThrowIfNull(keys);
@@ -1153,6 +1186,15 @@ internal sealed partial class LatticeGrain(
         // silo, let alone returned to the caller. On the default (null gate /
         // system-origin) path the filter is null and the caller's list is used
         // unchanged with no per-key work or allocation.
+        //
+        // The prune COUNT is carried out to the caller (issue #2277). It is the
+        // only seam that knows it: downstream, a pruned key is byte-identical to
+        // a key that was never written, so a caller reading coverage from the
+        // returned rows classifies an entry it is merely not authorized to see as
+        // an entry that does not exist. Never the identities - a prune list names
+        // the keys the caller was refused and turns any multi-get into an
+        // authorization oracle.
+        var prunedByAccessGate = 0;
         var keyFilter = await ResolveMultiReadKeyFilterAsync(cancellationToken);
         if (keyFilter is not null)
         {
@@ -1162,6 +1204,8 @@ internal sealed partial class LatticeGrain(
                 if (k is not null && keyFilter(k))
                     filtered.Add(k);
             }
+
+            prunedByAccessGate = keys.Count - filtered.Count;
             keys = filtered;
         }
 
@@ -1204,7 +1248,11 @@ internal sealed partial class LatticeGrain(
                     {
                         await DecodeManyInPlaceAsync(many, cancellationToken);
                     }
-                    return many;
+                    return new GatedMultiReadResult
+                    {
+                        Values = many,
+                        PrunedByAccessGate = prunedByAccessGate,
+                    };
                 }
                 catch (StaleShardRoutingException)
                 {

@@ -1,0 +1,1148 @@
+#!/usr/bin/env pwsh
+<#
+.SYNOPSIS
+	Pure adjudication helpers for the RepoContext container provenance check.
+
+.DESCRIPTION
+	Every function here is PURE: it takes readings as parameters and returns
+	violations. Nothing in this file runs `docker`, runs `git`, or touches the
+	filesystem. Assert-ContainerProvenance.ps1 does the acquisition and calls
+	these; Test-ContainerProvenance.ps1 drives these against literal fixtures.
+
+	That split is deliberate and is what makes the acceptance criterion
+	reachable. The check exists to be run against a RUNNING container, which
+	means the interesting failure - a container launched from a different
+	checkout than the operator believes - cannot be manufactured on demand in a
+	test. Separating the adjudication from the acquisition moves the whole
+	decision into functions that can be handed a fabricated disagreement, so the
+	FAILING direction is demonstrated rather than asserted. A check only ever
+	observed passing is indistinguishable from one that cannot fail.
+
+	Two conventions hold throughout:
+
+	- Every function returns a (possibly empty) array of violation strings. It
+	  never throws for a violation and never writes to the host. The caller
+	  decides what a violation means.
+	- A violation message names the DISAGREEING VALUES, not just the fact of
+	  disagreement, because the operator's next question is always "then what IS
+	  it running?" and a check that forces them to go and find out separately has
+	  done half its job.
+#>
+
+Set-StrictMode -Version Latest
+
+<#
+.SYNOPSIS
+	Canonicalises a filesystem path for comparison, without touching the disk.
+
+.DESCRIPTION
+	Unifies directory separators and strips trailing ones, so that
+	`C:/dev/lattice/samples/RepoContextContainer/` and
+	`C:\dev\lattice\samples\RepoContextContainer` compare equal. Deliberately
+	does NOT resolve `.`, `..`, or symlinks: this function is pure, and a
+	resolution that silently consulted the filesystem would make the comparison
+	depend on the machine the check runs from rather than on the two values
+	being compared.
+
+	The caller is responsible for supplying already-absolute paths. In the
+	acquisition script both sides come from a canonical source (a Docker label
+	and `git rev-parse --show-toplevel`), so neither is relative.
+#>
+function ConvertTo-ProvenancePath {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $Path
+	)
+
+	if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+
+	$normalised = $Path.Trim().Replace('/', '\')
+	# Trim trailing separators, but never past a drive root ("C:\") or the
+	# filesystem root ("\"), where the separator is part of the path rather
+	# than a decoration on it.
+	while ($normalised.Length -gt 1 -and $normalised.EndsWith('\')) {
+		if ($normalised.Length -eq 3 -and $normalised[1] -eq ':') { break }
+		$normalised = $normalised.Substring(0, $normalised.Length - 1)
+	}
+
+	return $normalised
+}
+
+<#
+.SYNOPSIS
+	Compares two paths for equality under the platform's case rules.
+
+.DESCRIPTION
+	Case sensitivity is an explicit PARAMETER rather than a fact this function
+	discovers for itself, for a reason worth stating: comparing
+	case-insensitively where the filesystem is case-sensitive makes two DIFFERENT
+	paths compare EQUAL, which turns a real disagreement into a pass. That is the
+	dangerous direction for a check whose entire job is to notice a
+	disagreement, so the decision is surfaced to the caller and pinned by tests
+	in both settings rather than inferred at the point of use.
+#>
+function Test-ProvenancePathsEqual {
+	[CmdletBinding()]
+	[OutputType([bool])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $Left,
+		[AllowNull()] [AllowEmptyString()] [string] $Right,
+		[bool] $CaseSensitive
+	)
+
+	$l = ConvertTo-ProvenancePath -Path $Left
+	$r = ConvertTo-ProvenancePath -Path $Right
+
+	if ($l -eq '' -or $r -eq '') { return $false }
+
+	if ($CaseSensitive) { return $l -ceq $r }
+	return $l -ieq $r
+}
+
+<#
+.SYNOPSIS
+	Decides whether two commit-ish strings name the same commit, tolerating an
+	abbreviation on either side.
+
+.DESCRIPTION
+	Returns $true when they match, $false when they demonstrably do not, and
+	$null when the question CANNOT BE ANSWERED - either side empty, or the
+	shorter side below seven characters, where a prefix starts matching commits
+	it did not mean.
+
+	The tri-state is the point. A bool would have to fold "too short to tell"
+	into one of the two verdicts, and whichever way it folded would be wrong:
+	folding to $true certifies an unverified revision, folding to $false accuses
+	a correct one. The caller decides what "cannot tell" means for its check, and
+	both callers here refuse on it.
+
+	This is the single point of truth for the matching rule, shared by check 2
+	(which compares a checkout HEAD to the expected commit) and check 6 (which
+	compares an image's stamped revision to it). Two checks disagreeing about
+	what "the same commit" means would produce a report that contradicts itself.
+#>
+function Test-ProvenanceCommitsMatch {
+	[CmdletBinding()]
+	[OutputType([object])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $Left,
+		[AllowNull()] [AllowEmptyString()] [string] $Right
+	)
+
+	if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) { return $null }
+
+	$l = $Left.Trim()
+	$r = $Right.Trim()
+
+	$shorter = if ($l.Length -le $r.Length) { $l } else { $r }
+	$longer = if ($l.Length -le $r.Length) { $r } else { $l }
+
+	if ($shorter.Length -lt 7) { return $null }
+
+	return $longer.StartsWith($shorter, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+<#
+.SYNOPSIS
+	Parses an RFC 3339 / ISO 8601 instant to a UTC [datetimeoffset], or $null.
+
+.DESCRIPTION
+	Handles both of the shapes check 6 has to compare, which come from different
+	producers and do not agree on precision: Docker reports an image's `.Created`
+	with nanosecond fraction ("2026-09-10T21:02:55.123456789Z") while git's `%cI`
+	emits whole seconds with a numeric offset ("2026-09-11T07:49:35+01:00").
+
+	Returns $null rather than throwing when the value is absent or unparseable,
+	so a caller can distinguish "no reading" from "a reading of zero". Every
+	result is normalised to UTC, because the two sides are routinely stamped in
+	different zones and a comparison of local wall-clock times between them would
+	invent a discrepancy of exactly the offset.
+
+	Pure: parses a string and consults nothing.
+#>
+function ConvertFrom-ProvenanceTimestamp {
+	[CmdletBinding()]
+	[OutputType([object])]
+	param([AllowNull()] [AllowEmptyString()] [string] $Value)
+
+	if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+
+	$parsed = [datetimeoffset]::MinValue
+	$styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+	if (-not [datetimeoffset]::TryParse($Value.Trim(), [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref] $parsed)) {
+		return $null
+	}
+
+	return $parsed.ToUniversalTime()
+}
+
+<#
+.SYNOPSIS
+	Parses a Compose duration ("120s", "2m", "1m30s") to whole seconds.
+
+.DESCRIPTION
+	Returns $null when the value is absent or is not a duration the Compose
+	specification would accept, so a caller can distinguish "not a duration" from
+	"zero seconds". A bare number is seconds, matching Compose.
+
+	This exists because COMPOSE NORMALISES DURATIONS AND A LITERAL COMPARISON
+	THEREFORE PRODUCES FALSE ACCUSATIONS. A file declaring `120s` resolves to
+	`2m0s`, so a check comparing text reports the setting as wrong - or absent -
+	on a stack that is correctly configured. That failure mode is worse than the
+	one this whole script exists to catch: it accuses a good deployment of
+	precisely the defect that invalidated two gate runs, and the obvious remedy
+	for the accusation is to change a deployment that was already right.
+
+	Semantics deliberately match ConvertFrom-RigComposeDuration in
+	benchmark/coldstart-rig/scripts/_rig-helpers.ps1. The two guards are
+	different instruments (see the header of Assert-ContainerProvenance.ps1), but
+	agreeing on what a duration MEANS is not a coupling, and disagreeing would
+	mean one of them refusing a stack the other accepts for no reason an operator
+	could act on.
+#>
+function ConvertFrom-ProvenanceDuration {
+	[CmdletBinding()]
+	param([AllowNull()] $Value)
+
+	$text = "$Value".Trim()
+	if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+
+	if ($text -match '^\d+$') { return [int] $text }
+
+	$matched = [regex]::Matches($text, '(?<n>\d+)(?<u>h|m|s)')
+	if ($matched.Count -eq 0) { return $null }
+	# Reject trailing junk: the units must account for the whole string, or a
+	# typo like "120sec onds" would silently parse as 120.
+	if ((($matched | ForEach-Object { $_.Value }) -join '') -ne $text) { return $null }
+
+	$total = 0
+	foreach ($m in $matched) {
+		$n = [int] $m.Groups['n'].Value
+		switch ($m.Groups['u'].Value) {
+			'h' { $total += $n * 3600 }
+			'm' { $total += $n * 60 }
+			's' { $total += $n }
+		}
+	}
+	return $total
+}
+
+<#
+.SYNOPSIS
+	Check 1 of 5. The container was composed from the checkout the operator means.
+
+.DESCRIPTION
+	`docker compose up` reads its OWN working directory's compose files, whatever
+	branch produced the image, and prints nothing that names a branch. So the
+	image and the runtime configuration are two independent inputs and only the
+	first is obviously version-controlled. This check reads the answer out of the
+	channel that actually holds it: the labels Compose stamps onto the container.
+
+	Refuses when the project working directory is absent or disagrees with the
+	expected checkout, when any resolved config file lies outside that working
+	directory, when a named file is not on disk, and when the NUMBER of resolved
+	files is not the number expected.
+
+	THE COUNT ASSERTION IS THE LOAD-BEARING PART, and it is why this check reads
+	the label rather than walking the repository. The sample stack's real
+	deployment is TWO files: the tracked `docker-compose.yml`, which carries a
+	`build:` stanza and no `image:`, and a `docker-compose.override.yml` that is
+	UNTRACKED AND GITIGNORED (see .gitignore, where it is ignored deliberately
+	because it is machine-local). That override is load-bearing: it supplies the
+	`image:` pin the tracked file does not have, the memory limit, the CPU caps,
+	and the scan-cadence variables every prior measurement on a given box was
+	taken against.
+
+	So a check that enumerated tracked files would not merely be incomplete, it
+	would be WRONG IN THE DANGEROUS DIRECTION. Relaunching from a worktree that
+	lacks the override silently drops the memory limit and the image pin while
+	the tree looks perfectly correct, and a tracked-file check would pass that
+	stack. The count is what fails on a file git has never heard of.
+
+	Note the corollary: fixing a provenance defect by changing the launch
+	directory is itself a provenance change, and it is not self-verifying.
+#>
+function Get-ComposeProvenanceViolation {
+	[CmdletBinding()]
+	[OutputType([string[]])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $WorkingDirectory,
+		[AllowNull()] [string[]] $ConfigFiles,
+		[Parameter(Mandatory)] [string] $ExpectedCheckout,
+		[int] $ExpectedConfigFileCount = 0,
+		[AllowNull()] [string[]] $MissingConfigFiles,
+		[bool] $CaseSensitive
+	)
+
+	$violations = [System.Collections.Generic.List[string]]::new()
+
+	if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+		$violations.Add("the container carries no com.docker.compose.project.working_dir label, so it cannot be shown to have come from '$ExpectedCheckout'; it was probably not started by Docker Compose")
+		return ,$violations.ToArray()
+	}
+
+	if (-not (Test-ProvenancePathsEqual -Left $WorkingDirectory -Right $ExpectedCheckout -CaseSensitive $CaseSensitive)) {
+		$violations.Add("compose project working directory is '$WorkingDirectory' but the expected checkout is '$ExpectedCheckout'; the runtime configuration under test came from a different working tree than the one being verified")
+	}
+
+	if ($null -eq $ConfigFiles -or $ConfigFiles.Count -eq 0) {
+		$violations.Add('the container carries no com.docker.compose.project.config_files label, so which compose files were merged into the running configuration is unknown')
+		return ,$violations.ToArray()
+	}
+
+	$normalisedWorkingDirectory = ConvertTo-ProvenancePath -Path $WorkingDirectory
+	foreach ($configFile in $ConfigFiles) {
+		if ([string]::IsNullOrWhiteSpace($configFile)) { continue }
+
+		$normalisedFile = ConvertTo-ProvenancePath -Path $configFile
+		$prefix = $normalisedWorkingDirectory + '\'
+		$isUnder = if ($CaseSensitive) {
+			$normalisedFile.StartsWith($prefix, [System.StringComparison]::Ordinal)
+		}
+		else {
+			$normalisedFile.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
+		}
+
+		if (-not $isUnder) {
+			$violations.Add("compose config file '$configFile' lies outside the project working directory '$WorkingDirectory'; a file merged in from elsewhere is not the tracked configuration")
+		}
+	}
+
+	# A file the label names but the disk does not have means the container was
+	# composed from a document that can no longer be reproduced, which is not a
+	# lesser problem than a wrong one.
+	foreach ($missing in @($MissingConfigFiles)) {
+		if ([string]::IsNullOrWhiteSpace($missing)) { continue }
+		$violations.Add("compose config file '$missing' is named by the container but is not present on disk; the running configuration cannot be reproduced from this checkout")
+	}
+
+	# Deliberately compares the COUNT, not the tracked set. The stack's real
+	# deployment includes a gitignored override supplying the image pin, the
+	# memory limit and the CPU caps, so a stack launched from a directory that
+	# lacks it resolves fewer files while every remaining path still looks right.
+	if ($ExpectedConfigFileCount -gt 0 -and $ConfigFiles.Count -ne $ExpectedConfigFileCount) {
+		$named = ($ConfigFiles -join ', ')
+		$violations.Add("the container resolved $($ConfigFiles.Count) compose file(s) but $ExpectedConfigFileCount were expected ($named); a missing override drops settings such as the image pin and the memory limit while leaving every remaining file correct")
+	}
+
+	return ,$violations.ToArray()
+}
+
+<#
+.SYNOPSIS
+	Check 2 of 6. The checkout the container was composed from is at the commit
+	the operator means.
+
+.DESCRIPTION
+	WHAT THIS ESTABLISHES, EXACTLY: a fact about a CHECKOUT. It says that the
+	directory named by the container's compose label is a git worktree and that
+	its HEAD is the supplied expected commit. It says NOTHING about the image the
+	container is executing, and must never be worded as though it did.
+
+	That distinction is not pedantry; it is the defect this check was found to
+	have. A worktree's HEAD tells you what would be built NOW. Only the image
+	tells you what WAS built. Bucket-4 gate run 4 read a HEAD, concluded the
+	running container carried a two-commit delta, and measured for eleven hours
+	against an image built 45 commits earlier (issue #2686). Establishing
+	build-from-commit is check 6's job, and check 6 is the one that must be
+	consulted for it.
+
+	NOTE the shape of the comparison. The expected commit must be sourced
+	INDEPENDENTLY of the resolved checkout - if it were defaulted to the HEAD of
+	the directory the container resolved to, this check would compare a value
+	against itself and pass unconditionally. That would be strictly worse than
+	omitting it, because it would report as checked. The caller reads the
+	expected commit from the operator's own checkout, which is the thing they
+	believe they deployed.
+
+	WHEN THOSE TWO DIRECTORIES ARE THE SAME DIRECTORY - the ordinary case, since
+	check 1 requires the container to have been composed from the operator's own
+	checkout - the independence is nominal and the comparison IS self-referential
+	in practice: one directory, read twice, compared to itself. It cannot dissent.
+	Callers detect that with Test-GitProvenanceIsSelfReferential and must report
+	the reading as a single checkout fact rather than as two agreeing values.
+
+	A short commit is accepted as a prefix of a long one, which is how operators
+	actually paste them, but never below seven characters: a shorter prefix
+	starts matching commits it did not mean.
+#>
+function Get-GitProvenanceViolation {
+	[CmdletBinding()]
+	[OutputType([string[]])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $ResolvedCommit,
+		[AllowNull()] [AllowEmptyString()] [string] $ExpectedCommit
+	)
+
+	$violations = [System.Collections.Generic.List[string]]::new()
+
+	if ([string]::IsNullOrWhiteSpace($ResolvedCommit)) {
+		$violations.Add('the compose project working directory did not resolve to a git commit, so the revision of the checkout the container was composed from is unknown; it may not be a git worktree at all')
+		return ,$violations.ToArray()
+	}
+
+	if ([string]::IsNullOrWhiteSpace($ExpectedCommit)) {
+		$violations.Add('no expected commit was supplied, so the checkout the container was composed from cannot be adjudicated')
+		return ,$violations.ToArray()
+	}
+
+	$resolved = $ResolvedCommit.Trim()
+	$expected = $ExpectedCommit.Trim()
+
+	$shorter = if ($resolved.Length -le $expected.Length) { $resolved } else { $expected }
+
+	$matched = Test-ProvenanceCommitsMatch -Left $resolved -Right $expected
+	if ($null -eq $matched) {
+		$violations.Add("commit '$shorter' is shorter than seven characters, which is too short to identify a commit; supply a longer revision")
+		return ,$violations.ToArray()
+	}
+
+	if (-not $matched) {
+		$violations.Add("the checkout the container was composed from is at commit '$resolved' but the expected commit is '$expected'; the running configuration predates or diverges from the revision being verified")
+	}
+
+	return ,$violations.ToArray()
+}
+
+<#
+.SYNOPSIS
+	Check 3 of 6. The container is running the image its tag currently names.
+
+.DESCRIPTION
+	Catches the stale container: an image rebuilt from a newer commit moves the
+	tag, but a container started before that rebuild keeps running the old image
+	id for as long as it is not recreated. `docker compose up -d` with no changed
+	service definition will happily leave it in place, so a rebuild can appear to
+	have been deployed when nothing was replaced.
+
+	Compares image IDS, never tags. A tag is a mutable pointer, so comparing tag
+	to tag is a comparison of two names for whatever is current and can never
+	detect this.
+#>
+function Get-ImageProvenanceViolation {
+	[CmdletBinding()]
+	[OutputType([string[]])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $RunningImageId,
+		[AllowNull()] [AllowEmptyString()] [string] $ExpectedImageId,
+		[AllowNull()] [AllowEmptyString()] [string] $ImageReference
+	)
+
+	$violations = [System.Collections.Generic.List[string]]::new()
+	$label = if ([string]::IsNullOrWhiteSpace($ImageReference)) { 'the expected image' } else { "image reference '$ImageReference'" }
+
+	if ([string]::IsNullOrWhiteSpace($RunningImageId)) {
+		$violations.Add('the running container reports no image id, so what it is executing cannot be established')
+		return ,$violations.ToArray()
+	}
+
+	if ([string]::IsNullOrWhiteSpace($ExpectedImageId)) {
+		$violations.Add("$label does not resolve to an image id on this host, so the running image cannot be adjudicated; the image may have been pruned or never built here")
+		return ,$violations.ToArray()
+	}
+
+	if ($RunningImageId.Trim() -ine $ExpectedImageId.Trim()) {
+		$violations.Add("the container is running image id '$RunningImageId' but $label now resolves to '$ExpectedImageId'; the container predates the current build and was never recreated")
+	}
+
+	return ,$violations.ToArray()
+}
+
+<#
+.SYNOPSIS
+	Check 4 of 6, and the only one that reads the channel the answer lives in.
+
+.DESCRIPTION
+	Checks 1 to 3 can ALL pass while the setting under test never reached the
+	process. An override file merged into the resolved document, a variable
+	dropped during an edit, or a container that predates the setting entirely
+	will each leave the value unset in an environment whose compose provenance,
+	git provenance, and image provenance are all impeccable.
+
+	So this check asserts the value is present in the CONTAINER'S OWN
+	ENVIRONMENT. The expected value is read from the intended checkout's compose
+	file; the actual value is read from the running container. That the
+	comparison crosses from tracked file to running process is the whole point:
+	a check comparing tracked files to other tracked files would have been green
+	throughout both failed gate runs, because the repository agreed with itself
+	perfectly and the deployment simply resolved a different checkout.
+
+	ABSENT and PRESENT-BUT-DIFFERENT are reported as distinct violations. They
+	have different causes and different remedies, and collapsing them would
+	reproduce in this check the very defect the check exists to catch.
+#>
+function Get-EnvironmentProvenanceViolation {
+	[CmdletBinding()]
+	[OutputType([string[]])]
+	param(
+		[AllowNull()] [string[]] $ContainerEnvironment,
+		[Parameter(Mandatory)] [hashtable] $ExpectedSettings
+	)
+
+	$violations = [System.Collections.Generic.List[string]]::new()
+
+	if ($ExpectedSettings.Count -eq 0) {
+		$violations.Add('no candidate-only setting was supplied to assert, so this check would pass regardless of what the container holds; supply at least one setting that differs between the candidate and the baseline')
+		return ,$violations.ToArray()
+	}
+
+	$actual = @{}
+	foreach ($entry in @($ContainerEnvironment)) {
+		if ([string]::IsNullOrWhiteSpace($entry)) { continue }
+		$split = $entry.IndexOf('=')
+		if ($split -lt 1) { continue }
+		$actual[$entry.Substring(0, $split)] = $entry.Substring($split + 1)
+	}
+
+	foreach ($name in ($ExpectedSettings.Keys | Sort-Object)) {
+		$expected = "$($ExpectedSettings[$name])"
+
+		if (-not $actual.ContainsKey($name)) {
+			$violations.Add("$name is ABSENT from the container's environment but the intended checkout declares it as '$expected'; the merged compose document that produced this container did not carry it")
+			continue
+		}
+
+		$observed = "$($actual[$name])"
+		if ($observed -ceq $expected) { continue }
+
+		# Literal inequality is not disagreement when both sides are durations:
+		# Compose normalises `120s` to `2m0s`, so a text comparison accuses a
+		# correctly configured stack of the exact defect this script exists to
+		# find. Fall back to the literal comparison only when the values are not
+		# both durations, so a genuine mismatch is still refused.
+		$expectedSeconds = ConvertFrom-ProvenanceDuration -Value $expected
+		$observedSeconds = ConvertFrom-ProvenanceDuration -Value $observed
+		if ($null -ne $expectedSeconds -and $null -ne $observedSeconds) {
+			if ($expectedSeconds -eq $observedSeconds) { continue }
+			$violations.Add("$name is '$observed' ($observedSeconds s) in the container's environment but the intended checkout declares '$expected' ($expectedSeconds s); the running process is configured differently from the source being verified")
+			continue
+		}
+
+		$violations.Add("$name is '$observed' in the container's environment but the intended checkout declares '$expected'; the running process is configured differently from the source being verified")
+	}
+
+	return ,$violations.ToArray()
+}
+
+<#
+.SYNOPSIS
+	Rewrites a Docker Desktop host-mount path back into the host path an operator
+	would recognise.
+
+.DESCRIPTION
+	Docker Desktop reports some bind sources through its own Linux VM view, as
+	`/run/desktop/mnt/host/c/dev/x`, rather than as `C:\dev\x`. Both name the same
+	directory, and the first is what `docker inspect` returned for the archive
+	bind in issue #2627 while the very same container reported `C:\dev` for the
+	workspace bind.
+
+	That asymmetry matters here rather than being cosmetic. A check that compared
+	the reported source against a Windows path, or asked whether it was absolute
+	in Windows terms, would silently take the VM form for something else and reach
+	a wrong verdict on the one reading it exists to adjudicate. So the form is
+	normalised once, at the boundary, and everything downstream sees one shape.
+
+	Pure: it rewrites a string and never consults the filesystem. A path that does
+	not carry the prefix is returned unchanged, so a genuine Linux host path is
+	left alone.
+#>
+function ConvertFrom-DockerDesktopHostPath {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $Path
+	)
+
+	if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+
+	$value = $Path.Trim()
+	$prefix = '/run/desktop/mnt/host/'
+	if (-not $value.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $value }
+
+	$remainder = $value.Substring($prefix.Length)
+	if ($remainder.Length -eq 0) { return $value }
+
+	$drive = $remainder.Substring(0, 1)
+	if ($drive -notmatch '^[A-Za-z]$') { return $value }
+
+	$rest = if ($remainder.Length -gt 1) { $remainder.Substring(1) } else { '' }
+	if ($rest.Length -gt 0 -and $rest[0] -ne '/') { return $value }
+
+	return ($drive.ToUpperInvariant() + ':' + $rest).Replace('/', '\')
+}
+
+<#
+.SYNOPSIS
+	Whether a path names a location absolutely, on either platform's rules.
+
+.DESCRIPTION
+	Accepts a drive-rooted Windows path (`C:\x`), a UNC path (`\\server\share`),
+	and a rooted POSIX path (`/x`). Everything else - `./memory-archive`,
+	`memory-archive`, `..\x` - is relative and is exactly the shape whose meaning
+	depends on where the operator happened to be standing.
+
+	Deliberately accepts BOTH platforms' forms rather than branching on the host
+	this script runs from: the value being judged came out of a container's mount
+	table, not out of this process, and it can legitimately be either.
+#>
+function Test-ProvenancePathIsAbsolute {
+	[CmdletBinding()]
+	[OutputType([bool])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $Path
+	)
+
+	if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+
+	$value = $Path.Trim()
+
+	if ($value.StartsWith('\\') -or $value.StartsWith('//')) { return $true }
+	if ($value.StartsWith('/')) { return $true }
+	if ($value -match '^[A-Za-z]:[\\/]') { return $true }
+
+	return $false
+}
+
+<#
+.SYNOPSIS
+	Did a `git rev-parse --show-toplevel` call actually ANSWER the question, as
+	distinct from answering "no"?
+
+.DESCRIPTION
+	Pure, so that the one line the archive durability check leans on is testable
+	without a git binary or any filesystem state. It is handed only the exit code,
+	the standard error text, and the toplevel; taking the reading stays in the
+	entry point. Note this is NOT coverage of `Get-ArchiveGitReading`, which
+	shells out to git and is tracked separately as issue #2644; nothing here
+	invokes git.
+
+	It promotes to examinable ONLY on positive recognition, because the ways git
+	can fail cannot be enumerated while the one way it succeeds at answering can.
+	An unanticipated failure therefore reports unexaminable, which is the safe
+	direction.
+
+	THE PARENTHETICAL IN THE MESSAGE IS LOAD-BEARING, NOT DECORATION. git emits
+	the BARE form
+
+		fatal: not a git repository: <admin dir>
+
+	for an ORPHANED LINKED WORKTREE - one whose `.git/worktrees` entry has been
+	removed - and that is exactly a state check 5 exists to catch. Recognising the
+	bare phrase would therefore certify as durable the very thing being looked
+	for. Only the parenthetical form
+
+		fatal: not a git repository (or any of the parent directories): .git
+
+	means discovery genuinely walked to the root and found nothing. DO NOT
+	SIMPLIFY THIS PATTERN.
+
+	Verified against git on all three inputs: a genuine miss emits the
+	parenthetical; an orphaned linked worktree emits the bare form only; a corrupt
+	`.git` file emits "invalid gitfile format" and matches neither.
+#>
+function Test-GitReadingIsExaminable {
+	[CmdletBinding()]
+	[OutputType([bool])]
+	param(
+		[AllowNull()] [int] $ExitCode,
+		[AllowNull()] [AllowEmptyString()] [string] $StandardError,
+		[AllowNull()] [AllowEmptyString()] [string] $Toplevel
+	)
+
+	if ($ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($Toplevel)) { return $true }
+
+	if ($ExitCode -eq 128 -and -not [string]::IsNullOrWhiteSpace($StandardError) `
+			-and $StandardError -match 'not a git repository \(or any of the parent directories\)') {
+		return $true
+	}
+
+	return $false
+}
+
+<#
+.SYNOPSIS
+	Check 5 of 6. The archive holding durable memory did not land somewhere a
+	routine cleanup deletes.
+
+.DESCRIPTION
+	This is the only check here that reads the WRITE path, and the reason it
+	exists is that the other four read inputs. Checks 1 to 3 establish where the
+	stack was composed from, what revision it carries, and which image it runs.
+	Not one of them looks at a bind DESTINATION, so all four can agree perfectly
+	on a container whose durable output is being written into a directory that
+	`git worktree remove` deletes.
+
+	Worse than not covering it: check 2 REQUIRES the compose directory to be a
+	git worktree, correctly, because a gate run deliberately composes from the
+	candidate worktree and composing from elsewhere is the #2617 defect. Compose
+	resolved the archive's relative default against that same directory. So the
+	single fact "this stack was composed from a git worktree" was simultaneously
+	the certified-correct state for the source tree and the cause of the archive
+	landing somewhere deletable (issue #2627).
+
+	THIS CHECK THEREFORE KEYS ON THE ARCHIVE PATH AND NOTHING ELSE. It is handed
+	no compose directory and no expected checkout, so it cannot be tempted into
+	refusing a worktree working directory - which would contradict check 2 and
+	refuse every legitimate gate run. The parameter list is the guarantee, not a
+	comment about one.
+
+	The readings are supplied by the caller, which is what keeps this pure and
+	testable: `ArchiveSource` and `ArchiveMountType` come from the container's own
+	mount table, and `GitToplevel` / `IsLinkedWorktree` from a git query run
+	against that source on the host.
+
+	AN EMPTY `GitToplevel` IS TWO DIFFERENT FACTS AND THEY ARE NOT INTERCHANGEABLE.
+	Either the source genuinely sits outside every checkout - the state this check
+	wants - or the git query never produced an answer. `git rev-parse` exits 128
+	for dubious ownership under `safe.directory`, for a locked or corrupt
+	repository, and produces nothing at all when git is absent from PATH. The
+	ownership case is not hypothetical here: the archive is written by the
+	container as root while this script runs as the operator, which is precisely
+	the mismatch that provokes exit 128.
+
+	Collapsing the two would mean the check reports CLEAN exactly when it has been
+	blinded, which is the wrong failure direction for the only check that reads
+	the write path. So the caller must state which it is, through
+	`GitReadingExaminable`, and that parameter DEFAULTS TO FALSE: a caller that
+	does not know has not established anything, and silence is not evidence of
+	absence.
+
+	This is the same rule `SourceExistsOnHost` already applies one branch above. A
+	check can be blind in two ways - the path is not visible, or the query failed -
+	and a check that cannot look must not report clean in EITHER of them.
+
+	A linked worktree and an ordinary checkout are reported as DISTINCT
+	violations. They have different lifetimes and different remedies - a worktree
+	is removed wholesale by a single command, a checkout survives until someone
+	deletes it but still loses the directory to `git clean -xdf` - and an operator
+	who is told only "inside git" will reach for the wrong one.
+#>
+function Get-ArchiveDurabilityViolation {
+	[CmdletBinding()]
+	[OutputType([string[]])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $ArchiveDestination,
+		[AllowNull()] [AllowEmptyString()] [string] $ArchiveSource,
+		[AllowNull()] [AllowEmptyString()] [string] $ArchiveMountType,
+		[AllowNull()] [AllowEmptyString()] [string] $GitToplevel,
+		[bool] $IsLinkedWorktree,
+		[bool] $SourceExistsOnHost = $true,
+		# Defaults to FALSE deliberately. A caller that has not positively
+		# recognised "this is not a git repository" has not established that it
+		# is not one, and must not be able to obtain a clean verdict by omission.
+		[bool] $GitReadingExaminable = $false
+	)
+
+	$violations = [System.Collections.Generic.List[string]]::new()
+	$destination = if ([string]::IsNullOrWhiteSpace($ArchiveDestination)) { '/memory-archive' } else { $ArchiveDestination.Trim() }
+
+	if ([string]::IsNullOrWhiteSpace($ArchiveSource)) {
+		$violations.Add("nothing is mounted at '$destination', so the only copy of durable agent memory that survives 'docker compose down -v' does not exist; the live tree in the /data volume is all there is")
+		return ,$violations.ToArray()
+	}
+
+	$source = ConvertFrom-DockerDesktopHostPath -Path $ArchiveSource
+
+	if (-not [string]::IsNullOrWhiteSpace($ArchiveMountType) -and $ArchiveMountType.Trim() -ine 'bind') {
+		$violations.Add("'$destination' is a '$($ArchiveMountType.Trim())' mount sourced from '$source', not a bind mount; 'docker compose down -v' removes every volume the project declares, so this archive dies in the same command as the store it exists to outlive")
+		return ,$violations.ToArray()
+	}
+
+	if (-not (Test-ProvenancePathIsAbsolute -Path $source)) {
+		$violations.Add("the archive bound at '$destination' resolved to the relative source '$source'; a relative bind source is resolved against the directory 'docker compose' was invoked from, so the location of the only surviving copy of durable memory is a function of where the operator was standing")
+		return ,$violations.ToArray()
+	}
+
+	if (-not $SourceExistsOnHost) {
+		$violations.Add("the archive bound at '$destination' is at '$source', which does not exist from where this check is running, so whether it sits inside a git worktree CANNOT BE ESTABLISHED; either this is not the docker host, or the directory has already been deleted. This is reported rather than passed over, because a check that cannot look must not report clean")
+		return ,$violations.ToArray()
+	}
+
+	if ([string]::IsNullOrWhiteSpace($GitToplevel)) {
+		if (-not $GitReadingExaminable) {
+			$violations.Add("the archive bound at '$destination' is at '$source', and the git query against it did not complete, so whether it sits inside a checkout or worktree CANNOT BE ESTABLISHED; git exits 128 for a dubious-ownership refusal under safe.directory and for a locked or corrupt repository, and answers nothing at all when it is absent from PATH. The archive is written by the container as root while this check runs as the operator, which is exactly that ownership mismatch. This is reported rather than passed over, because a check that cannot look must not report clean")
+		}
+		return ,$violations.ToArray()
+	}
+	$toplevel = ConvertFrom-DockerDesktopHostPath -Path $GitToplevel
+
+	if ($IsLinkedWorktree) {
+		$violations.Add("the archive bound at '$destination' is at '$source', which is inside the LINKED GIT WORKTREE rooted at '$toplevel'; 'git worktree remove', a session cleanup, or a tidy of a worktree collection deletes that tree and the only surviving copy of durable agent memory with it, without warning. Set REPOCONTEXT_MEMORY_ARCHIVE_PATH to an absolute path outside every checkout")
+		return ,$violations.ToArray()
+	}
+
+	$violations.Add("the archive bound at '$destination' is at '$source', which is inside the GIT CHECKOUT rooted at '$toplevel'; 'git clean -xdf' removes it and deleting the checkout takes it, so the only surviving copy of durable agent memory shares the lifetime of a working tree. Set REPOCONTEXT_MEMORY_ARCHIVE_PATH to an absolute path outside every checkout")
+	return ,$violations.ToArray()
+}
+
+<#
+.SYNOPSIS
+	Reports whether check 2's comparison is a value compared against itself.
+
+.DESCRIPTION
+	Check 2 compares the HEAD of the directory the container's compose label
+	names against an expected commit read from the operator's own checkout. When
+	those are the SAME directory - which check 1 actively requires, so it is the
+	ordinary passing case, not an edge case - both sides are one `git rev-parse`
+	of one directory. The comparison cannot dissent, and printing the two values
+	as though they agreed reports corroboration that was never obtained.
+
+	That is not a hypothetical. It is what a live run of the gate printed while
+	the container under it had been built 45 commits earlier (issue #2686):
+
+	    expected commit           : 2f1eeb1e357cab2fb47b08a226da921fdbe4e01a
+	    deployed checkout commit  : 2f1eeb1e357cab2fb47b08a226da921fdbe4e01a
+	    OK  all five provenance checks agree
+
+	A TAUTOLOGICAL LINE IN A PROVENANCE REPORT IS WORSE THAN AN ABSENT ONE,
+	because it reads as evidence. So this predicate exists to let the caller
+	print the reading once, as the single checkout fact it is, and point the
+	operator at check 6 for the commit-level question.
+
+	It deliberately does NOT produce a violation. Refusing here would refuse
+	every correct default invocation of the script; the remedy for a comparison
+	that carries no information is to stop presenting it as though it did, and
+	to obtain the information from a channel that has it.
+#>
+function Test-GitProvenanceIsSelfReferential {
+	[CmdletBinding()]
+	[OutputType([bool])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $ExpectedCheckout,
+		[AllowNull()] [AllowEmptyString()] [string] $ComposeWorkingDirectory,
+		[bool] $CaseSensitive,
+		# False when the caller sourced the expected commit from somewhere other
+		# than -ExpectedCheckout's HEAD (an operator-supplied -ExpectedCommit),
+		# in which case the two sides are genuinely independent however the
+		# directories compare.
+		[bool] $ExpectedCommitCameFromCheckoutHead = $true
+	)
+
+	if (-not $ExpectedCommitCameFromCheckoutHead) { return $false }
+
+	return (Test-ProvenancePathsEqual -Left $ExpectedCheckout -Right $ComposeWorkingDirectory -CaseSensitive $CaseSensitive)
+}
+
+<#
+.SYNOPSIS
+	Resolves the commit an IMAGE was built from, from the image's own metadata.
+
+.DESCRIPTION
+	Two channels, in order of authority, and the answer names which one spoke:
+
+	  - `label`: the OCI `org.opencontainers.image.revision` label, stamped at
+	    build time from the compose `GIT_COMMIT` build arg. Authoritative,
+	    because it is written by the build that produced the image.
+	  - `tag`: a `candidate-<sha>` repo tag on the same image. A fallback for
+	    images built before the label existed, and weaker - a tag is a mutable
+	    pointer that a human assigns - so it is reported as a fallback rather
+	    than quietly substituted for the label.
+	  - `none`: neither channel answered.
+
+	Ambiguity is an outcome, not an error to paper over: an image carrying two
+	DIFFERENT candidate shas has no single answer, so `Commit` stays empty while
+	`CandidateCommits` names them all and the caller refuses. Two tags naming the
+	same sha are one answer and resolve normally.
+
+	Pure: it reads strings the caller already fetched and runs no docker.
+#>
+function Get-ImageBuildCommitResolution {
+	[CmdletBinding()]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $RevisionLabel,
+		[AllowNull()] [string[]] $ImageTags,
+		[string] $CandidateTagPrefix = 'candidate-'
+	)
+
+	if (-not [string]::IsNullOrWhiteSpace($RevisionLabel)) {
+		return [pscustomobject] @{
+			Source           = 'label'
+			Commit           = $RevisionLabel.Trim()
+			CandidateCommits = @()
+		}
+	}
+
+	$candidates = [System.Collections.Generic.List[string]]::new()
+	foreach ($tag in @($ImageTags)) {
+		if ([string]::IsNullOrWhiteSpace($tag)) { continue }
+
+		# A repo tag is `[registry/]name:tag`, and the name may itself carry
+		# colons in a registry port. The TAG is what follows the last colon that
+		# is not inside a path segment, which for every shape this check sees is
+		# simply the last colon.
+		$text = $tag.Trim()
+		$separator = $text.LastIndexOf(':')
+		if ($separator -lt 0) { continue }
+
+		$tagPart = $text.Substring($separator + 1)
+		if (-not $tagPart.StartsWith($CandidateTagPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+
+		$sha = $tagPart.Substring($CandidateTagPrefix.Length).Trim()
+		# Only a hex string is a commit. Without this, a `candidate-latest` or a
+		# `candidate-rerun` tag would be adopted as a revision and compared, and
+		# the comparison would fail in a way that reads as a provenance
+		# disagreement rather than as a tag that was never a commit.
+		if ($sha.Length -lt 7 -or $sha -notmatch '^[0-9a-fA-F]+$') { continue }
+
+		if (-not ($candidates | Where-Object { $_ -ieq $sha })) { $candidates.Add($sha) }
+	}
+
+	if ($candidates.Count -eq 1) {
+		return [pscustomobject] @{
+			Source           = 'tag'
+			Commit           = $candidates[0]
+			CandidateCommits = $candidates.ToArray()
+		}
+	}
+
+	return [pscustomobject] @{
+		Source           = if ($candidates.Count -gt 1) { 'tag' } else { 'none' }
+		Commit           = ''
+		CandidateCommits = $candidates.ToArray()
+	}
+}
+
+<#
+.SYNOPSIS
+	Check 6 of 6. The IMAGE the container is executing was built from the
+	expected commit.
+
+.DESCRIPTION
+	The check the other five do not make, and the one the script's name implies.
+	Checks 1 and 2 adjudicate a CHECKOUT; check 3 adjudicates whether a container
+	is stale relative to what its own tag resolves to NOW. None of them reads the
+	image's own account of what went into it, so all five were green during
+	bucket-4 gate run 4 while eleven hours of measurement were taken against an
+	image built 45 commits behind the commit the gate named (issue #2686).
+
+	TWO INDEPENDENT ARMS, AND BOTH RUN.
+
+	1. IDENTITY. The commit the image itself names - from the OCI revision label,
+	   or failing that from a `candidate-<sha>` tag - is compared to the expected
+	   commit. FAILS CLOSED: when an expected commit was supplied and neither
+	   channel can name what was built, this REFUSES rather than warning. A
+	   provenance instrument that cannot answer must not return success, because
+	   the caller reads its silence as assurance.
+
+	2. CHRONOLOGY. If the expected commit was authored AFTER the image was
+	   created, the image cannot contain it, whatever any label says. This arm
+	   needs no build-time cooperation at all, so it works retroactively on every
+	   image already on a host - and on the real incident it is decisive on its
+	   own: the image was created 2026-09-10T21:02:55Z and the expected commit
+	   ff1d18a39 was committed 2026-09-11T07:49:35Z, 10h47m later.
+
+	   The arm is independent of arm 1 deliberately. A label that AGREES while
+	   the chronology is impossible is a label that is lying (stamped by hand,
+	   copied from another build, or built from a rewritten history), and that is
+	   precisely the case where the weaker evidence must not be allowed to
+	   overrule the stronger.
+
+	   -ClockSkewToleranceSeconds exists because the two timestamps come from
+	   different clocks - a docker daemon and whichever machine made the commit -
+	   and a check that refused on a few seconds of skew would accuse correct
+	   deployments of the exact defect it exists to find. That failure mode ends
+	   with the check switched off. The default is two minutes, which is four
+	   hundred times smaller than the incident it has to catch, so the tolerance
+	   costs nothing that matters.
+
+	   BUT A TOLERANCE ONLY MEANS ANYTHING WHEN THE TWO CLOCKS ARE RELATED. For
+	   a LOCALLY BUILT image, `.Created` and the commit date come from the same
+	   machine, true skew is near zero, and two minutes is generous. For a PULLED
+	   image, `.Created` is some builder's clock on a machine this host has never
+	   seen, and there is NO BOUND on the disagreement - so any tolerance is
+	   false precision dressed as safety. In that state the arm is declared NOT
+	   ADMISSIBLE and stays silent, rather than producing a number it cannot
+	   justify. Declaring a reading unmeasured beats measuring it badly.
+
+	   -ImageIsLocallyBuilt therefore defaults to TRUE, which is the direction
+	   that fails closed: a caller that forgets to supply the reading gets the
+	   arm ACTIVE. Defaulting it false would let the arm be disabled by omission,
+	   which is the shape of defect this whole script exists to refuse.
+
+	   Silencing the arm never weakens the check's guarantee, because the
+	   guarantee is arm 1's: identity refuses an image whose built commit cannot
+	   be established, whatever chronology does or does not say.
+#>
+function Get-BuildProvenanceViolation {
+	[CmdletBinding()]
+	[OutputType([string[]])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $ExpectedCommit,
+		[AllowNull()] [AllowEmptyString()] [string] $ImageRevisionLabel,
+		[AllowNull()] [string[]] $ImageTags,
+		[AllowNull()] [AllowEmptyString()] [string] $ImageCreated,
+		[AllowNull()] [AllowEmptyString()] [string] $ExpectedCommitDate,
+		[AllowNull()] [AllowEmptyString()] [string] $RunningImageId,
+		[string] $CandidateTagPrefix = 'candidate-',
+		[int] $ClockSkewToleranceSeconds = 120,
+		# TRUE by default so the chronology arm cannot be disabled by omission.
+		# See the description: a pulled image's .Created comes from an unrelated
+		# clock, so the arm is inadmissible rather than merely more tolerant.
+		[bool] $ImageIsLocallyBuilt = $true
+	)
+
+	$violations = [System.Collections.Generic.List[string]]::new()
+
+	# Nothing to adjudicate against. Check 2 already refuses a missing expected
+	# commit, and duplicating that refusal here would report one absence twice
+	# while adding no information the operator can act on.
+	if ([string]::IsNullOrWhiteSpace($ExpectedCommit)) { return ,$violations.ToArray() }
+
+	$expected = $ExpectedCommit.Trim()
+	$imageLabel = if ([string]::IsNullOrWhiteSpace($RunningImageId)) { 'the image the container is executing' } else { "image '$($RunningImageId.Trim())'" }
+
+	# --- arm 2 first: it needs no build-time cooperation, so it is the arm that
+	# works on images built before any of this existed.
+	$created = ConvertFrom-ProvenanceTimestamp -Value $ImageCreated
+	$committed = ConvertFrom-ProvenanceTimestamp -Value $ExpectedCommitDate
+	if ($ImageIsLocallyBuilt -and $null -ne $created -and $null -ne $committed) {
+		$skew = ($committed - $created).TotalSeconds
+		if ($skew -gt $ClockSkewToleranceSeconds) {
+			# Whole hours by FLOOR, not by cast. A [int] cast in PowerShell rounds
+			# to nearest, so a real 10h46m40s delta prints as "11h" and disagrees
+			# with every other record of the same incident. A provenance report
+			# that restates a measured value inaccurately is the last place to
+			# introduce a discrepancy an operator has to reconcile.
+			$lateBy = [timespan]::FromSeconds([math]::Round($skew))
+			$rendered = '{0}h{1:00}m{2:00}s' -f [int] [math]::Floor($lateBy.TotalHours), $lateBy.Minutes, $lateBy.Seconds
+			$violations.Add("$imageLabel was created at $($created.ToString('o')) but the expected commit '$expected' was committed at $($committed.ToString('o')), $rendered LATER; an image cannot contain a commit that did not exist when it was built, so this image was built from an earlier revision whatever else claims otherwise")
+		}
+	}
+
+	# --- arm 1: what the image says about itself.
+	$resolution = Get-ImageBuildCommitResolution `
+		-RevisionLabel $ImageRevisionLabel -ImageTags $ImageTags -CandidateTagPrefix $CandidateTagPrefix
+
+	if ([string]::IsNullOrWhiteSpace($resolution.Commit)) {
+		if ($resolution.CandidateCommits.Count -gt 1) {
+			$violations.Add("$imageLabel carries no '$($CandidateTagPrefix)<sha>' agreement: its candidate tags name $($resolution.CandidateCommits.Count) DIFFERENT commits ($($resolution.CandidateCommits -join ', ')), so which one it was built from cannot be established. Rebuild with the GIT_COMMIT build arg set, which stamps org.opencontainers.image.revision and settles it from the image itself")
+			return ,$violations.ToArray()
+		}
+
+		$violations.Add("$imageLabel carries neither an org.opencontainers.image.revision label nor a '$($CandidateTagPrefix)<sha>' tag, so THE COMMIT IT WAS BUILT FROM CANNOT BE ESTABLISHED and the expected commit '$expected' is unverified. This is REFUSED rather than warned about: the other checks adjudicate a checkout, not an image, and a green report here would be read as commit-level assurance. Rebuild with the GIT_COMMIT build arg set (docker build --build-arg GIT_COMMIT=`$(git rev-parse HEAD)), or tag the image '$($CandidateTagPrefix)<sha>' with the commit it was built from")
+		return ,$violations.ToArray()
+	}
+
+	$matched = Test-ProvenanceCommitsMatch -Left $resolution.Commit -Right $expected
+	$channel = if ($resolution.Source -eq 'label') { 'its org.opencontainers.image.revision label' } else { "its '$($CandidateTagPrefix)<sha>' tag (FALLBACK: the image carries no revision label)" }
+
+	if ($null -eq $matched) {
+		$violations.Add("$imageLabel names commit '$($resolution.Commit)' through $channel, but that value is too short to identify a commit against the expected '$expected'; a prefix below seven characters matches commits it did not mean")
+		return ,$violations.ToArray()
+	}
+
+	if (-not $matched) {
+		$violations.Add("$imageLabel WAS BUILT FROM commit '$($resolution.Commit)' according to $channel, but the expected commit is '$expected'; the running container is executing a different revision from the one being verified")
+	}
+
+	return ,$violations.ToArray()
+}
+
+<#
+.SYNOPSIS
+	Runs all six checks over a set of readings and returns a full report.
+
+.DESCRIPTION
+	Returns an object carrying BOTH the violations and every value that was
+	read, whether or not anything disagreed. Emitting the readings
+	unconditionally is a requirement of the check rather than a convenience: a
+	bare pass/fail forces the operator to go and find the values themselves at
+	precisely the moment they have least reason to trust their own assumptions
+	about where they live.
+#>
+function Get-ContainerProvenanceReport {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)] [hashtable] $Readings,
+		[Parameter(Mandatory)] [string] $ExpectedCheckout,
+		[Parameter(Mandatory)] [hashtable] $ExpectedSettings,
+		[int] $ExpectedConfigFileCount = 0,
+		[bool] $CaseSensitive,
+		# Whether the expected commit was taken from -ExpectedCheckout's own
+		# HEAD, which is the script's default. Used only to decide whether check
+		# 2's comparison is self-referential and must therefore be REPORTED as a
+		# single checkout reading rather than as two agreeing values.
+		[bool] $ExpectedCommitCameFromCheckoutHead = $true
+	)
+
+	$violations = [System.Collections.Generic.List[string]]::new()
+
+	$violations.AddRange([string[]] (Get-ComposeProvenanceViolation `
+				-WorkingDirectory $Readings['ComposeWorkingDirectory'] `
+				-ConfigFiles $Readings['ComposeConfigFiles'] `
+				-ExpectedCheckout $ExpectedCheckout `
+				-ExpectedConfigFileCount $ExpectedConfigFileCount `
+				-MissingConfigFiles $Readings['MissingConfigFiles'] `
+				-CaseSensitive $CaseSensitive))
+
+	$violations.AddRange([string[]] (Get-GitProvenanceViolation `
+				-ResolvedCommit $Readings['ResolvedCommit'] `
+				-ExpectedCommit $Readings['ExpectedCommit']))
+
+	$violations.AddRange([string[]] (Get-ImageProvenanceViolation `
+				-RunningImageId $Readings['RunningImageId'] `
+				-ExpectedImageId $Readings['ExpectedImageId'] `
+				-ImageReference $Readings['ImageReference']))
+
+	$violations.AddRange([string[]] (Get-EnvironmentProvenanceViolation `
+				-ContainerEnvironment $Readings['ContainerEnvironment'] `
+				-ExpectedSettings $ExpectedSettings))
+
+	# Check 5 is handed ONLY archive readings. Not the compose working directory,
+	# not the expected checkout: the composite is where a guard over the write
+	# path would most easily acquire a dependency on the read path, and check 2
+	# requires the compose directory to be a worktree.
+	$violations.AddRange([string[]] (Get-ArchiveDurabilityViolation `
+				-ArchiveDestination $Readings['ArchiveDestination'] `
+				-ArchiveSource $Readings['ArchiveSource'] `
+				-ArchiveMountType $Readings['ArchiveMountType'] `
+				-GitToplevel $Readings['ArchiveGitToplevel'] `
+				-IsLinkedWorktree ([bool] $Readings['ArchiveIsLinkedWorktree']) `
+				-SourceExistsOnHost ([bool] $Readings['ArchiveSourceExistsOnHost']) `
+				-GitReadingExaminable ([bool] $Readings['ArchiveGitReadingExaminable'])))
+
+	# Check 6 is handed ONLY readings taken from the IMAGE, plus the expected
+	# commit and its date. It is never given the compose working directory or the
+	# checkout HEAD, for the same reason check 5 is never given them: those are
+	# the values whose accidental reuse produced the tautology this check exists
+	# to replace, and a parameter list that cannot see them cannot be keyed on
+	# them by a later edit.
+	$buildArguments = @{
+		ExpectedCommit     = $Readings['ExpectedCommit']
+		ImageRevisionLabel = $(if ($Readings.ContainsKey('ImageRevisionLabel')) { $Readings['ImageRevisionLabel'] } else { '' })
+		ImageTags          = [string[]] @(if ($Readings.ContainsKey('ImageTags')) { $Readings['ImageTags'] } else { @() })
+		ImageCreated       = $(if ($Readings.ContainsKey('ImageCreated')) { $Readings['ImageCreated'] } else { '' })
+		ExpectedCommitDate = $(if ($Readings.ContainsKey('ExpectedCommitDate')) { $Readings['ExpectedCommitDate'] } else { '' })
+		RunningImageId     = $Readings['RunningImageId']
+	}
+	if ($Readings.ContainsKey('CandidateTagPrefix') -and -not [string]::IsNullOrWhiteSpace($Readings['CandidateTagPrefix'])) {
+		$buildArguments['CandidateTagPrefix'] = $Readings['CandidateTagPrefix']
+	}
+	if ($Readings.ContainsKey('ClockSkewToleranceSeconds') -and $null -ne $Readings['ClockSkewToleranceSeconds']) {
+		$buildArguments['ClockSkewToleranceSeconds'] = [int] $Readings['ClockSkewToleranceSeconds']
+	}
+	# Absent means TRUE, matching the check's own default. The chronology arm
+	# must not be switchable off by leaving a reading out.
+	if ($Readings.ContainsKey('ImageIsLocallyBuilt')) {
+		$buildArguments['ImageIsLocallyBuilt'] = [bool] $Readings['ImageIsLocallyBuilt']
+	}
+	$violations.AddRange([string[]] (Get-BuildProvenanceViolation @buildArguments))
+
+	$isSelfReferential = Test-GitProvenanceIsSelfReferential `
+		-ExpectedCheckout $ExpectedCheckout `
+		-ComposeWorkingDirectory $Readings['ComposeWorkingDirectory'] `
+		-CaseSensitive $CaseSensitive `
+		-ExpectedCommitCameFromCheckoutHead $ExpectedCommitCameFromCheckoutHead
+
+	return [pscustomobject] @{
+		Readings                  = $Readings
+		Violations                = $violations.ToArray()
+		IsSatisfied               = ($violations.Count -eq 0)
+		IsGitCheckSelfReferential = $isSelfReferential
+		ImageBuildCommit          = (Get-ImageBuildCommitResolution `
+				-RevisionLabel $buildArguments['ImageRevisionLabel'] `
+				-ImageTags $buildArguments['ImageTags'] `
+				-CandidateTagPrefix $(if ($buildArguments.ContainsKey('CandidateTagPrefix')) { $buildArguments['CandidateTagPrefix'] } else { 'candidate-' }))
+	}
+}

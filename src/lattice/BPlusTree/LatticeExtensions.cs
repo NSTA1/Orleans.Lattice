@@ -19,6 +19,373 @@ public static class LatticeExtensions
     public const int DefaultScanReconnectAttempts = 8;
 
     /// <summary>
+    /// Default resume budget for <see cref="ScanKeysAsync"/> and
+    /// <see cref="ScanEntriesAsync"/> when a shard-root page fill is abandoned
+    /// mid-scan with <see cref="ScanPageStalledException"/> - deliberately far
+    /// smaller than <see cref="DefaultScanReconnectAttempts"/>, and a separate
+    /// counter rather than a share of it.
+    /// <para>
+    /// The two faults cost different amounts, so they must not draw on one
+    /// budget. An <c>EnumerationAbortedException</c> is an enumerator reclaim:
+    /// it is raised the instant the activation goes, so a reopen costs
+    /// essentially nothing and eight of them are cheap. A stall is only raised
+    /// once the whole
+    /// <see cref="LatticeOptions.MaxScanPageStallDuration"/> ceiling has
+    /// elapsed, so each attempt costs that ceiling - on the derived default,
+    /// tens of seconds. Eight of those against one parked leaf read would be
+    /// minutes of repeated shard re-entry, which is the amplification a retry
+    /// under contention is rightly suspected of.
+    /// </para>
+    /// <para>
+    /// There is no separate parameter for it: the effective stall budget is
+    /// <c>min(maxAttempts, DefaultScanStallResumeAttempts)</c>, so
+    /// <c>maxAttempts: 0</c> continues to mean fail-fast for both faults and a
+    /// caller that raises <c>maxAttempts</c> for a long walk does not silently
+    /// raise its tolerance for stalls with it.
+    /// </para>
+    /// <para>
+    /// It is also the only bound on the resume's total wall-clock cost, which
+    /// is why it is left deliberately small rather than widened now that the
+    /// resume actually runs (issue 2456). There is no separate time budget: at
+    /// N resume attempts a scan can spend roughly N+1 ceilings failing, plus
+    /// the backoff between them, before it gives up. Callers here are driven by
+    /// interval reminders rather than by a hard per-pass deadline, so an
+    /// over-generous budget would not be cut off by anything - it would simply
+    /// make each doomed pass slower. Two was chosen conservatively on that
+    /// basis: enough to clear a transient queue, not enough to turn a scan that
+    /// cannot finish into a long one.
+    /// </para>
+    /// </summary>
+    public const int DefaultScanStallResumeAttempts = 2;
+
+    /// <summary>
+    /// Ceiling on the <em>total</em> stall resumptions a single walk may take,
+    /// however much progress it makes in between (issue 2539).
+    /// <para>
+    /// <see cref="DefaultScanStallResumeAttempts"/> bounds <em>consecutive
+    /// futile</em> stalls: it is replenished whenever the walk yields a record,
+    /// because a budget that is only ever spent caps how <em>long</em> a walk
+    /// may be rather than how <em>stuck</em> it is, and a walk whose range grows
+    /// with the corpus then dies at its third stall no matter how much it had
+    /// banked. That replenishment is the fix, but on its own it removes the last
+    /// bound on a walk's wall-clock: a source that dribbles one record per stall
+    /// would resume forever, which is worse than failing, since the caller's
+    /// next reminder tick never arrives and the failure is never surfaced.
+    /// </para>
+    /// <para>
+    /// This ceiling restores that bound without restoring the length cap. It can
+    /// only be reached by a walk that <em>is</em> progressing - a stuck walk
+    /// spends its consecutive budget first, at two - so it binds exactly the
+    /// pathological case of real but unusably slow progress.
+    /// </para>
+    /// <para>
+    /// The value is grounded in wall-clock, which is the property the original
+    /// budget was protecting. A resumption costs one reported stall ceiling
+    /// <c>T</c> plus its backoff, and the backoff is driven by the monotonic
+    /// total rather than the replenished budget, so it escalates as
+    /// <c>0.25T, 0.5T, 0.75T</c> and then saturates at <c>T</c> from the fourth
+    /// resumption on. At this ceiling a walk therefore spends at most roughly
+    /// <c>64T</c> stalling plus <c>62.5T</c> waiting - about 10 minutes on the
+    /// 5-second <see cref="LatticeOptions.DefaultMaxScanPageDuration"/> - before
+    /// it gives up, against a status quo in which the affected reload never
+    /// completed at all.
+    /// </para>
+    /// <para>
+    /// The value itself is <em>structural, not measured</em>, and it must not be
+    /// read as measured merely because it sits among measurements. It matches
+    /// <see cref="LatticeConstants.DefaultShardCount"/>, so it lets a walk
+    /// absorb about one stall per shard on a single pass across the default
+    /// fan-out; it is deliberately generous rather than fitted. It could not
+    /// have been derived from the run that motivated it. With a consecutive
+    /// budget of two, a walk that dies takes two
+    /// resumptions and then a terminal outcome - three decisions - and the
+    /// deployed build recorded almost exactly three decisions per dying walk.
+    /// The sample is therefore right-censored at precisely the bound under test:
+    /// no walk in it was ever permitted a fourth stall, so the data cannot say
+    /// how many stalls a <em>completed</em> walk needs, only that every observed
+    /// walk wanted more than two.
+    /// </para>
+    /// <para>
+    /// What the measurement does support is the <em>consequence</em> of the
+    /// value. On the deployed build the affected tree stalled at a rate of
+    /// roughly one stall per two completed leaf scans, so at that rate this
+    /// ceiling grants a walk on the order of a hundred leaves of progress,
+    /// spread over the wall-clock above, before it bites - against the previous
+    /// behaviour, which surrendered after two stalls and therefore about four
+    /// leaves. What will size the constant properly is
+    /// <see cref="StallOutcomeCeilingExhausted"/> on the next run, which is
+    /// recorded as a distinct outcome for exactly that purpose: a non-zero count
+    /// says this figure is too small, and says so without being confusable with
+    /// a source that is not yielding at all.
+    /// </para>
+    /// <para>
+    /// The calibration is deliberately expressed as a <em>rate</em> and not as
+    /// counter totals. The field counters are monotonic and were still climbing
+    /// on a running container, so any absolute value is true only at the instant
+    /// it was sampled and would be wrong - visibly, to anyone who re-queried -
+    /// by the time this is next read. A rate survives re-measurement; a total
+    /// does not, and a total that has silently gone stale discredits the
+    /// mechanism it was cited to support.
+    /// </para>
+    /// <para>
+    /// It is stated plainly that this is <em>necessary but not sufficient</em>
+    /// for a corpus-sized reload. A walk longer than the figure above still
+    /// reaches the ceiling, and raising the constant does not fix that: the
+    /// binding constraint is wall-clock, not the count, so a ceiling large
+    /// enough for an arbitrary corpus would licence an unbounded stall. The
+    /// count and the clock cannot both be satisfied by this constant, which is
+    /// precisely why the durable remedy is for the <em>caller</em> to bank
+    /// partial progress, so that a walk terminated here resumes instead of
+    /// restarting. This ceiling makes that termination bounded and observable;
+    /// it does not by itself make a corpus-sized reload converge.
+    /// </para>
+    /// <para>
+    /// Note that the client-side resumption counters cannot supply a per-walk
+    /// stall distribution to calibrate against directly, for the censoring
+    /// reason above. The leaf-per-stall rate is used instead because it is
+    /// censoring-free - both of its terms are server-side and neither is
+    /// bounded by the client budget.
+    /// </para>
+    /// <para>
+    /// Reaching it rethrows the same <see cref="ScanPageStalledException"/>
+    /// verbatim, exactly as exhausting the consecutive budget does, so a walk
+    /// that gives up here is never mistaken for one that finished. It is
+    /// reported under its own <c>ceiling-exhausted</c> outcome on
+    /// <c>scan_stall_resumptions_total</c> rather than under
+    /// <c>budget-exhausted</c>, because the two terminations call for opposite
+    /// responses: this one says the walk was progressing and <em>this constant
+    /// is too small</em>, the other says the source is not yielding and no
+    /// constant helps. <c>budget-exhausted</c> keeps its pre-2539 meaning
+    /// unchanged, so a series recorded before this change stays comparable with
+    /// one recorded after; the new value partitions what was previously a lump
+    /// rather than redefining it.
+    /// </para>
+    /// <para>
+    /// It is deliberately <em>not</em> presented as removing the cliff. Any
+    /// fixed total is eventually exceeded by a long enough walk, so this only
+    /// moves it - and it is set where it is because the real removal is for the
+    /// caller to bank partial progress, so that a walk terminated here resumes
+    /// rather than restarts. This ceiling is what makes that termination safe
+    /// and observable in the meantime.
+    /// </para>
+    /// </summary>
+    public const int DefaultScanStallResumeCeiling = 64;
+
+    /// <summary>
+    /// Fraction of the ceiling reported by a stall that a resilient scan waits
+    /// before resuming, multiplied by the attempt number.
+    /// <para>
+    /// Derived from the ceiling the stall itself reports
+    /// (<see cref="ScanPageStalledException.TimeoutSeconds"/>) rather than set
+    /// as an absolute duration, so the backoff cannot drift away from
+    /// <see cref="LatticeOptions.MaxScanPageStallDuration"/> when a deployment
+    /// retunes it: the two move together by construction and there is no second
+    /// knob to remember.
+    /// </para>
+    /// <para>
+    /// The fraction itself is conservative and is <em>not</em> tuned against a
+    /// measurement. It is chosen to be on the timescale of the causes a stall
+    /// names - a leaf replaying its WAL window from cold, an activation queued
+    /// behind another call, a contended storage read - which clear in seconds,
+    /// not in the milliseconds that
+    /// <see cref="ComputeReconnectDelayMs"/> waits for an enumerator reclaim.
+    /// Resuming on that millisecond ramp would descend onto the same still-parked
+    /// read and burn another whole ceiling.
+    /// </para>
+    /// </summary>
+    internal const double ScanStallResumeBackoffFraction = 0.25;
+
+    internal const string StallOutcomeResumed = "resumed";
+
+    /// <summary>
+    /// A terminal stall outcome: the walk burnt its <em>consecutive</em>
+    /// non-progressing budget without banking a record. See the resume site in
+    /// <c>ScanKeysAsyncCore</c>.
+    /// <para>
+    /// Its meaning is deliberately unchanged by the lifetime ceiling added in
+    /// issue 2539, so that a series recorded before that change stays
+    /// comparable with one recorded after. The ceiling records
+    /// <see cref="StallOutcomeCeilingExhausted"/> instead. That split is not
+    /// cosmetic: the two terminations call for opposite responses, so a single
+    /// label covering both would be populated, plausible, and blind to the only
+    /// distinction an operator needs. See that constant for the argument.
+    /// </para>
+    /// <para>
+    /// There was a second terminal outcome, <c>no-progress</c>, recorded when a
+    /// progress gate refused a stall that still had budget. That gate is gone
+    /// and the label is deliberately not retained as an unrecordable constant.
+    /// An instrument that has never recorded is <em>absent</em> from a scrape
+    /// rather than zero, so a documented outcome that can no longer occur reads
+    /// to an operator as a fact about the workload ("no stall ever failed this
+    /// way") when it is really a fact about the code. Removing the label makes
+    /// its disappearance a code change somebody can find, instead of a silence.
+    /// </para>
+    /// </summary>
+    internal const string StallOutcomeBudgetExhausted = "budget-exhausted";
+
+    /// <summary>
+    /// A terminal stall outcome: the walk was <em>progressing</em> but exceeded
+    /// <see cref="DefaultScanStallResumeCeiling"/> stalls over its lifetime.
+    /// <para>
+    /// This is reported separately from <see cref="StallOutcomeBudgetExhausted"/>
+    /// because the two demand opposite responses, and collapsing them would make
+    /// the metric unable to answer the question it is read to answer.
+    /// <c>budget-exhausted</c> says the source is genuinely not yielding: the
+    /// walk banked nothing across its consecutive budget, and no larger constant
+    /// helps it. <c>ceiling-exhausted</c> says the opposite - the walk was
+    /// banking records and was cut off by a bound chosen here, so it reports a
+    /// fact about <em>this constant</em> rather than about the source, and the
+    /// remedy is to raise the ceiling or, better, for the caller to bank partial
+    /// progress so a terminated walk resumes rather than restarts.
+    /// </para>
+    /// <para>
+    /// Adding a value to an existing tag partitions what was previously a lump;
+    /// it does not invalidate the existing series, because every stall that
+    /// would have been tagged <c>budget-exhausted</c> before the ceiling existed
+    /// still is.
+    /// </para>
+    /// </summary>
+    internal const string StallOutcomeCeilingExhausted = "ceiling-exhausted";
+
+    /// <summary>
+    /// The stall resume budget in force for a scan whose reconnect budget is
+    /// <paramref name="reconnectBudget"/>. See
+    /// <see cref="DefaultScanStallResumeAttempts"/> for why it is a floor over
+    /// the reconnect budget rather than a parameter of its own.
+    /// </summary>
+    internal static int ComputeScanStallResumeBudget(int reconnectBudget) =>
+        Math.Min(reconnectBudget, DefaultScanStallResumeAttempts);
+
+    /// <summary>
+    /// The delay before resuming a scan that stalled, derived from the ceiling
+    /// the stall reported. See <see cref="ScanStallResumeBackoffFraction"/>.
+    /// A stall carrying no usable ceiling (a default-constructed instance, or a
+    /// non-finite value) falls back to
+    /// <see cref="LatticeOptions.DefaultMaxScanPageDuration"/> so the wait is
+    /// still derived from a real bound rather than from a literal.
+    /// </summary>
+    internal static int ComputeScanStallResumeDelayMs(double ceilingSeconds, int attempt)
+    {
+        if (attempt < 1)
+        {
+            return 0;
+        }
+
+        var seconds = double.IsFinite(ceilingSeconds) && ceilingSeconds > 0
+            ? ceilingSeconds
+            : LatticeOptions.DefaultMaxScanPageDuration.TotalSeconds;
+
+        var delay = seconds * ScanStallResumeBackoffFraction * attempt;
+
+        // Never wait longer than the ceiling itself: past that point the caller
+        // is spending more time waiting to retry than the stall it is retrying.
+        if (delay > seconds)
+        {
+            delay = seconds;
+        }
+
+        return (int)Math.Ceiling(delay * 1000.0);
+    }
+
+    /// <summary>
+    /// Records the decision a resilient scan took on meeting a stall, so a scan
+    /// that completed only after resuming is distinguishable from one that
+    /// never stalled. See
+    /// <see cref="LatticeMetrics.ScanStallResumptions"/>.
+    /// </summary>
+    internal static void RecordScanStallOutcome(ScanPageStalledException stall, string outcome)
+    {
+        var treeId = stall.TreeId ?? string.Empty;
+        LatticeMetrics.ScanStallResumptions.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, stall.Phase ?? string.Empty),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome),
+            LatticeTenantLabel.ForTree(treeId));
+    }
+
+    private static ScanStallFutilityWatch _futilityWatch = new();
+
+    /// <summary>
+    /// The table observing what became of sources this process gave up on for
+    /// futility. See <see cref="ScanStallFutilityWatch"/>.
+    /// </summary>
+    internal static ScanStallFutilityWatch FutilityWatch => Volatile.Read(ref _futilityWatch);
+
+    /// <summary>
+    /// Swaps the futility watch table for the duration of the returned scope, so
+    /// a fixture can inject a controllable clock and start from an empty table.
+    /// </summary>
+    internal static IDisposable UseFutilityWatch(ScanStallFutilityWatch watch)
+    {
+        ArgumentNullException.ThrowIfNull(watch);
+        return new FutilityWatchScope(Interlocked.Exchange(ref _futilityWatch, watch));
+    }
+
+    private sealed class FutilityWatchScope(ScanStallFutilityWatch previous) : IDisposable
+    {
+        public void Dispose() => Interlocked.Exchange(ref _futilityWatch, previous);
+    }
+
+    /// <summary>
+    /// Records a stall that ended a walk, and - when it ended for futility -
+    /// opens a watch on the source so a later scan can say whether that source
+    /// was merely busy or genuinely not yielding. See
+    /// <see cref="ScanStallFutilityWatch"/> for why the counter this feeds is
+    /// the only thing that can answer that, and why it never re-drives the
+    /// abandoned work.
+    /// </summary>
+    /// <param name="stall">The stall being rethrown.</param>
+    /// <param name="outcome">The terminal outcome tag.</param>
+    /// <param name="source">The scan target the walk was reading.</param>
+    /// <param name="bound">
+    /// The last key yielded by the abandoned walk, or its inclusive start bound
+    /// when it yielded nothing.
+    /// </param>
+    /// <param name="boundExclusive">
+    /// Whether <paramref name="bound"/> is a yielded key rather than a start
+    /// bound.
+    /// </param>
+    /// <param name="reverse">Whether the abandoned walk was descending.</param>
+    internal static void RecordScanStallTermination(
+        ScanPageStalledException stall,
+        string outcome,
+        object source,
+        string? bound,
+        bool boundExclusive,
+        bool reverse)
+    {
+        RecordScanStallOutcome(stall, outcome);
+
+        // Only the futility arm is watched. ceiling-exhausted already reports a
+        // fact about a constant chosen here rather than about the source, so
+        // there is no ambiguity for a follow-up observation to resolve.
+        if (outcome == StallOutcomeBudgetExhausted)
+        {
+            FutilityWatch.OpenWatch(source, stall, bound, boundExclusive, reverse);
+        }
+    }
+
+    /// <summary>
+    /// Reports a record yielded by a resilient scan to the futility watch table.
+    /// <para>
+    /// The <see cref="ScanStallFutilityWatch.HasWatches"/> guard is what makes
+    /// this affordable on the per-record path: it is a single volatile read of a
+    /// counter that is zero unless this process has recently abandoned a source
+    /// for futility, so a healthy deployment pays one field read per record and
+    /// the instrument can stay on permanently.
+    /// </para>
+    /// </summary>
+    internal static void NoteScanProgress(object source, string key)
+    {
+        var watch = FutilityWatch;
+        if (watch.HasWatches)
+        {
+            watch.NoteProgress(source, key);
+        }
+    }
+
+    /// <summary>
     /// Streams sorted key-value pairs into the tree, partitioning by physical
     /// shard and flushing chunks in parallel across shards. Each shard receives
     /// its entries in key order via <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.BulkAppendAsync"/>,
@@ -295,6 +662,19 @@ public static class LatticeExtensions
         string? lastKey = null;
         var attempt = 0;
 
+        // Stall resumption. A ScanPageStalledException is a different fault from
+        // an EnumerationAbortedException and is resumed on its own budget and its
+        // own backoff; see DefaultScanStallResumeAttempts. The resume is gated
+        // by that budget alone; see the catch below.
+        var stallBudget = ComputeScanStallResumeBudget(budget);
+        var stallAttempt = 0;
+        var stallTotal = 0;
+        var stallDelayMs = 0;
+
+        // A scan starting is exactly the event that would resolve an open
+        // futility watch, so expiry is swept here rather than on a timer.
+        FutilityWatch.Sweep();
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -324,6 +704,168 @@ public static class LatticeExtensions
                         shouldReopen = true;
                         break;
                     }
+                    catch (ScanPageStalledException stall)
+                    {
+                        // The shard released itself so its queue could drain, and
+                        // said so: resuming from the last continuation token is the
+                        // recovery the ceiling was designed to enable. Resume while
+                        // there is budget - and on budget alone.
+                        //
+                        // This deliberately does NOT also require the scan to have
+                        // advanced since it last stalled. That gate was tried
+                        // (issue 2398) and then measured (issue 2456): on the
+                        // deployed build it refused 38 of 38 stalls, the budget was
+                        // never once consulted, and the resume branch below
+                        // executed zero times, so the indexing job still aborted
+                        // and re-scanned the whole corpus. The gate is unreachable
+                        // for the population that actually occurs - a cold tree
+                        // replaying its WAL windows stalls at or near the origin,
+                        // where lastKey is still null and no advance can have
+                        // happened. Issue 2278 measured leaves read before the
+                        // ceiling fired as 0,0,0,0,0,0,1,4,5.
+                        //
+                        // The gate's stated fear - that a second stall at the same
+                        // position re-attacks the same parked read - conflates the
+                        // same position with the same conditions. The ceiling
+                        // exists precisely so the shard stops being held and its
+                        // queue can drain, so after a backoff the position is
+                        // unchanged but the shard is not. What bounds the retry is
+                        // the budget and the backoff, both already present here.
+                        // The gate was a third bound that only ever fired first.
+                        //
+                        // WHAT THIS DOES NOT DO, recorded here because the metric
+                        // it corrects is easy to mistake for a cure. Where the
+                        // stall is downstream of the cold WAL replay loop (issues
+                        // 2280 and 2433) - a leaf that has never checkpointed and
+                        // must replay a WAL window that GC cannot trim because the
+                        // materialiser is behind - a resume lands back on the same
+                        // leaf in the same state and will exhaust its budget. The
+                        // gain there is a correct classification, not a completed
+                        // scan: the scan reports budget-exhausted, meaning "tried
+                        // and could not", instead of no-progress, meaning "refused
+                        // to try". Do not read a fall in no-progress as recovery.
+                        //
+                        // WHY THE BACKOFF IS NOT ESCALATED FOR AN UNCHANGED
+                        // POSITION. Charging a repeated same-position stall extra
+                        // backoff was considered and rejected. It assumes the
+                        // previous wait was merely too short, which is true of a
+                        // transient queue but false of the replay deadlock above,
+                        // where no wait of any length helps. Each attempt already
+                        // costs a whole ceiling, so on the derived default the
+                        // worst case is roughly three ceilings of work plus the
+                        // backoff between them; escalating would add most of
+                        // another ceiling of pure waiting to the case that cannot
+                        // benefit from it. The budget stays deliberately small for
+                        // the same reason - see DefaultScanStallResumeAttempts.
+                        // THE BUDGET WAS ALSO MONOTONIC, AND THAT IS A SEPARATE
+                        // DEFECT FROM THE GATE ABOVE (issue 2539). stallAttempt
+                        // was declared once outside the reopen loop and only ever
+                        // incremented - never reset when the walk delivered
+                        // records - so the budget capped the TOTAL faults a walk
+                        // could absorb over its whole life rather than the futile
+                        // ones. A walk whose range grows with the corpus then gets
+                        // a fixed handful of faults for its entire lifetime,
+                        // however much progress it banked in between, and every
+                        // fault after that is terminal. Raising the budget only
+                        // moves that cliff, since any fixed total is eventually
+                        // exceeded by a long enough walk.
+                        //
+                        // RESETTING ON A YIELDED RECORD IS THE INVERSE OF THE
+                        // REFUSED GATE, NOT A RE-INTRODUCTION OF IT, and that
+                        // distinction is the whole reason it survives the history
+                        // above. The gate used progress to REFUSE a resume, so it
+                        // fired first and vetoed the recovery; replenishment uses
+                        // progress to RESTORE budget, so it can only ever permit
+                        // more recovery than before, never less. A walk that never
+                        // advances is governed exactly as it was: the origin-
+                        // parked cold-replay population described above still
+                        // exhausts its budget and still reports budget-exhausted.
+                        // Nothing the 2456 measurement covered is changed.
+                        //
+                        // REPLENISHMENT ALONE WOULD REMOVE THE LAST BOUND ON A
+                        // WALK'S WALL-CLOCK, which the DefaultScanStallResumeAttempts
+                        // doc calls out as that budget's second job. A source that
+                        // dribbles one record per stall would resume forever, and
+                        // a scan that never returns is worse than one that fails:
+                        // the caller's next reminder tick never arrives, so the
+                        // fault is never surfaced anywhere. DefaultScanStallResumeCeiling
+                        // therefore caps TOTAL resumptions. It can only be reached
+                        // by a walk that is progressing, since a stuck one spends
+                        // its consecutive budget first, so it binds exactly the
+                        // pathological case of real but unusably slow progress and
+                        // leaves every other walk governed as before.
+                        //
+                        // Termination for a healthy walk is by construction rather
+                        // than by either ceiling: every yielded record strictly
+                        // advances lastKey and the reopened range is half-open
+                        // above it, so a walk that makes progress is converging,
+                        // while one that makes none spends its budget and rethrows.
+                        //
+                        // The population this serves was measured on the durable
+                        // vector index's reload walk, which is NOT the origin-
+                        // parked shape 2278 describes. Stated as ratios, because
+                        // the field counters are monotonic and a raw total is
+                        // true only at the instant it was sampled: over 90% of
+                        // all scan-page stalls in the deployment fell on that one
+                        // tree; they arrived at roughly one stall per two
+                        // completed leaf scans; and the resumptions taken ran at
+                        // roughly three per terminal outcome against a budget of
+                        // two. Those walks advance between stalls and then die at
+                        // their third one having covered a trivial fraction of
+                        // the corpus, which is exactly what replenishment
+                        // addresses and exactly what the refused gate could not
+                        // have.
+                        //
+                        // THAT LAST RATIO IS ALSO WHY 64 IS NOT A MEASURED
+                        // NUMBER, and it must not be read as one merely because
+                        // it sits beside measurements. Three decisions per walk
+                        // IS the budget of two plus its terminal: the defect
+                        // censors every observation at exactly the bound under
+                        // test, so no walk in the sample was ever permitted a
+                        // fourth stall and the data cannot say how many a
+                        // completed walk needs. 64 is chosen structurally and
+                        // generously - it matches LatticeConstants.DefaultShardCount,
+                        // so it lets a walk absorb about one stall per shard on a
+                        // single pass - and it is the run after this change,
+                        // where ceiling-exhausted is recorded separately, that
+                        // will size it for real.
+                        if (stallAttempt < stallBudget && stallTotal < DefaultScanStallResumeCeiling)
+                        {
+                            stallAttempt++;
+                            stallTotal++;
+                            stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallTotal);
+                            RecordScanStallOutcome(stall, StallOutcomeResumed);
+                            shouldReopen = true;
+                            break;
+                        }
+
+                        // Out of budget: rethrow the stall verbatim. A scan that
+                        // cannot be finished must never look finished, so there is
+                        // no path here that ends the enumeration normally.
+                        //
+                        // The two terminations are tagged apart because they call
+                        // for OPPOSITE responses and a single label would be
+                        // populated, plausible, and blind to the only distinction
+                        // an operator needs. Reaching here means the guard failed,
+                        // so a consecutive budget still in hand identifies the
+                        // lifetime ceiling as the term that failed: the walk was
+                        // BANKING RECORDS and this constant cut it off, which is a
+                        // fact about the constant, not about the source. The other
+                        // arm is the source genuinely not yielding, which no
+                        // larger constant repairs. budget-exhausted keeps exactly
+                        // its pre-2539 meaning so a series recorded before this
+                        // change stays comparable with one recorded after.
+                        RecordScanStallTermination(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? StallOutcomeCeilingExhausted
+                                : StallOutcomeBudgetExhausted,
+                            lattice,
+                            lastKey ?? startInclusive,
+                            lastKey is not null,
+                            reverse);
+                        throw;
+                    }
 
                     if (!hasNext)
                     {
@@ -331,7 +873,42 @@ public static class LatticeExtensions
                         break;
                     }
 
+                    // Progress replenishes the CONSECUTIVE stall budget (issue
+                    // 2539). It exists to stop a walk that is banking NOTHING,
+                    // not to cap how many faults a corpus-sized walk may absorb
+                    // over its life; see the stall catch above for why this is
+                    // the inverse of the gate that was refused, and not a
+                    // re-introduction of it.
+                    //
+                    // NOTE THE TWO COUNTERS ARE DELIBERATELY SPLIT BY PURPOSE,
+                    // and collapsing them back together reintroduces a defect in
+                    // whichever direction it is done. stallAttempt is FUTILITY
+                    // accounting - how many faults we have absorbed without
+                    // getting anywhere - so progress is exactly the right thing
+                    // to reset it, because progress is proof the walk is not
+                    // futile. stallTotal is CONGESTION accounting, and it feeds
+                    // both the ceiling and ComputeScanStallResumeDelayMs, so it
+                    // must stay monotonic: a server that is failing to answer is
+                    // not asking to be pressed harder, and progress is not
+                    // evidence that it is. Feeding the replenished counter to the
+                    // backoff would pin the delay at its first rung forever for
+                    // exactly the population this fix serves - walks that
+                    // progress between almost every pair of stalls - silently
+                    // flattening an escalating backoff into a permanent minimum
+                    // aimed at a server whose defining symptom is timeouts.
+                    //
+                    // `attempt` is deliberately NOT reset, and is NOT an unfixed
+                    // instance of this defect. It governs a different fault and
+                    // drives the reconnect backoff, so it is congestion
+                    // accounting like stallTotal and CORRECTLY has monotonic
+                    // semantics. Do not "finish the job" by resetting it.
+                    stallAttempt = 0;
                     lastKey = enumerator.Current;
+
+                    // A record from this source resolves any watch opened when a
+                    // previous walk gave up on it for futility. Guarded by a
+                    // single volatile read; see NoteScanProgress.
+                    NoteScanProgress(lattice, enumerator.Current);
                     yield return enumerator.Current;
                 }
             }
@@ -347,7 +924,8 @@ public static class LatticeExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ComputeReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ComputeReconnectDelayMs(attempt);
+                stallDelayMs = 0;
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
@@ -442,6 +1020,17 @@ public static class LatticeExtensions
         string? lastKey = null;
         var attempt = 0;
 
+        // See ScanKeysAsyncCore: stalls resume on their own budget and their own
+        // backoff, gated by that budget alone.
+        var stallBudget = ComputeScanStallResumeBudget(budget);
+        var stallAttempt = 0;
+        var stallTotal = 0;
+        var stallDelayMs = 0;
+
+        // See ScanKeysAsyncCore: expiry is swept at scan start rather than on a
+        // timer.
+        FutilityWatch.Sweep();
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -471,6 +1060,32 @@ public static class LatticeExtensions
                         shouldReopen = true;
                         break;
                     }
+                    catch (ScanPageStalledException stall)
+                    {
+                        // See ScanKeysAsyncCore for the reasoning, including why
+                        // an unchanged continuation position neither refuses the
+                        // resume nor lengthens its backoff.
+                        if (stallAttempt < stallBudget && stallTotal < DefaultScanStallResumeCeiling)
+                        {
+                            stallAttempt++;
+                            stallTotal++;
+                            stallDelayMs = ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallTotal);
+                            RecordScanStallOutcome(stall, StallOutcomeResumed);
+                            shouldReopen = true;
+                            break;
+                        }
+
+                        RecordScanStallTermination(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? StallOutcomeCeilingExhausted
+                                : StallOutcomeBudgetExhausted,
+                            lattice,
+                            lastKey ?? startInclusive,
+                            lastKey is not null,
+                            reverse);
+                        throw;
+                    }
 
                     if (!hasNext)
                     {
@@ -478,7 +1093,14 @@ public static class LatticeExtensions
                         break;
                     }
 
+                    // Progress replenishes the consecutive stall budget only;
+                    // stallTotal stays monotonic because it feeds both the
+                    // ceiling and the backoff, and `attempt` is deliberately not
+                    // reset and is not an unfixed instance of this defect (issue
+                    // 2539). See ScanKeysAsyncCore's yield site for all three.
+                    stallAttempt = 0;
                     lastKey = enumerator.Current.Key;
+                    NoteScanProgress(lattice, enumerator.Current.Key);
                     yield return enumerator.Current;
                 }
             }
@@ -494,7 +1116,8 @@ public static class LatticeExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ComputeReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ComputeReconnectDelayMs(attempt);
+                stallDelayMs = 0;
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
@@ -739,6 +1362,33 @@ public static class LatticeExtensions
                         shouldReopen = true;
                         break;
                     }
+
+                    // Deliberately NOT extended to ScanPageStalledException, unlike
+                    // the four resilient read scans above (issue 2398). Three
+                    // reasons, and the first is decisive on its own:
+                    //
+                    // 1. There is no continuation token to resume from. A reopen
+                    //    here re-issues OpenDeleteRangeCursorAsync with the
+                    //    ORIGINAL startInclusive/endExclusive; only `total`, a
+                    //    counter, is carried across. That is safe for an aborted
+                    //    enumerator because the keys the lost cursor tombstoned are
+                    //    already gone, so the reopened cursor lands on the first
+                    //    surviving key - but it means a stall retry is a restart
+                    //    from the beginning of the surviving range, not a resume.
+                    //    The rule the read scans obey is that a scan which can
+                    //    resume from a continuation token may retry and one that
+                    //    would restart must not; this loop is in the second class.
+                    // 2. The exception's own retriability warrant is scoped to
+                    //    reads: a page fill is a pure read of a key range, so
+                    //    nothing is half-applied when it is abandoned. A delete
+                    //    step is not that. Tombstones are idempotent, so a retry is
+                    //    probably harmless - but "probably harmless" is not the bar
+                    //    for silently swallowing a timeout in a destructive drain.
+                    // 3. A stall here is reachable (DeleteRangeBoundedAsync is
+                    //    stall-guarded), so leaving it to propagate is a live,
+                    //    intended behaviour and not an untested corner: the caller
+                    //    sees the stall and decides, which is what a destructive
+                    //    operation should do.
 
                     total += progress.DeletedThisStep;
                     if (progress.IsComplete)

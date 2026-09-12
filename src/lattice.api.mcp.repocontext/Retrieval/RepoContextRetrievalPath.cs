@@ -78,6 +78,40 @@ public static class RepoContextRetrievalPath
     public const string KeywordIndexDegraded = "keyword.index_degraded";
 
     /// <summary>
+    /// Wire value <c>"keyword.exact_fallback_suppressed"</c>: an embedding provider is
+    /// bound and the approximate plane is not serving, so the exact scan would
+    /// normally answer with complete recall - but a gather over this repository has
+    /// already stalled, so the exact fallback is <b>deliberately suppressed</b> and
+    /// keyword recall serves in its place.
+    /// <para>
+    /// <b>Why it is its own value.</b> Until issue #2720 this state reported as
+    /// <see cref="KeywordVectorPlaneUnavailable"/>, which says the plane holds
+    /// nothing to serve - true of an empty, replaying, or re-deriving plane, and
+    /// misleading here, because the plane's contents are not what stopped the query.
+    /// A guard did, and it is holding a fallback shut that would otherwise answer.
+    /// The two have opposite remedies: an unavailable plane needs the build to
+    /// finish, whereas a suppressed fallback needs the contention that stalled the
+    /// gather to clear, and will retry on its own through the breaker's half-open
+    /// probe whether or not the build ever completes.
+    /// </para>
+    /// <para>
+    /// <b>Only a suppression that can outlive its cause reports here.</b> The
+    /// corpus-size budget also declines a gather, and deliberately keeps reporting
+    /// <see cref="KeywordVectorPlaneUnavailable"/>: it is re-evaluated from a live
+    /// count on every query, so it cannot persist once the count moves, and it names
+    /// no state an operator could act on. The breaker can persist, which is the
+    /// defect issue #2720 was filed for, so it is the one that earns a name.
+    /// </para>
+    /// <para>
+    /// This is a real capability loss and readiness folds it exactly as it folds
+    /// <see cref="KeywordVectorPlaneUnavailable"/> and
+    /// <see cref="KeywordIndexDegraded"/>, so the added resolution changes what an
+    /// operator can see without changing whether the host reports ready.
+    /// </para>
+    /// </summary>
+    public const string KeywordExactFallbackSuppressed = "keyword.exact_fallback_suppressed";
+
+    /// <summary>
     /// Re-validates a semantic-path declaration from a host-bound
     /// <c>IRepoContextSemanticIndex</c> against this local vocabulary, so an index
     /// implementation can never put arbitrary text on a response.

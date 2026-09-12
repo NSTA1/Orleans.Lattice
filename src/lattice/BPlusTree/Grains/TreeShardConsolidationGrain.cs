@@ -93,6 +93,9 @@ internal sealed class TreeShardConsolidationGrain(
     /// <inheritdoc />
     protected override string LogContext => $"tree {TreeId} donor {DonorShardIndexFromKey}";
 
+    /// <inheritdoc />
+    protected override string MetricsTreeId => TreeId;
+
     /// <summary>
     /// Clock used for progress timestamps. Defaults to
     /// <see cref="TimeProvider.System"/>; unit tests substitute a controllable

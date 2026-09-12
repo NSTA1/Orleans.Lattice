@@ -100,6 +100,15 @@ internal static class SystemLatticeScanExtensions
                         break;
                     }
 
+                    // No ScanPageStalledException arm here, deliberately. This
+                    // wrapper mirrors the public wrappers' EnumerationAborted
+                    // recovery only - the class doc scopes the mirror to exactly
+                    // that - and it currently has no callers, so it is not on any
+                    // path a stall can reach. Adding a fourth copy of the resume
+                    // loop would be untestable through a real caller and would
+                    // widen a fix whose whole point is the loops that do run. Add
+                    // the arm, and coverage for it, when this surface acquires a
+                    // caller that scans a system tree for long enough to stall.
                     if (!hasNext)
                     {
                         completedNormally = true;

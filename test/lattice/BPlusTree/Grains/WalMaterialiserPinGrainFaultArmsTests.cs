@@ -321,6 +321,18 @@ public sealed class WalMaterialiserPinGrainFaultArmsTests
         // The advance must survive the failed write and land on the retry -
         // this is what makes swallowing the fault safe rather than lossy.
         h.Store.FailWrites = false;
+
+        // Timing the failed write is deliberate grain behaviour (a failed write is
+        // timed too, because it consumed the same grain time and the retry should
+        // back off equally), so the retry tick is subject to the amortisation window
+        // like any other. A failed in-memory write usually measures zero against
+        // Environment.TickCount64's ~15ms resolution, but not reliably: on a cold or
+        // loaded process it straddles a tick boundary, measures >=15ms, arms a 9x
+        // window, and the immediate retry below defers without writing - correct
+        // behaviour that this test would misread as a lost advance. Retire the window
+        // explicitly so what is measured here is re-arming, not clock granularity.
+        SetField(h.Grain, "_lastWriteCompletedTickMs", Environment.TickCount64 - 100_000L);
+
         await h.FlushTick!(CancellationToken.None);
 
         Assert.That(

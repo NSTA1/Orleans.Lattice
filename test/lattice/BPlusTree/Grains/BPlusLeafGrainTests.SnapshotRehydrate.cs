@@ -110,7 +110,7 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Activation_ignores_snapshot_older_than_persisted_checkpoint()
+    public async Task Activation_hydrates_empty_cache_from_snapshot_older_than_persisted_checkpoint()
     {
         var blob = NewSnapshotBlob(offset: 5, ("a", new byte[] { 1 }));
         var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
@@ -120,21 +120,32 @@ public partial class BPlusLeafGrainTests
 
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
-        // The snapshot is older than the persisted checkpoint, so the
-        // rehydrate path declines and the cache stays empty. The
-        // persisted checkpoint is untouched (the activation-time
-        // coherence override drives replay from -1 locally without
-        // mutating the persisted slot).
-        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(20L));
-        Assert.That(grain.EntriesForTest, Is.Empty);
+        // Issue #2278. The cache is empty on a fresh activation, so there is no
+        // live cache for the decline to protect. Declining here would not avoid
+        // a cache replace - it would force the whole readable WAL window to be
+        // replayed instead of loading a blob that already covers a prefix of it.
+        // The accept path lowers the checkpoint to exactly what the reloaded
+        // cache holds, and the tail replay then covers (5, head].
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5L),
+                "the checkpoint must drop to the snapshot offset, because the reloaded cache "
+                + "holds only the snapshot's rows and the tail replay resumes from there");
+            Assert.That(grain.EntriesForTest.Keys, Is.EquivalentTo(new[] { "a" }));
+        });
     }
 
     [Test]
-    public async Task Activation_ignores_snapshot_at_equal_offset()
+    public async Task Activation_hydrates_empty_cache_from_snapshot_at_equal_offset()
     {
-        // Equal offset == "we have already absorbed everything the
-        // snapshot contains via the WAL"; ignore to avoid the
-        // pointless cache replace.
+        // Issue #2278, and this is the converged steady state rather than an
+        // edge case: a capture stamps the checkpoint it covers, so offset ==
+        // checkpoint is exactly where a healthy leaf sits. Declining it left the
+        // cache empty, which is precisely the condition step 0.5 of
+        // OnActivateAsync reads as "cold" - so the leaf replayed its entire WAL
+        // window on every single activation and re-entered the same state, which
+        // is why the deployed cold total ran to 2.04 per distinct leaf rather
+        // than the 1.00 of a one-time first activation.
         var blob = NewSnapshotBlob(offset: 30, ("a", new byte[] { 1 }));
         var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
             preloadedSnapshot: blob,
@@ -143,12 +154,46 @@ public partial class BPlusLeafGrainTests
 
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
-        // Snapshot is ignored AND the cache is empty - but the
-        // activation-time coherence reset is a local replay-start
-        // override only, not a persistent mutation, so the persisted
-        // checkpoint slot retains its pre-activation value.
-        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(30L));
-        Assert.That(grain.EntriesForTest, Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(30L),
+                "an equal-offset snapshot moves the checkpoint nowhere");
+            Assert.That(grain.EntriesForTest.Keys, Is.EquivalentTo(new[] { "a" }),
+                "but it MUST fill the empty cache, or the activation is cold");
+        });
+    }
+
+    [Test]
+    public async Task Activation_still_ignores_snapshot_at_equal_offset_when_the_cache_is_populated()
+    {
+        // The control for the two tests above, and the preservation of issue
+        // #919's original intent. The decline exists to avoid a POINTLESS CACHE
+        // REPLACE, so it is still exactly right when there is a populated cache
+        // to replace - an upstream seam such as a sibling-at-birth attach having
+        // already supplied a coherent anchor. Without this test, widening the
+        // accept condition would look indistinguishable from deleting the
+        // decline outright.
+        var blob = NewSnapshotBlob(offset: 30, ("fromSnapshot", new byte[] { 1 }));
+        var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
+            preloadedSnapshot: blob,
+            persistedCheckpoint: 30,
+            walHead: 30);
+
+        grain.CacheForTest.StoreRow("fromCache", new LwwValue<byte[]>
+        {
+            Value = [9],
+            Timestamp = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+        });
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(30L));
+            Assert.That(grain.EntriesForTest.Keys, Is.EquivalentTo(new[] { "fromCache" }),
+                "the populated cache must survive: the snapshot is genuinely redundant here, "
+                + "and replacing it would be the pointless work #919 removed");
+        });
     }
 
     [Test]

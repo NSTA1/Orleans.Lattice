@@ -296,15 +296,42 @@ public partial class BPlusLeafGrainTests
         Assert.That(() => projection.Apply(bogus), Throws.TypeOf<ArgumentOutOfRangeException>());
     }
 
+    /// <summary>
+    /// A leaf that has never checkpointed must report the "nothing applied"
+    /// sentinel, not <c>0</c> (issue #2703).
+    /// <para>
+    /// This assertion is inverted from its original form, which required
+    /// <c>0</c>. That was not a contract - it was the type default of
+    /// <c>LeafNodeState.ProjectionCheckpointOffset</c>, which has no
+    /// initializer, observed and then written down as intended behaviour.
+    /// <see cref="ILeafProjection.GetCheckpointOffsetAsync"/> documents its own
+    /// meaning as "the highest WAL offset whose mutation has been durably
+    /// applied", with "a reactivating leaf resumes replay from
+    /// <c>offset + 1</c>". Under the old value a never-checkpointed leaf
+    /// therefore resumed from <c>1</c> and <b>skipped WAL offset 0 entirely</b>,
+    /// which is the defect #2703 describes, not a behaviour worth preserving.
+    /// </para>
+    /// <para>
+    /// So this is a corrected spec, not a test bent to fit new code: the old
+    /// form asserted the defect, and was structurally incapable of failing on
+    /// it. Every other partition has always reported the sentinel here; this
+    /// only brings partition 0 - which lives in the legacy scalar slot - into
+    /// line with them.
+    /// </para>
+    /// </summary>
     [Test]
-    public async Task GetCheckpointOffset_defaults_to_zero()
+    public async Task GetCheckpointOffset_defaults_to_the_nothing_applied_sentinel()
     {
         var grain = CreateGrain();
         var projection = AsProjection(grain);
 
         var offset = await projection.GetCheckpointOffsetAsync();
 
-        Assert.That(offset, Is.Zero);
+        Assert.That(offset, Is.EqualTo(-1L),
+            "a leaf that has never checkpointed must report the nothing-applied "
+            + "sentinel so replay resumes from offset 0; reporting the type "
+            + "default 0 resumes from 1 and silently skips the first WAL entry "
+            + "(issue #2703)");
     }
 
     [Test]
@@ -411,16 +438,26 @@ public partial class BPlusLeafGrainTests
         var projection = AsProjection(grain);
 
         // Advances under the threshold accumulate in memory.
+        //
+        // The pending-entry count is measured against the persisted checkpoint,
+        // which for a never-checkpointed leaf is now the "nothing applied"
+        // sentinel -1 rather than the type default 0 (issue #2703). Offsets
+        // 0..3 really are four entries, so the arithmetic here is now honest;
+        // previously it undercounted by one, because treating 0 as persisted
+        // silently asserted that WAL offset 0 had already been applied. That
+        // made the leaf flush one entry later than MaterialiserCheckpointEntries
+        // configured. The threshold semantics are unchanged - only the baseline
+        // they are measured from is corrected.
         await projection.SetCheckpointOffsetAsync(1);
         await projection.SetCheckpointOffsetAsync(2);
-        await projection.SetCheckpointOffsetAsync(4);
+        await projection.SetCheckpointOffsetAsync(3);
         Assert.That(state.WriteCount, Is.Zero);
         Assert.That(state.State.ProjectionCheckpointOffset, Is.Zero);
 
-        // Crossing the threshold (5 entries pending) flushes durably.
-        await projection.SetCheckpointOffsetAsync(5);
+        // Crossing the threshold (5 entries pending: offsets 0..4) flushes durably.
+        await projection.SetCheckpointOffsetAsync(4);
         Assert.That(state.WriteCount, Is.EqualTo(1));
-        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5));
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(4));
     }
 
     [Test]

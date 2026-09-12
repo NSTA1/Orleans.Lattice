@@ -159,7 +159,11 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<EmbeddingRepoContextVectorIngestor>>(),
                 sp.GetService<IEmbeddingProvider>()));
         services.TryAddSingleton<RepoContextVectorCache>();
-        services.TryAddSingleton<RepoContextVectorPlaneReDeriver>();
+        services.TryAddSingleton(sp => new RepoContextVectorPlaneReDeriver(
+            sp.GetRequiredService<IGrainFactory>(),
+            sp.GetRequiredService<ILogger<RepoContextVectorPlaneReDeriver>>(),
+            sp.GetRequiredService<TimeProvider>()));
+        services.TryAddSingleton<RepoContextCoverageDigestStore>();
         services.TryAddSingleton<RepoContextVectorWriter>();
         services.TryAddSingleton<RepoContextEmbeddingGapScanner>();
 
@@ -167,13 +171,23 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // so a restart reloads it instead of re-scanning every stored vector, and its
         // query cost is sub-linear in the corpus rather than proportional to it. The
         // brute-force exact scan stays registered either way - it answers while an
-        // index is still building, and it remains the correctness oracle the recall
-        // measurements are taken against. A host selects between them with
+        // index is still building, unless a gather over that repository has already
+        // stalled, in which case the breaker below withholds it and the response
+        // reports keyword.exact_fallback_suppressed rather than implying a scan that
+        // is not running (issue #2720) - and it remains the correctness oracle the
+        // recall measurements are taken against. A host selects between them with
         // RepoContextIndexingOptions.SemanticRetrieval; whichever answers, the
         // response says which guarantee it carries through its retrieval path.
         services.TryAddSingleton<ExactKnnSemanticIndex>();
         services.TryAddSingleton<RepoContextExactScanBudget>();
-        services.TryAddSingleton<RepoContextExactScanBreaker>();
+
+        // Constructed rather than resolved by convention because the breaker's
+        // half-open probe is timed, and the container's constructor selection does
+        // not fill optional parameters - a plain type registration would leave the
+        // breaker on the system clock, which is precisely the dependency that made
+        // the recovery path untestable before issue #2362.
+        services.TryAddSingleton(
+            sp => new RepoContextExactScanBreaker(sp.GetRequiredService<TimeProvider>()));
 
         // Both guards above suppress work, and neither could be verified from a
         // deployed container before this: the budget logged only when it skipped,
@@ -183,11 +197,42 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // information-level summary per repository.
         services.TryAddSingleton(
             sp => new RepoContextRetrievalGuardReporter(sp.GetRequiredService<TimeProvider>()));
+
+        // The retrieval latency reporter (issue #2624). Every retrieval tool takes it
+        // as a required dependency rather than an optional one, so a host that answers
+        // queries without measuring them is not constructible - an unmeasured box
+        // cannot masquerade as an idle one.
+        services.TryAddSingleton<RepoContextRetrievalLatencyReporter>();
         services.TryAddSingleton<RepoContextAnnOptions>();
         services.TryAddSingleton<IRepoContextAnnBackingFactory, LatticeRepoContextAnnBackingFactory>();
         services.TryAddSingleton<RepoContextAnnIndexRegistry>();
         services.TryAddSingleton<IRepoContextAnnIndex>(
             sp => sp.GetRequiredService<RepoContextAnnIndexRegistry>());
+
+        // A denied RANGE read returns a clean, successful, EMPTY result rather than
+        // throwing, so an approximate-index build whose corpus was refused reached
+        // Ready holding nothing and banked a converged empty index - durably
+        // indistinguishable from a repository that genuinely had nothing to index.
+        // Two full deployment gates on the repocontext-reliability line ended at an
+        // empty corpus with no series anywhere able to say whether authorization
+        // caused it. The probe classifies the emptiness against the gate and the
+        // reporter turns the answer into a metric, because prose that contradicts a
+        // metric loses whenever only one of the two is being watched. Both are
+        // singletons: the reporter owns a Meter, so a per-activation instance would
+        // leak one per repository. See issue #2426.
+        services.TryAddSingleton<IRepoContextCorpusGateProbe, LatticeRepoContextCorpusGateProbe>();
+        services.TryAddSingleton<RepoContextAnnBuildCorpusReporter>();
+
+        // The corpus reporter above fires only when a build reaches Ready, as the
+        // partitioning and sweep reporters fire only at their own terminal moments,
+        // so between an armed sweep and a Ready build the plane emitted no series at
+        // all. A build consuming nothing and a build that never ran were therefore
+        // the same observation - every arm primed to zero - which is precisely the
+        // reading the acceptance rig produced and could not interpret. This reporter
+        // counts every completed build step, so the total separates them. Singleton
+        // for the same reason as the corpus reporter: it owns a Meter, and a
+        // per-activation instance would leak one per repository. See issue #2651.
+        services.TryAddSingleton<RepoContextAnnBuildSliceReporter>();
 
         // The build scheduler and its startup sweep. The index build is what makes
         // queries fast, so arming it from a query made the acceleration reachable
@@ -224,7 +269,8 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                     sp.GetRequiredService<RepoContextExactScanBudget>(),
                     sp.GetRequiredService<RepoContextExactScanBreaker>(),
                     sp.GetRequiredService<RepoContextRetrievalGuardReporter>(),
-                    sp.GetRequiredService<ILogger<AnnRepoContextSemanticIndex>>());
+                    sp.GetRequiredService<ILogger<AnnRepoContextSemanticIndex>>(),
+                    sp.GetRequiredService<RepoContextRetrievalReadinessState>());
         });
 
         // The shared vector-plane readiness signal. It is fed at the single seam every
@@ -242,6 +288,7 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetRequiredService<RepoContextStore>(),
                 sp.GetRequiredService<TimeProvider>(),
                 sp.GetRequiredService<ILogger<RepoContextSearchService>>(),
+                sp.GetRequiredService<RepoContextRetrievalLatencyReporter>(),
                 sp.GetService<IEmbeddingProvider>(),
                 sp.GetRequiredService<RepoContextRetrievalReadinessState>()));
 
@@ -333,6 +380,23 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.AddOptions<RepoContextTtlOptions>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<RepoContextTtlOptions>, RepoContextTtlOptionsValidator>());
+
+        // The durable-memory archive. Agent memory is the one plane of this store that
+        // does not rebuild from anything, and it cannot be given its own volume (the
+        // write-ahead log has one root per provider and every B+ tree grain persists
+        // through one storage provider), so the only way to put it beyond the reach of
+        // a volume wipe is to copy it out. Registered only when a directory is
+        // configured, so a host that does not opt in gains no background work.
+        var archiveOptions = RepoContextMemoryArchiveOptions.FromEnvironment();
+        services.TryAddSingleton(archiveOptions);
+        services.TryAddSingleton(sp => new RepoContextMemoryArchive(
+            sp.GetRequiredService<RepoContextMemoryArchiveOptions>()));
+
+        if (archiveOptions.IsEnabled)
+        {
+            services.TryAddSingleton<RepoContextMemoryRestoreReporter>();
+            services.AddHostedService<RepoContextMemoryArchiveService>();
+        }
 
         return services;
     }

@@ -165,6 +165,17 @@ public static class LatticeMetrics
     public const string TagLeaf = "leaf";
 
     /// <summary>
+    /// Tag key for the Orleans grain type of a call's target, on the grain-call
+    /// observation instruments (<see cref="GrainCallOutstandingDepth"/> and
+    /// <see cref="GrainCallDuration"/>). The value is the runtime grain type
+    /// name (<c>bplusleaf</c>, <c>latticeregistry</c>, and so on), <b>not</b> a
+    /// per-activation key, so cardinality is bounded by the number of grain
+    /// classes the deployed application defines and does not grow with traffic
+    /// or with the size of a tree.
+    /// </summary>
+    public const string TagGrainType = "grain_type";
+
+    /// <summary>
     /// Tag key for the activation temperature of an activation-time leaf
     /// materialiser replay on <see cref="LeafActivationReplays"/>: either
     /// <see cref="ActivationTemperatureCold"/> or
@@ -232,6 +243,48 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> ActivationFailureCanceledAwaitingPermit =
         new(TagReason, "canceled_awaiting_permit");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>canceled_resolving_options</c> on
+    /// <see cref="LeafActivationFailures"/>: the activation was cancelled while
+    /// resolving the tree's options, which happens BEFORE the replay permit is
+    /// requested. It never reached the permit queue and the gate was never
+    /// contended on its behalf.
+    /// <para>
+    /// Split out of <see cref="ActivationFailureCanceledAwaitingPermit"/> for
+    /// issue #2770, because that value was reported for this arm too and made
+    /// the series unreadable in the one situation it exists for. Options
+    /// resolution calls <c>ILatticeRegistry.GetEntryAsync</c>, a non-reentrant
+    /// cluster singleton every cold activation queues behind, so under a cold
+    /// start this arm can be the whole population while the replay gate sits
+    /// completely idle - and the folded series reported that as
+    /// "queued for a replay permit", indicting the gate.
+    /// </para>
+    /// <para>
+    /// The reading to take from the split: this value rising means activations
+    /// are serialised behind a shared dependency, whereas
+    /// <see cref="ActivationFailureCanceledAwaitingPermit"/> rising means the
+    /// replay gate itself is genuinely saturated. Those call for opposite
+    /// remedies, which is why one value could not carry both.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ActivationFailureCanceledResolvingOptions =
+        new(TagReason, "canceled_resolving_options");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>canceled_rehydrating_snapshot</c> on
+    /// <see cref="LeafActivationFailures"/>: the activation was cancelled in
+    /// the snapshot rehydrate, which runs before replay admission is entered.
+    /// <para>
+    /// Added by issue #2770. This arm was previously not counted AT ALL: the
+    /// rehydrate ran outside the observed region, so a cancellation there
+    /// escaped without incrementing <see cref="LeafActivationFailures"/> under
+    /// any value. An arm that is invisible is worse than one that is
+    /// mislabelled, because a mislabelled arm at least shows up in the total.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ActivationFailureCanceledRehydratingSnapshot =
+        new(TagReason, "canceled_rehydrating_snapshot");
 
     /// <summary><see cref="TagReason"/> = <c>faulted</c> on <see cref="LeafActivationFailures"/>.</summary>
     public static readonly KeyValuePair<string, object?> ActivationFailureFaulted = new(TagReason, "faulted");
@@ -601,7 +654,25 @@ public static class LatticeMetrics
     /// <summary>Counter of leaf-level splits (leaf capacity exceeded, sibling allocated).</summary>
     public static readonly Counter<long> LeafSplits =
         Meter.CreateCounter<long>("orleans.lattice.leaf.splits", unit: "{split}",
-            description: "Leaf-node splits triggered by MaxLeafKeys overflow.");
+            description: "Leaf-node splits triggered by MaxLeafKeys or MaxLeafBytes overflow.");
+
+    /// <summary>
+    /// Counter of leaves observed over the <see cref="BPlusTree.LatticeOptions.MaxLeafBytes"/>
+    /// byte bound, tagged with <see cref="TagOutcome"/> = <c>split</c> when the
+    /// leaf was divided back under the bound, or <c>irreducible</c> when it
+    /// could not be, because a split pivots on a median key and a leaf holding
+    /// a single oversized entry has no median to pivot on.
+    /// <para>
+    /// The <c>irreducible</c> series is the one to alert on. It names the only
+    /// case this bound cannot repair, and such a leaf stays uncapturable, which
+    /// keeps its tree's WAL trim floor pinned at zero. The remedy is at the
+    /// application layer (store the oversized value across several keys), so
+    /// the condition has to be visible rather than silently tolerated.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafByteOverflows =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.byte.overflow", unit: "{leaf}",
+            description: "Leaves observed over the MaxLeafBytes bound, by whether they could be split.");
 
     /// <summary>
     /// Histogram of per-step latency on the leaf commit path
@@ -717,6 +788,27 @@ public static class LatticeMetrics
     public static readonly Histogram<int> LeafAccessModelLeaves =
         Meter.CreateHistogram<int>("orleans.lattice.leaf_access.model.leaves", unit: "{leaf}",
             description: "Leaves resident in a shard root's leaf-access histogram at persist time.");
+
+    /// <summary>
+    /// Counter of shard-root coalescing flush loops that suspended themselves after
+    /// hitting the consecutive-failure ceiling. Tagged by <see cref="TagKind"/> with
+    /// the loop that gave up (<c>dirty-leaves</c> or <c>leaf-access</c>).
+    /// <para>
+    /// Any non-zero value means a shard root is persistently unable to write its own
+    /// state - most commonly a stale ETag that no longer matches the stored row, which
+    /// no amount of retrying resolves. Before this counter existed the leaf-access loop
+    /// reported such a failure only at <c>Debug</c>, so a shard root could fail every
+    /// flush indefinitely with nothing visible above the storage provider.
+    /// </para>
+    /// <para>
+    /// Alert on any increase. Suspension bounds the wasted writes, it does not repair
+    /// the shard: the loop stays suspended until the activation is collected and a
+    /// later one re-reads its state.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardRootFlushRetriesSuspended =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.flush.retries_suspended", unit: "{suspension}",
+            description: "Shard-root coalescing flush loops suspended after repeated consecutive failures.");
 
     // --- Cache instruments (LeafCacheGrain) --------------------------------------
 
@@ -920,6 +1012,33 @@ public static class LatticeMetrics
             description: "Long-running coordinator-grain completions (snapshot, resize, reshard, merge, compaction).");
 
     /// <summary>
+    /// Counter incremented once per coordinator phase-timer tick whose phase step
+    /// threw. The base coordinator swallows that exception by design so the timer
+    /// survives, which means the tick made no progress and the next tick starts the
+    /// same step over; without this counter that outcome is visible only as a log
+    /// line (issue #2705). Tagged with <see cref="TagKind"/> = the coordinator's
+    /// keepalive reminder name (<c>snapshot-keepalive</c>, <c>reshard-keepalive</c>,
+    /// <c>repo-context-ann-index-build-keepalive</c>, ...), <see cref="TagTree"/> =
+    /// the tree or repository the coordinator serves, and the tenant label.
+    /// <para>
+    /// <b>Zero-primed</b> once per activation, when the coordinator first arms its
+    /// phase timer. A <see cref="Counter{T}"/> exports no series until its first
+    /// <c>Add</c>, so an unprimed instrument answers "has this coordinator failed a
+    /// tick?" with silence, which reads identically to a dead subsystem or a broken
+    /// instrument. Priming at the arm point makes the population exactly the
+    /// coordinators that are actually ticking, so <c>0</c> on a primed series is a
+    /// measurement: this coordinator ran and no tick threw. It does <b>not</b> mean
+    /// the coordinator is making progress - a tick that returns without advancing
+    /// its phase machine is a success here - and the absence of a series still
+    /// means only that no coordinator of that kind has armed a timer in this
+    /// process.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> CoordinatorPhaseTickFailures =
+        Meter.CreateCounter<long>("orleans.lattice.coordinator.phase_tick.failures", unit: "{failure}",
+            description: "Coordinator phase-timer ticks whose phase step threw and was swallowed, tagged by coordinator kind and tree. Zero-primed when a coordinator arms its phase timer, so zero on a live series is a reading rather than an absence.");
+
+    /// <summary>
     /// Counter incremented once per tree-lifecycle transition. Tagged with
     /// <see cref="TagKind"/> = <c>deleted</c>, <c>recovered</c>, or <c>purged</c>.
     /// </summary>
@@ -1040,16 +1159,33 @@ public static class LatticeMetrics
             description: "WAL entries consumed by the zero-observable-writes snapshot-leaf replay engine.");
 
     /// <summary>
-    /// Up-down counter tracking the number of live WAL retention pins
-    /// registered by snapshot cursors against
-    /// <see cref="IWalCursorRegistry"/>. Incremented on
-    /// <c>OpenSnapshotKeyCursorAsync</c> / <c>OpenSnapshotEntryCursorAsync</c>
-    /// after a successful pin report and decremented on close /
-    /// idle-TTL eviction. Tagged with <see cref="TagTree"/>.
+    /// Name of the observable gauge reporting the number of live WAL retention
+    /// pins registered by snapshot cursors against
+    /// <see cref="IWalCursorRegistry"/>, tagged with <see cref="TagTree"/> and
+    /// the tenant label. Published by
+    /// <see cref="BPlusTree.Grains.SnapshotPinCensus"/>, which derives the value
+    /// from the registry's live pin set for the tree.
+    /// <para>
+    /// This was an <c>UpDownCounter</c> until issue #2700. A counter is
+    /// process-lifetime state, and the <c>+1</c> / <c>-1</c> were guarded by a
+    /// per-<i>activation</i> boolean on the cursor grain, so the increment was
+    /// repeatable across activations while the decrement was not guaranteed:
+    /// an activation collected, migrated, or lost with its silo while holding a
+    /// pin never emitted its compensating <c>-1</c> and the series ratcheted
+    /// permanently upward - which made a genuine pin leak indistinguishable
+    /// from accumulated drift, the one question the instrument exists to
+    /// answer. An observable gauge reporting present truth has no compensating
+    /// write to lose, so a deployment already carrying drift returns to
+    /// reporting the truth on its own after upgrade.
+    /// </para>
+    /// <para>
+    /// The tree set is seeded by the WAL GC scheduler, so a tree that has never
+    /// opened a snapshot cursor still exports an explicit <c>0</c> rather than
+    /// no series at all - the same priming convention issue #2694 established
+    /// for the WAL-retention counters, and for the same reason.
+    /// </para>
     /// </summary>
-    public static readonly UpDownCounter<long> SnapshotPinCount =
-        Meter.CreateUpDownCounter<long>("orleans.lattice.snapshot.pins", unit: "{pin}",
-            description: "Live WAL retention pins held by zero-observable-writes snapshot cursors.");
+    public const string SnapshotPinsGaugeName = "orleans.lattice.snapshot.pins";
 
     // --- WAL garbage-collector instruments ----------------------------------
 
@@ -1068,7 +1204,9 @@ public static class LatticeMetrics
     /// Counter of WAL garbage-collection passes the per-silo scheduler drove for a
     /// tree, tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>
     /// (<see cref="OutcomeReclaimed"/> when the pass trimmed at least one entry,
-    /// <see cref="OutcomeIdle"/> when it found nothing above the trim floor, and
+    /// <see cref="OutcomeBlocked"/> when it reclaimed nothing because an unusable
+    /// durable materialiser pin disabled the cursor branch,
+    /// <see cref="OutcomeIdle"/> when it reclaimed nothing and was not blocked, and
     /// <see cref="OutcomeFailed"/> when the pass threw). Pairing the reclaimed rate
     /// against the total pass rate gives the per-tree reclaim rate, and the failed
     /// rate isolates a wedged tree without needing to read the scheduler's logs.
@@ -1148,11 +1286,71 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.offset_floor_unavailable", unit: "{pass}",
             description: "WAL GC passes that could not compute the durable offset floor because the pin store was unreachable, tagged by tree.");
 
+    /// <summary>
+    /// Counter of WAL garbage-collection passes for which no retained-byte
+    /// backlog could be sampled, tagged with <see cref="TagTree"/> and with
+    /// <see cref="TagReason"/> = <c>policy_disabled</c> or
+    /// <c>provider_unsupported</c>. This is the positive "not measured" signal
+    /// for <see cref="WalGcBacklogBytes"/> (issue #2694).
+    /// <para>
+    /// <see cref="WalGcBacklogBytes"/> records only when the pass actually
+    /// sampled bytes, so on a host with byte accounting turned off it publishes
+    /// <b>no series at all</b> - a shape a reader cannot distinguish from a dead
+    /// subsystem, a broken instrument, or a genuine zero backlog without opening
+    /// the source. That ambiguity is the defect: the prior contract asked the
+    /// reader to infer "not measured" from the <i>absence</i> of one series
+    /// beside the presence of another (<see cref="WalGcPasses"/>), which is an
+    /// inference from silence and is exactly what produced the wrong,
+    /// publicly-retracted diagnosis in issue #2692.
+    /// </para>
+    /// <para>
+    /// This counter states it instead, and separates the two causes a reader
+    /// would act on differently: <c>policy_disabled</c> means
+    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> is unset and setting it
+    /// turns byte accounting on, whereas <c>provider_unsupported</c> means the
+    /// policy <i>is</i> enabled but the configured <see cref="IWalStorageProvider"/>
+    /// returned no retained byte size, so the remedy is a different provider.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcBacklogBytesUnavailable =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.backlog_bytes_unavailable", unit: "{pass}",
+            description: "WAL GC passes that sampled no retained-byte backlog, tagged by tree and by reason (policy_disabled/provider_unsupported).");
+
+    /// <summary><see cref="TagReason"/> = <c>policy_disabled</c> (byte accounting is off because <see cref="LatticeOptions.WalMaxRetainedBytes"/> is unset).</summary>
+    public static readonly KeyValuePair<string, object?> ReasonBytePolicyDisabled = new(TagReason, "policy_disabled");
+
+    /// <summary><see cref="TagReason"/> = <c>provider_unsupported</c> (the byte-pressure policy is enabled but the WAL storage provider reports no retained byte size).</summary>
+    public static readonly KeyValuePair<string, object?> ReasonByteProviderUnsupported = new(TagReason, "provider_unsupported");
+
     /// <summary><see cref="TagOutcome"/> = <c>reclaimed</c> (a WAL GC pass that trimmed at least one entry).</summary>
     public static readonly KeyValuePair<string, object?> OutcomeReclaimed = new(TagOutcome, "reclaimed");
 
-    /// <summary><see cref="TagOutcome"/> = <c>idle</c> (a WAL GC pass that found nothing above the trim floor).</summary>
+    /// <summary><see cref="TagOutcome"/> = <c>idle</c> (a WAL GC pass that reclaimed nothing and was <b>not</b> blocked - it had a usable cursor floor, or the tree has no consumer at all, and found nothing above the trim floor). Before <see cref="OutcomeBlocked"/> existed this value also absorbed blocked passes, which is what let a stranded tree and a quiet one present identically (issue #2702).</summary>
     public static readonly KeyValuePair<string, object?> OutcomeIdle = new(TagOutcome, "idle");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>blocked</c> (a WAL GC pass that reclaimed
+    /// nothing because the consumer-cursor branch was disabled by an unusable
+    /// durable materialiser pin - see
+    /// <see cref="WalGcCursorFloorState.BlockedByUnusablePin"/>).
+    /// <para>
+    /// This is a defect state, not a quiet one: the tree cannot reclaim at all
+    /// and its WAL grows without bound. It is separated from
+    /// <see cref="OutcomeIdle"/> because the two demand opposite responses, and
+    /// because the same predicate drives the scheduler's backoff - so before
+    /// this value existed a blocked tree was scheduled <i>least</i> often
+    /// precisely when it needed attention most.
+    /// </para>
+    /// <para>
+    /// The series is primed at zero for every tree the scheduler collects, so
+    /// its absence means "this silo is not reporting" and a flat zero means
+    /// "measured, never blocked". That distinction is load-bearing: a repair
+    /// that unblocks a tree makes the counter stop advancing, and without
+    /// priming the series would instead <i>vanish</i> at exactly the moment a
+    /// reader needs to confirm the tree is healthy rather than silent.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeBlocked = new(TagOutcome, "blocked");
 
     /// <summary><see cref="TagOutcome"/> = <c>failed</c> (a WAL GC pass that threw).</summary>
     public static readonly KeyValuePair<string, object?> OutcomeFailed = new(TagOutcome, "failed");
@@ -1215,6 +1413,43 @@ public static class LatticeMetrics
             description: "Coalescible leaf-materialiser pin reports shed under durable pin-store pressure, tagged by tree.");
 
     /// <summary>
+    /// Counter of leaf-materialiser pin merges classified by what the merge
+    /// actually moved, tagged with <see cref="TagTree"/> and
+    /// <see cref="TagOutcome"/> = <c>offset</c>, <c>frontier_only</c>, or
+    /// <c>none</c> (issue #2694).
+    /// <para>
+    /// <see cref="MaterialiserPinDurableWrites"/> counts <i>writes</i> and tags
+    /// them <c>birth</c>/<c>coalesced</c>, which describes how a write was
+    /// scheduled and not what it achieved. Neither value distinguishes a pin
+    /// whose checkpoint <b>offset advanced</b> from one rewritten at the same
+    /// offset, and with bucketing a single advancing pin rewrites its whole
+    /// bucket - so the write rate is not even proportional to the advance rate.
+    /// </para>
+    /// <para>
+    /// Offset advancement is the quantity that determines whether the WAL GC
+    /// <i>offset</i> floor can move (the GC reads
+    /// <c>IWalMaterialiserPinGrain.GetPinOffsetsAsync</c>), so
+    /// <c>offset</c> is the arm to read when asking "why is retained WAL not
+    /// being reclaimed?". A healthy <c>frontier_only</c> rate with a flat
+    /// <c>offset</c> rate is the specific shape of a floor that cannot move
+    /// while pins are otherwise being maintained; <c>none</c> counts a report
+    /// that was fully coalesced away.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> MaterialiserPinAdvances =
+        Meter.CreateCounter<long>("orleans.lattice.materialiser.pin.advances", unit: "{report}",
+            description: "Leaf-materialiser pin merges tagged by what advanced: offset, frontier_only, or none.");
+
+    /// <summary><see cref="TagOutcome"/> = <c>offset</c> (a pin merge that advanced the consumer's durable checkpoint offset, which is what lets the WAL GC offset floor move).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomePinOffsetAdvanced = new(TagOutcome, "offset");
+
+    /// <summary><see cref="TagOutcome"/> = <c>frontier_only</c> (a pin merge that advanced the HLC frontier while leaving the checkpoint offset where it was).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomePinFrontierOnly = new(TagOutcome, "frontier_only");
+
+    /// <summary><see cref="TagOutcome"/> = <c>none</c> (a pin merge fully coalesced away: neither the frontier nor the offset moved).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomePinNoAdvance = new(TagOutcome, "none");
+
+    /// <summary>
     /// Histogram of leaf-materialiser drain lag, in milliseconds, recorded by the
     /// WAL saturation sampler on every tick
     /// (<see cref="LatticeOptions.WalSaturationSampleInterval"/>, default 200 ms)
@@ -1247,6 +1482,43 @@ public static class LatticeMetrics
     public static readonly Histogram<double> MaterialiserDrainLag =
         Meter.CreateHistogram<double>("orleans.lattice.materialiser.drain_lag", unit: "ms",
             description: "Leaf-materialiser drain lag sampled by the WAL saturation sampler, tagged by tree.");
+
+    /// <summary>
+    /// Number of individually lagging WAL cursor consumers behind a tree's
+    /// materialiser drain-lag, recorded by the WAL saturation sampler for a tree
+    /// whose aggregate lag is <b>already over</b>
+    /// <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> on that
+    /// tick. A consumer counts when its own reported cursor trails the WAL head
+    /// wall clock by more than that same threshold; consumers that have never
+    /// reported a cursor (<see cref="HybridLogicalClock.Zero"/>) are excluded, as
+    /// they are from the <c>min(cursor)</c> meet that produces the aggregate.
+    /// <para>
+    /// <b>Why this exists (issue #2444).</b>
+    /// <see cref="MaterialiserDrainLag"/> is a minimum across consumers, so a
+    /// single value cannot distinguish <i>one</i> dormant consumer holding the
+    /// minimum down from <i>many</i> consumers genuinely falling behind. Those
+    /// two conditions have opposite responses, and the aggregate reads
+    /// identically for both. This count separates them.
+    /// </para>
+    /// <para>
+    /// <b>What it deliberately does not do.</b> It does not name the contributing
+    /// consumer. Consumer identity is unbounded cardinality and is not a safe tag,
+    /// so this makes the aggregate <b>triageable, not diagnosable</b>: it tells an
+    /// operator which of the two shapes they are in, not which consumer to look
+    /// at. Naming the contributor is tracked out of band as issue #2505, where
+    /// <see cref="IWalCursorRegistry.SnapshotAsync"/> already supplies the
+    /// identity.
+    /// </para>
+    /// <para>
+    /// <b>Cost.</b> Sampled only for trees already found over threshold, so a
+    /// healthy estate adds no per-tick work: a tree that never trips never
+    /// triggers the snapshot read that backs this instrument.
+    /// </para>
+    /// Tagged with <see cref="TagTree"/> and the derived tenant label.
+    /// </summary>
+    public static readonly Histogram<int> MaterialiserLaggingConsumers =
+        Meter.CreateHistogram<int>("orleans.lattice.materialiser.lagging_consumers", unit: "{consumer}",
+            description: "Count of individually lagging WAL cursor consumers on a tree already over the drain-lag threshold, tagged by tree.");
 
     /// <summary>
     /// Counter of activation-time leaf materialiser replays started, emitted by
@@ -1320,6 +1592,44 @@ public static class LatticeMetrics
     public static readonly Counter<long> LeafActivationOverBudgetReplays =
         Meter.CreateCounter<long>("orleans.lattice.leaf.activation_replays_over_budget", unit: "{replay}",
             description: "Activation-time leaf replays whose own post-range-filter applied-entry count exceeded the configured replay budget with an intact WAL, tagged by tree and WAL partition.");
+
+    /// <summary>
+    /// Tag marking a permit <b>withheld</b> from the replay concurrency gate on
+    /// <see cref="WalReplayPermitAdaptations"/>, because a replay failed for
+    /// memory pressure.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PermitAdaptationWithheld = new(TagOutcome, "withheld");
+
+    /// <summary>
+    /// Tag marking a previously withheld permit <b>restored</b> to the replay
+    /// concurrency gate on <see cref="WalReplayPermitAdaptations"/>, because a
+    /// replay completed without memory pressure.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PermitAdaptationRestored = new(TagOutcome, "restored");
+
+    /// <summary>
+    /// Counter of adaptations to the per-silo WAL replay concurrency gate, tagged
+    /// with <see cref="TagOutcome"/> (<see cref="PermitAdaptationWithheld"/> when a
+    /// permit was withheld from circulation after a replay failed for memory
+    /// pressure, <see cref="PermitAdaptationRestored"/> when one was returned after
+    /// a replay completed cleanly). Issue #2781.
+    /// <para>
+    /// <b>Deliberately not tagged by tree.</b> The gate is process-wide, so a
+    /// per-tree tag would imply a per-tree ceiling that does not exist and would
+    /// invite a reader to sum arms that share one underlying resource.
+    /// </para>
+    /// <para>
+    /// The difference <c>withheld - restored</c> is the number of permits currently
+    /// withheld, so the effective ceiling is
+    /// <c>configured - (withheld - restored)</c>. Both arms are <b>zero-primed</b>
+    /// when the gate is sized, which is the one site that proves the gate was
+    /// actually created: without priming, "backpressure never engaged" and "this
+    /// build does not have backpressure" would both read as an absent series.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalReplayPermitAdaptations =
+        Meter.CreateCounter<long>("orleans.lattice.wal.replay.permit_adaptations", unit: "{permit}",
+            description: "Adaptations to the per-silo WAL replay concurrency gate under memory pressure, tagged by outcome. Zero-primed on both arms when the gate is sized.");
 
     /// <summary>
     /// Counter of activation-time leaf replays that re-entered from a persisted
@@ -1462,6 +1772,577 @@ public static class LatticeMetrics
             description: "Leaf activations that threw out of OnActivateAsync, tagged by tree, activation temperature and reason (canceled/canceled_awaiting_permit/faulted). LOWER BOUND: faults raised before the guarded replay region, and outright process kills, are not counted.");
 
     /// <summary>
+    /// Counter of leaf activations cancelled while COLD that carried the leaf's
+    /// run of consecutive cold cancellations to or past the escalation
+    /// threshold - the self-reinforcing cold replay loop of issue #2280 caught
+    /// in the act. Tagged with <see cref="TagTree"/> only (plus the tenant label
+    /// derived from it).
+    /// <para>
+    /// <b>Why this is not derivable from <see cref="LeafActivationFailures"/>.</b>
+    /// That counter is an aggregate over the tree, as is the distinct-cold-leaf
+    /// population carried on the activation-temperature sample line. Neither can
+    /// express <em>this same leaf again, with no successful activation in
+    /// between</em>, which is the whole pathology: a leaf whose cancellation
+    /// reproduces exactly the condition that caused it. Summing cancellations
+    /// cannot recover that, because the sum cannot tell one leaf cancelled five
+    /// times from five leaves cancelled once - and those are a defect and a
+    /// cost respectively.
+    /// </para>
+    /// <para>
+    /// <b>Not tagged by leaf, deliberately</b>, for the same reason
+    /// <see cref="LeafDeactivationCheckpointDelta"/> is not: the leaf population
+    /// is unbounded and would be an unbounded metric dimension. The leaf
+    /// identity is carried on the accompanying warning instead, which is where
+    /// an operator needs it anyway - this counter answers "is it happening and
+    /// how often", the log line answers "to which leaf".
+    /// </para>
+    /// <para>
+    /// It counts EVERY cancellation at or above the threshold, not just the
+    /// crossing, so a leaf that stays stuck keeps registering and the series
+    /// carries a rate rather than a one-shot edge. The paired warning is
+    /// throttled per leaf; this is not, because a counter has no flood to
+    /// prevent.
+    /// </para>
+    /// <para>
+    /// A zero here is a genuine and expected reading: it is the healthy state,
+    /// and the threshold is calibrated so that the measured field distribution
+    /// (55 leaves cancelled once, 12 twice, none more) produces no observations
+    /// at all. That is the point - a diagnostic that fired on that distribution
+    /// would be muted, and would take the real signal with it.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafColdReplayLoop =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.activation.cold_replay_loop", unit: "{activation}",
+            description: "Cold leaf activations cancelled at or past the consecutive-cancellation escalation threshold, tagged by tree: the self-reinforcing cold WAL replay loop (issue #2280). Per-leaf identity is on the paired warning, never a tag. Zero is the healthy reading.");
+
+    /// <summary>
+    /// Counter of activation-time leaf-snapshot loads that FAILED, emitted by
+    /// <c>BPlusLeafGrain.TryRehydrateFromSnapshotAsync</c> (issue #2364).
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagReason"/>:
+    /// <see cref="SnapshotLoadFailureResourceExhausted"/> when an
+    /// <see cref="OutOfMemoryException"/> appears anywhere in the thrown
+    /// exception's chain, and <see cref="SnapshotLoadFailureFaulted"/>
+    /// otherwise.
+    /// <para>
+    /// The rehydrate path treats a failed load as best-effort and returns
+    /// "no snapshot", which is correct for availability but made the failure
+    /// <b>indistinguishable from a leaf that genuinely has no snapshot</b>: both
+    /// render as the same declined rehydrate, and the activation then takes the
+    /// <c>-1</c> replay-start override and replays its whole readable WAL
+    /// window. Without this counter the failure population reads as zero at
+    /// every rate of occurrence, so the two arms of "no snapshot" cannot be
+    /// separated at all.
+    /// </para>
+    /// <para>
+    /// The <c>resource_exhausted</c> arm exists because that failure arrives
+    /// <b>wearing a storage fault's clothes</b>. Under a container memory limit
+    /// the .NET GC heap hard limit is sized from the cgroup limit, so the
+    /// runtime is not OOM-killed - it throws
+    /// <see cref="OutOfMemoryException"/> inside the provider's deserialise of
+    /// the snapshot blob, and the only line an operator sees is the provider's
+    /// own "Error reading grain state". Nothing in that presentation names
+    /// memory, which is why a deployment can run in this state for a long time
+    /// undiagnosed. It also COMPOUNDS: the failed load forces the cold
+    /// whole-window replay, which costs more memory again, so the same few
+    /// leaves go cold repeatedly. A sustained non-zero <c>resource_exhausted</c>
+    /// rate means the host's memory limit is below the deployment's true
+    /// working set, and is not a storage-provider fault.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotLoadFailures =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.load_failures", unit: "{load}",
+            description: "Activation-time leaf-snapshot loads that failed and were swallowed as \"no snapshot\", tagged by tree and reason (resource_exhausted/faulted). A resource_exhausted reading is memory exhaustion presenting as a storage fault, not a provider defect.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotLoadFailures"/>.</summary>
+    public const string LeafSnapshotLoadFailuresName = "orleans.lattice.leaf.snapshot.load_failures";
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>resource_exhausted</c> on
+    /// <see cref="LeafSnapshotLoadFailures"/>. An
+    /// <see cref="OutOfMemoryException"/> was present in the failure's
+    /// exception chain, so the load did not fail because the store was
+    /// unreachable or the row unreadable - it failed because the blob could not
+    /// be materialised within the available heap.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotLoadFailureResourceExhausted =
+        new(TagReason, "resource_exhausted");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>faulted</c> on
+    /// <see cref="LeafSnapshotLoadFailures"/>: any load failure with no
+    /// <see cref="OutOfMemoryException"/> in its chain (an unreachable store, a
+    /// rejected activation, a deserialisation defect). Kept apart from
+    /// <see cref="SnapshotLoadFailureResourceExhausted"/> because the two call
+    /// for opposite operator responses - raise the memory limit, versus
+    /// investigate the storage provider - and folding them together is exactly
+    /// the conflation this counter exists to undo.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotLoadFailureFaulted =
+        new(TagReason, "faulted");
+
+    /// <summary>
+    /// Counter of activation-time leaf-snapshot hydrations that passed through
+    /// the byte-budgeted admission gate, tagged with <see cref="TagTree"/>,
+    /// <see cref="TagOutcome"/> (<c>immediate</c>/<c>queued</c>) and the tenant
+    /// label (issue #2765).
+    /// <para>
+    /// The gate bounds the aggregate bytes of snapshot loads materialising at
+    /// once, so a cold start costs a function of this process's heap rather than
+    /// of however many leaves Orleans happens to activate together. The
+    /// <c>queued</c> arm is the one that carries information: it counts the
+    /// hydrations that actually had to wait, and a sustained non-zero rate means
+    /// the deployment's leaves are large enough, or numerous enough, that
+    /// unbounded activation would have exceeded the heap hard limit - which is
+    /// precisely the condition that used to present as a clean-exit restart
+    /// loop with no OOM kill recorded anywhere.
+    /// </para>
+    /// <para>
+    /// Both arms are primed to zero per tree at the first hydration, because a
+    /// counter that is only ever incremented cannot distinguish "the gate never
+    /// had to queue anything" from "the gate is not deployed in this build" from
+    /// "nothing has activated yet". Those have entirely different responses, and
+    /// an absent series reads identically for all three.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotHydrationAdmissions =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.hydration_admissions", unit: "{hydration}",
+            description: "Activation-time leaf-snapshot hydrations admitted through the byte-budgeted concurrency gate, tagged by tree and outcome (immediate/queued). A sustained queued rate means unbounded cold activation would have exceeded the heap hard limit.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotHydrationAdmissions"/>.</summary>
+    public const string LeafSnapshotHydrationAdmissionsName = "orleans.lattice.leaf.snapshot.hydration_admissions";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>immediate</c> on
+    /// <see cref="LeafSnapshotHydrationAdmissions"/>: the hydration fitted inside
+    /// the remaining budget and started without waiting.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotHydrationAdmittedImmediately =
+        new(TagOutcome, "immediate");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>queued</c> on
+    /// <see cref="LeafSnapshotHydrationAdmissions"/>: the hydration waited behind
+    /// the budget before starting. This is the gate doing its job, not a fault,
+    /// but a sustained rate is the signal that cold activation is memory-bound.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotHydrationQueued =
+        new(TagOutcome, "queued");
+
+    /// <summary>
+    /// Counter of leaf activations shed by the per-silo resident leaf working
+    /// set, tagged with <see cref="TagTree"/>, <see cref="TagKind"/>
+    /// (<c>banked</c>/<c>unbanked</c>) and the tenant label (issue #2767).
+    /// <para>
+    /// Where <see cref="LeafSnapshotHydrationAdmissions"/> counts hydrations
+    /// bounded while they materialise, this counts activations deactivated
+    /// because what they retained <b>after</b> materialising exceeded the
+    /// process's resident budget. The two measure disjoint costs: a hydration
+    /// that queued and then completed is invisible here, and a leaf shed here
+    /// was admitted there without waiting.
+    /// </para>
+    /// <para>
+    /// The class tag is the one to watch. A <c>banked</c> shed returns on the
+    /// fast path by re-attaching its snapshot; an <c>unbanked</c> shed
+    /// reactivates cold and must first queue for a replay permit, so a
+    /// sustained <c>unbanked</c> rate means the working set has run out of cheap
+    /// candidates and is now paying whole-window replays to stay under budget.
+    /// That is the signal to look at snapshot coverage, not at this bound.
+    /// </para>
+    /// <para>
+    /// Both arms are primed to zero per tree when a tree first registers, for
+    /// the same reason the admission arms are: an absent series otherwise reads
+    /// identically for "never needed to shed", "not deployed in this build" and
+    /// "nothing has activated yet", which have entirely different responses.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafResidencySheds =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.residency.sheds", unit: "{activation}",
+            description: "Leaf activations deactivated by the per-silo resident leaf working set to stay under its derived byte budget, tagged by tree and by whether the shed leaf was snapshot-banked (cheap reload) or unbanked (cold whole-window replay).");
+
+    /// <summary>Canonical name of <see cref="LeafResidencySheds"/>.</summary>
+    public const string LeafResidencyShedsName = "orleans.lattice.leaf.residency.sheds";
+
+    /// <summary>
+    /// <see cref="TagKind"/> = <c>banked</c> on <see cref="LeafResidencySheds"/>:
+    /// the shed activation had rehydrated from a durable snapshot, so it
+    /// reactivates by re-attaching that snapshot and replaying only the tail.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafResidencyClassBanked =
+        new(TagKind, "banked");
+
+    /// <summary>
+    /// <see cref="TagKind"/> = <c>unbanked</c> on <see cref="LeafResidencySheds"/>:
+    /// the shed activation held no snapshot, so it reactivates cold, replaying
+    /// the whole readable WAL window behind a replay permit.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafResidencyClassUnbanked =
+        new(TagKind, "unbanked");
+
+    /// <summary>
+    /// Counter of leaf-snapshot capture <b>attempts</b>, emitted by
+    /// <c>BPlusLeafGrain.CaptureSnapshotCoreAsync</c> once per attempt that
+    /// passes the eligibility gates, tagged with <see cref="TagTree"/>,
+    /// <see cref="TagOutcome"/>
+    /// (<c>succeeded</c>/<c>failed</c>/<c>abandoned</c>) and the tenant label.
+    /// <para>
+    /// This exists because before issue #2696 the capture path carried
+    /// <b>no instrument at all</b>: the write half was untimed and uncounted,
+    /// and <c>TryCaptureSnapshotForAdvisoryAsync</c> caught every exception and
+    /// only logged it. The single capture-derived series on the endpoint,
+    /// <see cref="StorageSnapshotBytesName"/>, is fed only <b>after</b> a
+    /// successful save, so it reads <c>0</c> both when every capture is failing
+    /// and when no capture has ever been attempted. Those are opposite
+    /// operational states - a broken provider versus a correctly idle one - and
+    /// they were byte-identical on <c>/metrics</c>. Nothing exported could tell
+    /// them apart.
+    /// </para>
+    /// <para>
+    /// A failure counter <b>alone</b> would not have fixed that, which is why
+    /// this counts attempts and tags the outcome rather than counting failures.
+    /// A bare failure counter reading zero is ambiguous in exactly the same way
+    /// the original defect was - no failures because everything succeeded, or
+    /// no failures because nothing ran - so it would have reproduced the defect
+    /// one level up. Read <c>succeeded + failed + abandoned</c> as "attempted";
+    /// a tree absent from this counter entirely has genuinely never attempted a
+    /// capture, and that is now a distinguishable, positively-readable state.
+    /// </para>
+    /// <para>
+    /// Counted at the single-flight boundary inside the core capture method
+    /// rather than at the advisory call site, so that every caller (activation
+    /// advisory, periodic recheck, cold-progress banking, graceful
+    /// deactivation) is denominated identically and this counter shares its
+    /// population exactly with
+    /// <see cref="LeafSnapshotCaptureDuration"/>. Instrumenting the advisory
+    /// catch block alone would have counted failures from one caller against
+    /// durations from four.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotCaptures =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.captures", unit: "{capture}",
+            description: "Leaf-snapshot capture attempts, tagged by tree and outcome (succeeded/failed/abandoned). Sum across outcomes is the attempt count, which is what distinguishes \"every capture failed\" from \"capture never ran\" - a distinction no exported series could make before issue #2696.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotCaptures"/>.</summary>
+    public const string LeafSnapshotCapturesName = "orleans.lattice.leaf.snapshot.captures";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>succeeded</c> on
+    /// <see cref="LeafSnapshotCaptures"/>: the blob reached the snapshot
+    /// storage grain and durable coverage was advanced.
+    /// <para>
+    /// <b>This records that a capture completed and persisted, not that the
+    /// result is loadable</b>, and the distinction is not pedantic. A capture
+    /// whose <c>SnapshotOffset</c> normalises to null is saved successfully and
+    /// is then discarded on the load path by <c>HasCapturedPrefix</c>, so for
+    /// that population this counter reports a success for a blob that can never
+    /// be read back. The limitation is named here rather than left to be
+    /// inferred, because the alternative - a reader treating
+    /// <c>succeeded</c> as end-to-end coverage - is exactly the class of
+    /// unstated guarantee this instrument exists to remove. Correlate with
+    /// <c>orleans.lattice.leaf.snapshot.load_failures</c> and
+    /// <c>orleans.lattice.storage.snapshot_bytes</c> before reading it as
+    /// coverage.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotCaptureSucceeded =
+        new(TagOutcome, "succeeded");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>failed</c> on
+    /// <see cref="LeafSnapshotCaptures"/>: the attempt threw and the exception
+    /// was swallowed by the caller. This is the reading that was previously
+    /// invisible - the advisory handler logs it and increments nothing, so a
+    /// deployment in which every capture fails presented as total silence.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotCaptureFailed =
+        new(TagOutcome, "failed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>abandoned</c> on
+    /// <see cref="LeafSnapshotCaptures"/>: the caller's token was cancelled, so
+    /// the attempt was deliberately dropped on a deactivation deadline (issue
+    /// #1965) rather than failing. Kept apart from
+    /// <see cref="SnapshotCaptureFailed"/> because a fleet-wide shutdown and a
+    /// broken storage provider would otherwise look identical. The existing
+    /// log-flood argument for swallowing these silently does not extend to a
+    /// counter: an increment is O(1) against a bounded tag set, not a line.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotCaptureAbandoned =
+        new(TagOutcome, "abandoned");
+
+    /// <summary>
+    /// Histogram of wall-clock leaf-snapshot capture duration in milliseconds,
+    /// emitted by <c>BPlusLeafGrain.CaptureSnapshotCoreAsync</c>, tagged with
+    /// <see cref="TagTree"/>, <see cref="TagOutcome"/> and the tenant label.
+    /// Shares its population exactly with <see cref="LeafSnapshotCaptures"/>.
+    /// <para>
+    /// Timing starts at the single-flight boundary, <b>after</b> the
+    /// eligibility gates, so a leaf that declines to capture contributes no
+    /// sample. That boundary is load-bearing rather than tidy: the gates return
+    /// in microseconds and are taken far more often than a capture runs, so
+    /// timing the whole method would let near-zero no-ops dominate the count
+    /// and drag the mean toward zero - an instrument that reports "captures are
+    /// fast" precisely when none are happening.
+    /// </para>
+    /// <para>
+    /// The capture is awaited <b>inline inside <c>OnActivateAsync</c></b>, and
+    /// Orleans delivers no request to a grain until activation completes, so
+    /// this duration is paid by every caller waiting on that leaf. It is
+    /// therefore the direct measurement of the activation-latency contribution
+    /// that previously had to be inferred from caller-side
+    /// <see cref="GrainCallDuration"/>, which conflates activation with call
+    /// and queue latency.
+    /// </para>
+    /// <para>
+    /// <b>Readable as an interval mean only.</b> The container's metrics
+    /// exposition renders a histogram as <c>_sum</c>/<c>_count</c> with no
+    /// quantiles and no buckets, and both are cumulative since process start,
+    /// so a percentile is not derivable from this instrument as deployed and a
+    /// threshold on the raw cumulative mean is heavily damped. Read it as
+    /// <c>(sum2-sum1)/(count2-count1)</c> across two scrapes. Do not "improve"
+    /// this into an explicit-bucket histogram expecting to read percentiles;
+    /// nothing in the pipeline renders them.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> LeafSnapshotCaptureDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.leaf.snapshot.capture.duration", unit: "ms",
+            description: "Wall-clock duration of leaf-snapshot capture attempts, tagged by tree and outcome. Measured from the single-flight boundary so declined captures contribute no sample. Exported with explicit buckets like every other ms-unit histogram on this meter, so histogram_quantile over _bucket is available; delta _sum over delta _count gives an interval mean.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotCaptureDuration"/>.</summary>
+    public const string LeafSnapshotCaptureDurationName = "orleans.lattice.leaf.snapshot.capture.duration";
+
+    /// <summary>
+    /// Counter of leaf-snapshot capture invocations that <b>declined</b> before
+    /// reaching the attempt boundary, tagged <see cref="TagTree"/> and
+    /// <see cref="TagReason"/>.
+    /// <para>
+    /// This is a separate instrument from
+    /// <see cref="LeafSnapshotCaptures"/> rather than a fourth value of that
+    /// counter's <c>outcome</c> tag, and the separation is load-bearing.
+    /// <see cref="LeafSnapshotCaptures"/> and
+    /// <see cref="LeafSnapshotCaptureDuration"/> are written at one boundary
+    /// precisely so they share a population exactly - every counted attempt is
+    /// timed and every timed attempt is counted - which makes their ratio a
+    /// within-family comparison that cannot drift. A counter-only outcome value
+    /// would break that invariant silently, since declines are never timed.
+    /// Keeping declines in their own family preserves it.
+    /// </para>
+    /// <para>
+    /// It exists because without it the capture instruments reproduce, one gate
+    /// higher, the very ambiguity they were added to remove: a deployment in
+    /// which every capture is <i>declined</i> and one in which the capture path
+    /// is never reached at all would both leave
+    /// <see cref="LeafSnapshotCaptures"/> at zero. A declined capture is a third
+    /// state, distinct from both a failed capture and an idle deployment, and it
+    /// is the most likely way a self-heal silently never runs.
+    /// </para>
+    /// <para>
+    /// The three reasons carry different operational meanings and are the reason
+    /// a tag beats a bare count. <c>already_in_flight</c> dominating is a
+    /// <b>contention</b> signal - captures are being requested faster than the
+    /// shared snapshot storage provider retires them, which is the pressure
+    /// issue #2696 describes. <c>not_eligible</c> dominating is the
+    /// <b>starved-leaf</b> signal this diagnostic exists for: the leaf has
+    /// nothing checkpointed and no live data, so it will never cover itself.
+    /// <c>no_tree_id</c> above zero is a <b>bug</b> - capture was invoked on a
+    /// leaf that was never attached to a tree. <c>no_coverage_claim</c> is the
+    /// <b>unclaimable-rows</b> signal (issue #2725): the leaf holds live rows
+    /// but has never checkpointed, so any blob it wrote would claim no coverage
+    /// and be refused by the load gate. It is benign - WAL replay covers such a
+    /// leaf - but it names the population whose retained WAL cannot shrink yet.
+    /// </para>
+    /// <para>
+    /// A <c>no_tree_id</c> decline carries <b>no</b> tree or tenant tag, because
+    /// at that point the leaf has no tree identity to report. That is a property
+    /// of the state being counted, not an omission: read it as a global count,
+    /// and do not expect it to appear under a per-tree filter.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotCaptureDeclines =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.capture.declines", unit: "{decline}",
+            description: "Leaf-snapshot capture invocations that declined before the attempt boundary, tagged by tree and reason (no_tree_id, not_eligible, already_in_flight, no_coverage_claim). Separate from the capture counter so attempts and durations stay exactly co-populated.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotCaptureDeclines"/>.</summary>
+    public const string LeafSnapshotCaptureDeclinesName = "orleans.lattice.leaf.snapshot.capture.declines";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a capture declined because the leaf has
+    /// no <c>TreeId</c>, so it was never attached to a tree. Above zero this is
+    /// a bug, not a workload characteristic.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotDeclineNoTreeId =
+        new(TagReason, "no_tree_id");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a capture declined because no partition
+    /// holds a checkpoint or live data. This is the starved-leaf signal: a leaf
+    /// declining for this reason will never cover itself, so a sustained rate
+    /// here is the population that snapshot coverage is failing to reach.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotDeclineNotEligible =
+        new(TagReason, "not_eligible");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a capture declined by the single-flight
+    /// guard because an earlier capture's save is still in flight. A sustained
+    /// rate here is a contention signal against the shared snapshot storage
+    /// provider, not an error: the in-flight capture will land and the next
+    /// advisory re-evaluates.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotDeclineAlreadyInFlight =
+        new(TagReason, "already_in_flight");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a capture declined because the blob it
+    /// would write could carry no coverage claim, and so could never be loaded
+    /// back (issue #2725). The leaf holds live rows but has never checkpointed
+    /// any partition, so every per-partition slot the capture could stamp is the
+    /// <c>-1</c> sentinel - exactly the shape
+    /// <c>LeafSnapshotStorageGrain.HasCapturedPrefix</c> refuses.
+    /// <para>
+    /// This is the leaf-holds-unclaimable-rows signal, and it is distinct from
+    /// <see cref="SnapshotDeclineNotEligible"/>: that one means the leaf has
+    /// nothing at all, whereas this one means the leaf has data whose only
+    /// durable copy is the WAL. It is not an error and needs no intervention -
+    /// WAL replay covers such a leaf completely - but a sustained rate names the
+    /// population whose retained WAL cannot shrink until it checkpoints.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotDeclineNoCoverageClaim =
+        new(TagReason, "no_coverage_claim");
+
+    /// <summary>
+    /// Counter of off-cadence leaf snapshot captures driven by the zero-coverage
+    /// repair path (issue #2692). Tagged with <see cref="TagTree"/> and
+    /// <see cref="TagOutcome"/>: <c>repaired</c> when a capture gave a
+    /// checkpointed partition the durable coverage it previously lacked, and
+    /// <c>exhausted</c> when an activation spent its entire repair budget with a
+    /// checkpointed partition still uncovered.
+    /// <para>
+    /// <b>Why one instrument carries both outcomes.</b> A counter publishes no
+    /// series at all until its first <c>Add</c>, so a dedicated exhaustion
+    /// counter would sit dark in the healthy case and read identically to an
+    /// instrument that was never wired up. Sharing one instrument means any
+    /// repair traffic whatsoever proves the series is live, after which a zero
+    /// on <c>exhausted</c> is a measured zero rather than silence. That
+    /// distinction is the whole point: this counter exists because the defect it
+    /// watches for was invisible for months behind exactly that ambiguity.
+    /// </para>
+    /// <para>
+    /// <c>exhausted</c> is the alarm condition and is never benign. A
+    /// checkpointed partition with no durable snapshot coverage resolves its
+    /// durable materialiser pin to the Zero block value, which disables
+    /// cursor-based WAL trimming for the leaf's ENTIRE tree - one such leaf
+    /// retains every other leaf's WAL without bound. The leaf identity is
+    /// carried on the paired warning rather than as a tag, because the leaf
+    /// population is unbounded and would be an unbounded metric dimension.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotCoverageRepairs =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.coverage_repairs", unit: "{capture}",
+            description: "Off-cadence leaf snapshot captures driven by the zero-coverage repair path (issue #2692), tagged by tree and outcome (repaired/exhausted). Both outcomes share one instrument so that a zero on 'exhausted' is a measured zero and not an unpublished series.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotCoverageRepairs"/>.</summary>
+    public const string LeafSnapshotCoverageRepairsName = "orleans.lattice.leaf.snapshot.coverage_repairs";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="LeafSnapshotCoverageRepairs"/> for a repair capture after
+    /// which every checkpointed partition holds durable snapshot coverage, so
+    /// the leaf no longer blocks its tree's cursor trim.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageRepairRepaired =
+        new(TagOutcome, "repaired");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="LeafSnapshotCoverageRepairs"/> for an activation that spent
+    /// its entire per-activation repair budget with a checkpointed partition
+    /// still uncovered. Emitted once per activation at the moment the budget is
+    /// spent, not once per attempt, so the series counts stuck activations
+    /// rather than retries.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageRepairExhausted =
+        new(TagOutcome, "exhausted");
+
+    /// <summary>
+    /// Reactivations of a dormant leaf whose unusable durable materialiser pin
+    /// was blocking its tree's WAL cursor floor (issue #2710 Limitation 2),
+    /// tagged by tree and outcome
+    /// (<c>attempted</c>/<c>healed</c>/<c>abandoned</c>).
+    /// <para>
+    /// All three outcomes share one instrument so that a zero on
+    /// <c>healed</c> is a measured zero rather than an unpublished series. That
+    /// distinction is load-bearing here: a sweep that reactivates a leaf and
+    /// moves on cannot tell "the pin lifted" from "the capture failed again",
+    /// and a deployment can sit indefinitely in the second state while the
+    /// first is what the sweep was built to produce. Counting only successes
+    /// would make those two indistinguishable from outside the process, which
+    /// is the same ambiguity that hid the defect this sweep exists to clear.
+    /// </para>
+    /// <para>
+    /// <c>abandoned</c> is the alarm condition. It means a leaf stayed blocked
+    /// across every permitted attempt, so the block is not one activation away
+    /// from clearing and something downstream of the touch is failing - a
+    /// capture that cannot complete, for instance. The leaf identity is carried
+    /// on the paired warning rather than as a tag, because the leaf population
+    /// is unbounded and would be an unbounded metric dimension.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcBlockedLeafReactivations =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome (attempted/healed/abandoned). All outcomes share one instrument so that a zero on 'healed' is a measured zero and not an unpublished series.");
+
+    /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
+    public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a touch that was issued
+    /// to a blocking leaf. Counts the cost the sweep imposes, independently of
+    /// whether it achieved anything.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationAttempted =
+        new(TagOutcome, "attempted");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a previously-swept
+    /// consumer that stopped blocking its tree. This is the only evidence that
+    /// a reactivation accomplished anything, so it is what distinguishes a
+    /// working sweep from one that is merely running.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationHealed =
+        new(TagOutcome, "healed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a consumer that stayed
+    /// blocked across every permitted attempt and will not be swept again.
+    /// Emitted once, at the moment the budget is spent, so the series counts
+    /// stranded leaves rather than retries.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationAbandoned =
+        new(TagOutcome, "abandoned");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a
+    /// leaf that was over the byte bound and was divided back under it.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafByteOverflowSplit =
+        new(TagOutcome, "split");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a
+    /// leaf that is over the byte bound and cannot be divided, because it holds
+    /// a single entry larger than the bound and a split has no median key to
+    /// pivot on. Splitting anyway would move every entry to the sibling and
+    /// leave an empty donor, re-triggering forever without making progress, so
+    /// the leaf is deliberately left intact and reported here instead.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafByteOverflowIrreducible =
+        new(TagOutcome, "irreducible");
+
+    /// <summary>
     /// Counter of resident unresolved saga prepares recorded into
     /// <c>LeafNodeState.UnresolvedReplayWork</c> <b>beyond</b> the
     /// <see cref="LatticeOptions.MaxDurableUnresolvedReplayWork"/> cap, emitted
@@ -1490,6 +2371,50 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap", unit: "{prepare}",
             description: "Resident unresolved saga prepares recorded beyond the MaxDurableUnresolvedReplayWork cap, tagged by tree and WAL partition. Provider-dependent persist hazard on Azure Table (1MB entity cap); benign on the SQLite local profile.");
 
+    /// <summary>
+    /// Deferred terminals (<c>TxCommit</c>, <c>TxAbort</c>, <c>DeleteRange</c>)
+    /// that pass 1 of replay could NOT record durably because the leaf's
+    /// <c>UnresolvedReplayWork</c> ledger was already at
+    /// <c>MaxDurableUnresolvedReplayWork</c>, and which therefore fell back to
+    /// the pre-#2165 in-memory clamp (issue #2756). Tagged <c>tree</c> and
+    /// <c>partition</c>.
+    /// <para>
+    /// This is the counterpart of
+    /// <see cref="LeafUnresolvedPrepareLedgerBeyondCap"/> for the OTHER ledger
+    /// arm, and it is not interchangeable with it. That counter is emitted by
+    /// the prepare recorder, which is uncapped by design and records
+    /// unconditionally; this one is emitted by the capped deferred-terminal
+    /// recorder, at the point where a terminal is DROPPED. Different ledger,
+    /// different policy, opposite outcome.
+    /// </para>
+    /// <para>
+    /// It exists because that drop was previously silent - no metric, no log,
+    /// no counter - while being able to pin the replay checkpoint and so block
+    /// WAL reclamation for the whole tree. On a non-transactional tree (one
+    /// that runs no sagas and therefore carries no prepares at all) the
+    /// deferred-terminal clamp is the ONLY clamp that can fire, so without this
+    /// instrument a frozen tree is indistinguishable between "this clamp is
+    /// pinning the checkpoint" and "this clamp never fired and the cause is
+    /// elsewhere".
+    /// </para>
+    /// <para>
+    /// Note the neighbouring counter cannot be used as a proxy for it even on a
+    /// tree that does run sagas. It fires on <c>work.Count &gt; cap</c>, so a
+    /// ledger resting at EXACTLY the cap drops every subsequent terminal
+    /// forever while leaving it at zero - it is a near-miss detector that is
+    /// blind at precisely the value where this clamp bites. That boundary is
+    /// now inclusive for the same reason.
+    /// </para>
+    /// <para>
+    /// Pre-minted at zero per (tree, partition) when a partition enters replay,
+    /// so an absent series means the build did not land rather than that the
+    /// clamp never fired. Observability only: the drop behaviour is unchanged.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafDeferredTerminalsDroppedAtCap =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.deferred_terminals_dropped_at_cap", unit: "{terminal}",
+            description: "Deferred terminals (TxCommit, TxAbort, DeleteRange) dropped by replay pass 1 because the durable UnresolvedReplayWork ledger was at the MaxDurableUnresolvedReplayWork cap, falling back to the in-memory clamp that can pin the replay checkpoint. Tagged by tree and WAL partition.");
+
     // --- Storage-usage instruments (byte-accurate retained footprint) ------
     //
     // The four byte gauges and the over-threshold gauge are observable gauges
@@ -1515,6 +2440,26 @@ public static class LatticeMetrics
 
     /// <summary>Canonical name of the observable 0/1 gauge that flags a tree whose retained WAL bytes currently breach the advisory ceiling (tagged <see cref="TagTree"/>).</summary>
     public const string StoragePolicyOverThresholdName = "orleans.lattice.storage.policy.over_threshold";
+
+    /// <summary>
+    /// Canonical name of the observable 0/1 gauge reporting whether a tree's
+    /// storage usage has ever been measured at <i>depth</i> - that is, whether
+    /// a deep report carrying real snapshot and leaf-state byte counts has been
+    /// published for it (tagged <see cref="TagTree"/>). Issue #2693.
+    /// <para>
+    /// <c>1</c> means <see cref="StorageSnapshotBytesName"/>,
+    /// <see cref="StorageLeafStateBytesName"/>, and
+    /// <see cref="StorageTotalBytesName"/> carry a real measurement for the
+    /// tree. <c>0</c> means only the cheap WAL-only refresh path has run, so
+    /// those three gauges publish <b>no measurement</b> for that tree and
+    /// <see cref="StorageWalBytesName"/> is the only byte surface that has been
+    /// sampled. The gauge itself reports no measurement for a tree that has not
+    /// been observed at all, so the three states - never seen, seen WAL-only,
+    /// and deeply measured - are all distinguishable from
+    /// <c>/metrics</c> alone without reading the source.
+    /// </para>
+    /// </summary>
+    public const string StorageUsageDeepPublishedName = "orleans.lattice.storage.usage_deep_published";
 
     /// <summary>
     /// Counter incremented once per <see cref="ILatticeWalGc.RunOnceAsync"/>
@@ -2275,10 +3220,282 @@ public static class LatticeMetrics
     /// that shard (issue 2002). Treat sustained non-zero as a wedge, and read
     /// the phase tag to place it.
     /// </para>
+    /// <para>
+    /// <b>Reading a zero.</b> Because a zero is also the expected value under
+    /// health, it carries no information on its own: it is what a clean shard
+    /// reports and equally what a deployment that never scanned reports. Pair
+    /// it with <see cref="LeafScanDuration"/>'s count before reading zero as
+    /// clean, per the fuller note on <see cref="ScanPageCeilingOutcomes"/>.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> ScanPageStalls =
         Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.stalls", unit: "{stall}",
             description: "Count of shard-root range-scan page fills abandoned after exceeding MaxScanPageStallDuration.");
+
+    /// <summary>
+    /// Count of <c>ShardRootGrain</c> page-fill ceiling fires, tagged with what
+    /// the ceiling did with the work the walk had already done:
+    /// <see cref="TagOutcome"/> = <c>banked</c> (rows had been read, so they
+    /// were returned as a short page with <c>HasMore</c> set and the caller
+    /// resumes from the last one) or <c>discarded</c> (the fire caught the walk
+    /// with no rows to bank, so the call faulted with
+    /// <see cref="Orleans.Lattice.ScanPageStalledException"/>). Also tagged
+    /// with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// <para>
+    /// <b>Reading a zero.</b> Both arms are emitted from the one site a ceiling
+    /// fire passes through, so their sum is the ceiling-fire count and neither
+    /// arm needs a denominator supplied from elsewhere. That is what makes a
+    /// zero on the <c>banked</c> arm interpretable: beside a non-zero
+    /// <c>discarded</c> arm it is a measured negative - ceilings fired and none
+    /// of them found bankable work, which points at a prologue or descent that
+    /// parks rather than at a slow leaf chain. The reading it is designed to
+    /// close off is the one where a series carries no points at all: if this
+    /// counter is absent while
+    /// <see cref="ScanPageStalls"/> is climbing, the banking path is not wired
+    /// up, and that is a broken measurement rather than a clean shard.
+    /// <c>banked</c> being zero and <c>discarded</c> also being zero means only
+    /// that no ceiling fired. That is the healthy steady state <i>only</i>
+    /// beside independent evidence that scans ran at all: on an idle
+    /// deployment both arms read zero because nothing reached the fire, which
+    /// is an absence of activity and not an absence of defect. This instrument
+    /// cannot tell those two zeros apart, because both arms are emitted only
+    /// by a fire that a scan has to reach. Supply the activity evidence from
+    /// <see cref="LeafScanDuration"/>, whose count series is recorded
+    /// immediately before the single return of each leaf key and entry scan.
+    /// Read the pair, and note which direction is sound: a non-zero scan count
+    /// beside zero on both arms is a measured clean shard, whereas zero on all
+    /// three is no evidence either way. That count is biased low, because a
+    /// scan that faults before returning never records, so a zero count means
+    /// <i>no scan completed</i> rather than <i>no scan was attempted</i> - and
+    /// neither of those licenses a clean bill of health.
+    /// </para>
+    /// <para>
+    /// <c>discarded</c> equals <see cref="ScanPageStalls"/> by construction -
+    /// the same fire raises both - so a divergence between them is itself a
+    /// wiring fault worth alerting on.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanPageCeilingOutcomes =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.ceiling_outcomes", unit: "{fire}",
+            description: "Count of shard-root page-fill stall-ceiling fires by whether the partial page was banked or discarded.");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>banked</c> (a ceiling fire returned the
+    /// rows the walk had already read, as a short page).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageBankedTag =
+        new(TagOutcome, "banked");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>discarded</c> (a ceiling fire found no
+    /// rows to bank, so the call faulted).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageDiscardedTag =
+        new(TagOutcome, "discarded");
+
+    /// <summary>
+    /// Count of bounded leaf reads issued by a stall-guarded shard-root page
+    /// fill, tagged with whether the read was issued or attached to one
+    /// already in flight (issue 2585).
+    /// <para>
+    /// This is the convergence counterpart to
+    /// <see cref="ScanPageCeilingOutcomes"/>. That counter reports whether a
+    /// ceiling fire kept the rows it had; this one reports whether the
+    /// <em>next</em> attempt had to pay for them again. A livelocked walk shows
+    /// <c>issued</c> climbing in step with
+    /// <see cref="ScanPageStalls"/> while <c>joined</c> stays
+    /// at zero: every retry re-reading the same leaf from scratch is the
+    /// signature of the defect.
+    /// </para>
+    /// <para>
+    /// <b>There is deliberately no third arm for a reused result.</b> Only a
+    /// read still in flight is ever joined: once the leaf's turn ends, later
+    /// writes are ordered after the read, so serving its rows again would be a
+    /// scan page that misses committed writes. An earlier revision retained
+    /// settled results briefly and emitted a <c>served</c> arm; that was
+    /// incorrect at any window length and both were removed.
+    /// </para>
+    /// <para>
+    /// <b>Reading a zero.</b> Both arms are primed at zero on first
+    /// guarded use, through the same recorder the live path uses, so a zero
+    /// here is a measured absence rather than an absent measurement. An
+    /// unguarded walk never reports, by design - it cannot strand a read, so it
+    /// has nothing to attach to.
+    /// </para>
+    /// <para>
+    /// <b>One name is not one cause.</b> <c>issued</c> is the ordinary steady
+    /// state of a healthy scan as well as the signature above; it is only
+    /// diagnostic read <em>against</em> <see cref="ScanPageStalls"/>, never on
+    /// its own.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanPageLeafReadOutcomes =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.leaf_read_outcomes", unit: "{read}",
+            description: "Count of stall-guarded shard-root page-fill leaf reads by whether the read was issued or joined while still in flight.");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>issued</c> (no identical read was held, so
+    /// the read went to the leaf).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafReadIssuedTag =
+        new(TagOutcome, "issued");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>joined</c> (an identical read was already
+    /// in flight, so this walk attached to it instead of enqueueing a duplicate
+    /// behind it).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafReadJoinedTag =
+        new(TagOutcome, "joined");
+
+
+    /// <summary>
+    /// Count of client-side resilient scans
+    /// (<see cref="Orleans.Lattice.LatticeExtensions.ScanKeysAsync"/> and its
+    /// siblings) that met a
+    /// <see cref="Orleans.Lattice.ScanPageStalledException"/>, tagged with the
+    /// decision the scan took. Tagged with <see cref="TagTree"/>,
+    /// <see cref="TagPhase"/> (carried through from the stall) and
+    /// <see cref="TagOutcome"/>.
+    /// <para>
+    /// The outcome tag is the point of the counter, and each value is a
+    /// distinct operational statement:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><c>resumed</c> - the scan resumed from its last
+    /// continuation token and carried on. The scan still completed in full, so
+    /// without this counter a scan that succeeded only after N resumptions
+    /// would be indistinguishable from one that never stalled, and a worsening
+    /// contention trend would be hidden by its own recovery.</description></item>
+    /// <item><description><c>budget-exhausted</c> - the scan had already
+    /// resumed its permitted number of <em>consecutive</em> non-progressing
+    /// times
+    /// (<see cref="Orleans.Lattice.LatticeExtensions.DefaultScanStallResumeAttempts"/>,
+    /// or a lower caller <c>maxAttempts</c>) without banking a record, and
+    /// rethrew. It says the source is genuinely not yielding, so no larger
+    /// bound would have helped it. Its meaning is unchanged from builds
+    /// predating the lifetime ceiling, so a series spanning that change stays
+    /// comparable.
+    /// </description></item>
+    /// <item><description><c>ceiling-exhausted</c> - the scan was
+    /// <em>progressing</em>, banking records between stalls, and exceeded
+    /// <see cref="Orleans.Lattice.LatticeExtensions.DefaultScanStallResumeCeiling"/>
+    /// stalls over its lifetime. This is the opposite diagnosis to
+    /// <c>budget-exhausted</c> despite the identical symptom: it is a statement
+    /// about that constant being too small for the workload, not about the
+    /// source being dead, and the remedy is to raise it or for the caller to
+    /// bank partial progress so a terminated walk resumes rather than restarts.
+    /// The two are tagged apart precisely because a single label covering both
+    /// would be populated, plausible, and blind to the only distinction an
+    /// operator needs to choose between those remedies.
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// A <c>resumed</c> rate that climbs while both terminal outcomes stay at
+    /// zero is recovery working. Every terminal outcome is a scan that
+    /// failed, and the caller saw the stall: a resumption never truncates, so
+    /// the scan either yields its full range or rethrows the last stall
+    /// verbatim.
+    /// </para>
+    /// <para>
+    /// Earlier builds emitted a third value, <c>no-progress</c>, when a
+    /// progress gate refused a stall that still had resume budget. That gate
+    /// refused every stall that occurred in practice, so the resume it guarded
+    /// never ran; it has been removed and the label can no longer be recorded.
+    /// It is named here only so a reader meeting it in historical data knows
+    /// what it meant. See
+    /// <see cref="Orleans.Lattice.LatticeExtensions.DefaultScanStallResumeAttempts"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanStallResumptions =
+        Meter.CreateCounter<long>("orleans.lattice.scan.stall_resumptions", unit: "{resumption}",
+            description: "Count of resilient client scans that met a scan-page stall, tagged by the decision taken (resumed, budget-exhausted, ceiling-exhausted).");
+
+    /// <summary>
+    /// What happened to a scan source <em>after</em> a resilient scan gave up on
+    /// it for futility - that is, after
+    /// <see cref="ScanStallResumptions"/> recorded a
+    /// <c>budget-exhausted</c> termination against it. Tagged with
+    /// <see cref="TagTree"/>, <see cref="TagPhase"/> (both carried through from
+    /// the terminating stall) and <see cref="TagOutcome"/>.
+    /// <para>
+    /// It answers the one question <c>budget-exhausted</c> cannot. Under load,
+    /// "this shard was busy for a while" and "this source is genuinely not
+    /// yielding" are the SAME OBSERVATION at the consecutive bound
+    /// (<see cref="Orleans.Lattice.LatticeExtensions.DefaultScanStallResumeAttempts"/>),
+    /// so a large futility count on its own cannot say whether that bound is
+    /// what stopped a job. This counter records whether the abandoned source
+    /// served records again shortly afterwards.
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><c>recovered</c> - a later scan of the same source
+    /// yielded a record at or beyond the position the futile walk died on. The
+    /// source was recoverable and the consecutive bound cut it off early.
+    /// <b>Any sustained non-zero value is the finding</b>: it says the bound is
+    /// too tight for this workload.</description></item>
+    /// <item><description><c>still-stalled</c> - a later walk reached the same
+    /// source and also terminated for futility there. The source was not merely
+    /// busy, so the bound was right to give up. A later walk that merely stalls
+    /// again and then gets past the abandoned position is deliberately counted
+    /// as <c>recovered</c>, not here: that walk demonstrates recoverability and
+    /// is precisely the premature-bound case.</description></item>
+    /// <item><description><c>unobserved</c> - the observation window closed with
+    /// no later scan reaching the source at all, so this termination says
+    /// nothing either way.</description></item>
+    /// <item><description><c>dropped</c> - the bounded watch table was at
+    /// capacity, so the answer is unknown for a reason internal to this
+    /// instrument rather than anything about the source.</description></item>
+    /// </list>
+    /// <para>
+    /// READ THE LAST TWO BEFORE CONCLUDING ANYTHING FROM THE FIRST. A zero
+    /// <c>recovered</c> is evidence the abandoned sources were dead only when
+    /// <c>still-stalled</c> is populated; against a scrape that is mostly
+    /// <c>unobserved</c> or <c>dropped</c> it means nobody looked, which is a
+    /// fact about the callers or about this table and not about the bound. The
+    /// two non-answer arms exist so that distinction cannot be papered over by
+    /// whichever complement a reader finds convenient.
+    /// </para>
+    /// <para>
+    /// Every futility termination eventually resolves to exactly one of the four
+    /// values, so
+    /// <c>sum(stall_futility_outcomes) &lt;= stall_resumptions{outcome="budget-exhausted"}</c>
+    /// always holds, with equality once every open watch has resolved. A
+    /// persistent shortfall means watches are outliving the scrape window rather
+    /// than that terminations went unrecorded.
+    /// </para>
+    /// <para>
+    /// A LOW READING IS NOT A VERDICT UNLESS THE RUN WAS STRAINED. This
+    /// instrument can only speak about a bound that came under pressure, so
+    /// before reading a small <c>recovered</c> count as "the bound is well
+    /// sized", confirm all three of: a non-zero
+    /// <c>stall_resumptions{outcome="budget-exhausted"}</c> (with no futility
+    /// terminations no watch is ever opened and every arm below reads zero for a
+    /// trivial reason); a non-zero <c>recovered + still-stalled</c> (if
+    /// <c>unobserved</c> and <c>dropped</c> account for the whole total then
+    /// nothing revisited the abandoned sources and the run observed nothing
+    /// either way); and a materially non-zero
+    /// <see cref="ScanPageStalls"/>, which is the upstream condition
+    /// that makes a source look busy at all. Where any of those fails, the
+    /// finding is "the bound was not exercised", not "the bound is correct" - a
+    /// bound that was never strained is untested, exactly as a
+    /// <c>ceiling-exhausted</c> of zero does not validate the lifetime ceiling.
+    /// This reading is recorded here in advance of the data precisely so it
+    /// cannot be chosen after the numbers arrive.
+    /// </para>
+    /// <para>
+    /// The observation is passive: it issues no grain call, starts no timer, and
+    /// never re-drives the abandoned work, so it changes no termination
+    /// decision. See <c>ScanStallFutilityWatch</c> for the mechanism, including
+    /// why the window is derived from the stall's own reported ceiling and is
+    /// structural rather than measured. Shard index is deliberately NOT a tag:
+    /// this family must stay small enough to leave on permanently, and the tag
+    /// shape is otherwise identical to <see cref="ScanStallResumptions"/> so the
+    /// two series join.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanStallFutilityOutcomes =
+        Meter.CreateCounter<long>("orleans.lattice.scan.stall_futility_outcomes", unit: "{outcome}",
+            description: "What happened to a scan source after a resilient scan gave up on it for futility (recovered, still-stalled, unobserved, dropped).");
 
     /// <summary>
     /// Count of internal-node digest publishes (the upward
@@ -3453,4 +4670,63 @@ public static class LatticeMetrics
     public static readonly Counter<long> ViewSourceBackpressure =
         Meter.CreateCounter<long>("orleans.lattice.view.source_backpressure", unit: "{pass}",
             description: "View maintainer drain passes that throttled themselves because the source tree was under WAL saturation back-pressure.");
+
+    /// <summary>
+    /// Histogram of the number of calls to a target activation that were already
+    /// outstanding from this silo at the instant a further call was dispatched to
+    /// it. Tagged with <see cref="TagGrainType"/>. Recorded by
+    /// <c>LatticeGrainCallObservationFilter</c>, which a host installs with
+    /// <see cref="LatticeServiceCollectionExtensions.AddLatticeGrainCallObservation(Hosting.ISiloBuilder)"/>.
+    /// <para>
+    /// <b>This instrument exists because the alternative is censored.</b> The
+    /// only out-of-the-box description of Orleans' per-activation non-reentrancy
+    /// queue is the <c>NonReentrancyQueueSize=</c> clause of the
+    /// <c>Response did not arrive on time</c> timeout diagnostic. That clause is
+    /// emitted only for a request already approaching the message timeout and
+    /// describes only the <em>emitting</em> request's own wait, so a grain type
+    /// whose calls are deeply queued but which does not itself trip the timeout
+    /// contributes no rows at all, and the rows that do exist are truncated at
+    /// the timeout threshold. An extraction from that channel can therefore
+    /// report no queueing, be internally consistent, and reproduce exactly - the
+    /// sampling frame excluded the phenomenon rather than biasing the estimate.
+    /// This histogram records at dispatch on <em>every</em> outgoing call, with
+    /// no timeout, fault, or threshold in its emission condition, so its
+    /// population is not truncated.
+    /// </para>
+    /// <para>
+    /// <b>Read it as a floor, not a measurement of the queue.</b> Only calls
+    /// issued from this silo are counted, so calls to the same activation from
+    /// another silo or an external client make the value an under-estimate; and
+    /// for a <c>[Reentrant]</c> grain type or an <c>[AlwaysInterleave]</c>
+    /// method the outstanding calls interleave rather than queue, so a high
+    /// value there means pipelining and not contention. Contrast
+    /// <see cref="LeafCommitInFlight"/>, which is measured after the scheduler
+    /// has dequeued the request and consequently pins at one on a non-reentrant
+    /// grain however deep the real queue is.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<int> GrainCallOutstandingDepth =
+        Meter.CreateHistogram<int>("orleans.lattice.grain.call.outstanding_depth", unit: "{call}",
+            description: "Calls to a target activation already outstanding from this silo when a further call was dispatched, by grain type.");
+
+    /// <summary>
+    /// Histogram of end-to-end outgoing grain call duration, clocked on the
+    /// caller side around the whole call. Tagged with
+    /// <see cref="TagGrainType"/> and <see cref="TagOutcome"/>
+    /// (<c>completed</c> or <c>faulted</c>). Recorded by
+    /// <c>LatticeGrainCallObservationFilter</c>.
+    /// <para>
+    /// The outcome split is load-bearing rather than decorative. A message
+    /// timeout surfaces as a fault after the full timeout has elapsed, so a
+    /// single undifferentiated duration series mixes a completion-latency
+    /// population with a population pinned at the timeout threshold, and the
+    /// second can swamp the first exactly when a cluster is saturated. Selecting
+    /// <c>outcome=completed</c> yields request-completion latency that a healthy
+    /// run populates; selecting <c>outcome=faulted</c> isolates the timeouts
+    /// rather than letting them masquerade as slow completions.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> GrainCallDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.grain.call.duration", unit: "ms",
+            description: "End-to-end outgoing grain call duration observed by the caller, by grain type and outcome.");
 }

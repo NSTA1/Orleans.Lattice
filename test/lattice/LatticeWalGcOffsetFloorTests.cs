@@ -267,4 +267,114 @@ public sealed class LatticeWalGcOffsetFloorTests
         Assert.That(observed, Is.EqualTo(0),
             "A successful offset read must not tick the unavailable counter.");
     }
+
+    // ---------------------------------------------------------------------
+    // The "-1" sentinel (issue #2699). The GetPinOffsetsAsync contract used to
+    // document -1 as the STRONGEST pin ("pins the entire WAL"). It is the exact
+    // opposite: -1 is excluded from the floor and constrains nothing. Nothing
+    // executable pinned that, which is how the doc drifted to the inverse of the
+    // code and stayed there. These three tests make the corrected contract
+    // executable so it cannot drift back silently.
+    // ---------------------------------------------------------------------
+
+    [Test]
+    public async Task RunOnceAsync_a_reported_minus_one_does_not_lower_the_offset_floor()
+    {
+        // Two participating leaves: one with a real checkpoint at offset 1, one
+        // reporting -1 (no WAL-replay dependency). Under the documented-but-wrong
+        // reading, the -1 would pin the whole WAL and nothing could ever be
+        // trimmed. Under the real contract the -1 is skipped and the floor is the
+        // surviving real checkpoint, so the applied prefix 0..1 still trims.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+
+        var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = Hlc(20),
+        };
+        var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = 1,
+            ["_lattice_materialiser_tree_leaf-empty"] = -1,
+        };
+        var sut = new LatticeWalGc(Services(provider, durablePins, durableOffsets), registry, Monitor());
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(2),
+            "A -1 alongside a real checkpoint must leave the floor at the real checkpoint (1), "
+            + "not collapse it to -1.");
+
+        var survivors = await SurvivingOffsetsAsync(provider);
+        Assert.That(survivors, Is.EqualTo(new[] { 2L, 3L }),
+            "The floor is still the real leaf checkpoint, so the reaps above it survive.");
+    }
+
+    [Test]
+    public async Task RunOnceAsync_every_offset_minus_one_leaves_the_floor_unset_and_does_not_wedge_the_trim()
+    {
+        // The case the wrong doc made unanswerable, and the one that actually
+        // occurs: a fleet of leaves that ALL report -1 (genuinely empty
+        // partitions report -1 indefinitely and legitimately). If -1 pinned the
+        // WAL, this tree could never trim again. It must fall through to the HLC
+        // floor alone - the same outcome as a pin store that reports nothing.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+
+        var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = Hlc(20),
+        };
+        var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = -1,
+            ["_lattice_materialiser_tree_leaf-2"] = -1,
+        };
+        var sut = new LatticeWalGc(Services(provider, durablePins, durableOffsets), registry, Monitor());
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(4),
+            "An all--1 pin set imposes NO offset floor, so the HLC floor alone governs the trim "
+            + "- identical to reporting no offsets at all. Were -1 treated as a pin the trim "
+            + "would wedge at zero entries forever.");
+    }
+
+    [Test]
+    public async Task RunOnceAsync_a_consumer_absent_from_the_pin_set_does_not_constrain_the_floor()
+    {
+        // The other half of the corrected contract: the floor is a minimum over
+        // the leaves that REPORTED, not over the leaves that OWE. A leaf present
+        // in the HLC pin set but absent from the offset set contributes nothing,
+        // so the floor comes only from the one leaf that reported an offset.
+        // Absence is deliberately NOT read as offset 0 - that would be a floor
+        // over a population the pin grain never measured.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+
+        var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = Hlc(20),
+            ["_lattice_materialiser_tree_leaf-silent"] = Hlc(20),
+        };
+        var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = 1,
+        };
+        var sut = new LatticeWalGc(Services(provider, durablePins, durableOffsets), registry, Monitor());
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(2),
+            "The silent leaf must not drag the floor to 0 - only reported offsets constrain it.");
+
+        var survivors = await SurvivingOffsetsAsync(provider);
+        Assert.That(survivors, Is.EqualTo(new[] { 2L, 3L }));
+    }
 }

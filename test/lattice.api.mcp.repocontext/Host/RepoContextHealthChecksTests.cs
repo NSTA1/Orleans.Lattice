@@ -118,6 +118,51 @@ public sealed class RepoContextHealthChecksTests
     }
 
     [Test]
+    public async Task A_serving_plane_reports_whether_it_is_armed()
+    {
+        using var armed = new RepoContextRetrievalReadinessState(new SettableTimeProvider());
+        using var unarmed = new RepoContextRetrievalReadinessState(new SettableTimeProvider());
+        armed.MarkServing();
+        armed.ObserveArming(RepoContextRetrievalArming.Armed);
+        unarmed.MarkServing();
+        unarmed.ObserveArming(RepoContextRetrievalArming.Unarmed);
+
+        var armedResult = await new RepoContextRetrievalReadinessHealthCheck(armed).CheckHealthAsync(Context);
+        var unarmedResult = await new RepoContextRetrievalReadinessHealthCheck(unarmed).CheckHealthAsync(Context);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(armedResult.Status, Is.EqualTo(HealthStatus.Healthy));
+            Assert.That(unarmedResult.Status, Is.EqualTo(HealthStatus.Healthy),
+                "An unarmed plane serves complete recall by exhaustive scan and is genuinely ready. "
+                + "Failing it here would wedge any deployment whose corpus cannot partition.");
+            Assert.That(armedResult.Description, Does.Contain("trained partitioning"));
+            Assert.That(unarmedResult.Description, Does.Contain("not from a trained partitioning"));
+            Assert.That(armedResult.Description, Is.Not.EqualTo(unarmedResult.Description),
+                "This is the readable form of issue #2441: before it, /health/ready emitted the same "
+                + "line for an armed and an unarmed plane, so the distinction was invisible on the one "
+                + "surface an operator actually reads.");
+        });
+    }
+
+    [Test]
+    public async Task A_serving_plane_whose_path_has_not_been_observed_says_so()
+    {
+        using var state = new RepoContextRetrievalReadinessState(new SettableTimeProvider());
+        state.MarkServing();
+
+        var result = await new RepoContextRetrievalReadinessHealthCheck(state).CheckHealthAsync(Context);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(HealthStatus.Healthy));
+            Assert.That(result.Description, Does.Contain("not been observed"),
+                "Unobserved and observed-unarmed are different facts, and reporting the first as the "
+                + "second would reintroduce a claim where there is only an absence of evidence.");
+        });
+    }
+
+    [Test]
     public async Task Retrieval_readiness_is_healthy_in_a_keyword_only_configuration()
     {
         using var state = new RepoContextRetrievalReadinessState(new SettableTimeProvider());

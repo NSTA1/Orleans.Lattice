@@ -76,6 +76,8 @@ public sealed partial class DurableVectorIndex
     private int _expected;
     private int _updatesSinceTraining;
     private bool _restored;
+    private int _slicesDeadlined;
+    private int _slicesDeadlinedWithoutProgress;
 
     private DurableVectorIndex(
         IVectorIndexStore store,
@@ -186,7 +188,9 @@ public sealed partial class DurableVectorIndex
         _expected,
         _persistedPartitions,
         _index.PartitionCount,
-        _restored);
+        _restored,
+        _slicesDeadlined,
+        _slicesDeadlinedWithoutProgress);
 
     /// <summary>
     /// Searches the resident index, writing hits into the caller's span in
@@ -269,17 +273,16 @@ public sealed partial class DurableVectorIndex
     {
         ArgumentNullException.ThrowIfNull(id);
         RequireMutable();
-
-        // Any mutation the build did not itself apply breaks the assumption that
-        // the ingest cell is an append-only extension of what is committed, so
-        // the next checkpoint rewrites it wholesale instead of appending to a
-        // prefix that has shifted underneath it.
-        _ingestAppendOnly = false;
         _updatesSinceTraining++;
 
-        return _keys.TryGetKey(id, out var key)
-            ? new ValueTask<bool>(_index.Upsert(key, vector.Span))
-            : UpsertNewAsync(id, vector, cancellationToken);
+        if (!_keys.TryGetKey(id, out var key))
+        {
+            return UpsertNewAsync(id, vector, cancellationToken);
+        }
+
+        var replaced = _index.Upsert(key, vector.Span);
+        NoteOutOfBandUpsert(replaced);
+        return new ValueTask<bool>(replaced);
     }
 
     /// <summary>
@@ -300,7 +303,6 @@ public sealed partial class DurableVectorIndex
     {
         ArgumentNullException.ThrowIfNull(id);
         RequireMutable();
-        _ingestAppendOnly = false;
 
         if (!_keys.TryGetKey(id, out var key))
         {
@@ -310,6 +312,16 @@ public sealed partial class DurableVectorIndex
         _updatesSinceTraining++;
         await WriteRetirementAsync(key, cancellationToken).ConfigureAwait(false);
         var removed = _index.Remove(key);
+        if (removed)
+        {
+            // A removal vacates a position and backfills it from the tail, so a
+            // committed chunk that held either of them no longer matches the
+            // cell. Unlike an append, there is no position at which this is
+            // harmless, so the next checkpoint has to rewrite the cell whole.
+            // A removal that found nothing shifted nothing and must not pay it.
+            _ingestAppendOnly = false;
+        }
+
         await _keys.RemoveAsync(id, cancellationToken).ConfigureAwait(false);
         return removed;
     }
@@ -357,7 +369,38 @@ public sealed partial class DurableVectorIndex
         string id, ReadOnlyMemory<float> vector, CancellationToken cancellationToken)
     {
         var key = await _keys.GetOrAddAsync(id, cancellationToken).ConfigureAwait(false);
-        return _index.Upsert(key, vector.Span);
+        var replaced = _index.Upsert(key, vector.Span);
+        NoteOutOfBandUpsert(replaced);
+        return replaced;
+    }
+
+    /// <summary>
+    /// Records whether an upsert the build did not itself apply has cost the
+    /// ingest cell its append-only property.
+    /// <para>
+    /// Only a <b>replacement</b> can. It vacates a position and backfills it from
+    /// the tail, so a committed chunk holding either no longer matches the cell
+    /// and the next checkpoint has to rewrite the cell whole. This is the rule the
+    /// build's own ingest loop already applies to the vectors it streams - a
+    /// replacement is not an append - and it holds just the same for a write that
+    /// arrived from outside the build.
+    /// </para>
+    /// <para>
+    /// A <b>plain append</b> is indistinguishable from one the build would have
+    /// made itself: it lands at the tail and leaves every committed chunk exactly
+    /// as it was. Charging it a rewrite makes the next checkpoint rewrite the
+    /// whole cell, which over a build whose writer hands a batch over once per slice is
+    /// quadratic in corpus size rather than linear. That is the amplification
+    /// behind issue #2691, where one tree reached 25 GB of write-ahead log while
+    /// its largest sibling reached 185 MB.
+    /// </para>
+    /// </summary>
+    private void NoteOutOfBandUpsert(bool replaced)
+    {
+        if (replaced)
+        {
+            _ingestAppendOnly = false;
+        }
     }
 
     private Task WriteRetirementAsync(long key, CancellationToken cancellationToken)
