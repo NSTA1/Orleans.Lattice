@@ -678,17 +678,28 @@ internal sealed partial class BPlusLeafGrain
     /// two families silently differ.
     /// </para>
     /// <para>
-    /// A <c>no_tree_id</c> decline is emitted without tree or tenant tags,
-    /// because the leaf has no tree identity at that point. That is a property
-    /// of the state being counted, not an omission.
+    /// A <c>no_tree_id</c> decline carries no <c>tree</c> tag - there is no tree
+    /// identity to report - but it still carries the derived <c>tenant</c>
+    /// dimension, which <see cref="LatticeTenantLabel.ForTree(string?)"/>
+    /// resolves to the platform sentinel for a null id. Emitting it with no
+    /// tenant dimension at all would make it invisible to every tenant-scoped
+    /// query, so an operator could not tell an unattributable measurement from
+    /// a missed one - which is the same ambiguity this instrument exists to
+    /// remove, reintroduced one dimension over. The uniform dimension also
+    /// keeps every site on this instrument under one attribution rule, so its
+    /// series never splits across two.
     /// </para>
     /// </summary>
     private void ObserveSnapshotCaptureDecline(KeyValuePair<string, object?> reason)
     {
-        var treeId = state.State.TreeId;
-        if (treeId is not { Length: > 0 })
+        // Normalise an empty id to null so it resolves to the platform sentinel
+        // rather than being adopted by the default tenant, matching the guard below.
+        var treeId = state.State.TreeId is { Length: > 0 } id ? id : null;
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        if (treeId is null)
         {
-            LatticeMetrics.LeafSnapshotCaptureDeclines.Add(1, reason);
+            LatticeMetrics.LeafSnapshotCaptureDeclines.Add(1, reason, tenantTag);
             return;
         }
 
@@ -696,7 +707,7 @@ internal sealed partial class BPlusLeafGrain
             1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
             reason,
-            LatticeTenantLabel.ForTree(treeId));
+            tenantTag);
     }
 
     /// <summary>
