@@ -52,6 +52,14 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     private DurableVectorIndex? _index;
     private VectorIndexBuildProgress _progress;
     private int _pendingFlush;
+
+    /// <summary>
+    /// Identifiers the writer handed over while the build was still streaming, and
+    /// which were therefore recorded instead of applied. Holds identifiers only,
+    /// never vectors, so it stays a few bytes per write of a build that is already
+    /// reading the whole corpus. Drained by the catch-up once the build is Ready.
+    /// </summary>
+    private HashSet<string>? _deferredWrites;
     private bool _serving;
     private bool _disposed;
 
@@ -359,6 +367,31 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                     continue;
                 }
 
+                if (index.Progress.Phase != VectorIndexBuildPhase.Ready)
+                {
+                    // THE BUILD IS STREAMING THE STORE OF RECORD RIGHT NOW, AND
+                    // THIS WRITE IS ALREADY IN IT. Applying it here anyway costs
+                    // far more than it looks: while the index is ingesting it is
+                    // one untrained cell, and any write the build did not make
+                    // itself ends the cell's append-only property, so the next
+                    // ingest checkpoint rewrites EVERY chunk of it instead of
+                    // appending. The writer hands a batch over once per build
+                    // slice, so the build pays a whole-index rewrite per slice
+                    // and its write-ahead volume becomes quadratic in corpus
+                    // size rather than linear. That is issue #2691, where this
+                    // tree reached 25 GB of log while its largest sibling
+                    // reached 185 MB.
+                    //
+                    // Recording the identifier rather than dropping it is what
+                    // keeps this exact: the build re-reads anything it has not
+                    // reached, and CatchUpAsync replays these once the build is
+                    // Ready, so an identifier the build had already passed is
+                    // refreshed instead of being left stale.
+                    (_deferredWrites ??= new HashSet<string>(StringComparer.Ordinal))
+                        .Add(update.VectorId);
+                    continue;
+                }
+
                 await index.UpsertAsync(update.VectorId, update.Vector, cancellationToken).ConfigureAwait(false);
                 applied++;
             }
@@ -459,6 +492,15 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     private async Task CatchUpAsync(
         DurableVectorIndex index, bool probeSource, CancellationToken cancellationToken)
     {
+        // WRITES DEFERRED DURING THE BUILD ARE REPLAYED HERE, and this is taken
+        // before the probe's early exit below rather than after it. That exit
+        // reasons that "anything written since arrives through the writer's
+        // write-through seam" - which is precisely the seam ApplyWriteAsync now
+        // defers, so leaving the drain behind it would strand every deferred
+        // write on the path the build's own process takes.
+        var deferred = _deferredWrites;
+        _deferredWrites = null;
+
         // ONLY AN INDEX THIS PROCESS DID NOT STREAM NEEDS THE SHORTFALL PROBE.
         // The probe is an O(corpus) key walk whose only job is to decide whether a
         // persisted index is BEHIND the store of record. When this activation
@@ -466,7 +508,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         // anything written since arrives through the writer's write-through seam,
         // so the walk is pure cost - and it is the single most timeout-prone call
         // in the build, which took the whole build down with it (#1844).
-        if (!probeSource)
+        if (!probeSource && deferred is null)
         {
             await MaintainAsync(index, cancellationToken).ConfigureAwait(false);
             return;
@@ -494,20 +536,23 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         // and nowhere else: neither yields a figure, and a missing figure has exactly
         // one safe reading here.
         var behind = true;
-        try
+        if (deferred is null)
         {
-            var expected = await _source.CountAsync(cancellationToken).ConfigureAwait(false);
-            behind = expected > index.Count;
-        }
-        catch (Exception ex) when (ex is EnumerationAbortedException or RepoContextCountBudgetExceededException)
-        {
-            _logger.LogInformation(
-                ex,
-                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} could not count the "
-                + "source within its budget; treating the persisted index as possibly behind and repairing.",
-                _repoId,
-                _space.ModelId,
-                _space.Dimension);
+            try
+            {
+                var expected = await _source.CountAsync(cancellationToken).ConfigureAwait(false);
+                behind = expected > index.Count;
+            }
+            catch (Exception ex) when (ex is EnumerationAbortedException or RepoContextCountBudgetExceededException)
+            {
+                _logger.LogInformation(
+                    ex,
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} could not count the "
+                    + "source within its budget; treating the persisted index as possibly behind and repairing.",
+                    _repoId,
+                    _space.ModelId,
+                    _space.Dimension);
+            }
         }
 
         if (!behind)
@@ -522,8 +567,14 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             .ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (index.TryGetKey(entry.Id, out _))
+            if (index.TryGetKey(entry.Id, out _)
+                && (deferred is null || !deferred.Contains(entry.Id)))
             {
+                // Present and not deferred: the build read it, so it is current.
+                // A deferred identifier is refreshed even when present, because
+                // that is exactly the case the build cannot have picked up - it
+                // had already streamed past that identifier when the write
+                // arrived.
                 continue;
             }
 
