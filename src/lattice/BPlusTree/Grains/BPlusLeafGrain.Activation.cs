@@ -3662,13 +3662,36 @@ internal sealed partial class BPlusLeafGrain
                 // activation replays a strictly shorter gap, which is a
                 // strictly cheaper read.
                 //
-                // No flush is issued here. The incremental flush at the foot
-                // of this loop (issue #1513) is unconditional after every
-                // non-empty slice, so everything this pass applied is already
-                // banked and a flush on this path can only ever be a no-op -
-                // a perturbation arm that removed it reddened nothing. Adding
-                // a storage call at the single moment the process is most
-                // starved, for no progress, is the wrong trade.
+                // No flush is issued here, and the reason is narrower than
+                // "the foot of the loop already flushed". The foot-of-loop
+                // flush (issue #1513) is CALLED unconditionally after every
+                // non-empty slice, but calling it is not the same as banking:
+                // it clamps to the recovered ceiling and is skipped unless it
+                // strictly advances the partition's position. What makes a
+                // flush here pointless is that this path adds no progress the
+                // foot of the loop has not already offered - the slice that
+                // threw applied nothing. So a flush on this path can only
+                // repeat an offer already made, at the single moment the
+                // process is most starved. A perturbation arm that removed it
+                // reddened nothing, which is the evidence rather than the
+                // argument.
+                //
+                // That the absorbed prefix survives an interruption mid-replay
+                // is pinned independently by
+                // Cancellation_at_each_slice_boundary_banks_the_absorbed_prefix,
+                // which interrupts at each slice boundary and asserts the
+                // prefix banked. This throw is that same shape.
+                //
+                // One shape is exempt, and it is not this path's to repair:
+                // when the ledger is unavailable and a deferred terminal sits
+                // at the HEAD of the window, the ceiling clamps to the current
+                // checkpoint and nothing banks, for an interrupted replay of
+                // any kind. That is issue #2746, it predates this path (plain
+                // cancellation reproduces it with none of this code present),
+                // and it is unfixable here because the checkpoint is a single
+                // watermark: an unapplied head offset admits no correct
+                // checkpoint above the current one, however much of the rest
+                // of the window was absorbed.
                 ReplayLogger(context)?.LogError(
                     ex,
                     "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford even a "
