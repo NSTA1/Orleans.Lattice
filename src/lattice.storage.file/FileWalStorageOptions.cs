@@ -96,6 +96,32 @@ public sealed class FileWalStorageOptions
     /// stall replay permanently at that offset, so this option bounds a
     /// page's size without ever being able to block progress.
     /// </para>
+    /// <para>
+    /// That floor is why this option cannot, on its own, keep a read
+    /// affordable, and why it must not be tuned downwards in the hope that
+    /// it will (issue #2742). It bounds how many bytes a page totals; it
+    /// bounds neither the largest single block the read must find nor the
+    /// page's cost relative to the memory that actually remains. Both gaps
+    /// are closed below this option rather than by changing it:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>the oversized-single-entry case is decoded from
+    /// pooled non-contiguous chunks, so it no longer needs a contiguous
+    /// buffer its own size - the floor stays, and stops being expensive;
+    /// </description></item>
+    /// <item><description>this value is treated as a ceiling and narrowed
+    /// per read by the process's current heap occupancy, because a ceiling
+    /// chosen for healthy operation is the wrong one for a process whose
+    /// allocations are already failing; and</description></item>
+    /// <item><description>a page that still cannot be allocated is retried
+    /// at a quarter of its width, down to one entry, before the read is
+    /// refused as unaffordable.</description></item>
+    /// </list>
+    /// <para>
+    /// The configured value therefore continues to mean what it says on a
+    /// healthy host, and stops being the binding constraint on a host that
+    /// is out of memory.
+    /// </para>
     /// </summary>
     public long MaxReadBatchBytes { get; set; } = DefaultMaxReadBatchBytes;
 }
