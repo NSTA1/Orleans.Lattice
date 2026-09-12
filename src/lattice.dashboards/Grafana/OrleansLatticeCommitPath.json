@@ -815,6 +815,46 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_activation_cold_replay_loop_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "loop-escalated cancellations {{tree}}/s" }
       ]
+    },
+    {
+      "id": 135,
+      "title": "Leaf snapshot capture attempts (rate) by outcome - issue #2696",
+      "description": "Leaf-snapshot capture attempts (orleans.lattice.leaf.snapshot.captures), split by outcome - issue #2696. READ THE SUM ACROSS OUTCOMES FIRST: it is the attempt count, and before this instrument existed there was no exported series anywhere from which it could be derived, so \"every capture is failing\" and \"capture never ran\" were the same reading - zero - at every rate of occurrence. That is not a weak measurement, it is no measurement, and it is the defect this panel exists to close. outcome=failed is the reading that was previously invisible: the activation advisory handler catches and swallows the exception, logging it and incrementing nothing. outcome=abandoned is a capture dropped because the caller's deactivation token was cancelled; it is kept apart from failed deliberately, because a fleet-wide rolling restart and a broken storage provider would otherwise produce an identical graph while calling for opposite responses. ONE LIMITATION, STATED BECAUSE INFERRING A GUARANTEE FROM IT WOULD BE WRONG: outcome=succeeded records that the capture completed and the blob was persisted, NOT that the blob is subsequently loadable. A capture whose SnapshotOffset normalises to null is saved and is then discarded on load by HasCapturedPrefix, and this counter will record that as a success. Correlate with the snapshot load panels above rather than reading succeeded as end-to-end coverage.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 193 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_snapshot_captures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{outcome}}/s" },
+        { "refId": "B", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_captures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} attempts (all outcomes)/s" }
+      ]
+    },
+    {
+      "id": 136,
+      "title": "Leaf snapshot capture duration p50/p95 (ms) - issue #2696",
+      "description": "Wall-clock duration of leaf-snapshot capture attempts (orleans.lattice.leaf.snapshot.capture.duration) - issue #2696. Timing starts at the SINGLE-FLIGHT BOUNDARY, after the eligibility gates, so a leaf that declines to capture contributes no sample; the gates return in microseconds and are taken far more often than a capture runs, so timing the whole method would let near-zero no-ops dominate and drag the distribution toward zero exactly when capture is most expensive. This shares its population exactly with the attempt counter above - every counted attempt is timed and every timed attempt is counted - so the two may be read as a ratio without drift. WHY THIS PANEL MATTERS OPERATIONALLY: capture is awaited INLINE inside OnActivateAsync, and Orleans delivers no request to a grain until that method completes, so every millisecond here is activation latency paid by every caller of that leaf. A rising p95 with a flat attempt rate is the shape of a saturating snapshot provider (issue #2696): all per-leaf snapshot grains write through one shared provider with no admission control, no cap and no jitter.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 200 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_leaf_snapshot_capture_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "{{tree}} p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_leaf_snapshot_capture_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "{{tree}} p95" },
+        { "refId": "C", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_capture_duration_milliseconds_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum by (tree) (rate(orleans_lattice_leaf_snapshot_capture_duration_milliseconds_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1) or vector(0)", "legendFormat": "{{tree}} interval mean" }
+      ]
+    },
+    {
+      "id": 137,
+      "title": "Leaf snapshot capture declines (rate) by reason - issue #2696",
+      "description": "Leaf-snapshot capture invocations that DECLINED before reaching the attempt boundary (orleans.lattice.leaf.snapshot.capture.declines), split by reason - issue #2696. THIS PANEL EXISTS BECAUSE THE ATTEMPT COUNTER ABOVE CANNOT BE READ ALONE. A declined capture is a third state, distinct from both a failed capture and an idle deployment: it increments nothing on that counter, so \"every capture is being declined\" and \"the capture path is never reached\" leave it at zero alike. That is the same ambiguity the attempt counter was added to remove, one gate higher, and it is the most likely way a self-heal silently never runs. It is a separate instrument rather than a fourth outcome value deliberately, so that attempts and durations stay exactly co-populated - declines are never timed. reason=not_eligible IS THE STARVED-LEAF SIGNAL and is the one to read after a self-heal deploy: it means no partition held a checkpoint or live data, so that leaf will never cover itself. reason=already_in_flight is contention rather than error - a sustained rate means captures are being requested faster than the shared provider retires them, which is the saturation shape, and it calls for the opposite response to not_eligible. reason=no_tree_id is a bug above zero rather than a workload characteristic, and carries NO tree tag because the leaf has no tree identity to report, so a per-tree filter will never show it.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 207 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_snapshot_capture_declines_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{reason}}/s" },
+        { "refId": "B", "expr": "sum by (reason) (rate(orleans_lattice_leaf_snapshot_capture_declines_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "untagged-tree {{reason}}/s" }
+      ]
     }
   ]
 }

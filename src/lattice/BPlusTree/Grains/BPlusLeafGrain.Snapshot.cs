@@ -400,6 +400,7 @@ internal sealed partial class BPlusLeafGrain
         // there is no cache content worth persisting anyway.
         if (state.State.TreeId is null)
         {
+            ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNoTreeId);
             return;
         }
 
@@ -472,6 +473,7 @@ internal sealed partial class BPlusLeafGrain
             }
             if (!anyPartitionHasLiveData)
             {
+                ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNotEligible);
                 return;
             }
         }
@@ -485,6 +487,7 @@ internal sealed partial class BPlusLeafGrain
         // slow.
         if (_snapshotCaptureInFlight)
         {
+            ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineAlreadyInFlight);
             return;
         }
         _snapshotCaptureInFlight = true;
@@ -663,6 +666,37 @@ internal sealed partial class BPlusLeafGrain
             treeTag,
             outcome,
             tenantTag);
+    }
+
+    /// <summary>
+    /// Records a capture invocation that declined before the attempt boundary.
+    /// <para>
+    /// Declines are counted on their own instrument rather than as a fourth
+    /// value of the attempt counter's outcome tag, so that the attempt counter
+    /// and the duration histogram keep sharing a population exactly. A decline
+    /// is never timed, so folding it into the attempt counter would make the
+    /// two families silently differ.
+    /// </para>
+    /// <para>
+    /// A <c>no_tree_id</c> decline is emitted without tree or tenant tags,
+    /// because the leaf has no tree identity at that point. That is a property
+    /// of the state being counted, not an omission.
+    /// </para>
+    /// </summary>
+    private void ObserveSnapshotCaptureDecline(KeyValuePair<string, object?> reason)
+    {
+        var treeId = state.State.TreeId;
+        if (treeId is not { Length: > 0 })
+        {
+            LatticeMetrics.LeafSnapshotCaptureDeclines.Add(1, reason);
+            return;
+        }
+
+        LatticeMetrics.LeafSnapshotCaptureDeclines.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            reason,
+            LatticeTenantLabel.ForTree(treeId));
     }
 
     /// <summary>

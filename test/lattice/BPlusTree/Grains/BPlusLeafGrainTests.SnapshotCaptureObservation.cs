@@ -363,4 +363,217 @@ public partial class BPlusLeafGrainTests
                 "an abandoned attempt is still an attempt and is still timed.");
         });
     }
+
+    /// <summary>
+    /// Collects decline records for <paramref name="treeId"/>, returning the
+    /// <c>reason</c> tag of each. A decline carrying no tree tag - which is what
+    /// the <c>no_tree_id</c> path emits, because the leaf has no tree identity -
+    /// is collected when <paramref name="treeId"/> is <c>null</c>, since
+    /// filtering it out unconditionally would make that reason unobservable by
+    /// construction.
+    /// </summary>
+    private static ConcurrentBag<string> CaptureSnapshotDeclineObservations(
+        string? treeId,
+        out IDisposable listener)
+    {
+        var reasons = new ConcurrentBag<string>();
+
+        listener = MeterListening.StartForMeter(
+            LatticeMetrics.Meter,
+            new[] { LatticeMetrics.LeafSnapshotCaptureDeclinesName },
+            l => l.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            {
+                string? reason = null;
+                string? taggedTree = null;
+
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == LatticeMetrics.TagTree)
+                    {
+                        taggedTree = tag.Value as string;
+                    }
+                    else if (tag.Key == LatticeMetrics.TagReason)
+                    {
+                        reason = tag.Value as string;
+                    }
+                }
+
+                if (reason is not null && taggedTree == treeId)
+                {
+                    reasons.Add(reason);
+                }
+            }));
+
+        return reasons;
+    }
+
+    /// <summary>
+    /// A declined capture is a <b>third</b> state, and before this instrument it
+    /// was indistinguishable from the other two.
+    /// <para>
+    /// The attempt counter above fixed the original defect - "every capture
+    /// failed" against "capture never ran" - but only moved the ambiguity up one
+    /// gate: a deployment in which every capture <em>declines</em> and one in
+    /// which the capture path is never reached both leave the attempt counter at
+    /// zero. That is the same error the attempt counter exists to prevent, one
+    /// level higher, and it is the most likely way a self-heal silently never
+    /// runs.
+    /// </para>
+    /// <para>
+    /// This is not hypothetical. While this instrument was under review, an
+    /// engineer debugging a leaf that held three live keys and no flushed
+    /// checkpoint had to hand-roll a file-append probe to answer "did capture
+    /// run or decline", because no instrument reported it - and a `captures`
+    /// counter reading zero would have supported the wrong answer.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_declined_capture_is_distinguishable_from_a_capture_path_never_entered()
+    {
+        // ---- Arm A: the capture path IS entered and declines at the gate. ----
+        var declinedTree = UniqueSnapshotCaptureTree();
+        var (declinedGrain, declinedState, declinedStub, _) = CreateGrainForProactiveCapture(
+            activationDecision: FallOffLogDecision.TailReplay,
+            persistedCheckpoint: -1,
+            walHead: -1);
+        declinedState.State.TreeId = declinedTree;
+        declinedState.State.ProjectionCheckpointOffset = -1;
+        await ((IGrainBase)declinedGrain).OnActivateAsync(CancellationToken.None);
+
+        var declinedReasons = CaptureSnapshotDeclineObservations(declinedTree, out var declinedListener);
+        using (declinedListener)
+        {
+            // No rows seeded, so the leaf has neither a checkpoint nor live data.
+            await ((IBPlusLeafGrain)declinedGrain).CaptureSnapshotAsync();
+        }
+
+        // ---- Arm B: the capture path is never entered at all. ----
+        var untouchedTree = UniqueSnapshotCaptureTree();
+        var (untouchedGrain, untouchedState, untouchedStub, _) = CreateGrainForProactiveCapture(
+            activationDecision: FallOffLogDecision.TailReplay,
+            persistedCheckpoint: 5,
+            walHead: 5);
+        untouchedState.State.TreeId = untouchedTree;
+        SeedOneCaptureRow(untouchedGrain);
+
+        var untouchedReasons = CaptureSnapshotDeclineObservations(untouchedTree, out var untouchedListener);
+        using (untouchedListener)
+        {
+            await ((IGrainBase)untouchedGrain).OnActivateAsync(CancellationToken.None);
+        }
+
+        // Controls: neither arm reached the store, so the store cannot be what
+        // distinguishes them - only the decline instrument can.
+        await declinedStub.DidNotReceive().SaveAsync(
+            Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+        await untouchedStub.DidNotReceive().SaveAsync(
+            Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(declinedReasons, Is.EquivalentTo(new[] { "not_eligible" }),
+                "a capture that enters the path and declines because no partition holds a "
+                + "checkpoint or live data must be counted once, as not_eligible. This is "
+                + "the starved-leaf signal: such a leaf will never cover itself.");
+            Assert.That(untouchedReasons, Is.Empty,
+                "a leaf whose capture path is never entered must contribute nothing, so "
+                + "that a decline count positively means 'declined' rather than merely "
+                + "'nothing recorded'.");
+            Assert.That(declinedReasons.Count, Is.Not.EqualTo(untouchedReasons.Count),
+                "THE discrimination this instrument exists for: 'every capture is being "
+                + "declined' and 'the capture path is never reached' must produce "
+                + "different readings. The attempt counter alone leaves both at zero.");
+        });
+    }
+
+    /// <summary>
+    /// The single-flight decline is a <b>contention</b> signal rather than an
+    /// error, which is why it is a distinct reason rather than folded into
+    /// <c>not_eligible</c>. A second capture arriving while a save is genuinely
+    /// suspended is the exact shape of the cross-leaf pressure issue #2696
+    /// describes, so the store is held open here rather than simulated.
+    /// </summary>
+    [Test]
+    public async Task A_capture_declined_by_the_single_flight_guard_is_counted_as_already_in_flight()
+    {
+        var treeId = UniqueSnapshotCaptureTree();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var (grain, state, snapshotStub, _) = CreateGrainForProactiveCapture(
+            activationDecision: FallOffLogDecision.SnapshotPending,
+            persistedCheckpoint: 12,
+            walHead: 12);
+        state.State.TreeId = treeId;
+        SeedOneCaptureRow(grain);
+
+        snapshotStub
+            .SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
+            .Returns(async _ =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+            });
+
+        var reasons = CaptureSnapshotDeclineObservations(treeId, out var listener);
+        using (listener)
+        {
+            var first = ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.That(first.IsCompleted, Is.False,
+                "precondition: the held store must actually be keeping the first capture "
+                + "in flight, otherwise the second call below would not be contending and "
+                + "this test would prove nothing.");
+
+            // A second capture arrives while the first save is suspended.
+            await ((IBPlusLeafGrain)grain).CaptureSnapshotAsync();
+
+            release.TrySetResult();
+            await first;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reasons, Does.Contain("already_in_flight"),
+                "a capture dropped by the single-flight guard must be counted as "
+                + "already_in_flight. A sustained rate here means captures are requested "
+                + "faster than the shared snapshot provider retires them.");
+            Assert.That(reasons, Does.Not.Contain("not_eligible"),
+                "and must NOT be conflated with the starved-leaf reason: contention and "
+                + "ineligibility call for opposite operator responses.");
+        });
+    }
+
+    /// <summary>
+    /// Capture invoked on a leaf that was never attached to a tree is a bug, so
+    /// it is counted rather than silently returning. It is emitted with no tree
+    /// tag - there is no tree to name - which this test asserts directly, since
+    /// a reader filtering by tree would otherwise never see it.
+    /// </summary>
+    [Test]
+    public async Task A_capture_on_a_leaf_with_no_tree_id_is_counted_untagged_as_no_tree_id()
+    {
+        var (grain, state, snapshotStub, _) = CreateGrainForProactiveCapture(
+            activationDecision: FallOffLogDecision.TailReplay,
+            persistedCheckpoint: -1,
+            walHead: -1);
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        state.State.TreeId = null;
+
+        // Passing null as the expected tree collects exactly the untagged records.
+        var untagged = CaptureSnapshotDeclineObservations(null, out var listener);
+        using (listener)
+        {
+            await ((IBPlusLeafGrain)grain).CaptureSnapshotAsync();
+        }
+
+        await snapshotStub.DidNotReceive().SaveAsync(
+            Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+
+        Assert.That(untagged, Is.EquivalentTo(new[] { "no_tree_id" }),
+            "a capture on a leaf with no TreeId must be counted as no_tree_id and must "
+            + "carry no tree tag, because the leaf has no tree identity to report. Above "
+            + "zero this reason is a bug, not a workload characteristic.");
+    }
 }
