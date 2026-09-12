@@ -143,6 +143,15 @@ public class BPlusLeafGrainColdActivationAdmissionTests
         }
     }
 
+    // Every rehydrate below is driven through a bounded token rather than
+    // CancellationToken.None. Abandoning the await alone is not enough: the
+    // grain call would keep waiting on the gate forever, and an orphaned
+    // in-flight activation hangs the test host at shutdown - which aborts a
+    // perturbation run and names nothing. Cancelling the claim itself means a
+    // clause that has been reverted reddens a test and the run continues.
+    private static CancellationTokenSource ClaimDeadline()
+        => new(TimeSpan.FromSeconds(15));
+
     // ---------------------------------------------------------------------
     // Clause 1 - the gate bounds AGGREGATE in-flight hydration bytes.
     // ---------------------------------------------------------------------
@@ -188,6 +197,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
         }
 
         var treeId = UniqueAdmissionTree();
+        using var deadline = ClaimDeadline();
         var rehydrates = new List<Task<bool>>(Leaves);
         for (var i = 0; i < Leaves; i++)
         {
@@ -196,7 +206,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
             // A known per-leaf size, so the arithmetic under test is the gate's
             // and not an estimate the test cannot predict.
             state.State.SnapshotLoadHintBytes = PerLeafBytes;
-            rehydrates.Add(Task.Run(() => grain.TryRehydrateFromSnapshotAsync(CancellationToken.None)));
+            rehydrates.Add(Task.Run(() => grain.TryRehydrateFromSnapshotAsync(deadline.Token)));
         }
 
         await SpinUntilAsync(
@@ -449,7 +459,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
                 new OutOfMemoryException("Exception of type 'System.OutOfMemoryException' was thrown.")));
 
         var thrown = Assert.ThrowsAsync<LeafSnapshotUnaffordableException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None));
+            async () => await ((IGrainBase)grain).OnActivateAsync(ClaimDeadline().Token));
 
         Assert.Multiple(() =>
         {
@@ -488,7 +498,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
 
         state.State.ProjectionCheckpointOffset = 5L;
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await ((IGrainBase)grain).OnActivateAsync(ClaimDeadline().Token);
 
         await coord.Received().ReadSliceAsync(
             -1L,
@@ -516,8 +526,8 @@ public class BPlusLeafGrainColdActivationAdmissionTests
 
         Assert.That(state.State.SnapshotLoadHintBytes, Is.Zero, "nothing observed yet");
 
-        var rehydrated = await grain.TryRehydrateFromSnapshotAsync(CancellationToken.None)
-            .WaitAsync(TimeSpan.FromSeconds(15));
+        using var deadline = ClaimDeadline();
+        var rehydrated = await grain.TryRehydrateFromSnapshotAsync(deadline.Token);
 
         Assert.Multiple(() =>
         {
@@ -565,7 +575,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
             Timestamp = HybridLogicalClock.Zero,
         };
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await ((IGrainBase)grain).OnActivateAsync(ClaimDeadline().Token);
         await ((IBPlusLeafGrain)grain).CaptureSnapshotAsync();
 
         Assert.That(saved, Is.Not.Null,
@@ -613,6 +623,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
         // bound would have been admitted immediately.
         var admission = new LeafSnapshotHydrationAdmission(budgetBytes: 1_000L);
         using var occupant = await admission.AcquireAsync(180L, CancellationToken.None);
+        using var deadline = ClaimDeadline();
 
         var (grain, state, _, _) = CreateGatedGrain(
             admission,
@@ -622,7 +633,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
 
         state.State.SnapshotLoadHintBytes = 5_000L;
 
-        var rehydrate = Task.Run(() => grain.TryRehydrateFromSnapshotAsync(CancellationToken.None));
+        var rehydrate = Task.Run(() => grain.TryRehydrateFromSnapshotAsync(deadline.Token));
         await SpinUntilAsync(() => admission.QueuedCount == 1, "the hinted claim to queue");
 
         Assert.That(rehydrate.IsCompleted, Is.False,
@@ -631,10 +642,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
 
         occupant.Dispose();
 
-        // Bounded: without the sole-occupant rule this claim can never fit, and
-        // an unbounded await here would hang a perturbation run rather than
-        // redden it.
-        Assert.That(await rehydrate.WaitAsync(TimeSpan.FromSeconds(15)), Is.True);
+        Assert.That(await rehydrate, Is.True);
     }
 
     // ---------------------------------------------------------------------
@@ -675,8 +683,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
             () => Task.FromResult<LeafSnapshotBlob?>(NewSizedBlob(offset: 10L, snapshotBytes: 10L)));
 
         Assert.That(
-            await grain.TryRehydrateFromSnapshotAsync(CancellationToken.None)
-                .WaitAsync(TimeSpan.FromSeconds(15)),
+            await grain.TryRehydrateFromSnapshotAsync(ClaimDeadline().Token),
             Is.True);
 
         List<(string Outcome, long Value)> observed;
