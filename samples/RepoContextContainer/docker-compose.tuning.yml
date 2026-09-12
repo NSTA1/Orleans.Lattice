@@ -33,11 +33,37 @@
 #   pwsh -File ./scripts/Assert-ContainerProvenance.ps1
 #
 # ---------------------------------------------------------------------------
-# Host these values were measured on: 16 logical CPUs, 55.7 GiB RAM.
-# Do not copy them onto a different host without re-measuring. In particular
-# DOTNET_PROCESSOR_COUNT below is a literal host core count, and a literal
-# copied from someone else's deployment is the failure mode the base compose
-# file's LATTICE_WAL_MAX_CONCURRENT_REPLAYS comment warns about at length.
+# EVERY RESOURCE KNOB BELOW IS DERIVED, NOT TRANSCRIBED (issue #2779).
+#
+# This block used to read, in full:
+#
+#   "Host these values were measured on: 16 logical CPUs, 55.7 GiB RAM.
+#    Do not copy them onto a different host without re-measuring. In particular
+#    DOTNET_PROCESSOR_COUNT below is a literal host core count, and a literal
+#    copied from someone else's deployment is the failure mode the base compose
+#    file's LATTICE_WAL_MAX_CONCURRENT_REPLAYS comment warns about at length."
+#
+# That warning was exactly right, which is why it is quoted rather than
+# deleted. What changed is that it is now ENFORCED instead of advised. Every
+# resource knob below is a `${VAR:?...}` reference with NO default, so this
+# file cannot carry a literal from anyone's machine - including the one it was
+# written on. The warning had been sitting directly above the literals it
+# warned about for the whole of epic #2368, and was not enough on its own.
+#
+# WHAT THE LITERALS COST, so the next person does not restore one. The two
+# mem_limit values summed to 17 GiB, so on a 16 GiB host this stack could not
+# start at all, and nothing said why. Worse, DOTNET_PROCESSOR_COUNT: "16"
+# overrode a cgroup-aware default and held the WAL replay concurrency gate at
+# 16 permits against a 6.0-CPU quota - a 2.67x oversubscription, measured on
+# the live deployment, and the deployment half of the root cause in #2692.
+#
+# Derive the values for THIS host and corpus:
+#
+#   pwsh -File ./scripts/New-TuningEnv.ps1
+#
+# It writes .env in this directory. Read .env.example for what each variable
+# means, what it is derived FROM, and which of them are policy rather than
+# measurement - the distinction is stated per-variable and deliberately.
 # ---------------------------------------------------------------------------
 
 services:
@@ -95,24 +121,71 @@ services:
       #
       # GCHeapCount decouples the collector from PROCESSOR_COUNT, so the
       # footprint concern that motivated "0" is addressed directly instead of
-      # by giving up parallel collection. 6 matches the cpus cap below, NOT the
-      # 16 above.
-      DOTNET_gcServer: "1"
-      DOTNET_GCHeapCount: "6"
-      # DO NOT REMOVE. This decouples the WAL replay concurrency gate from the
-      # CPU cap below. BPlusLeafGrain sizes that process-wide gate from
-      # Environment.ProcessorCount when the option is left non-positive, once,
-      # as a structural constant. Environment.ProcessorCount is cgroup-aware, so
-      # the cpus limit below would otherwise shrink the gate silently and
-      # unattributably. Pinning the reported count holds the gate at the value
-      # every previous field measurement on this box was taken against, while
-      # the cgroup quota still bounds actual CPU consumption.
+      # by giving up parallel collection. It matched the cpus cap below, NOT
+      # the 16 that used to be pinned beneath it.
       #
-      # This is also why the embedder derives its own thread count from the
-      # cgroup quota rather than from the processor count (issue #2610): this
-      # variable overrides Environment.ProcessorCount and wins over the quota,
-      # so a service that copied this environment block would be oversubscribed.
-      DOTNET_PROCESSOR_COUNT: "16"
+      # Under #2779 that correspondence is no longer a coincidence maintained
+      # by hand: this and `cpus` below read the SAME derived value, so they
+      # cannot drift apart the way two independently-edited literals could.
+      # The original pairing was correct and is preserved by construction.
+      DOTNET_gcServer: "1"
+      DOTNET_GCHeapCount: "${REPOCONTEXT_GC_HEAP_COUNT:?unset - run ./scripts/New-TuningEnv.ps1 to derive it, or set it by hand from .env.example. No default by design (issue #2779).}"
+      # ---- WAL replay concurrency ---------------------------------------
+      # DOTNET_PROCESSOR_COUNT: "16" USED TO BE HERE. IT IS GONE (issue #2779).
+      # Do not restore it. Its comment read, in full:
+      #
+      #   "DO NOT REMOVE. This decouples the WAL replay concurrency gate from
+      #    the CPU cap below. BPlusLeafGrain sizes that process-wide gate from
+      #    Environment.ProcessorCount when the option is left non-positive,
+      #    once, as a structural constant. Environment.ProcessorCount is
+      #    cgroup-aware, so the cpus limit below would otherwise shrink the
+      #    gate silently and unattributably. Pinning the reported count holds
+      #    the gate at the value every previous field measurement on this box
+      #    was taken against, while the cgroup quota still bounds actual CPU
+      #    consumption.
+      #
+      #    This is also why the embedder derives its own thread count from the
+      #    cgroup quota rather than from the processor count (issue #2610):
+      #    this variable overrides Environment.ProcessorCount and wins over the
+      #    quota, so a service that copied this environment block would be
+      #    oversubscribed."
+      #
+      # Every mechanical sentence in that is accurate, and the last paragraph
+      # correctly identifies the variable as an oversubscription hazard for any
+      # service that copies it. The justification for keeping it is what fails:
+      # it holds the gate "at the value every previous field measurement on
+      # this box was taken against" - preserving COMPARABILITY WITH PRIOR RUNS,
+      # while the thing held constant was the defect those runs were measuring.
+      # A comment can be meticulous about one axis and silent about another;
+      # this one reasons carefully about continuity and never about cost.
+      #
+      # THE COST, measured on the live deployment rather than argued:
+      #   - the gate sized to 16 permits against a `cpus: 6.0` quota (2.67x);
+      #   - `docker stats` bursting to 638/751/681% against a 600% quota;
+      #   - `Configured WalMaterialiserMaxConcurrentReplays=0` in the gate's own
+      #     log line, proving the supported knob was never set;
+      #   - and 16 concurrent whole-window replays holding multi-MiB buffers,
+      #     which is the deployment half of the heap exhaustion in #2692.
+      # BPlusLeafGrain.Activation.cs:154-172 (#2278) already names this exact
+      # shape as self-reinforcing, in the code this variable was overriding.
+      #
+      # AND THE COMPARABILITY IT BOUGHT IS WORTHLESS, which is the part that
+      # closes the argument rather than merely rebutting it. Every prior field
+      # measurement this pin was protecting was taken IN the 2.67x-oversubscribed
+      # condition. They are comparable to each other and to nothing that should
+      # ever be run again, so there is no longer a continuity argument to weigh
+      # against the cost - the baseline the pin preserved was itself the defect.
+      # If you are tempted to restore this variable for that good reason, that
+      # is the reason it does not hold.
+      #
+      # The gate's decoupling from the CPU cap is a REAL requirement and is
+      # still met - by the option that exists for it (#2279) instead of by a
+      # runtime-wide variable with two jobs. This one has a single job, is
+      # read by the library in preference to Environment.ProcessorCount, is
+      # refused at startup if unparseable, and - unlike the pin - does not also
+      # resize the GC, the thread pool, and every other ProcessorCount consumer
+      # in the process as a side effect.
+      LATTICE_WAL_MAX_CONCURRENT_REPLAYS: "${REPOCONTEXT_MAX_CONCURRENT_REPLAYS:?unset - run ./scripts/New-TuningEnv.ps1 to derive it from this container's CPU grant, or set it by hand from .env.example. No default by design (issue #2779).}"
 
       # Diagnostic for issue #2252, NOT tuning, and so deliberately left
       # commented out rather than tracked as a default. Uncomment only while
@@ -121,14 +194,27 @@ services:
       # Logging__LogLevel__Orleans.Lattice.Api.Mcp.RepoContext.RepoContextVectorWriter: "Debug"
 
     # Bounds a runaway without starving normal operation. This service measured
-    # about 92% of one core in steady state before any of these limits, so 6 is
-    # headroom rather than a working limit.
-    cpus: 6.0
+    # about 92% of one core in steady state before any of these limits, so the
+    # grant is headroom rather than a working limit.
+    #
+    # It is now also the SOURCE for DOTNET_GCHeapCount and for the WAL replay
+    # gate above: the derive script sizes all three from this one number, which
+    # is what the base compose file's LATTICE_WAL_MAX_CONCURRENT_REPLAYS
+    # comment asks for when it says to set the gate together with the CPU limit
+    # it derives from, in the same file.
+    cpus: "${REPOCONTEXT_CPUS:?unset - run ./scripts/New-TuningEnv.ps1 to derive it, or set it by hand from .env.example. No default by design (issue #2779).}"
     # Sized above the measured steady-state plateau, not below it. See the
     # runbook: a cap below the working set does not present as a resource event,
     # because .NET sizes its heap hard limit from the cgroup limit and collects
     # harder as it approaches it rather than being OOM-killed at it.
-    mem_limit: 12g
+    #
+    # That is precisely why this one must not be a literal (#2779): the failure
+    # mode of an undersized grant is a STORAGE fault, not a container kill, so
+    # a value copied from a larger host degrades the stack while `docker ps`
+    # still reports it healthy. The derive script sizes it from the corpus and
+    # clamps it to what the host can actually offer, and REFUSES rather than
+    # silently granting less when the clamp binds below the requirement.
+    mem_limit: "${REPOCONTEXT_MEM_LIMIT:?unset - run ./scripts/New-TuningEnv.ps1 to derive it from this host and corpus, or set it by hand from .env.example. No default by design: a memory grant nobody measured is the defect this overlay exists to stop (issue #2779).}"
 
   embedder:
     environment:
@@ -153,10 +239,24 @@ services:
       # an explicit value is what the deployed configuration actually carries.
       # Removing it is precisely how the derived path gets exercised, which has
       # not happened yet on this box.
-      EMBED_INTRA_THREADS: "4"
-    # Leaves 12 of the host's 16 cores for interactive work. The embedder sizes
-    # its ONNX intra-op thread pool from this grant, read from the cgroup
+      #
+      # Under #2779 it stays explicit for those reasons, but is no longer a
+      # literal: it is derived from the SAME number as the cgroup grant below,
+      # so the restatement is guaranteed to agree with what #2610 would pick
+      # rather than merely happening to. A literal `4` beside a `cpus` value
+      # that someone later edits is how the two silently stop matching.
+      EMBED_INTRA_THREADS: "${EMBEDDER_INTRA_THREADS:?unset - run ./scripts/New-TuningEnv.ps1 to derive it, or set it by hand from .env.example. No default by design (issue #2779).}"
+    # Leaves the balance of the host's cores for interactive work. The embedder
+    # sizes its ONNX intra-op thread pool from this grant, read from the cgroup
     # filesystem (issue #2610), so changing this number changes the pool.
-    cpus: 4.0
+    cpus: "${EMBEDDER_CPUS:?unset - run ./scripts/New-TuningEnv.ps1 to derive it, or set it by hand from .env.example. No default by design (issue #2779).}"
     # The resident ONNX model needs room to work above its own footprint.
-    mem_limit: 5g
+    #
+    # Unlike the sibling service's grant, this one is WORKLOAD-derived, not
+    # corpus-derived: it is dominated by the model resident in the image, so it
+    # does not grow with the repository. The derive script therefore treats it
+    # as a near-constant and only clamps it against the host. It is still a
+    # variable because it is half of the sum that has to fit: the two
+    # mem_limits together used to demand 17 GiB on any host, which is why a
+    # 16 GiB machine could not start this stack at all (issue #2779).
+    mem_limit: "${EMBEDDER_MEM_LIMIT:?unset - run ./scripts/New-TuningEnv.ps1 to derive it, or set it by hand from .env.example. No default by design (issue #2779).}"
