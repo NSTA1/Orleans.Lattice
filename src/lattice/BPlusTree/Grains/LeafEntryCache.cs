@@ -20,7 +20,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// activation's lifetime and has no cross-activation sharing.
 /// </para>
 /// </summary>
-internal sealed class LeafEntryCache
+internal sealed partial class LeafEntryCache
 {
     // UTF-8 scratch size for a key seek. Comfortably covers every ordinary
     // Lattice key, so a seek stays allocation-free; a longer key rents.
