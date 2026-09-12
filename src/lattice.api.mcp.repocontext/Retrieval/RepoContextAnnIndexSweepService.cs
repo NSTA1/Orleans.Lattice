@@ -321,6 +321,7 @@ internal sealed class RepoContextAnnIndexSweepService(
                     if (await scheduler.TryArmAsync(repoId, stoppingToken).ConfigureAwait(false))
                     {
                         armed++;
+                        _reporter.RecordArming(RepoContextAnnArmingResult.Armed);
                         if (_deferred.Remove(repoId))
                         {
                             logger.LogInformation(
@@ -336,13 +337,16 @@ internal sealed class RepoContextAnnIndexSweepService(
                     }
                     else
                     {
-                        // Reachable only through the scheduler's process-global
-                        // guard (no embedder, or scheduling switched off), which
-                        // ExecuteAsync already checks before entering this loop and
-                        // which cannot be true for one repository and false for
-                        // another. Recorded anyway so 'did not arm' is derived from
-                        // what happened rather than from the assumption that a
-                        // non-timeout is always a success.
+                        // Unreachable. Reaching here needs TryArmAsync to return
+                        // false, which requires !CanSchedule, and both of its terms
+                        // are fixed at construction: RepoContextIndexingOptions is an
+                        // init-only singleton with no monitor to reload it, and the
+                        // embedder is a readonly field assigned once. ExecuteAsync
+                        // evaluates !CanSchedule before entering this loop, so the
+                        // value cannot have changed by the time control is here. It
+                        // therefore carries no arming arm: a pre-minted arm that can
+                        // never move would be a standing false signal in exactly the
+                        // reading this instrument exists to support.
                         unarmed.Add(repoId);
                     }
                 }
@@ -350,6 +354,7 @@ internal sealed class RepoContextAnnIndexSweepService(
                 {
                     deferred++;
                     unarmed.Add(repoId);
+                    _reporter.RecordArming(RepoContextAnnArmingResult.Deferred);
 
                     // Announced once per repository per episode, then counted. A
                     // coordinator busy for hours would otherwise warn on every
@@ -379,6 +384,14 @@ internal sealed class RepoContextAnnIndexSweepService(
                     // counter cannot name, and keep going so a single bad
                     // repository cannot hide every repository behind it.
                     //
+                    // Counted per repository here as well as once for the sweep
+                    // below, because the two answer different questions: the sweep
+                    // arm says a sweep failed, this one says how many repositories
+                    // it failed for. A sweep that faulted on one of ten and one that
+                    // faulted on ten of ten are the same observation on the sweep
+                    // arm and different ones here.
+                    _reporter.RecordArming(RepoContextAnnArmingResult.Faulted);
+
                     // The cause is classified from the first fault only, matching the
                     // exception the sweep goes on to report. A later repository
                     // failing differently would otherwise leave the cause tag and the

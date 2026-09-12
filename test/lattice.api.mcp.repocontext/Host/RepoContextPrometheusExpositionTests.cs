@@ -18,6 +18,7 @@ public sealed class RepoContextPrometheusExpositionTests
 
     [TestCase("repocontext.calls", RepoContextMetricKind.Counter, "repocontext_calls_total")]
     [TestCase("repocontext.ann.sweep", RepoContextMetricKind.Counter, "repocontext_ann_sweep_total")]
+    [TestCase("repocontext.ann.sweep.arming", RepoContextMetricKind.Counter, "repocontext_ann_sweep_arming_total")]
     [TestCase("repocontext.retrieval.ann.search", RepoContextMetricKind.Counter, "repocontext_retrieval_ann_search_total")]
     [TestCase("repocontext.retrieval.ready_seconds", RepoContextMetricKind.Summary, "repocontext_retrieval_ready_seconds")]
     [TestCase("orleans.lattice.leaf.activation.failures", RepoContextMetricKind.Counter, "orleans_lattice_leaf_activation_failures_total")]

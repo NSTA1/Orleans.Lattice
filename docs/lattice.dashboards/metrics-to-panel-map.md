@@ -431,6 +431,7 @@ Every instrument here carries the derived `tenant` label with the reserved `_pla
 | `repocontext.response_tokens` | counter (`{token}`) | `command` | (none) | **not charted** |
 | `repocontext.reads_replaced_tokens` | counter (`{token}`) | `command` | (none) | **not charted** |
 | `repocontext.ann.sweep` | counter (`{sweep}`) | `outcome` = `armed`, `empty`, `faulted` | (none) | **not charted** |
+| `repocontext.ann.sweep.arming` | counter (`{repository}`) | `result` = `armed`, `deferred`, `faulted` | (none) | **not charted** - denominated by repository visits rather than by sweeps, so it must not be ratioed against `repocontext.ann.sweep` |
 | `repocontext.ann.build.corpus` | counter (`{build}`) | `coverage` = `nonempty`, `unrestricted`, `filtered`, `denied`, `unknown` | (none) | **not charted** |
 | `repocontext.ann.build.denial_terminal` | counter (`{coordinator}`) | (none) | (none) | **not charted** |
 | `repocontext.ann.build.slice` | counter (`{step}`) | `progress` = `advanced`, `starved`, `idle`, `faulted` | (none) | **not charted** |
