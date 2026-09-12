@@ -1,3 +1,5 @@
+using System.Text;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -143,5 +145,89 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(state.State.ProjectionCheckpointOffsetAssigned, Is.Null);
         Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(42L));
+    }
+
+    /// <summary>
+    /// ACCEPTANCE CRITERION 2, end to end. The criteria ask for a leaf whose
+    /// partition-0 replay reaches exactly offset <c>0</c> to ADVANCE its
+    /// checkpoint, observed through the activation replay rather than through
+    /// the accessor the fix edits.
+    /// <para>
+    /// The sibling tests above assert the accessor's return value, which is a
+    /// proxy: they would stay green against an accessor that was correct while
+    /// the reconciliation that consumes it was not. This test drives the real
+    /// activation path and asserts the consequence, so it covers the mechanism
+    /// the issue is actually about.
+    /// </para>
+    /// <para>
+    /// It also states the defect in its strongest form, which reading the
+    /// accessor cannot. Replay resumes strictly after the reported checkpoint.
+    /// A birth leaf reporting the ambiguous <c>0</c> resumes at offset <c>1</c>
+    /// and so NEVER READS OFFSET 0 AT ALL: the entry is not merely left
+    /// uncheckpointed, its mutation is never applied to the projection. The
+    /// <c>k0</c> assertion below is therefore a committed-data-loss assertion,
+    /// not a bookkeeping one. Post-fix the leaf reports the sentinel, resumes at
+    /// offset 0 inclusive, applies the entry, and the final reconciliation
+    /// advances because <c>0 &gt; -1</c>.
+    /// </para>
+    /// <para>
+    /// Constructed the way production makes the state - the scalar left at the
+    /// CLR default with no presence marker - and NOT by writing an explicit
+    /// <c>-1</c>. That distinction is the whole point of acceptance criterion 8:
+    /// the pre-existing replay coverage
+    /// (<c>Materialiser_replays_offset_zero_when_checkpoint_is_nothing_applied_sentinel</c>)
+    /// seeds an explicit <c>-1</c>, which only the operator-driven projection
+    /// rebuild ever writes, so its green says nothing about the birth path.
+    /// </para>
+    /// <para>
+    /// RED pre-fix: with the accessor reporting the raw scalar, the head-versus-
+    /// checkpoint guard sees <c>0 &lt;= 0</c>, no replay runs, <c>k0</c> reads
+    /// back null and the presence marker is never written.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Birth_leaf_whose_replay_reaches_offset_zero_applies_it_and_advances_the_checkpoint()
+    {
+        var entry = new CommitLogSliceEntry(0, BuildCommittedSet("k0", Encoding.UTF8.GetBytes("v0")));
+
+        // head is an EXCLUSIVE bound - a leaf that has read the whole partition
+        // sits at head - 1 - so a WAL holding exactly one entry, at offset 0,
+        // has head 1. Passing 0 here would describe an EMPTY WAL, and the replay
+        // would decline on the newest-entry check for a reason that has nothing
+        // to do with this issue, making the test vacuous in the GREEN direction.
+        var coord = BuildCoordinator(head: 1, entry);
+
+        // persistedCheckpoint defaults to 0 and the helper never writes the
+        // presence marker, which is exactly the production birth shape.
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.Zero,
+                "precondition: partition 0 carries the CLR default, the value the encoding "
+                + "produces by omitting the member");
+            Assert.That(state.State.ProjectionCheckpointOffsetAssigned, Is.Null,
+                "precondition: no presence marker, so this leaf has never assigned partition 0");
+        });
+
+        await ActivateAsync(grain);
+
+        Assert.That(
+            await grain.GetAsync("k0"),
+            Is.Not.Null,
+            "WAL offset 0 must be REPLAYED. A birth leaf that reports the ambiguous 0 resumes at "
+            + "offset 1 and never reads offset 0, silently dropping its mutation from the "
+            + "projection - this is the committed-data-loss face of issue #2703");
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k0"))!), Is.EqualTo("v0"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ProjectionCheckpointOffsetAssigned, Is.True,
+                "the replay advance must record the checkpoint, which is what makes partition 0 "
+                + "unambiguous from here on and lets it ever satisfy the proven-checkpoint predicate");
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.Zero,
+                "and the recorded value is the real offset 0, now reported at face value rather "
+                + "than deferred to the sentinel");
+        });
     }
 }
