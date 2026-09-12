@@ -211,7 +211,7 @@ public sealed class LatticeWalGc(
         // cursor eagerly, but dormant leaves re-register only lazily, so
         // without this floor the GC would trim past a leaf's durable
         // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
-        var (flooredCursor, cursorBlocked) = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, cancellationToken).ConfigureAwait(false);
+        var (flooredCursor, cursorBlocked, blockingConsumerId) = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, cancellationToken).ConfigureAwait(false);
         minCursor = flooredCursor;
         // Offset-space retention floor. The HLC floor above cannot protect a
         // low-HLC / high-offset WAL entry (a tombstone-compaction reap re-emits
@@ -303,7 +303,7 @@ public sealed class LatticeWalGc(
             var over0 = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedBefore);
             return new LatticeWalGcReport(
                 treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0,
-                ceiling, retainedBefore, retainedBefore, triggered, over0, cursorFloorState);
+                ceiling, retainedBefore, retainedBefore, triggered, over0, cursorFloorState, blockingConsumerId);
         }
 
         long totalTrimmed = 0;
@@ -334,7 +334,7 @@ public sealed class LatticeWalGc(
 
         return new LatticeWalGcReport(
             treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed,
-            ceiling, retainedBefore, retainedAfter, triggered, overThreshold, cursorFloorState);
+            ceiling, retainedBefore, retainedAfter, triggered, overThreshold, cursorFloorState, blockingConsumerId);
     }
 
     /// <summary>
@@ -367,8 +367,16 @@ public sealed class LatticeWalGc(
     /// them apart can schedule them differently (issue #2702). The flag is
     /// diagnostic; it does not participate in the trim predicate.
     /// </para>
+    /// <para>
+    /// <c>BlockingConsumerId</c> names the consumer whose pin caused that
+    /// short-circuit, and is <see langword="null"/> on every other path
+    /// (issue #2464). It is what turns "this tree cannot reclaim" into a
+    /// actionable statement, because the id embeds the owning leaf's grain id.
+    /// Like <c>Blocked</c> it is diagnostic only and never widens what a pass
+    /// is allowed to trim.
+    /// </para>
     /// </summary>
-    private async Task<(HybridLogicalClock? Floor, bool Blocked)> ApplyDurableMaterialiserFloorAsync(
+    private async Task<(HybridLogicalClock? Floor, bool Blocked, string? BlockingConsumerId)> ApplyDurableMaterialiserFloorAsync(
         string treeName,
         HybridLogicalClock? registryMin,
         CancellationToken cancellationToken)
@@ -376,7 +384,7 @@ public sealed class LatticeWalGc(
         var factory = GrainFactory;
         if (factory is null)
         {
-            return (registryMin, false);
+            return (registryMin, false, null);
         }
 
         IReadOnlyDictionary<string, HybridLogicalClock> pins;
@@ -390,12 +398,12 @@ public sealed class LatticeWalGc(
             // the in-memory floor rather than failing the whole GC run. The
             // next pass retries; a missed floor never trims unsafely because
             // the present in-memory consumers still constrain the trim point.
-            return (registryMin, false);
+            return (registryMin, false, null);
         }
 
         if (pins.Count == 0)
         {
-            return (registryMin, false);
+            return (registryMin, false, null);
         }
 
         var snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
@@ -424,7 +432,25 @@ public sealed class LatticeWalGc(
                 // Both a never-checkpointed leaf and a fully-checkpointed leaf
                 // with no durable snapshot land here; the caller reports this
                 // as blocked without asserting which.
-                return (null, true);
+                //
+                // The consumer id IS carried out (issue #2464). Reporting that
+                // a tree is blocked without naming the consumer leaves an
+                // operator to guess which of potentially thousands of leaves is
+                // holding the tree, and leaves a fix unable to demonstrate it
+                // cleared every blocking leaf rather than some. The id encodes
+                // the owning leaf's grain id, so naming it is the whole
+                // difference between observing the condition and acting on it.
+                //
+                // It is deliberately returned rather than tagged onto a metric:
+                // the leaf population is unbounded, so the id is an unbounded
+                // metric dimension and belongs on the log line instead.
+                //
+                // This names ONE blocker, not all of them: the short-circuit is
+                // what makes the pass cheap, and enumerating every unusable pin
+                // would mean abandoning it. A later pass naming a different
+                // consumer is therefore expected while a tree drains, and is
+                // progress rather than a regression.
+                return (null, true, consumerId);
             }
 
             floor = floor is { } current
@@ -432,7 +458,7 @@ public sealed class LatticeWalGc(
                 : pin;
         }
 
-        return (floor, false);
+        return (floor, false, null);
     }
 
     /// <summary>
