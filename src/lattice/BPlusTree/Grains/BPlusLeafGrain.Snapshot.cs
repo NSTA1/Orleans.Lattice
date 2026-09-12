@@ -142,6 +142,35 @@ internal sealed partial class BPlusLeafGrain
     private bool _snapshotCoverageDeficitAtActivation;
 
     /// <summary>
+    /// Per-activation budget for the zero-coverage repair path (issue #2692).
+    /// The repair is self-extinguishing on success - a capture stamps coverage
+    /// for every checkpointed partition, and coverage is monotone-max, so the
+    /// trigger predicate is false forever afterwards - which means this budget
+    /// is only ever consumed by captures that FAIL. Eight attempts absorbs a
+    /// transient snapshot-store fault without letting a persistently failing
+    /// store turn every checkpoint persist into a capture attempt.
+    /// </summary>
+    private const int MaxZeroCoverageRepairAttempts = 8;
+
+    /// <summary>
+    /// Number of zero-coverage repair captures attempted on this activation.
+    /// Reset implicitly on every activation because it is a plain instance
+    /// field, never persisted - which is correct, since a fresh activation
+    /// re-reads the durable snapshot and so re-derives the coverage the budget
+    /// is spent chasing.
+    /// </summary>
+    private int _zeroCoverageRepairAttempts;
+
+    /// <summary>
+    /// Whether this activation has already reported budget exhaustion on
+    /// <see cref="LatticeMetrics.LeafSnapshotCoverageRepairs"/>. Keeps the
+    /// exhaustion series a count of stuck ACTIVATIONS rather than of persists,
+    /// which would otherwise scale with write rate and say nothing about how
+    /// many leaves are stuck.
+    /// </summary>
+    private bool _zeroCoverageRepairExhaustionReported;
+
+    /// <summary>
     /// Byte-accurate footprint of the most recently persisted snapshot
     /// for this leaf, or <c>0</c> when no snapshot has been captured this
     /// activation. Mirrors the value written into
@@ -341,6 +370,231 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Reports whether any partition holds a durable projection checkpoint that
+    /// no durable snapshot covers - the leaf-local form of the tree-wide WAL
+    /// retention stall of issue #2692.
+    /// <para>
+    /// <b>Why this state is not merely suboptimal.</b>
+    /// <c>ResolveDurablePinForPartition</c> computes
+    /// <c>min(checkpoint, covered)</c> and returns the Zero block pin whenever
+    /// that is negative. A partition matching this predicate therefore reports
+    /// the block value on every pin flush for the life of the activation, and
+    /// <c>ApplyDurableMaterialiserFloorAsync</c> abandons the cursor branch for
+    /// the WHOLE TREE on the first Zero pin it folds. One leaf in this state
+    /// retains every other leaf's WAL, without bound, for as long as it stays
+    /// in it.
+    /// </para>
+    /// <para>
+    /// <b>Both conjuncts are load-bearing; neither may be dropped.</b>
+    /// Requiring <c>covered &lt; 0</c> rather than <c>checkpoint &gt; covered</c>
+    /// is what separates this from the ordinary cadence debounce further down
+    /// <see cref="MaybeRunPeriodicSnapshotRecheckAsync"/>: coverage that merely
+    /// LAGS an advancing checkpoint still yields a usable (non-blocking) pin, so
+    /// it is a cadence concern and not an outage, and triggering on it would
+    /// capture on essentially every persist. Requiring <c>checkpoint &gt;= 0</c>
+    /// is what makes the repair TERMINATE: capture stamps coverage from
+    /// <see cref="BuildCheckpointCoverage"/>, which derives each partition's
+    /// coverage FROM its checkpoint, so a checkpointed partition necessarily
+    /// lands at a non-negative covered offset and (coverage being monotone-max)
+    /// can never return to -1. Drop that conjunct and a never-checkpointed
+    /// partition would be stamped -1 by its own capture, leaving the predicate
+    /// true and re-firing on every subsequent persist forever.
+    /// </para>
+    /// <para>
+    /// A partition holding live data but no checkpoint is deliberately NOT
+    /// matched here. That is the population Half A (#2692) already routes to
+    /// capture through <see cref="CaptureSnapshotCoreAsync"/>'s live-data
+    /// fall-through, and its coverage correctly stays at -1 so its Zero block
+    /// pin is RETAINED - there is no WAL offset it could honestly claim. This
+    /// predicate governs when to capture and never what to claim.
+    /// </para>
+    /// </summary>
+    internal bool HasCheckpointedPartitionWithoutCoverage(int partitionCount)
+    {
+        for (var p = 0; p < partitionCount; p++)
+        {
+            if (IsPartitionProvenCheckpointed(p)
+                && DurableSnapshotCoverageForPartition(p) < 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a partition carries POSITIVE evidence that it was actually
+    /// checkpointed, as opposed to merely reporting a non-negative offset.
+    /// <para>
+    /// Every partition reports the <c>-1</c> "nothing applied" sentinel until it
+    /// is genuinely checkpointed, so a non-negative offset IS the positive
+    /// evidence and this predicate is a thin, intention-revealing alias. That
+    /// holds for partition 0 only because
+    /// <c>GetPersistedCheckpointForPartition</c> resolves the born-<c>0</c>
+    /// scalar ambiguity described in issue #2703 at source; before that fix
+    /// partition 0 reported <c>0</c> for a leaf that had never checkpointed it,
+    /// and this predicate carried a compensating <c>&gt; 0</c> clamp of its own.
+    /// </para>
+    /// <para>
+    /// The clamp was deliberately removed rather than kept as defence in depth.
+    /// Two independent mechanisms enforcing one invariant means neither can be
+    /// shown to be load-bearing: mutating either leaves the tests green, so the
+    /// suite silently stops covering the property it was written for. One
+    /// mechanism, mutation-testable, is the stronger arrangement - and a second
+    /// clamp here would additionally be WRONG once the marker exists, rejecting
+    /// a leaf legitimately assigned offset 0.
+    /// </para>
+    /// <para>
+    /// What this predicate is for is unchanged, and is the reason it has a name
+    /// at all. Reading an unproven partition as checkpointed would let the
+    /// repair stamp a durable coverage offset for a partition that never
+    /// applied anything, turning the Zero block pin - correct, and deliberately
+    /// retained by <c>CaptureSnapshotAsync</c>'s live-data fall-through - into a
+    /// published trim entitlement. That is the silent-data-loss-on-upgrade shape
+    /// this fix must not introduce, arriving through a type default rather than
+    /// through advancing a pin.
+    /// </para>
+    /// </summary>
+    private bool IsPartitionProvenCheckpointed(int partition)
+        => GetCurrentCheckpointForPartition(partition) >= 0;
+
+    /// <summary>
+    /// Runs the zero-coverage repair capture (issue #2692) when this leaf holds
+    /// a checkpointed partition with no durable snapshot coverage, and reports
+    /// the outcome on
+    /// <see cref="LatticeMetrics.LeafSnapshotCoverageRepairs"/>. Returns whether
+    /// a capture was attempted.
+    /// <para>
+    /// Shared by the two drivers that must both be able to reach it: the
+    /// activation-time hook, which covers a leaf that entered the activation
+    /// already uncovered (including a tree that has stopped taking writes
+    /// entirely, and so will never reach the persist-driven hook again), and the
+    /// post-persist hook, which covers a leaf that becomes uncovered DURING an
+    /// activation - a newly split sibling being the case that matters, since it
+    /// is created mid-activation and would otherwise wait for a deactivation
+    /// that may never come. Between them a leaf cannot occupy this state
+    /// unobserved: it either holds it at activation, or acquires it by
+    /// persisting a checkpoint, and those are precisely the two call sites.
+    /// </para>
+    /// <para>
+    /// <b>Bound on concurrent uncancellable persists.</b> The post-persist
+    /// driver passes no cancellation token, because none exists anywhere on
+    /// that path - <c>CompleteCheckpointFlushTailAsync</c> takes none and
+    /// neither do its callers in <c>FlushPendingCheckpointAsync</c>. Since
+    /// issue #1965 is precisely about an uncancellable capture outrunning a
+    /// deactivation deadline, the exposure this adds is bounded as follows.
+    /// </para>
+    /// <para>
+    /// Per leaf the bound is ONE concurrent capture, and it holds even though
+    /// the leaf mutation surface is <c>[AlwaysInterleave]</c> so several write
+    /// turns run on one activation. <c>CaptureSnapshotCoreAsync</c> tests and
+    /// sets <c>_snapshotCaptureInFlight</c> in adjacent statements with no
+    /// await between them, and an Orleans activation yields only at an await,
+    /// so the check-and-set cannot be torn by an interleaved turn. The
+    /// per-activation ceiling is <see cref="MaxZeroCoverageRepairAttempts"/>
+    /// captures; the counter is likewise incremented before the first await, so
+    /// two interleaved turns cannot consume the same attempt.
+    /// </para>
+    /// <para>
+    /// Across leaves, the untokened population is only those completing a
+    /// checkpoint persist while still uncovered - bounded by write concurrency,
+    /// not by corpus size. It does NOT reproduce #1965's burst, whose shape is
+    /// the deactivation stampede at end of replay ("thousands of leaves go idle
+    /// together"): this repair never runs on the deactivation path. The one
+    /// mass-concurrency path it does run on is activation, and that driver
+    /// passes the activation token.
+    /// </para>
+    /// <para>
+    /// The population is also self-extinguishing, which is what keeps the cost
+    /// one-off rather than per-write: the predicate requires coverage &lt; 0,
+    /// the first successful capture moves coverage to 0 or above, and coverage
+    /// is monotone, so a leaf leaves the eligible set permanently.
+    /// </para>
+    /// <para>
+    /// Two residuals, stated rather than papered over. First, the cross-leaf
+    /// bound is application write concurrency, which is not a Lattice-configured
+    /// ceiling, so no constant in this repository names it. Second, a turn that
+    /// passes the guard below and then loses the race to set the in-flight flag
+    /// (the window is the <c>GetOptionsAsync</c> await inside the capture) burns
+    /// an attempt without doing work, so contention alone could exhaust the
+    /// budget. That is survivable precisely because exhaustion is a reported
+    /// state rather than silence - see
+    /// <see cref="ReportZeroCoverageRepairExhaustion"/>.
+    /// </para>
+    /// </summary>
+    private async Task<bool> TryRepairZeroCoverageAsync(
+        int partitionCount,
+        CancellationToken cancellationToken = default)
+    {
+        if (_snapshotCaptureInFlight || !HasCheckpointedPartitionWithoutCoverage(partitionCount))
+        {
+            return false;
+        }
+
+        if (_zeroCoverageRepairAttempts >= MaxZeroCoverageRepairAttempts)
+        {
+            ReportZeroCoverageRepairExhaustion();
+            return false;
+        }
+
+        _zeroCoverageRepairAttempts++;
+        // Honour a caller deadline wherever one exists. The activation driver
+        // passes the activation token, so a repair capture cannot outlive the
+        // activation that started it. The post-persist driver has no ambient
+        // caller token and passes none, exactly as the pre-existing cadence and
+        // coverage-deficit captures on that same path do.
+        await TryCaptureSnapshotForAdvisoryAsync(cancellationToken);
+
+        if (!HasCheckpointedPartitionWithoutCoverage(partitionCount))
+        {
+            RecordCoverageRepairOutcome(LatticeMetrics.CoverageRepairRepaired);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Emits the budget-exhaustion observation at most once per activation, on
+    /// both the counter and a warning carrying the leaf identity the counter
+    /// deliberately does not tag.
+    /// </summary>
+    private void ReportZeroCoverageRepairExhaustion()
+    {
+        if (_zeroCoverageRepairExhaustionReported)
+        {
+            return;
+        }
+
+        _zeroCoverageRepairExhaustionReported = true;
+        RecordCoverageRepairOutcome(LatticeMetrics.CoverageRepairExhausted);
+
+        ResolveLogger()?.LogWarning(
+            "Leaf {GrainId} on tree {TreeId} exhausted its zero-coverage snapshot repair budget ({Attempts} "
+            + "attempts) with a checkpointed partition still uncovered. Its durable materialiser pin stays at "
+            + "the block value, which disables cursor-based WAL trimming for the whole tree, so retained WAL "
+            + "will grow until the leaf reactivates or the snapshot store recovers (issue #2692).",
+            context.GrainId,
+            state.State.TreeId,
+            MaxZeroCoverageRepairAttempts);
+    }
+
+    private void RecordCoverageRepairOutcome(KeyValuePair<string, object?> outcome)
+    {
+        var treeId = state.State.TreeId;
+        if (treeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            outcome,
+            LatticeTenantLabel.ForTree(treeId));
+    }
+
+    /// <summary>
     /// Records that a durable snapshot covers each partition through the
     /// offsets in <paramref name="blob"/>. A blob predating the
     /// per-partition field (legacy) is treated as covering partition 0 only,
@@ -418,11 +672,34 @@ internal sealed partial class BPlusLeafGrain
         // partition has absorbed at least one entry.
         var resolved = await GetOptionsAsync();
         var partitionCount = Math.Max(1, resolved.WalPartitions);
-        var checkpoint = state.State.ProjectionCheckpointOffset;
-        var anyPartitionCheckpointed = checkpoint >= 0;
-        for (var p = 1; p < partitionCount && !anyPartitionCheckpointed; p++)
+
+        // Partition 0's coverage claim is read through the per-partition
+        // accessor rather than from the raw scalar, because BuildCheckpointCoverage
+        // stamps offsets[0] straight from this value. The scalar is born 0 rather
+        // than at the -1 sentinel (issue #2703), so reading it directly would
+        // publish an offset-0 coverage claim for a partition that never applied
+        // anything; the accessor resolves that ambiguity to the sentinel. Keeping
+        // the claim honest is what lets ResolveDurablePinForPartition go on
+        // computing min(checkpoint, covered) < 0 and retain the Zero block pin.
+        var checkpoint = GetCurrentCheckpointForPartition(0);
+
+        // The loop starts at partition 0 and reads it through the same predicate
+        // as every other partition. It previously started at 1, seeding the flag
+        // from a bare `checkpoint >= 0` on the raw scalar - which was ALWAYS true
+        // in production, because partition 0's only negative writer is the admin
+        // projection-rebuild path and the scalar is otherwise born 0 and positive
+        // thereafter (issue #2703). The short-circuit therefore fired on the
+        // first evaluation and the entire widening below was unreachable outside
+        // that one operator-driven path, while its own comment described
+        // partition 0 "staying at -1 forever" - a state the encoding cannot
+        // produce. With the born-0 ambiguity resolved in
+        // GetPersistedCheckpointForPartition, partition 0 now reports the
+        // sentinel exactly when it has nothing applied, and the widening becomes
+        // reachable for the population it was written for.
+        var anyPartitionCheckpointed = false;
+        for (var p = 0; p < partitionCount && !anyPartitionCheckpointed; p++)
         {
-            if (GetCurrentCheckpointForPartition(p) >= 0)
+            if (IsPartitionProvenCheckpointed(p))
                 anyPartitionCheckpointed = true;
         }
         if (!anyPartitionCheckpointed)
@@ -840,6 +1117,43 @@ internal sealed partial class BPlusLeafGrain
             // cadence or another capture beat us): retire the latch and fall
             // through to normal cadence handling.
             _snapshotCoverageDeficitAtActivation = false;
+        }
+
+        // Zero-coverage repair (issue #2692), deliberately ABOVE the cadence
+        // gate below and above the option read, for the same reason the
+        // coverage-deficit escape above is: this is a retention OUTAGE and not a
+        // tuning concern, and it must not be disableable by a tuning knob.
+        //
+        // A partition that is checkpointed but holds no durable snapshot
+        // coverage resolves its durable pin to the Zero block value, and the WAL
+        // GC abandons the cursor branch for the entire tree on the first such
+        // pin - so ONE leaf in this state retains every other leaf's WAL without
+        // bound. The cadence path below cannot be relied on to clear it. Its
+        // counter (_checkpointPersistCountSinceRecheck) resets every activation,
+        // so a leaf that persists fewer than `threshold` checkpoints per
+        // activation never reaches it however long it lives; and with the option
+        // set to 0 the path does not exist at all, which would make an
+        // unbounded-disk failure mode reachable by a tuning value. Neither is an
+        // acceptable dependency for the only thing standing between a tree and
+        // unbounded WAL growth.
+        //
+        // This widens WHEN a blob is written and nothing else - it advances no
+        // pin and lifts no block. The coverage stamp still comes from
+        // BuildCheckpointCoverage, so a partition with no checkpoint still
+        // records -1 and still retains its Zero block pin; see
+        // HasCheckpointedPartitionWithoutCoverage for why both conjuncts of the
+        // predicate are load-bearing, and CaptureSnapshotCoreAsync's live-data
+        // fall-through for the population this one deliberately excludes.
+        //
+        // Termination is structural rather than scheduled: a capture stamps
+        // coverage for every checkpointed partition, coverage is monotone-max,
+        // so the predicate is false from then on and this path never fires again
+        // for this leaf. The attempt budget therefore bounds only repeated
+        // FAILURE, and its exhaustion is reported as its own state rather than
+        // being absorbed silently.
+        if (await TryRepairZeroCoverageAsync(Math.Max(1, resolved.WalPartitions)))
+        {
+            return;
         }
 
         var threshold = resolved.LeafSnapshotReClassifyEveryNCheckpoints;
@@ -1261,6 +1575,15 @@ internal sealed partial class BPlusLeafGrain
         // block pin from ever lifting (unbounded WAL).
         RecordDurableSnapshotCoverage(blob);
 
+        // Read deliberately from the raw scalar, not through
+        // GetPersistedCheckpointForPartition. This is a like-for-like comparison
+        // against the blob's OWN scalar offset - both sides come from the same
+        // legacy partition-0 wire slot - and it decides rehydration, not a
+        // retention claim, so the born-0 disambiguation of issue #2703 does not
+        // apply to it. Routing it through the accessor would turn an ambiguous 0
+        // into -1 and flip "decline, already absorbed" into "accept" for a blob
+        // at offset 0, changing snapshot-load semantics that issues #919 and
+        // #2278 pin, for no retention benefit.
         var checkpoint = state.State.ProjectionCheckpointOffset;
         if (blob.ScalarOffsetOrSentinel() <= checkpoint)
         {

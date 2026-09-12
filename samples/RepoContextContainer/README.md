@@ -628,6 +628,13 @@ cd samples/RepoContextContainer
 pwsh -File ./scripts/Assert-ContainerProvenance.ps1
 ```
 
+It exits `0` only when every check agrees, and with a distinct non-zero code on
+each refusal path (`2` refused, `3` the container could not be interrogated, `4`
+the expected configuration could not be read), so automation can gate on it. Until
+#2718 it never called `exit` at all and leaked `128` from a git probe that is
+SUPPOSED to fail; the full contract is in the
+[local deployment runbook](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#what-its-exit-code-means).
+
 It takes four readings from the running container and refuses unless all four
 agree, printing every value it read either way:
 

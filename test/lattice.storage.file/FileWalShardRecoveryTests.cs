@@ -121,7 +121,7 @@ public sealed class FileWalShardRecoveryTests
     private async Task<long[]> RecoveredOffsetsAsync()
     {
         using var shard = CreateShard();
-        var (offsets, _) = await shard.SnapshotAsync(-1L, int.MaxValue, CancellationToken.None);
+        var (offsets, _) = await shard.SnapshotAsync(-1L, int.MaxValue, long.MaxValue, CancellationToken.None);
         return offsets;
     }
 
@@ -364,7 +364,7 @@ public sealed class FileWalShardRecoveryTests
         await shard.ReconcileAsync(CancellationToken.None);
         var afterLength = new FileInfo(LogPath).Length;
 
-        var (offsets, payloads) = await shard.SnapshotAsync(-1L, int.MaxValue, CancellationToken.None);
+        var (offsets, payloads) = await shard.SnapshotAsync(-1L, int.MaxValue, long.MaxValue, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -407,7 +407,7 @@ public sealed class FileWalShardRecoveryTests
         }
 
         using var shard = CreateShard();
-        var (offsets, payloads) = await shard.SnapshotAsync(-1L, int.MaxValue, CancellationToken.None);
+        var (offsets, payloads) = await shard.SnapshotAsync(-1L, int.MaxValue, long.MaxValue, CancellationToken.None);
 
         Assert.Multiple(() =>
         {

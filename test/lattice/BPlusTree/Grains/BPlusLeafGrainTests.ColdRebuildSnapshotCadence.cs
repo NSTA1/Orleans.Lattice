@@ -123,8 +123,17 @@ public partial class BPlusLeafGrainTests
         // nothing advanced the checkpoint and no capture fired during activation.
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(3L),
             "converged leaf: checkpoint must stay at head - no forward advance this activation");
-        Assert.That(store.SaveCount, Is.EqualTo(0),
-            "no capture during activation: neither the advisory nor the periodic recheck fires for a converged block-pinned leaf");
+        // Issue #2692 moved this capture EARLIER, from deactivation to
+        // activation. This leaf is the repair's exact target population: a
+        // partition proven checkpointed (3) with no durable coverage, which is
+        // the state that pins the whole tree's WAL at the Zero block pin. The
+        // activation-time driver now stamps coverage without waiting for a
+        // deactivation that a resident leaf may never reach. The #1542 contract
+        // asserted below is unchanged - one capture covering [1, 3], and a
+        // lifted block pin - and is now additionally proof that the repair does
+        // not double-capture on the way out.
+        Assert.That(store.SaveCount, Is.EqualTo(1),
+            "the zero-coverage repair captures during activation for a checkpointed-but-uncovered leaf (#2692)");
         foreach (var k in new[] { "k1", "k2", "k3" })
             Assert.That(await grain.GetAsync(k), Is.Not.Null, $"key {k} must be present after the full cold rebuild");
 

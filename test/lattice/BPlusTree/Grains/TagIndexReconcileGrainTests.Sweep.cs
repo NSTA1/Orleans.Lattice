@@ -36,7 +36,8 @@ public partial class TagIndexReconcileGrainTests
         IReminderRegistry Reminders,
         IGrainFactory GrainFactory,
         FakeIndexTree IndexTree,
-        ILatticeReplicationContext Replication);
+        ILatticeReplicationContext Replication,
+        ITimerRegistry Timers);
 
     /// <summary>
     /// Builds a grain whose coordinator work-pump can actually start: the phase
@@ -80,7 +81,7 @@ public partial class TagIndexReconcileGrainTests
             context, grainFactory, reminderRegistry, optionsMonitor, replication,
             NullLogger<TagIndexReconcileGrain>.Instance, state);
 
-        return new SweepHarness(grain, state, reminderRegistry, grainFactory, indexTree, replication);
+        return new SweepHarness(grain, state, reminderRegistry, grainFactory, indexTree, replication, timerRegistry);
     }
 
     /// <summary>

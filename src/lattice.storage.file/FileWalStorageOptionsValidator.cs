@@ -37,6 +37,14 @@ internal sealed class FileWalStorageOptionsValidator : IValidateOptions<FileWalS
                 + $"was {options.CompactionMinimumDeadBytes}.");
         }
 
+        if (options.MaxReadBatchBytes < 1L)
+        {
+            failures.Add(
+                $"{nameof(FileWalStorageOptions.MaxReadBatchBytes)} must be at least 1; "
+                + $"was {options.MaxReadBatchBytes}. A read page always yields at least one entry, "
+                + "so this is a size ceiling and can never stall replay.");
+        }
+
         return failures.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(failures);

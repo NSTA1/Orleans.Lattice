@@ -107,12 +107,48 @@ function Get-ProductionFunctionBody {
 	return ($lines[$startIndex..$endIndex] -join [Environment]::NewLine)
 }
 
-# Dot-source the extracted body at SCRIPT scope so the function is defined here,
-# not trapped inside a helper's local scope.
-$_readerBody = Get-ProductionFunctionBody `
-	-SourceFile (Join-Path $here 'Assert-ContainerProvenance.ps1') `
-	-FunctionName 'Get-ArchiveGitReading'
-. ([scriptblock]::Create($_readerBody))
+# Dot-source the extracted bodies at SCRIPT scope so the functions are defined
+# here, not trapped inside a helper's local scope.
+#
+# Get-ArchiveGitReading does not stand alone: it runs its git probe through
+# Invoke-GitProbe, the single funnel that clears $LASTEXITCODE after every
+# deliberately-swallowed git failure (issue #2718). Extracting the reader
+# without its funnel produced a command-not-found at the first call, which is at
+# least loud - but it is loud in Arm 2 only, and it named the wrong culprit. The
+# closure check below turns that into a named failure AT EXTRACTION TIME, and
+# more importantly catches the case where a future dependency is added and
+# nobody remembers this file exists.
+$_productionSource = Join-Path $here 'Assert-ContainerProvenance.ps1'
+$_extractedNames = @('Invoke-GitProbe', 'Get-ArchiveGitReading')
+foreach ($_name in $_extractedNames) {
+	. ([scriptblock]::Create((Get-ProductionFunctionBody -SourceFile $_productionSource -FunctionName $_name)))
+}
+
+# The closure check. Every function the production script declares is a
+# candidate dependency; if the extracted text calls one that was not itself
+# extracted, the reader is being tested with a hole in it. Fail here, by name,
+# rather than at the first call site.
+$_productionLines = Get-Content -LiteralPath $_productionSource
+$_declaredNames = @(
+	$_productionLines |
+		ForEach-Object { if ($_ -match '^function\s+([A-Za-z]+-[A-Za-z]+)\s*\{') { $Matches[1] } }
+)
+if ($_declaredNames.Count -eq 0) {
+	throw "no 'function Verb-Noun {' declarations found in $_productionSource; the closure check would be vacuous"
+}
+$_extractedText = (
+	$_extractedNames |
+		ForEach-Object { Get-ProductionFunctionBody -SourceFile $_productionSource -FunctionName $_ }
+) -join [Environment]::NewLine
+$_missing = @(
+	$_declaredNames |
+		Where-Object { $_extractedNames -notcontains $_ } |
+		Where-Object { $_extractedText -match ("(?m)^[^#]*\b" + [regex]::Escape($_) + "\b") }
+)
+if ($_missing.Count -gt 0) {
+	throw ("the extracted functions call production functions that were NOT extracted: " +
+		($_missing -join ', ') + ". Add them to `$_extractedNames in this file.")
+}
 
 # ---------------------------------------------------------------------------
 # The pinned constants are read out of the pure suite rather than re-declared,
