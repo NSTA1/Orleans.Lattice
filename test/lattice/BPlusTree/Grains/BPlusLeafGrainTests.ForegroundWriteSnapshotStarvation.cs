@@ -80,7 +80,7 @@ public partial class BPlusLeafGrainTests
         FakePersistentState<LeafNodeState> State,
         Func<IReadOnlyList<MaterialiserPinReport>?> LastFlush,
         ILeafSnapshotStorageGrain SnapshotStub)
-        CreateNeverCheckpointedLeaf(int walPartitions)
+        CreateNeverCheckpointedLeaf(int walPartitions, bool bornAtDefault = false)
     {
         IReadOnlyList<MaterialiserPinReport>? captured = null;
         var reporter = Substitute.For<ILeafCursorReporter>();
@@ -118,7 +118,23 @@ public partial class BPlusLeafGrainTests
         // the scalar slot and every per-partition slot sit at the "nothing
         // applied" sentinel. This is the state of a leaf whose materialiser is
         // lagging behind sustained foreground write load.
-        state.State.ProjectionCheckpointOffset = -1L;
+        //
+        // Two ways to be never-checkpointed, and they are NOT interchangeable
+        // (issue #2703). An explicit -1 is what the operator-driven projection
+        // rebuild writes, and it is the only writer of a negative partition-0
+        // scalar anywhere in src/lattice. Production reaches the same logical
+        // state by a different route: the scalar is simply never assigned, so it
+        // holds the CLR default and the serializer omits it. bornAtDefault
+        // selects that second, far more common shape.
+        if (bornAtDefault)
+        {
+            state.State.ProjectionCheckpointOffset = 0L;
+            state.State.ProjectionCheckpointOffsetAssigned = null;
+        }
+        else
+        {
+            state.State.ProjectionCheckpointOffset = -1L;
+        }
 
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: new LatticeOptions
@@ -219,5 +235,110 @@ public partial class BPlusLeafGrainTests
         await snapshotStub.DidNotReceive().SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
         Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(-1L),
             "an empty, never-checkpointed leaf has nothing to cover and must not write a snapshot");
+    }
+
+    /// <summary>
+    /// ACCEPTANCE CRITERION 7. The two tests above reach Half A's widened branch
+    /// by seeding an explicit <c>-1</c>, which only the operator-driven
+    /// projection rebuild ever writes. Acceptance criterion 8 is explicit that
+    /// their green therefore does NOT evidence the production path, and this
+    /// pair supplies what it asks for: the same branch driven by a leaf built
+    /// the way production builds one, with partition 0 left at the CLR default
+    /// and no presence marker.
+    /// <para>
+    /// This arm is the positive half - live rows are captured - and it is
+    /// deliberately NOT the discriminating one. A birth leaf reaches a capture
+    /// pre-fix too, just by the other route: reading the ambiguous <c>0</c> as
+    /// real progress made <c>anyPartitionCheckpointed</c> true, which
+    /// short-circuited the gate and passed control to the ordinary capture. The
+    /// assertion that distinguishes the two routes is on the COVERAGE STAMP.
+    /// Pre-fix the ordinary route runs <c>BuildCheckpointCoverage</c>, which
+    /// stamps <c>offsets[0]</c> straight from the birth scalar and publishes an
+    /// offset-0 trim entitlement for a partition that has consumed nothing;
+    /// post-fix the widened branch earns durability and claims nothing.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Born_at_default_leaf_with_live_rows_takes_the_widened_capture_branch()
+    {
+        const int partitions = 8;
+        var (grain, state, _, snapshotStub) = CreateNeverCheckpointedLeaf(partitions, bornAtDefault: true);
+        var projection = AsProjection(grain);
+        var (dataKey, dataPartition) = FirstKeyInNonZeroPartition(partitions);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.Zero,
+                "precondition: the PRODUCTION birth shape, not the admin rebuild's explicit -1");
+            Assert.That(state.State.ProjectionCheckpointOffsetAssigned, Is.Null,
+                "precondition: no presence marker was ever written");
+        });
+        for (var p = 0; p < partitions; p++)
+        {
+            Assert.That(grain.GetCurrentCheckpointForPartition(p), Is.EqualTo(-1L),
+                $"precondition: partition {p} reports nothing applied, partition 0 included");
+        }
+
+        projection.Apply(BuildSet(dataKey, Encoding.UTF8.GetBytes("v"), hlcPhysical: 500, treeId: ForegroundStarvationTreeId));
+
+        await grain.CaptureSnapshotAsync();
+
+        await snapshotStub.Received().SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(-1L),
+                "THE data-loss assertion. Partition 0 never applied anything, so no offset floor may "
+                + "be published for it. Reading its birth value as a real checkpoint stamps coverage 0, "
+                + "which turns min(checkpoint, covered) from -1 into 0 and converts a correct block pin "
+                + "into an unearned trim entitlement - silently, on upgrade, across every such leaf");
+            Assert.That(grain.DurableSnapshotCoverageForPartition(dataPartition), Is.EqualTo(-1L),
+                "and the partition holding the rows earns durability, not trim authority");
+        });
+    }
+
+    /// <summary>
+    /// ACCEPTANCE CRITERION 7, the discriminating arm. This is the assertion
+    /// that can only pass when the widened branch actually EXECUTED, because
+    /// declining an empty cache is something only that branch does.
+    /// <para>
+    /// Pre-fix a birth leaf reported <c>0</c>, so <c>anyPartitionCheckpointed</c>
+    /// was true on the first iteration, the widening was skipped entirely, and
+    /// an EMPTY leaf went on to be captured as though it held a real checkpoint -
+    /// writing a blob the activation path is then required to ignore. Post-fix
+    /// partition 0 reports the sentinel, no partition is proven, control enters
+    /// the widened branch, it finds no live data, and it returns without
+    /// capturing.
+    /// </para>
+    /// <para>
+    /// Paired with the arm above, the two bracket the branch from both sides:
+    /// live rows are captured, an empty cache is not. No other path through
+    /// <c>CaptureSnapshotCoreAsync</c> makes the capture decision turn on cache
+    /// liveness for a leaf with no proven checkpoint, so the pair cannot be
+    /// satisfied without the branch having run.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Born_at_default_leaf_with_an_empty_cache_is_declined_by_the_widened_branch()
+    {
+        const int partitions = 8;
+        var (grain, state, _, snapshotStub) = CreateNeverCheckpointedLeaf(partitions, bornAtDefault: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.Zero,
+                "precondition: the PRODUCTION birth shape, not the admin rebuild's explicit -1");
+            Assert.That(state.State.ProjectionCheckpointOffsetAssigned, Is.Null,
+                "precondition: no presence marker was ever written");
+        });
+        Assert.That(grain.EntriesForTest, Is.Empty,
+            "precondition: the cache is genuinely empty, so the widened branch has a reason to decline");
+
+        await grain.CaptureSnapshotAsync();
+
+        await snapshotStub.DidNotReceive().SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+        Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(-1L),
+            "a birth leaf with nothing in it must be declined by the widened branch. Reading its "
+            + "partition 0 as checkpointed skips that branch altogether and captures an empty leaf, "
+            + "which is how the gate was proven unreachable in production");
     }
 }
