@@ -3183,6 +3183,17 @@ public static class LatticeMetrics
     /// the phase tag to place it.
     /// </para>
     /// <para>
+    /// <b>This counter records only the fires that faulted, not every ceiling
+    /// fire.</b> It is raised from the one site that builds the stall fault, and
+    /// a fire whose partial page was banked returns that page instead of
+    /// throwing, so it records nothing here and contributes no phase tag. The
+    /// phase distribution on this counter is therefore the distribution over
+    /// <em>discarded</em> fires alone, which is also why its total equals the
+    /// <c>discarded</c> arm of <see cref="ScanPageCeilingOutcomes"/> by
+    /// construction. Use that counter's sum, not this one, when the question is
+    /// how often the ceiling fired at all.
+    /// </para>
+    /// <para>
     /// <b>Reading a zero.</b> Because a zero is also the expected value under
     /// health, it carries no information on its own: it is what a clean shard
     /// reports and equally what a deployment that never scanned reports. Pair
@@ -3206,11 +3217,61 @@ public static class LatticeMetrics
     /// <para>
     /// <b>Reading a zero.</b> Both arms are emitted from the one site a ceiling
     /// fire passes through, so their sum is the ceiling-fire count and neither
-    /// arm needs a denominator supplied from elsewhere. That is what makes a
-    /// zero on the <c>banked</c> arm interpretable: beside a non-zero
-    /// <c>discarded</c> arm it is a measured negative - ceilings fired and none
-    /// of them found bankable work, which points at a prologue or descent that
-    /// parks rather than at a slow leaf chain. The reading it is designed to
+    /// arm needs a denominator supplied from elsewhere.
+    /// </para>
+    /// <para>
+    /// <b>A zero on the <c>banked</c> arm has three distinct causes and does not
+    /// separate them on its own.</b> In particular it does <i>not</i> indicate a
+    /// prologue or descent that parks. An earlier revision of this note said so,
+    /// and the phase tag beside it refutes that reading: a fire that parks before
+    /// the leaf chain never reaches <c>ScanPagePhase.LeafWalk</c>, so it is
+    /// tagged <c>prologue</c> or <c>descent</c> on <see cref="ScanPageStalls"/>
+    /// rather than <c>leaf-walk</c>.
+    /// </para>
+    /// <para>
+    /// <b>Cause 1, and the one seen in the field: the fire landed inside the
+    /// page's first leaf read.</b> The accumulator is published before the phase
+    /// flips to <c>leaf-walk</c>, and a leaf contributes its rows only once its
+    /// read returns in full, so a read still in flight has banked nothing. A
+    /// <c>leaf-walk</c> stall with <c>banked=0</c> on a paging operation
+    /// therefore means no leaf read had completed at all. Banking cannot help
+    /// this shape, and where the range fits in a single leaf it never can, since
+    /// there is no earlier completed leaf to have contributed rows however small
+    /// that leaf is. The mitigation is the read coalescing reported by
+    /// <see cref="ScanPageLeafReadOutcomes"/>, not banking: read its
+    /// <c>joined</c> arm against <see cref="ScanPageStalls"/> to tell a retry
+    /// that attaches to the in-flight read from one that enqueues another behind
+    /// it.
+    /// </para>
+    /// <para>
+    /// <b>Cause 2: the operation cannot bank at all.</b> Banking requires two
+    /// things that only the key and entry paging operations have: the core
+    /// method must publish its accumulator through <c>BeginScanPageRows</c>, and
+    /// the return type must be <c>KeysPage</c> or <c>EntriesPage</c>, the only
+    /// two shapes <c>TryBankPartialScanPage</c> can construct. Every other
+    /// stall-guarded operation - the counting, any, range-delete, diagnostics,
+    /// storage-usage, projection-rebuild, materialiser-lag and snapshot-baseline
+    /// pages - fails both tests, so its fires record <c>discarded</c> however
+    /// many leaves had completed. On such a series <c>banked=0</c> is not a
+    /// statement about the walk at all.
+    /// </para>
+    /// <para>
+    /// <b>Cause 3: every row read so far was filtered out.</b> Moved-away slots
+    /// are skipped before they reach the accumulator, so a page that has walked
+    /// several completed leaves holding only moved-away entries still banks
+    /// nothing. Expect this only while a shard is consolidating.
+    /// </para>
+    /// <para>
+    /// <b>The banked-to-discarded ratio is therefore mix-dependent and is not a
+    /// health signal on its own.</b> A shard whose scan traffic is mostly counts
+    /// and diagnostics reports a zero <c>banked</c> arm however healthy its leaf
+    /// reads are, while a shard serving key and entry pages reports a ratio that
+    /// does track first-leaf health. Comparing the ratio across trees compares
+    /// their operation mixes as much as their leaf latency; separate the two
+    /// before attributing a difference to either.
+    /// </para>
+    /// <para>
+    /// The reading this arm is designed to
     /// close off is the one where a series carries no points at all: if this
     /// counter is absent while
     /// <see cref="ScanPageStalls"/> is climbing, the banking path is not wired
