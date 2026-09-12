@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
@@ -653,6 +654,7 @@ internal sealed partial class BPlusLeafGrain
         // there is no cache content worth persisting anyway.
         if (state.State.TreeId is null)
         {
+            ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNoTreeId);
             return;
         }
 
@@ -748,6 +750,7 @@ internal sealed partial class BPlusLeafGrain
             }
             if (!anyPartitionHasLiveData)
             {
+                ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNotEligible);
                 return;
             }
         }
@@ -761,9 +764,20 @@ internal sealed partial class BPlusLeafGrain
         // slow.
         if (_snapshotCaptureInFlight)
         {
+            ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineAlreadyInFlight);
             return;
         }
         _snapshotCaptureInFlight = true;
+        // Attempt boundary. Everything above this line is a DECLINE (no tree,
+        // nothing checkpointed and no live data, or a capture already in
+        // flight); everything below is a genuine attempt that will either land
+        // a blob or throw. Counting and timing from here - rather than from
+        // method entry - is what makes both instruments readable: the gates
+        // return in microseconds and are taken far more often than a capture
+        // runs, so timing them would let near-zero no-ops dominate the sample
+        // count and report "captures are fast" precisely when none happen.
+        var captureStartedAt = Stopwatch.GetTimestamp();
+        var captureSucceeded = false;
         try
         {
             // Single-threaded copy of the cache rows under the grain
@@ -866,11 +880,111 @@ internal sealed partial class BPlusLeafGrain
             // FlushPendingCheckpointAsync) keeps the pin conservative: it can
             // never license a trim ahead of durable coverage.
             RecordDurableSnapshotCoverage(blob);
+            captureSucceeded = true;
         }
         finally
         {
             _snapshotCaptureInFlight = false;
+            // Recorded in the finally so that the swallowed-exception paths are
+            // counted too. That is the whole point of issue #2696: the advisory
+            // handler catches every exception and only logs, so before this a
+            // deployment in which every capture failed exported nothing at all
+            // - not a spike, not a zero - and was indistinguishable from one
+            // that had never attempted a capture.
+            ObserveSnapshotCaptureAttempt(captureSucceeded, cancellationToken, captureStartedAt);
         }
+    }
+
+    /// <summary>
+    /// Records one leaf-snapshot capture attempt on
+    /// <see cref="LatticeMetrics.LeafSnapshotCaptures"/> and its wall-clock
+    /// duration on <see cref="LatticeMetrics.LeafSnapshotCaptureDuration"/>,
+    /// tagged by tree and outcome (issue #2696). Observation only: the caller's
+    /// control flow, and the exception it is propagating if any, are unchanged.
+    /// <para>
+    /// Called from the <c>finally</c> of the capture's single-flight block, so
+    /// it runs on the success path and on every throwing path alike. It must
+    /// therefore not throw: a metrics write that faulted here would replace the
+    /// capture's real exception with an observation defect. Both instrument
+    /// writes are allocation-light tag writes against a bounded tag set and
+    /// neither allocates per-leaf series - the tree is the finest label, which
+    /// keeps this family at trees x outcomes rather than at leaf cardinality.
+    /// </para>
+    /// <para>
+    /// A cancelled token is reported as <c>abandoned</c> rather than
+    /// <c>failed</c>, mirroring the predicate the advisory handler already uses
+    /// to swallow deactivation cancellations silently, so a fleet-wide
+    /// shutdown does not read as a storage-provider outage.
+    /// </para>
+    /// </summary>
+    private void ObserveSnapshotCaptureAttempt(
+        bool succeeded,
+        CancellationToken cancellationToken,
+        long startedAtTimestamp)
+    {
+        var treeId = state.State.TreeId;
+        if (treeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        var outcome = succeeded
+            ? LatticeMetrics.SnapshotCaptureSucceeded
+            : cancellationToken.IsCancellationRequested
+                ? LatticeMetrics.SnapshotCaptureAbandoned
+                : LatticeMetrics.SnapshotCaptureFailed;
+
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        LatticeMetrics.LeafSnapshotCaptures.Add(1, treeTag, outcome, tenantTag);
+        LatticeMetrics.LeafSnapshotCaptureDuration.Record(
+            Stopwatch.GetElapsedTime(startedAtTimestamp).TotalMilliseconds,
+            treeTag,
+            outcome,
+            tenantTag);
+    }
+
+    /// <summary>
+    /// Records a capture invocation that declined before the attempt boundary.
+    /// <para>
+    /// Declines are counted on their own instrument rather than as a fourth
+    /// value of the attempt counter's outcome tag, so that the attempt counter
+    /// and the duration histogram keep sharing a population exactly. A decline
+    /// is never timed, so folding it into the attempt counter would make the
+    /// two families silently differ.
+    /// </para>
+    /// <para>
+    /// A <c>no_tree_id</c> decline carries no <c>tree</c> tag - there is no tree
+    /// identity to report - but it still carries the derived <c>tenant</c>
+    /// dimension, which <see cref="LatticeTenantLabel.ForTree(string?)"/>
+    /// resolves to the platform sentinel for a null id. Emitting it with no
+    /// tenant dimension at all would make it invisible to every tenant-scoped
+    /// query, so an operator could not tell an unattributable measurement from
+    /// a missed one - which is the same ambiguity this instrument exists to
+    /// remove, reintroduced one dimension over. The uniform dimension also
+    /// keeps every site on this instrument under one attribution rule, so its
+    /// series never splits across two.
+    /// </para>
+    /// </summary>
+    private void ObserveSnapshotCaptureDecline(KeyValuePair<string, object?> reason)
+    {
+        // Normalise an empty id to null so it resolves to the platform sentinel
+        // rather than being adopted by the default tenant, matching the guard below.
+        var treeId = state.State.TreeId is { Length: > 0 } id ? id : null;
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        if (treeId is null)
+        {
+            LatticeMetrics.LeafSnapshotCaptureDeclines.Add(1, reason, tenantTag);
+            return;
+        }
+
+        LatticeMetrics.LeafSnapshotCaptureDeclines.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            reason,
+            tenantTag);
     }
 
     /// <summary>

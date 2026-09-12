@@ -1783,6 +1783,215 @@ public static class LatticeMetrics
         new(TagReason, "faulted");
 
     /// <summary>
+    /// Counter of leaf-snapshot capture <b>attempts</b>, emitted by
+    /// <c>BPlusLeafGrain.CaptureSnapshotCoreAsync</c> once per attempt that
+    /// passes the eligibility gates, tagged with <see cref="TagTree"/>,
+    /// <see cref="TagOutcome"/>
+    /// (<c>succeeded</c>/<c>failed</c>/<c>abandoned</c>) and the tenant label.
+    /// <para>
+    /// This exists because before issue #2696 the capture path carried
+    /// <b>no instrument at all</b>: the write half was untimed and uncounted,
+    /// and <c>TryCaptureSnapshotForAdvisoryAsync</c> caught every exception and
+    /// only logged it. The single capture-derived series on the endpoint,
+    /// <see cref="StorageSnapshotBytesName"/>, is fed only <b>after</b> a
+    /// successful save, so it reads <c>0</c> both when every capture is failing
+    /// and when no capture has ever been attempted. Those are opposite
+    /// operational states - a broken provider versus a correctly idle one - and
+    /// they were byte-identical on <c>/metrics</c>. Nothing exported could tell
+    /// them apart.
+    /// </para>
+    /// <para>
+    /// A failure counter <b>alone</b> would not have fixed that, which is why
+    /// this counts attempts and tags the outcome rather than counting failures.
+    /// A bare failure counter reading zero is ambiguous in exactly the same way
+    /// the original defect was - no failures because everything succeeded, or
+    /// no failures because nothing ran - so it would have reproduced the defect
+    /// one level up. Read <c>succeeded + failed + abandoned</c> as "attempted";
+    /// a tree absent from this counter entirely has genuinely never attempted a
+    /// capture, and that is now a distinguishable, positively-readable state.
+    /// </para>
+    /// <para>
+    /// Counted at the single-flight boundary inside the core capture method
+    /// rather than at the advisory call site, so that every caller (activation
+    /// advisory, periodic recheck, cold-progress banking, graceful
+    /// deactivation) is denominated identically and this counter shares its
+    /// population exactly with
+    /// <see cref="LeafSnapshotCaptureDuration"/>. Instrumenting the advisory
+    /// catch block alone would have counted failures from one caller against
+    /// durations from four.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotCaptures =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.captures", unit: "{capture}",
+            description: "Leaf-snapshot capture attempts, tagged by tree and outcome (succeeded/failed/abandoned). Sum across outcomes is the attempt count, which is what distinguishes \"every capture failed\" from \"capture never ran\" - a distinction no exported series could make before issue #2696.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotCaptures"/>.</summary>
+    public const string LeafSnapshotCapturesName = "orleans.lattice.leaf.snapshot.captures";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>succeeded</c> on
+    /// <see cref="LeafSnapshotCaptures"/>: the blob reached the snapshot
+    /// storage grain and durable coverage was advanced.
+    /// <para>
+    /// <b>This records that a capture completed and persisted, not that the
+    /// result is loadable</b>, and the distinction is not pedantic. A capture
+    /// whose <c>SnapshotOffset</c> normalises to null is saved successfully and
+    /// is then discarded on the load path by <c>HasCapturedPrefix</c>, so for
+    /// that population this counter reports a success for a blob that can never
+    /// be read back. The limitation is named here rather than left to be
+    /// inferred, because the alternative - a reader treating
+    /// <c>succeeded</c> as end-to-end coverage - is exactly the class of
+    /// unstated guarantee this instrument exists to remove. Correlate with
+    /// <c>orleans.lattice.leaf.snapshot.load_failures</c> and
+    /// <c>orleans.lattice.storage.snapshot_bytes</c> before reading it as
+    /// coverage.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotCaptureSucceeded =
+        new(TagOutcome, "succeeded");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>failed</c> on
+    /// <see cref="LeafSnapshotCaptures"/>: the attempt threw and the exception
+    /// was swallowed by the caller. This is the reading that was previously
+    /// invisible - the advisory handler logs it and increments nothing, so a
+    /// deployment in which every capture fails presented as total silence.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotCaptureFailed =
+        new(TagOutcome, "failed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>abandoned</c> on
+    /// <see cref="LeafSnapshotCaptures"/>: the caller's token was cancelled, so
+    /// the attempt was deliberately dropped on a deactivation deadline (issue
+    /// #1965) rather than failing. Kept apart from
+    /// <see cref="SnapshotCaptureFailed"/> because a fleet-wide shutdown and a
+    /// broken storage provider would otherwise look identical. The existing
+    /// log-flood argument for swallowing these silently does not extend to a
+    /// counter: an increment is O(1) against a bounded tag set, not a line.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotCaptureAbandoned =
+        new(TagOutcome, "abandoned");
+
+    /// <summary>
+    /// Histogram of wall-clock leaf-snapshot capture duration in milliseconds,
+    /// emitted by <c>BPlusLeafGrain.CaptureSnapshotCoreAsync</c>, tagged with
+    /// <see cref="TagTree"/>, <see cref="TagOutcome"/> and the tenant label.
+    /// Shares its population exactly with <see cref="LeafSnapshotCaptures"/>.
+    /// <para>
+    /// Timing starts at the single-flight boundary, <b>after</b> the
+    /// eligibility gates, so a leaf that declines to capture contributes no
+    /// sample. That boundary is load-bearing rather than tidy: the gates return
+    /// in microseconds and are taken far more often than a capture runs, so
+    /// timing the whole method would let near-zero no-ops dominate the count
+    /// and drag the mean toward zero - an instrument that reports "captures are
+    /// fast" precisely when none are happening.
+    /// </para>
+    /// <para>
+    /// The capture is awaited <b>inline inside <c>OnActivateAsync</c></b>, and
+    /// Orleans delivers no request to a grain until activation completes, so
+    /// this duration is paid by every caller waiting on that leaf. It is
+    /// therefore the direct measurement of the activation-latency contribution
+    /// that previously had to be inferred from caller-side
+    /// <see cref="GrainCallDuration"/>, which conflates activation with call
+    /// and queue latency.
+    /// </para>
+    /// <para>
+    /// <b>Readable as an interval mean only.</b> The container's metrics
+    /// exposition renders a histogram as <c>_sum</c>/<c>_count</c> with no
+    /// quantiles and no buckets, and both are cumulative since process start,
+    /// so a percentile is not derivable from this instrument as deployed and a
+    /// threshold on the raw cumulative mean is heavily damped. Read it as
+    /// <c>(sum2-sum1)/(count2-count1)</c> across two scrapes. Do not "improve"
+    /// this into an explicit-bucket histogram expecting to read percentiles;
+    /// nothing in the pipeline renders them.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> LeafSnapshotCaptureDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.leaf.snapshot.capture.duration", unit: "ms",
+            description: "Wall-clock duration of leaf-snapshot capture attempts, tagged by tree and outcome. Measured from the single-flight boundary so declined captures contribute no sample. Exported with explicit buckets like every other ms-unit histogram on this meter, so histogram_quantile over _bucket is available; delta _sum over delta _count gives an interval mean.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotCaptureDuration"/>.</summary>
+    public const string LeafSnapshotCaptureDurationName = "orleans.lattice.leaf.snapshot.capture.duration";
+
+    /// <summary>
+    /// Counter of leaf-snapshot capture invocations that <b>declined</b> before
+    /// reaching the attempt boundary, tagged <see cref="TagTree"/> and
+    /// <see cref="TagReason"/>.
+    /// <para>
+    /// This is a separate instrument from
+    /// <see cref="LeafSnapshotCaptures"/> rather than a fourth value of that
+    /// counter's <c>outcome</c> tag, and the separation is load-bearing.
+    /// <see cref="LeafSnapshotCaptures"/> and
+    /// <see cref="LeafSnapshotCaptureDuration"/> are written at one boundary
+    /// precisely so they share a population exactly - every counted attempt is
+    /// timed and every timed attempt is counted - which makes their ratio a
+    /// within-family comparison that cannot drift. A counter-only outcome value
+    /// would break that invariant silently, since declines are never timed.
+    /// Keeping declines in their own family preserves it.
+    /// </para>
+    /// <para>
+    /// It exists because without it the capture instruments reproduce, one gate
+    /// higher, the very ambiguity they were added to remove: a deployment in
+    /// which every capture is <i>declined</i> and one in which the capture path
+    /// is never reached at all would both leave
+    /// <see cref="LeafSnapshotCaptures"/> at zero. A declined capture is a third
+    /// state, distinct from both a failed capture and an idle deployment, and it
+    /// is the most likely way a self-heal silently never runs.
+    /// </para>
+    /// <para>
+    /// The three reasons carry different operational meanings and are the reason
+    /// a tag beats a bare count. <c>already_in_flight</c> dominating is a
+    /// <b>contention</b> signal - captures are being requested faster than the
+    /// shared snapshot storage provider retires them, which is the pressure
+    /// issue #2696 describes. <c>not_eligible</c> dominating is the
+    /// <b>starved-leaf</b> signal this diagnostic exists for: the leaf has
+    /// nothing checkpointed and no live data, so it will never cover itself.
+    /// <c>no_tree_id</c> above zero is a <b>bug</b> - capture was invoked on a
+    /// leaf that was never attached to a tree.
+    /// </para>
+    /// <para>
+    /// A <c>no_tree_id</c> decline carries <b>no</b> tree or tenant tag, because
+    /// at that point the leaf has no tree identity to report. That is a property
+    /// of the state being counted, not an omission: read it as a global count,
+    /// and do not expect it to appear under a per-tree filter.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotCaptureDeclines =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.capture.declines", unit: "{decline}",
+            description: "Leaf-snapshot capture invocations that declined before the attempt boundary, tagged by tree and reason (no_tree_id, not_eligible, already_in_flight). Separate from the capture counter so attempts and durations stay exactly co-populated.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotCaptureDeclines"/>.</summary>
+    public const string LeafSnapshotCaptureDeclinesName = "orleans.lattice.leaf.snapshot.capture.declines";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a capture declined because the leaf has
+    /// no <c>TreeId</c>, so it was never attached to a tree. Above zero this is
+    /// a bug, not a workload characteristic.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotDeclineNoTreeId =
+        new(TagReason, "no_tree_id");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a capture declined because no partition
+    /// holds a checkpoint or live data. This is the starved-leaf signal: a leaf
+    /// declining for this reason will never cover itself, so a sustained rate
+    /// here is the population that snapshot coverage is failing to reach.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotDeclineNotEligible =
+        new(TagReason, "not_eligible");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a capture declined by the single-flight
+    /// guard because an earlier capture's save is still in flight. A sustained
+    /// rate here is a contention signal against the shared snapshot storage
+    /// provider, not an error: the in-flight capture will land and the next
+    /// advisory re-evaluates.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotDeclineAlreadyInFlight =
+        new(TagReason, "already_in_flight");
+
+    /// <summary>
     /// Counter of off-cadence leaf snapshot captures driven by the zero-coverage
     /// repair path (issue #2692). Tagged with <see cref="TagTree"/> and
     /// <see cref="TagOutcome"/>: <c>repaired</c> when a capture gave a
