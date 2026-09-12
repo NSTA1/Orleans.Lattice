@@ -163,7 +163,9 @@ You can skip Tier 3 and go straight from Tier 2 to Tier 4 if you're about to do 
 
 ### Tier 4 - before opening a PR (touched packages)
 
-Run the non-chaos suite for **each test project that covers a package the PR touches** - not the whole solution. Map each changed `src/<package>/` (or `test/<package>/`) to its `test/<package>/*.Tests.csproj`. The repo-level hygiene gates (em-dash, mojibake, docs-snippet) for `docs/`, `.github/`, `CHANGELOG.md`, `samples/`, and root files live in the **core** `Orleans.Lattice.Tests` project - but do not run its whole suite just for them. When the PR touches only repo-level paths (no `src/lattice/` code), run just the targeted hygiene filter against the core project instead; run the full core test project only when you changed `src/lattice/` code.
+Run the non-chaos suite for **each test project that covers a package the PR touches** - not the whole solution. Map each changed `src/<package>/` (or `test/<package>/`) to its `test/<package>/*.Tests.csproj`. The repo-level hygiene gates (em-dash, mojibake, docs-snippet) live in the **core** `Orleans.Lattice.Tests` project - but do not run its whole suite just for them. When the PR touches only repo-level paths (no `src/lattice/` code), run just the targeted hygiene filter against the core project instead; run the full core test project only when you changed `src/lattice/` code.
+
+**Run that core hygiene filter whichever package you touched.** It covers far more than `docs/`, `.github/`, `CHANGELOG.md`, `samples/`, and root files: it covers every `src/` and `test/` directory not registered in `CoreHygieneScope.AllPackageSliceRoots`, which is most of them. Skipping it because "my package has its own test project" is the single most common way a text-hygiene violation reaches CI - see "Hygiene gates" below for why a package-scoped `~Hygiene` run can report success having scanned nothing.
 
 ```powershell
 # Example: a PR scoped to src/lattice.replication/ (plus repo-level CHANGELOG/docs edits)
@@ -184,11 +186,20 @@ Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging t
 | --- | --- | --- |
 | `TenantMetricDimensionHygieneTests` | `test/lattice/` | each instrument's tenant dimension, including the `PlatformSentinelInstruments` list - which is keyed on the **C# field name**, not the metric name |
 | `MeterDashboardCoverageEnrolmentTests` | `test/lattice/` | that every **meter** is covered by some charting guard (meter-keyed, so it does not see an individual unpaneled instrument) |
-| `MetricsDocCoverageEnrolmentTests` | `test/lattice/` | each instrument's row in its package reference doc |
+| `MetricsDocCoverageEnrolmentTests` | `test/lattice/` | that every instrument-publishing package is **enrolled** in the documentation guard, i.e. covered by *some* `MetricsDocCoverageTestsBase` subclass (package-keyed, so it does not see an individual undocumented instrument) |
 | `MeterFieldDeclarationOrderTests` | `test/lattice/` | the `Meter`-field-declared-above-every-instrument ordering |
 | `DashboardJsonTests` | `test/lattice.dashboards/` | that every **individual instrument** on `orleans.lattice` / `orleans.lattice.replication` is referenced by a bundled Grafana panel, or enrolled in `IntentionallyUnpaneledInstruments` with a justification |
 
 Note the last two dashboard entries are **two separate enrolment lists for adjacent concerns**, and neither implies the other: `MeterDashboardCoverageEnrolmentTests` asks "is this meter charted by something", `DashboardJsonTests` asks "is this instrument on a panel". A new instrument on an already-covered meter satisfies the first and can still fail the second.
+
+**The metrics-doc row is an enrolment gate too, and running it alone will not catch an undocumented instrument.** `MetricsDocCoverageEnrolmentTests` asks "does this package have a doc-coverage fixture at all"; the fixture that asserts **each instrument's row in its package reference doc** is the package's own `MetricsDocCoverageTestsBase` subclass - `MetricsDocCoverageTests` for `src/lattice`, `BackupMetricsDocCoverageTests` for `src/lattice.backup.azureblob`, and so on. Those are per-package, not repository-wide, which is why they are not in the table above and why the enrolment gate exists at all. Adding an instrument to an already-enrolled package satisfies the enrolment gate and can still fail its package's substantive fixture, so **run both**: the enrolment gate, and the `MetricsDocCoverage*Tests` of the package you touched.
+
+```powershell
+# enrolment (repository-wide) - is my package covered by a doc fixture?
+dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~MetricsDocCoverageEnrolmentTests"
+# substantive (per package) - does my instrument have a doc row?
+dotnet test test/<pkg>/<Project>.Tests.csproj --filter "FullyQualifiedName~MetricsDocCoverage"
+```
 
 So **a change that adds or removes a metric instrument in any package must also run these five**, alongside the six standard content gates, whichever package the instrument itself lives in. Budget for it: adding a single instrument costs at least four edits outside its own package, in two different test projects.
 
@@ -633,7 +644,21 @@ Two things that filter does **not** cover, so do not treat it as "all gates":
   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~DocsSnippet"
   ```
 
-- The em-dash, mojibake, deletion-mandate, and integration-category gates now live as abstract bases in the shared `Orleans.Lattice.Testing` library and run in **every** test project via a thin concrete subclass under each project's `Hygiene/` folder. Each subclass scans only that project's own slice (`src/<package>` + `test/<package>`); the core project additionally owns the repo-level files no package owns (`docs/`, `.github/`, `benchmark/`, `samples/`, `tools/`, and root files). The single-project command above therefore only checks the core slice plus repo-level files; the other packages' slices are exercised by running each touched package's own test project before the PR (or that package's own `~Hygiene` filter), and by CI's full cross-solution run.
+- The em-dash, mojibake, deletion-mandate, and integration-category gates live as abstract bases in the shared `Orleans.Lattice.Testing` library, reached through a thin concrete subclass under a project's `Hygiene/` folder. **They do not all reach every package the same way, and the difference decides where you must run them.** The integration-category gate reflects over its *own assembly*, so it is genuinely per project. The three content gates scan a *slice of the filesystem*, and a slice is only scanned by its own project when that project declares one via `HygieneScanScope.ForSlice(...)` and registers it in `CoreHygieneScope.AllPackageSliceRoots`. Most packages do not. Everything not registered - the other `src/` and `test/` directories, plus `docs/`, `.github/`, `benchmark/`, `samples/`, `tools/`, and root files - falls to the **core** project's repo-level scan, which enumerates the whole repository minus the registered slices. Coverage is therefore complete either way; what varies is *which project's run* covers a given package.
+
+  The consequence for a pre-PR run, and it is the one that bites: **for a package with no registered slice, a package-scoped hygiene run checks none of its text, and says so in a way that reads like a pass.**
+
+  ```text
+  > dotnet test test/lattice.api.mcp.repocontext/... --filter "FullyQualifiedName~Hygiene"
+  No test matches the given testcase filter `FullyQualifiedName~Hygiene`   # exit code 0
+  ```
+
+  Treat that output as "this gate does not live here", never as "this package is clean". Two rules follow:
+
+  - **Always run the core project's hygiene filter before a PR, whichever package you touched.** For an unregistered package that is the run that covers your text; for a registered one it still covers your `docs/` and `.github/` edits. `CoreHygieneScope.AllPackageSliceRoots` is the authority on which is which - if your package is absent from it, the core run is the only one that sees it.
+  - **A non-zero discovered count is not sufficient evidence either.** Several projects carry a `Hygiene/` folder holding *only* the assembly-scoped integration-category gate. There, `~Hygiene` matches tests, passes, and still scans none of the package's files. What tells the two apart is the registry, not the count.
+
+  In CI none of this matters: the `content-gates` job runs the whole cross-solution set, and `run-text-gates.py` fails the job outright when the run executed no tests. The hazard is local-only, and it is why `HygieneDenominator.RequireExamined` guards the inside of each gate - a gate that ran but examined nothing fails loudly. Nothing inside a test can defend against the test not being selected, which is the gap these two rules close by hand.
 
 `SliceCoverageCompletenessTests` *is* matched, but only because its namespace was
 deliberately moved to `Orleans.Lattice.Tests.Hygiene` - its type name still has no
