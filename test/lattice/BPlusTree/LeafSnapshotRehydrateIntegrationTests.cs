@@ -97,7 +97,14 @@ public class LeafSnapshotRehydrateIntegrationTests
         // the leaf had not earned. With that ambiguity resolved the claim is
         // honestly absent, so the rehydrate round-trip this test exists to
         // cover has to be given a real checkpoint to round-trip against.
-        await leaf.SetCheckpointOffsetHintAsync(1);
+        //
+        // Hinted through the partition-scoped plural seam. The singular
+        // SetCheckpointOffsetHintAsync this used to call resolved its partition
+        // from an AsyncLocal that cannot flow across a grain call, so it always
+        // landed on partition 0 whatever the caller meant; it was removed in
+        // issue #2699. Index 0 here is deliberate and now explicit - this
+        // fixture's leaf is single-partition.
+        await leaf.SetCheckpointOffsetHintsAsync([1]);
 
         // Drive a snapshot capture through the public seam. The capture
         // path stamps the blob with whatever ProjectionCheckpointOffset

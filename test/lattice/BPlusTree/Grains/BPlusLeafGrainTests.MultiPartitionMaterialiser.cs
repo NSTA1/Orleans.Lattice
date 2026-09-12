@@ -338,7 +338,7 @@ public partial class BPlusLeafGrainTests
         siblingMock.SetKeyRangeAsync(Arg.Any<string>(), Arg.Any<string?>()).Returns(Task.CompletedTask);
         siblingMock.MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
             .Returns(Task.CompletedTask);
-        siblingMock.SetCheckpointOffsetHintAsync(Arg.Any<long>()).Returns(Task.CompletedTask);
+        siblingMock.SetCheckpointOffsetHintsAsync(Arg.Any<long[]>()).Returns(Task.CompletedTask);
         siblingMock.SetNextSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
         siblingMock.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
         factory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
