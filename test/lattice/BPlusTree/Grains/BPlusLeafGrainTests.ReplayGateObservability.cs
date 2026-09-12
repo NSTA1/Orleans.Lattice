@@ -4,11 +4,12 @@ using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Coverage for the resolved-replay-gate startup record (issues #2278, #2279).
+/// Coverage for the resolved-replay-gate startup record and for the default
+/// ceiling it reports (issues #2278, #2279, #2816).
 /// <para>
-/// The replay concurrency gate defaults to
-/// <see cref="Environment.ProcessorCount"/>, and a comment on that path used to
-/// assert flatly that this "honours a container CPU quota". It does so only
+/// The replay concurrency gate used to default to
+/// <see cref="Environment.ProcessorCount"/> alone, and a comment on that path
+/// asserted flatly that this "honours a container CPU quota". It does so only
 /// while <c>DOTNET_PROCESSOR_COUNT</c> does not override it, and a deployed
 /// repo-context host was found where it did: 16 permits against a 6-CPU quota,
 /// each permit admitting one CPU-bound whole-window WAL replay. The divergence
@@ -17,22 +18,141 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// container environment variable, two artefacts that never meet.
 /// </para>
 /// <para>
-/// Deliberately <b>not</b> tested here: that the gate resolves to any particular
-/// number. The remedy ruled on in #2279 is explicitly not to have library code
-/// second-guess a documented, supported .NET override, so there is no new sizing
-/// behaviour to assert. What is new is the record, and its load-bearing property
-/// is that it can never itself break an activation.
+/// Issue #2279 ruled that library code must not second-guess that override, so
+/// the first remedy shipped was the record alone. Issue #2816 overturned the
+/// sizing half of that ruling, and the fixture now asserts the sizing behaviour
+/// the earlier revision of this comment said would never exist. The reversal
+/// turns on <b>minimum, not replacement</b>: the default takes the lesser of the
+/// runtime figure and the enforced cgroup grant, so it can only ever lower the
+/// ceiling. An operator lowering <c>DOTNET_PROCESSOR_COUNT</c> is still obeyed
+/// exactly; what the gate refuses is to admit more concurrent CPU-bound replays
+/// than the kernel will schedule in parallel, which is a different question from
+/// how many threads the process should run. The tests below pin both halves: the
+/// arithmetic in
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain.ResolveDefaultReplayCeiling"/>,
+/// and the record's load-bearing property that it can never itself break an
+/// activation.
 /// </para>
 /// </summary>
 [TestFixture]
 public sealed class BPlusLeafGrainReplayGateObservabilityTests
 {
     [Test]
+    public void Default_ceiling_is_capped_by_the_enforced_container_cpu_grant()
+    {
+        // The measured deployed case: DOTNET_PROCESSOR_COUNT=16 on a 6.0-CPU
+        // container grant, which sized the gate at 2.67x the CPU the process
+        // could obtain. The grant must win, because it is the only one of the two
+        // figures the kernel actually enforces.
+        Assert.That(
+            BPlusLeafGrain.ResolveDefaultReplayCeiling(processorCount: 16, containerCpuGrant: 6),
+            Is.EqualTo(6),
+            "an overridden processor count above the enforced grant must not size this gate; the "
+            + "permits it hands out are concurrent CPU-bound whole-window replays");
+    }
+
+    [Test]
+    public void Default_ceiling_falls_back_to_the_processor_count_when_no_grant_is_readable()
+    {
+        // Null means UNKNOWN, not zero: an unconstrained host, a non-Linux host,
+        // and an unreadable cgroup are all cases where nothing is being enforced,
+        // so nothing should be constrained. Treating null as zero here would
+        // deadlock every leaf activation in the silo on a SemaphoreSlim(0, 0).
+        Assert.That(
+            BPlusLeafGrain.ResolveDefaultReplayCeiling(processorCount: 16, containerCpuGrant: null),
+            Is.EqualTo(16),
+            "an unreadable or unlimited quota must impose no constraint at all");
+    }
+
+    [Test]
+    public void Default_ceiling_keeps_the_processor_count_when_it_is_already_below_the_grant()
+    {
+        // The minimum is symmetric, and this is the arm that shows it never
+        // RAISES the ceiling - which is the whole basis on which #2816 overturned
+        // #2279. A host that deliberately lowers DOTNET_PROCESSOR_COUNT under a
+        // generous grant is still obeyed to the letter.
+        Assert.That(
+            BPlusLeafGrain.ResolveDefaultReplayCeiling(processorCount: 6, containerCpuGrant: 16),
+            Is.EqualTo(6),
+            "a deliberately lowered processor count must still be honoured; taking the minimum must "
+            + "never raise the ceiling above the runtime figure");
+    }
+
+    [Test]
+    public void Default_ceiling_from_a_fractional_grant_is_at_least_one_permit()
+    {
+        // Acceptance item 3 of #2816, pinned end to end at its source rather than
+        // defended by a second floor in the resolver. A 0.01-CPU grant is the
+        // smallest thing Docker will express; the reader's own ceiling rounding
+        // turns it into 1, so the resolver cannot produce a zero-permit gate
+        // without that contract changing first. A Math.Max(1, ...) in the
+        // resolver would be unreachable, and an unreachable safety net is worse
+        // than none because it reads as protection.
+        var grant = Orleans.Lattice.Runtime.ContainerCpuGrant.ParseCpuQuota("1000", "100000");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grant, Is.EqualTo(1),
+                "the reader rounds a fractional grant up, so the smallest expressible grant is one CPU");
+            Assert.That(
+                BPlusLeafGrain.ResolveDefaultReplayCeiling(processorCount: 16, containerCpuGrant: grant),
+                Is.EqualTo(1),
+                "a fractional grant must resolve to exactly one permit, never zero");
+        });
+    }
+
+    [Test]
+    public void Gate_sizing_prefers_an_explicitly_configured_ceiling_over_both_derived_figures()
+    {
+        // The operator's pin still wins. A minimum that could override an explicit
+        // setting would be exactly the "library defeats the operator" objection
+        // #2279 raised, and it would be a fair one.
+        var sizing = BPlusLeafGrain.ResolveGateSizing(
+            configured: 3, processorCount: 16, containerCpuGrant: 6);
+
+        Assert.That(sizing.Ceiling, Is.EqualTo(3),
+            "a positive configured ceiling supersedes both the processor count and the grant");
+    }
+
+    [Test]
+    public void Gate_sizing_reports_the_container_cpu_grant_even_when_a_pin_supersedes_it()
+    {
+        // The diagnostic case that motivates returning the grant rather than
+        // reading it at the call site: the operator pinned 3 on a 6-CPU grant with
+        // the runtime claiming 16, and all three numbers are worth writing down.
+        // Asserting on 6 rather than on the ceiling is what makes this falsifiable -
+        // the ceiling here is 3, so a resolver that dropped the grant entirely would
+        // still satisfy an assertion phrased against the ceiling.
+        var sizing = BPlusLeafGrain.ResolveGateSizing(
+            configured: 3, processorCount: 16, containerCpuGrant: 6);
+
+        Assert.That(sizing.ContainerCpuGrant, Is.EqualTo(6),
+            "the grant must be reported whether or not it constrained the ceiling, because a pin "
+            + "that disagrees with the grant is the case an operator most needs to see");
+    }
+
+    [Test]
+    public void Gate_sizing_derives_the_ceiling_when_the_option_is_left_unset()
+    {
+        var sizing = BPlusLeafGrain.ResolveGateSizing(
+            configured: 0, processorCount: 16, containerCpuGrant: 6);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sizing.Ceiling, Is.EqualTo(6),
+                "an unset option must fall through to the lesser of the two derived figures");
+            Assert.That(sizing.ContainerCpuGrant, Is.EqualTo(6),
+                "and the grant it resolved against must still be reported");
+        });
+    }
+
+    [Test]
     public void Resolved_gate_record_reports_the_ceiling_the_configured_option_and_the_processor_count()
     {
         var sink = new CapturingLogger();
 
-        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 6, configured: 6, () => sink);
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+            max: 6, configured: 6, containerCpuGrant: 6, () => sink);
 
         Assert.That(sink.Entries, Has.Count.EqualTo(1),
             "sizing the gate must leave exactly one record; this line is the only in-process evidence "
@@ -71,8 +191,8 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
         // than only the resolved one is what lets a reader tell "nobody pinned
         // this" apart from "somebody pinned it to exactly the processor count",
         // which are different situations with different remedies.
-        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 16, configured: 0, () => unset);
-        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 16, configured: 16, () => pinned);
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 16, configured: 0, containerCpuGrant: 16, () => unset);
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 16, configured: 16, containerCpuGrant: 16, () => pinned);
 
         Assert.That(unset.Entries[0], Is.Not.EqualTo(pinned.Entries[0]),
             "an unset option and one pinned to the same resolved ceiling must not render identically, "
@@ -80,11 +200,53 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
     }
 
     [Test]
+    public void Resolved_gate_record_reports_the_container_cpu_grant_it_resolved_against()
+    {
+        // Acceptance item 5 of #2816. The grant is the third figure, and it is
+        // the one that was missing: a reader could previously see the ceiling and
+        // the processor count disagree with the container's quota only by going
+        // and reading the quota out of band.
+        var sink = new CapturingLogger();
+
+        // 37 is deliberately a value that appears nowhere else in the record, so
+        // the assertion cannot be satisfied by the ceiling or the processor count
+        // happening to render the same digits.
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+            max: 6, configured: 0, containerCpuGrant: 37, () => sink);
+
+        Assert.That(sink.Entries[0], Does.Contain("37"),
+            "the quota-derived grant must be written down, because the whole failure mode is the "
+            + "runtime figure and the enforced grant disagreeing");
+    }
+
+    [Test]
+    public void Resolved_gate_record_distinguishes_an_unreadable_grant_from_a_readable_one()
+    {
+        var readable = new CapturingLogger();
+        var unreadable = new CapturingLogger();
+
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+            max: 6, configured: 0, containerCpuGrant: 6, () => readable);
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+            max: 6, configured: 0, containerCpuGrant: null, () => unreadable);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(unreadable.Entries[0], Does.Contain("unreadable or unlimited"),
+                "a null grant must render as an explicit statement that nothing was enforced, not as "
+                + "an empty slot a reader would mistake for a zero or for a formatting fault");
+            Assert.That(readable.Entries[0], Does.Not.Contain("unreadable or unlimited"),
+                "a grant that was read must not render as though it had not been");
+        });
+    }
+
+    [Test]
     public void Resolved_gate_record_is_skipped_when_information_is_disabled()
     {
         var sink = new CapturingLogger { Enabled = false };
 
-        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 6, configured: 6, () => sink);
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+            max: 6, configured: 6, containerCpuGrant: 6, () => sink);
 
         Assert.That(sink.Entries, Is.Empty,
             "the record must respect the level filter rather than formatting unconditionally");
@@ -103,6 +265,7 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
             () => BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
                 max: 6,
                 configured: 6,
+                containerCpuGrant: 6,
                 () => throw new InvalidOperationException("Injected logging-sink fault.")),
             "a faulting logger resolution must not escape the gate-sizing record; the caller is on the "
             + "leaf activation path, where an escaping exception is an activation failure");
@@ -117,7 +280,8 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
         var sink = new CapturingLogger { ThrowOnLog = true };
 
         Assert.DoesNotThrow(
-            () => BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 6, configured: 6, () => sink),
+            () => BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+                max: 6, configured: 6, containerCpuGrant: 6, () => sink),
             "a sink that throws while writing must not escape either");
     }
 
@@ -127,7 +291,8 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
         // ResolveLogger yields null when no logger factory is registered, which
         // is the ordinary shape in a bare unit-test host rather than an error.
         Assert.DoesNotThrow(
-            () => BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 6, configured: 6, () => null),
+            () => BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+                max: 6, configured: 6, containerCpuGrant: 6, () => null),
             "a null logger must be treated as 'nowhere to record it', not as a fault");
     }
 

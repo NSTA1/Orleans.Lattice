@@ -398,7 +398,8 @@ if (options.WalMaterialiserMaxConcurrentReplays < 0)
 {
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.WalMaterialiserMaxConcurrentReplays)} must be greater than or equal to 0 "
-        + "(zero resolves the per-silo concurrent-leaf-replay ceiling to Environment.ProcessorCount; a positive "
+        + "(zero resolves the per-silo concurrent-leaf-replay ceiling to the lesser of "
+        + "Environment.ProcessorCount and the enforced container CPU grant; a positive "
         + "value pins it explicitly).");
 }
 if (options.WalReplayMaxRecordsPerTurn < 0)

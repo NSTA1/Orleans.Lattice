@@ -2,12 +2,14 @@ using System.IO;
 using System.Text.RegularExpressions;
 using Orleans.Lattice.Testing.Hygiene;
 
-namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests;
+namespace Orleans.Lattice.Tests.Hygiene;
 
 /// <summary>
 /// Guards the deliberate duplication introduced by issue #2613. The canonical
 /// CPU-grant reader lives at
-/// <c>src/lattice.api.mcp.repocontext/Runtime/ContainerCpuGrant.cs</c>, but the
+/// <c>src/lattice/Runtime/ContainerCpuGrant.cs</c> (moved there from the
+/// repository-context add-on by issue #2816, so the core library's WAL replay
+/// concurrency gate can consult it), but the
 /// standalone ONNX embedding companion keeps a byte-identical private copy at
 /// <c>apps/embedding-onnx/Embedding/ContainerCpuGrant.cs</c> because that
 /// container image deliberately has no project reference into <c>src/</c> and its
@@ -19,15 +21,15 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests;
 /// The comparison is over executable code only: it discards everything above the
 /// class declaration (namespace, usings, and the class-level doc comment, which
 /// legitimately differ), then drops comment and blank lines and normalises the
-/// class-declaration access modifier (<c>public</c> on the canonical,
-/// <c>internal</c> on the mirror). What remains is the parsing logic, which must
+/// class-declaration access modifier (<c>internal</c> on both since issue #2816,
+/// and normalised regardless). What remains is the parsing logic, which must
 /// match exactly.
 /// </remarks>
 [TestFixture]
 public sealed class ContainerCpuGrantMirrorDriftTests
 {
     private const string CanonicalRelative =
-        "src/lattice.api.mcp.repocontext/Runtime/ContainerCpuGrant.cs";
+        "src/lattice/Runtime/ContainerCpuGrant.cs";
 
     private const string MirrorRelative =
         "apps/embedding-onnx/Embedding/ContainerCpuGrant.cs";
@@ -55,7 +57,7 @@ public sealed class ContainerCpuGrantMirrorDriftTests
 
         Assert.That(mirror, Is.EqualTo(canonical),
             "The embedding-onnx ContainerCpuGrant mirror has drifted from the canonical reader in "
-            + "src/lattice.api.mcp.repocontext/Runtime/. They are duplicated on purpose (the image "
+            + "src/lattice/Runtime/. They are duplicated on purpose (the image "
             + "has no src reference) and must stay byte-identical in their executable body. Re-sync "
             + "the two, changing both.");
     }

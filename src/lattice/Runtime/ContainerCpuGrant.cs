@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Api.Mcp.RepoContext;
+namespace Orleans.Lattice.Runtime;
 
 /// <summary>
 /// Reads the container's enforced CPU grant from the cgroup filesystem, so any
@@ -8,12 +8,17 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <remarks>
 /// <para>
 /// This is the shared, reusable form of the reader introduced by issue #2610
-/// (which sized the ONNX Runtime intra-op pool). It is promoted out of that app
-/// so the whole repository-context deployment can consult one implementation:
-/// <see cref="Bootstrap.RepoTreeWalker"/> uses it here, and the standalone ONNX
-/// embedding companion keeps a byte-identical mirror because its container image
-/// deliberately has no project reference into <c>src/</c> (a divergence guard
-/// fails CI if the two ever drift).
+/// (which sized the ONNX Runtime intra-op pool) and promoted out of that app by
+/// issue #2613 so every pool-sizing site can consult one implementation. Issue
+/// #2816 promoted it again, from the repository-context add-on into the core
+/// library, because the core library's own WAL replay concurrency gate is the
+/// site where the quota/<c>DOTNET_PROCESSOR_COUNT</c> disagreement was actually
+/// measured to hurt, and a package may only reference core, never the reverse.
+/// Promotion was chosen over a third copy deliberately: two copies already exist
+/// and are kept honest only by a divergence guard, and a third would be exactly
+/// the defect that guard exists to prevent. The standalone ONNX embedding
+/// companion keeps the byte-identical mirror because its container image has no
+/// project reference into <c>src/</c> at all.
 /// </para>
 /// <para>
 /// It exists because <see cref="System.Environment.ProcessorCount"/> is not a
@@ -54,8 +59,15 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// non-Linux machine, where the caller falls back to
 /// <see cref="System.Environment.ProcessorCount"/>.
 /// </para>
+/// <para>
+/// Kept <c>internal</c> rather than public. Every consumer today is inside this
+/// solution and reaches it through <c>InternalsVisibleTo</c>; the type has never
+/// shipped in a release, so narrowing it here removes nothing a consumer could
+/// have taken a dependency on. Promote it if a host ever needs to size a pool of
+/// its own from the same figure.
+/// </para>
 /// </remarks>
-public static class ContainerCpuGrant
+internal static class ContainerCpuGrant
 {
     /// <summary>The cgroup v2 unified CPU limit file.</summary>
     public const string CgroupV2CpuMaxPath = "/sys/fs/cgroup/cpu.max";

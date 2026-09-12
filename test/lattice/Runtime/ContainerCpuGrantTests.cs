@@ -1,11 +1,13 @@
-namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests;
+using Orleans.Lattice.Runtime;
+
+namespace Orleans.Lattice.Tests.Runtime;
 
 /// <summary>
 /// Covers the shared cgroup CPU-grant reader that decouples pool sizing from
 /// <see cref="System.Environment.ProcessorCount"/>. Moved here with issue #2613
-/// when the reader was promoted out of the ONNX embedding app into
-/// <c>src/lattice.api.mcp.repocontext</c> so every pool-sizing site can consult
-/// one implementation.
+/// when the reader was promoted out of the ONNX embedding app, and moved again
+/// with issue #2816 when it was promoted from the repository-context add-on into
+/// the core library so the WAL replay concurrency gate could consult it too.
 /// </summary>
 /// <remarks>
 /// The rows below are not invented. Each was measured on .NET 10 under Docker

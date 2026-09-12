@@ -6,8 +6,8 @@ namespace Orleans.Lattice.Embedding.Onnx;
 /// <remarks>
 /// <para>
 /// MIRROR: this is a byte-identical copy (comments aside) of the canonical
-/// <c>Orleans.Lattice.Api.Mcp.RepoContext.ContainerCpuGrant</c> in
-/// <c>src/lattice.api.mcp.repocontext/Runtime/</c>. It is duplicated rather than
+/// <c>Orleans.Lattice.Runtime.ContainerCpuGrant</c> in
+/// <c>src/lattice/Runtime/</c>. It is duplicated rather than
 /// referenced because this container image deliberately has no project reference
 /// into <c>src/</c> and its Docker build context is only <c>apps/embedding-onnx</c>,
 /// so it cannot compile a shared <c>src</c> type without breaking the image. A
