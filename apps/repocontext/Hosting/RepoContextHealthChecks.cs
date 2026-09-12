@@ -127,13 +127,18 @@ public sealed class RepoContextRetrievalReadinessHealthCheck(RepoContextRetrieva
     // build was in progress - which this message did until issue #2362 - turned an
     // absence of evidence into a claim, and on a deployment whose sweep had
     // scheduled no build at all it was simply false. The machine-readable form of
-    // the same fact is the search response's retrieval path,
-    // keyword.vector_plane_unavailable, which this text deliberately quotes so an
-    // operator reading either one is told the same thing.
+    // the same fact is the search response's retrieval path, which this text
+    // deliberately quotes so an operator reading either one is told the same thing.
+    // It names both keyword causes rather than one, because since issue #2720 a
+    // plane that holds nothing and an exact fallback a guard is holding shut report
+    // differently, and this phase is reached by both - so pinning a single value
+    // here would make the line wrong for whichever box is in the other state.
     private static readonly Task<HealthCheckResult> Building = Task.FromResult(
         HealthCheckResult.Unhealthy(
             "Not ready: the vector plane has not served semantic retrieval, so searches are answering as "
-            + "keyword.vector_plane_unavailable. Whether a build is in progress is not known here; check the "
+            + "keyword.vector_plane_unavailable, or as keyword.exact_fallback_suppressed when a stalled gather "
+            + "has left the exact fallback withheld. Run a search and read its retrievalPath to tell which. "
+            + "Whether a build is in progress is not known here; check the "
             + "index build's own status rather than inferring it from this line."));
 
     private readonly RepoContextRetrievalReadinessState _state = state

@@ -843,7 +843,8 @@ function Get-RigRetrievalMode {
 .DESCRIPTION
 	The vocabulary is S7's: semantic.exact, semantic.approximate,
 	keyword.no_embedder, keyword.vector_plane_unavailable,
-	keyword.index_degraded. `mode` says WHETHER the semantic plane answered;
+	keyword.index_degraded, keyword.exact_fallback_suppressed. `mode` says
+	WHETHER the semantic plane answered;
 	`retrievalPath` says WHICH path did, which is what makes an approximate
 	answer distinguishable from an exact one instead of silently substituted.
 #>

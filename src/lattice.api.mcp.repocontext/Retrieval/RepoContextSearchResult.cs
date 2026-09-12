@@ -35,8 +35,9 @@ public sealed record RepoContextSearchResult
     /// cannot: whether a semantic answer had complete or bounded recall, and - when the
     /// answer was a keyword scan - whether that is an intended keyword-only deployment
     /// (<see cref="RepoContextRetrievalPath.KeywordNoEmbedder"/>) or a real capability
-    /// loss (<see cref="RepoContextRetrievalPath.KeywordVectorPlaneUnavailable"/> or
-    /// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/>). Always server-derived
+    /// loss (<see cref="RepoContextRetrievalPath.KeywordVectorPlaneUnavailable"/>,
+    /// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/>, or
+    /// <see cref="RepoContextRetrievalPath.KeywordExactFallbackSuppressed"/>). Always server-derived
     /// and never <see langword="null"/>.
     /// </summary>
     public required string RetrievalPath { get; init; }

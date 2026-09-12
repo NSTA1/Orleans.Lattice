@@ -6,7 +6,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <summary>
 /// The default <see cref="IRepoContextSemanticIndex"/>: it answers from the
 /// persisted approximate nearest-neighbour plane, and falls back to the exact
-/// scan while that plane is still building.
+/// scan while that plane is still building - except where that fallback has
+/// already proved it cannot finish, in which case keyword recall serves and the
+/// response says so.
 /// <para>
 /// <b>It declares the weaker guarantee, always.</b>
 /// <see cref="IRepoContextSemanticIndex.RetrievalPath"/> is a property of the
@@ -19,10 +21,15 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// answering, and never over-promises it once the plane is.
 /// </para>
 /// <para>
-/// <b>Nothing about the fallback is a degradation.</b> While the plane builds,
-/// the exact scan answers with complete recall - slower, never worse - so this
-/// path must never be confused with
-/// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/>. The build state
+/// <b>Nothing about the fallback is a degradation, while it runs.</b> While the
+/// plane builds, the exact scan answers with complete recall - slower, never
+/// worse - so this path must never be confused with
+/// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/>. That holds only
+/// while the gather can complete: once the breaker below has suppressed it, the
+/// fallback is not answering at all and recall is neither complete nor bounded but
+/// keyword, reported as
+/// <see cref="RepoContextRetrievalPath.KeywordExactFallbackSuppressed"/> (issue
+/// #2720). The build state
 /// itself is reported out of band: as a log line on every transition, and to a
 /// host through <see cref="TryGetProgress"/>, which is per repository and
 /// embedding space and so carries detail the single per-response value could not.
@@ -153,6 +160,19 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     /// type remarks for why a state-tracking declaration would be unsound.
     /// </remarks>
     public string RetrievalPath => RepoContextRetrievalPath.SemanticApproximate;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Reports the breaker's own open/closed state rather than the last
+    /// <see cref="RepoContextExactScanBreakerDecision"/>, so a query granted the
+    /// half-open probe still reports the fallback as suppressed while that probe is
+    /// in flight - which it is, for every other query in the window.
+    /// </remarks>
+    public bool IsExactFallbackSuppressed(string repoId)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        return _exactScanBreaker.IsTripped(repoId);
+    }
 
     /// <summary>
     /// The state the last query for a repository and embedding space would be
@@ -480,8 +500,12 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     /// It states only what is known. The plane not serving is measured here; why it
     /// is not serving is not, so no cause is named and no build is claimed. The
     /// machine-readable form of the same fact is the search service's
-    /// <see cref="RepoContextRetrievalPath.KeywordVectorPlaneUnavailable"/>, which
-    /// this line deliberately quotes so the two cannot drift into disagreeing.
+    /// <see cref="RepoContextRetrievalPath.KeywordExactFallbackSuppressed"/>, which
+    /// this line deliberately quotes so the two cannot drift into disagreeing. It is
+    /// that value rather than
+    /// <see cref="RepoContextRetrievalPath.KeywordVectorPlaneUnavailable"/> because
+    /// this method is only reached with the breaker open, which is precisely the
+    /// condition the search service now reports separately (issue #2720).
     /// </para>
     /// </summary>
     /// <param name="repoId">The repository the gather stalled for.</param>
@@ -509,7 +533,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             repoId,
             stalls,
             _exactScanBreaker.OpenFor(repoId),
-            RepoContextRetrievalPath.KeywordVectorPlaneUnavailable,
+            RepoContextRetrievalPath.KeywordExactFallbackSuppressed,
             _exactScanBreaker.MaxProbeDelay);
     }
 

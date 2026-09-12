@@ -265,9 +265,16 @@ public sealed class AnnRepoContextSemanticIndexRecoveryTests
             Assert.That(wedged, Has.Length.EqualTo(1),
                 "One line, once. Emitting it per query would bury it, and emitting it never is the state "
                 + "issue #2362 was filed from.");
-            Assert.That(wedged[0], Does.Contain(RepoContextRetrievalPath.KeywordVectorPlaneUnavailable),
+            Assert.That(wedged[0], Does.Contain(RepoContextRetrievalPath.KeywordExactFallbackSuppressed),
                 "The prose has to quote the machine-readable field, or the two can drift into disagreeing - "
-                + "which is precisely the defect, three components describing one state three ways.");
+                + "which is precisely the defect, three components describing one state three ways. This "
+                + "assertion originally named KeywordVectorPlaneUnavailable, and issue #2720 changed what a "
+                + "wedged repository actually answers with, so quoting the old value here would BE the drift "
+                + "this assertion exists to catch rather than a weakening of it.");
+            Assert.That(wedged[0], Does.Not.Contain(RepoContextRetrievalPath.KeywordVectorPlaneUnavailable),
+                "Two-sided on purpose. A line that quoted both values would satisfy the positive assertion "
+                + "above while still telling an operator the wedged state and the merely-building state are "
+                + "the same thing, which is the conflation #2720 removed.");
             Assert.That(wedged[0], Does.Not.Contain("still building"),
                 "Nothing here observes a build. Naming one turns an absence of evidence into a claim, and "
                 + "on the deployment that produced this issue that claim was simply false: the sweep had "
