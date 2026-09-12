@@ -127,13 +127,39 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public partial class BPlusLeafGrainTests
 {
     /// <summary>
-    /// Three partitions, because two cannot reach the defect at a positive
+    /// Three partitions, because two cannot reach the FREEZE at a positive
     /// cap. Pass 1 sweeps by backlog ASCENDING (#2089) and only the partition
     /// absorbed LAST is drain-eligible, so with two partitions the one whose
     /// window opens with a range delete is either swept FIRST, where the
     /// ledger is still empty and its offset records fine, or swept LAST, where
-    /// the range delete drains inline (#1831). Neither reaches the refusal.
-    /// Only a MIDDLE partition is neither, so a third is required.
+    /// the range delete drains inline (#1831). Only a MIDDLE partition is
+    /// neither, so a third is required.
+    /// <para>
+    /// An earlier revision of this note said "neither reaches the REFUSAL",
+    /// which is false, and the distinction it elided is the one a reader of
+    /// this fixture most needs. A REFUSAL (the saturation branch at
+    /// BPlusLeafGrain.DurableReplayWork.cs:126) and a FREEZE (the ceiling
+    /// clamping to at or below the checkpoint at
+    /// BPlusLeafGrain.Activation.cs:3117, so nothing banks) are different
+    /// events, and the first does not imply the second. A single first-swept
+    /// partition carrying cap+1 range deletes DOES reach the refusal off its
+    /// own deferrals - measured at cap 2 with four range deletes, and at cap 1
+    /// with two.
+    /// </para>
+    /// <para>
+    /// What those measurements showed is that such a partition BANKS AT
+    /// EXACTLY cap rather than freezing, and the reason generalises to every
+    /// partition that fills the ledger itself: filling it requires at least
+    /// cap of that partition's OWN offsets to have been ACCEPTED first, so its
+    /// first refusal necessarily lands at offset cap+1. That gives
+    /// minDeferred = cap+1, hence ceiling = cap >= 1 > 0, which clears the
+    /// :3117 guard. The freeze needs minDeferred == 1 - the window must OPEN
+    /// on a refusal - which requires the ledger to be FULL ON ARRIVAL, which
+    /// requires a DIFFERENT, EARLIER-SWEPT partition to have filled it. So the
+    /// third partition is required by an invariant, not by an enumeration of
+    /// cases, and a fixture that reaches only the refusal would come back
+    /// green while pinning nothing about the freeze.
+    /// </para>
     /// <para>
     /// Backlogs are therefore chosen for sweep POSITION, not for size:
     /// partition 1 (8) is absorbed first and its own deferred range delete is
