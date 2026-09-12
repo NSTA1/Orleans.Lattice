@@ -460,6 +460,40 @@ internal sealed partial class BPlusLeafGrain
         => GetCurrentCheckpointForPartition(partition) >= 0;
 
     /// <summary>
+    /// Whether a caller-supplied per-partition coverage claim asserts coverage
+    /// for at least one partition, and so would produce a blob
+    /// <c>LeafSnapshotStorageGrain.HasCapturedPrefix</c> accepts.
+    /// <para>
+    /// A <see langword="null"/> argument reports <see langword="false"/>, and
+    /// that reading is correct ONLY at the one call site this helper has: the
+    /// never-checkpointed branch of <see cref="CaptureSnapshotCoreAsync"/>,
+    /// where a null override means the claim is derived by
+    /// <see cref="BuildCheckpointCoverage"/> from checkpoints the branch
+    /// condition has already proven are all negative. Do not reuse it anywhere
+    /// a null override could still yield a covering claim - outside that branch
+    /// a null override means "derive from the checkpoints", not "claim
+    /// nothing".
+    /// </para>
+    /// </summary>
+    private static bool SuppliedCoverageClaimsAnyPartition(long[]? coverageOverride)
+    {
+        if (coverageOverride is null)
+        {
+            return false;
+        }
+
+        foreach (var offset in coverageOverride)
+        {
+            if (offset >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Runs the zero-coverage repair capture (issue #2692) when this leaf holds
     /// a checkpointed partition with no durable snapshot coverage, and reports
     /// the outcome on
@@ -742,13 +776,8 @@ internal sealed partial class BPlusLeafGrain
             // BuildCheckpointCoverage derives the coverage stamp FROM the
             // checkpoint, so it records -1, ResolveDurablePinForPartition still
             // computes min(checkpoint, covered) < 0 and retains the Zero block
-            // pin, and no WAL becomes trimmable. That separation is deliberate
-            // and load-bearing rather than incidental: durability of this
-            // leaf's rows is earned by writing the blob, whereas authority to
-            // trim is a claim about what OTHER consumers still need, and a blob
-            // containing these rows says nothing about whether the materialiser
-            // has consumed the corresponding WAL entries. Crucially the two
-            // retention planes are coupled by a documented handoff -
+            // pin, and no WAL becomes trimmable. Crucially the two retention
+            // planes are coupled by a documented handoff -
             // ComputeMaterialiserOffsetFloorAsync SKIPS a -1 pin precisely
             // because "WAL retention is already enforced by the HLC block-pin
             // branch" - so lifting the block on an un-replayed partition would
@@ -768,6 +797,85 @@ internal sealed partial class BPlusLeafGrain
             if (!anyPartitionHasLiveData)
             {
                 ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNotEligible);
+                return;
+            }
+
+            // ...and the leaf holds rows, but a capture taken from here can
+            // make no coverage claim at all, so the blob it would write can
+            // never be read back. That is why this is a DECLINE and not a
+            // capture (issue #2725).
+            //
+            // The equivalence is exact rather than approximate, which is what
+            // makes declining safe to state as a rule. Control only reaches
+            // here when IsPartitionProvenCheckpointed is false for EVERY
+            // partition, i.e. GetCurrentCheckpointForPartition(p) < 0 for all
+            // p. BuildCheckpointCoverage builds its array from precisely those
+            // accessor reads (slot 0 from `checkpoint`, slot p from the
+            // accessor), so on this branch every slot it can produce is
+            // negative and NormalizeScalarOffset maps the scalar to null.
+            // LeafSnapshotStorageGrain.HasCapturedPrefix returns false for
+            // exactly that shape, so LoadAsync reports the blob absent on every
+            // subsequent read. The branch condition and the load gate's refusal
+            // condition are the same condition.
+            //
+            // An earlier revision of this comment claimed "durability of this
+            // leaf's rows is earned by writing the blob". That was false as
+            // written, and it is the reason this went unnoticed: a blob no
+            // reader will accept confers no durability. The write was not
+            // merely redundant, it was three separate costs -
+            // GetSnapshotByteSizeAsync also gates on HasUsableSnapshot and so
+            // reports the persisted bytes as 0, understating real storage
+            // consumption, and ClearAsync gates on HasCapturedPrefix and so
+            // short-circuits, leaving the row in the provider permanently
+            // unreclaimable even under an explicit clear.
+            //
+            // Nor is the remedy to widen the load gate. A blob whose coverage
+            // is negative on every partition authorises skipping no WAL, so a
+            // leaf rehydrating from it must still replay each partition from
+            // offset 0: it would buy a cold-path blob read - the very read that
+            // exhausts the heap on a large leaf in issue #2364 - for zero saved
+            // replay, while weakening the fail-closed gate the no-loss
+            // invariant of issue #1535 rests on. WAL replay already covers this
+            // leaf completely and remains the correct recovery path until it
+            // checkpoints something.
+            //
+            // What survives the decline is the SIGNAL, which is what issue
+            // #2692 actually needed: this population is now counted under its
+            // own reason instead of being buried in a successful-looking
+            // capture, so "leaf holds rows it cannot yet claim coverage for" is
+            // legible to an operator reading snapshot coverage.
+            //
+            // The override is the one exception, and it is DEFENSIVE rather
+            // than live - stated precisely, because the comment this fix
+            // replaced overstated exactly this kind of claim, and repeating
+            // that here would be the same defect in a new place.
+            //
+            // The cold-replay banking path (issue #2280) supplies its own
+            // claim, the re-read frontier, and it cannot in fact reach this
+            // branch. TryBankColdReplayProgressAsync returns early unless
+            // _cacheRebuiltFromWalStartThisActivation is set, and the replay
+            // sets that flag only for a partition whose PERSISTED checkpoint is
+            // already greater than zero. A partition with a persisted
+            // checkpoint above zero is proven checkpointed, and checkpoints are
+            // monotonic within an activation, so whenever an override is
+            // supplied at least one partition reports checkpointed and the
+            // enclosing branch is not entered. A leaf that starts at the
+            // sentinel is not on that arm at all: its replay advances the
+            // checkpoint through TryFlushRecoveredCeilingAsync before anything
+            // captures, so it too arrives here checkpointed.
+            //
+            // Gate on the claim regardless. The property that decides whether
+            // the blob can ever be read back is the claim it carries, not the
+            // branch that produced it, and those coincide today only because of
+            // the reachability argument above - which is one refactor away from
+            // being false. Written as the branch, a future override-supplying
+            // caller would lose its capture silently. The perturbation study for
+            // this change measures the clause by forcing the branch to be
+            // entered unconditionally: with the clause the banking captures
+            // survive, without it they are declined.
+            if (!SuppliedCoverageClaimsAnyPartition(coverageOverride))
+            {
+                ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNoCoverageClaim);
                 return;
             }
         }

@@ -1966,7 +1966,11 @@ public static class LatticeMetrics
     /// <b>starved-leaf</b> signal this diagnostic exists for: the leaf has
     /// nothing checkpointed and no live data, so it will never cover itself.
     /// <c>no_tree_id</c> above zero is a <b>bug</b> - capture was invoked on a
-    /// leaf that was never attached to a tree.
+    /// leaf that was never attached to a tree. <c>no_coverage_claim</c> is the
+    /// <b>unclaimable-rows</b> signal (issue #2725): the leaf holds live rows
+    /// but has never checkpointed, so any blob it wrote would claim no coverage
+    /// and be refused by the load gate. It is benign - WAL replay covers such a
+    /// leaf - but it names the population whose retained WAL cannot shrink yet.
     /// </para>
     /// <para>
     /// A <c>no_tree_id</c> decline carries <b>no</b> tree or tenant tag, because
@@ -1977,7 +1981,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafSnapshotCaptureDeclines =
         Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.capture.declines", unit: "{decline}",
-            description: "Leaf-snapshot capture invocations that declined before the attempt boundary, tagged by tree and reason (no_tree_id, not_eligible, already_in_flight). Separate from the capture counter so attempts and durations stay exactly co-populated.");
+            description: "Leaf-snapshot capture invocations that declined before the attempt boundary, tagged by tree and reason (no_tree_id, not_eligible, already_in_flight, no_coverage_claim). Separate from the capture counter so attempts and durations stay exactly co-populated.");
 
     /// <summary>Canonical name of <see cref="LeafSnapshotCaptureDeclines"/>.</summary>
     public const string LeafSnapshotCaptureDeclinesName = "orleans.lattice.leaf.snapshot.capture.declines";
@@ -2008,6 +2012,25 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> SnapshotDeclineAlreadyInFlight =
         new(TagReason, "already_in_flight");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a capture declined because the blob it
+    /// would write could carry no coverage claim, and so could never be loaded
+    /// back (issue #2725). The leaf holds live rows but has never checkpointed
+    /// any partition, so every per-partition slot the capture could stamp is the
+    /// <c>-1</c> sentinel - exactly the shape
+    /// <c>LeafSnapshotStorageGrain.HasCapturedPrefix</c> refuses.
+    /// <para>
+    /// This is the leaf-holds-unclaimable-rows signal, and it is distinct from
+    /// <see cref="SnapshotDeclineNotEligible"/>: that one means the leaf has
+    /// nothing at all, whereas this one means the leaf has data whose only
+    /// durable copy is the WAL. It is not an error and needs no intervention -
+    /// WAL replay covers such a leaf completely - but a sustained rate names the
+    /// population whose retained WAL cannot shrink until it checkpoints.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotDeclineNoCoverageClaim =
+        new(TagReason, "no_coverage_claim");
 
     /// <summary>
     /// Counter of off-cadence leaf snapshot captures driven by the zero-coverage
