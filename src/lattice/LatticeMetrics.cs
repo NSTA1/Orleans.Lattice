@@ -2243,16 +2243,32 @@ public static class LatticeMetrics
     /// </para>
     /// <para>
     /// <c>abandoned</c> is the alarm condition. It means a leaf stayed blocked
-    /// across every permitted attempt, so the block is not one activation away
-    /// from clearing and something downstream of the touch is failing - a
-    /// capture that cannot complete, for instance. The leaf identity is carried
-    /// on the paired warning rather than as a tag, because the leaf population
-    /// is unbounded and would be an unbounded metric dimension.
+    /// across every permitted attempt of a cycle, so the block is not one
+    /// activation away from clearing and something downstream of the touch is
+    /// failing - a capture that cannot complete, for instance. The leaf identity
+    /// is carried on the paired warning rather than as a tag, because the leaf
+    /// population is unbounded and would be an unbounded metric dimension.
+    /// </para>
+    /// <para>
+    /// <c>rearmed</c> is abandonment's counterweight (issue #2783): the budget
+    /// was restored after a backoff, because the conditions that make
+    /// reactivation futile - memory pressure, replay saturation, an ingest burst
+    /// - are transient and a permanent stop outlives them. A tree that never
+    /// unblocks therefore shows <c>abandoned</c> and <c>rearmed</c> advancing
+    /// together at an ever-slower rate, which is the intended shape; it is
+    /// <c>abandoned</c> advancing while <c>rearmed</c> stays flat that means the
+    /// sweep has genuinely stopped.
+    /// </para>
+    /// <para>
+    /// Every outcome is zero-primed per tree on each GC pass, above every early
+    /// return, so an absent series means the scheduler never evaluated that tree
+    /// and a flat zero means it did and the outcome never occurred. Absence is
+    /// therefore evidence of a missing build rather than of a missing event.
     /// </para>
     /// </summary>
     public static readonly Counter<long> WalGcBlockedLeafReactivations =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
-            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome (attempted/healed/abandoned). All outcomes share one instrument so that a zero on 'healed' is a measured zero and not an unpublished series.");
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome (attempted/healed/abandoned/rearmed). All outcomes share one instrument and every one is zero-primed per tree per pass, so a zero on 'healed' is a measured zero and not an unpublished series.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
@@ -2279,12 +2295,24 @@ public static class LatticeMetrics
     /// <summary>
     /// <see cref="TagOutcome"/> value on
     /// <see cref="WalGcBlockedLeafReactivations"/> for a consumer that stayed
-    /// blocked across every permitted attempt and will not be swept again.
-    /// Emitted once, at the moment the budget is spent, so the series counts
-    /// stranded leaves rather than retries.
+    /// blocked across every permitted attempt of a cycle. Emitted once per
+    /// cycle, at the moment the budget is spent, so the series counts stranded
+    /// leaves rather than retries.
     /// </summary>
     public static readonly KeyValuePair<string, object?> BlockedLeafReactivationAbandoned =
         new(TagOutcome, "abandoned");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for an abandoned consumer
+    /// whose attempt budget was restored after a backoff (issue #2783), letting
+    /// the sweep try again once the transient pressure that defeated it may have
+    /// lifted. Paired with <see cref="BlockedLeafReactivationAbandoned"/>: the
+    /// two advancing together is a tree retrying on schedule, whereas
+    /// <c>abandoned</c> advancing alone is a sweep that has stopped.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationRearmed =
+        new(TagOutcome, "rearmed");
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a
