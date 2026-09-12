@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Runtime;
+namespace Orleans.Lattice.Internal;
 
 /// <summary>
 /// Reads the container's enforced CPU grant from the cgroup filesystem, so any
@@ -65,6 +65,21 @@ namespace Orleans.Lattice.Runtime;
 /// shipped in a release, so narrowing it here removes nothing a consumer could
 /// have taken a dependency on. Promote it if a host ever needs to size a pool of
 /// its own from the same figure.
+/// </para>
+/// <para>
+/// Lives in <c>Orleans.Lattice.Internal</c> rather than the <c>Runtime</c> folder
+/// this reader arrived in, and that placement is load-bearing rather than
+/// cosmetic. A namespace <c>Orleans.Lattice.Runtime</c> would sit as a sibling of
+/// Orleans' own heavily-used <c>Orleans.Runtime</c>, and C# resolves a namespace
+/// qualifier by walking outward through the enclosing namespaces. Every file in
+/// the product is inside some <c>Orleans.Lattice.*</c> namespace, so an
+/// unqualified <c>Runtime.GrainId</c> - which resolves to
+/// <c>Orleans.Runtime.GrainId</c> today - would bind instead to
+/// <c>Orleans.Lattice.Runtime</c> and fail to compile, product-wide, in files
+/// that have nothing to do with this reader. That is exactly what happened when
+/// this type was first promoted here: two innocent files in
+/// <c>test/lattice.grainindex/</c> stopped compiling. Do not reintroduce an
+/// <c>Orleans.Lattice.Runtime</c> namespace.
 /// </para>
 /// </remarks>
 internal static class ContainerCpuGrant

@@ -4,7 +4,7 @@ using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
-using Orleans.Lattice.Runtime;
+using Orleans.Lattice.Internal;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
