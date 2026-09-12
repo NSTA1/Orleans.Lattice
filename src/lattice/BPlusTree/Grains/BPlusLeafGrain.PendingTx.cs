@@ -743,13 +743,19 @@ internal sealed partial class BPlusLeafGrain
         // sees the raw typed-CRDT body. See the determinism remarks on
         // ILatticeEnvelopeCodec: the same durable bytes strip to the same body on
         // every replay, so the terminal-commit fold stays byte-identical.
+        //
+        // The stored state is stripped by the same contract just below. Both halves
+        // are required: stripping only the delta hands the shape an enveloped state
+        // whose 0xFE magic fails a JSON decode at byte zero, and because every retry
+        // re-decodes the same bytes the row becomes permanently unwritable while
+        // still reading back cleanly.
         var typedDelta = shape.DeserializeDelta(StripDeltaForFold(delta));
         object typedState;
         if (Cache.TryGetRow(key, out var existing)
             && !existing.IsTombstone
             && existing.Value is { Length: > 0 } existingBytes)
         {
-            typedState = shape.DeserializeState(existingBytes);
+            typedState = shape.DeserializeState(StripStateForFold(existingBytes));
         }
         else
         {

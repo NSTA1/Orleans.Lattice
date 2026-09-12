@@ -1,6 +1,7 @@
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -230,4 +231,70 @@ public class SnapshotProjectionFolderBranchTests
 
         Assert.That(folder.Entries, Is.Empty);
     }
-}
+
+    // -- envelope-strip symmetry on the restore-replay fold --
+
+    private static SnapshotProjectionFolder NewEnvelopeFolder(ILatticeEnvelopeCodec? codec)
+    {
+        var registry = new CrdtShapeRegistry();
+        registry.Register(TreeId, CrdtShape.ForGCounter());
+        return new SnapshotProjectionFolder(TreeId, registry, codec);
+    }
+
+    private static SnapshotProjectionFolder SeededWith(SnapshotProjectionFolder folder, byte[] state)
+    {
+        folder.SeedRow("k", new LwwValue<byte[]> { Value = state, Timestamp = Hlc(1) }, LatticeMergeMode.GCounter);
+        return folder;
+    }
+
+    private static byte[] FoldGCounterOnto(SnapshotProjectionFolder folder, string replica, long value)
+    {
+        var txId = Guid.NewGuid();
+        folder.Apply(new LatticeMutation
+        {
+            TreeId = TreeId,
+            Kind = MutationKind.Set,
+            Key = "k",
+            TransactionId = txId,
+            IsPrepared = true,
+            Delta = GCounterDeltaBytes(replica, value),
+            Mode = LatticeMergeMode.GCounter,
+            Timestamp = Hlc(10),
+        });
+        folder.Apply(new LatticeMutation { TreeId = TreeId, Kind = MutationKind.TxCommit, TransactionId = txId, Timestamp = Hlc(11) });
+        return folder.Entries["k"].Value!;
+    }
+
+    /// <summary>
+    /// The restore-replay fold reads the prior folded state back out of its own
+    /// entries. On a tree opted into schema versioning that stored row carries a
+    /// version envelope, so the fold must strip the stored state as well as the
+    /// prepared delta. Stripping only the delta fails the state decode at byte
+    /// zero on the envelope magic, which is never a valid UTF-8 lead byte.
+    /// </summary>
+    /// <remarks>
+    /// Asserted as byte equality against the identical fold run without an
+    /// envelope. The envelope is a storage detail and must make no difference
+    /// whatever to the folded output - a stronger claim than "the fold did not
+    /// throw", and the one the replay-determinism contract actually needs.
+    /// </remarks>
+    [Test]
+    public void Prepared_crdt_commit_folds_into_an_enveloped_seeded_row()
+    {
+        var seedState = FoldGCounterOnto(NewEnvelopeFolder(null), "r1", 5);
+        var expected = FoldGCounterOnto(SeededWith(NewEnvelopeFolder(null), seedState), "r2", 3);
+
+        var codec = new FakeEnvelopeCodec();
+        var folder = SeededWith(NewEnvelopeFolder(codec), FakeEnvelopeCodec.Encode(seedState));
+        var actual = FoldGCounterOnto(folder, "r2", 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(actual, Is.EqualTo(expected),
+                "an enveloped stored state must fold identically to a bare one");
+            Assert.That(actual[0], Is.Not.EqualTo(FakeEnvelopeCodec.Magic),
+                "the fold must not re-stamp an envelope onto its output");
+            Assert.That(codec.StripCallCount, Is.GreaterThanOrEqualTo(2),
+                "both the delta and the stored state must route through the strip");
+        });
+    }}
