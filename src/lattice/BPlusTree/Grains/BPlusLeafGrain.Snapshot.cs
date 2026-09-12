@@ -539,6 +539,23 @@ internal sealed partial class BPlusLeafGrain
         }
 
         _zeroCoverageRepairAttempts++;
+
+        // Divide an oversized leaf BEFORE attempting the capture, not after a
+        // failure. A leaf over the byte bound is one whose capture has to
+        // materialise a payload too large to allocate contiguously under
+        // ambient heap pressure, so attempting it first would burn an attempt
+        // on a capture that is expected to fail, and would allocate hundreds of
+        // megabytes to discover it. Splitting first makes the very first
+        // capture on this path the one that succeeds.
+        //
+        // This is the step that makes an ALREADY-oversized deployment recover
+        // on its own: the driver above runs at activation for any leaf holding
+        // a checkpointed partition without coverage, so it reaches a leaf that
+        // grew oversized and then went quiet, which no write-path predicate
+        // ever would.
+        var splitOptions = await GetOptionsAsync();
+        await TrySplitForByteOverflowAsync(splitOptions.MaxLeafKeys, splitOptions.MaxLeafBytes);
+
         // Honour a caller deadline wherever one exists. The activation driver
         // passes the activation token, so a repair capture cannot outlive the
         // activation that started it. The post-persist driver has no ambient

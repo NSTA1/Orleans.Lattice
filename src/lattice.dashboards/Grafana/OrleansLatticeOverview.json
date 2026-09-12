@@ -400,6 +400,11 @@
           "refId": "L",
           "expr": "sum by (tree) (rate(orleans_lattice_leaf_splits_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60 or vector(0)",
           "legendFormat": "leaf {{tree}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_byte_overflow_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60 or vector(0)",
+          "legendFormat": "byte-overflow {{outcome}} {{tree}}"
         }
       ]
     },

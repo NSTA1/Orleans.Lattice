@@ -950,9 +950,9 @@ internal sealed partial class BPlusLeafGrain(
             // any stale migration provenance from a prior migrated
             // entry on the same key automatically - the flag rides
             // with the value, not in a side-channel map.
-            if (Cache.Count > options.MaxLeafKeys)
+            if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
-                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys);
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
             }
         }
         RecordCommitStep("apply", applyStartTicks);
@@ -1431,9 +1431,9 @@ internal sealed partial class BPlusLeafGrain(
             {
                 StoreEntry(entries[i].Key, values[i]);
             }
-            if (Cache.Count > options.MaxLeafKeys)
+            if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
-                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys);
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
             }
         }
         RecordCommitStep("apply", applyStartTicks);
@@ -3101,9 +3101,10 @@ internal sealed partial class BPlusLeafGrain(
         await MergeIntoStateAsync(entries, isCrossShardMigration);
 
         SplitResult? splitResult = null;
-        if (Cache.Count > (await GetOptionsAsync()).MaxLeafKeys)
+        var mergeOptions = await GetOptionsAsync();
+        if (IsLeafOverCapacity(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes))
         {
-            splitResult = await SplitIfNeededUnderGateAsync((await GetOptionsAsync()).MaxLeafKeys);
+            splitResult = await SplitIfNeededUnderGateAsync(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes);
         }
 
         return splitResult;
