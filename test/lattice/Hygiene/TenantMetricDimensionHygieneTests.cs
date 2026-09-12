@@ -246,6 +246,23 @@ public sealed class TenantMetricDimensionHygieneTests
         // denied arm a measured absence rather than a plane that never ran.
         "_corpusCoverage",
         "_terminalDenials",
+        // repocontext.ann.build.slice - approximate-index build steps partitioned by
+        // what the step achieved (advanced / starved / idle), issue #2651. It is the
+        // one series on this plane that fires BEFORE a build reaches Ready, which is
+        // what makes "the coordinator is stepping and consuming nothing" separable
+        // from "the coordinator never stepped"; every other instrument here is
+        // terminal, so the whole interval between an armed sweep and Ready was
+        // previously dark and those two faults were byte-identical in telemetry.
+        // Unscopable for the same reason as _partitioning below rather than as
+        // _annSweeps: a step is emitted per PLANE, and a plane is keyed by repository
+        // and embedding space, which is not a lattice tenant. Every repository's
+        // vectors share one tree (RepoContextTrees.VectorIndex), separated only by
+        // key prefix, so LatticeTenantLabel.ForTree would resolve to one constant for
+        // every plane on the host - one series, no discrimination - while falsely
+        // implying a tenant attribution. The progress tag carries the signal, and all
+        // three arms are pre-minted so a zero on the starved arm is a measured absence
+        // rather than an arm that never existed.
+        "_slices",
         // repocontext.ann.partitioning - whether each approximate plane holds a
         // trained partitioning, and repocontext.ann.repartition - the outcome of a
         // threshold-crossing training, issue #2706. Both are the sentinel for a
