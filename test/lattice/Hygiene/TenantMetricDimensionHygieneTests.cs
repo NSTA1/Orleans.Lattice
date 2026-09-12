@@ -176,6 +176,20 @@ public sealed class TenantMetricDimensionHygieneTests
         "SweepsCounter",
         "TreesMismatchedCounter",
         "TreesProbedCounter",
+        // orleans.lattice.wal.replay.permit_adaptations - memory-adaptive backpressure
+        // on the per-silo WAL replay concurrency gate (issue #2781). The gate is a
+        // single process-wide SemaphoreSlim shared by every leaf of every tree, so
+        // its admitted concurrency is a property of THIS SILO'S HEAP and cannot vary
+        // by tenant: the permit a replay is waiting for is the same permit whoever
+        // else is waiting. A tenant tag would partition a series that has one value,
+        // and worse, it would attribute a shared reduction to whichever tenant's
+        // replay happened to fail last - which is not a fact about that tenant. The
+        // instrument is also deliberately untagged by tree for the same reason, so a
+        // tenant dimension could not be derived here even if one were wanted. A
+        // tenant-scoped consumer asking whether its own tree is failing to activate
+        // is served by leaf.activation_failures, which is tree-tagged and tenant-
+        // labelled.
+        "WalReplayPermitAdaptations",
         "WriteFailures",
         // repocontext.retrieval.ann.search - every approximate-plane outcome, tagged by
         // serving state (bootstrapping / exhaustive / approximate). Which plane answered
