@@ -919,6 +919,12 @@ internal sealed partial class RepoContextStore
                 // malformed bytes, so the register path cannot carry this lapse.
                 // A direct write of the stored bytes under the short time-to-live
                 // retires the entry without ever decoding it.
+                //
+                // This bypass is a correctness requirement, not an optimisation, and
+                // a perturbation arm establishes it rather than assuming it: routing
+                // this write back through the accessor reddens the lapse fixtures
+                // with a decode failure raised from the accessor itself. Do not
+                // "simplify" the two branches back into one.
                 await tree.SetAsync(key, lapseBytes, TimeSpan.FromSeconds(seconds), cancellationToken)
                     .ConfigureAwait(false);
             }

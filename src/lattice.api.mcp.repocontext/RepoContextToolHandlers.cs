@@ -238,7 +238,7 @@ internal static class RepoContextToolHandlers
     /// <param name="fencingToken">The fencing token from repocontext_claim, when writing under a claim.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>The write outcome.</returns>
-    /// <exception cref="McpException">A required argument is missing, the kind is unknown, the TTL is not positive, the body carries leaked tool-call framing, or a link target is malformed.</exception>
+    /// <exception cref="McpException">A required argument is missing, the kind is unknown, the TTL is not positive, the body carries leaked tool-call framing, the body, title, author, or provenance carries a URL with a password-bearing userinfo component, or a link target is malformed.</exception>
     /// <exception cref="RepoContextClaimConflictException">The entry is claimed and the presented token does not entitle this write.</exception>
     public static Task<RepoContextRememberResult> RememberAsync(
         RequestContext<CallToolRequestParams> context,
@@ -291,6 +291,9 @@ internal static class RepoContextToolHandlers
         }
 
         GuardBody(RepoContextBodyFraming.RememberBodyLocation, body);
+        GuardText("The 'title' argument", title);
+        GuardText("The 'author' argument", author);
+        GuardText("The 'provenance' argument", provenance);
 
         return ResolveStore(context).RememberAsync(
             repoId, topic, id, memoryKind, title, body, author, provenance, tags,
@@ -311,7 +314,7 @@ internal static class RepoContextToolHandlers
     /// <param name="fencingToken">The fencing token from repocontext_claim, when patching under a claim.</param>
     /// <param name="cancellationToken">Cancels the read-merge-write.</param>
     /// <returns>The patch outcome.</returns>
-    /// <exception cref="McpException">The key is missing or malformed, no record exists, a field is invalid, the patched body carries leaked tool-call framing, or a link target is malformed.</exception>
+    /// <exception cref="McpException">The key is missing or malformed, no record exists, a field is invalid, the patched body carries leaked tool-call framing, any patched field carries a URL with a password-bearing userinfo component, or a link target is malformed.</exception>
     /// <exception cref="RepoContextClaimConflictException">The record is claimed and the presented token does not entitle this write.</exception>
     public static Task<RepoContextUpdateResult> UpdateAsync(
         RequestContext<CallToolRequestParams> context,
@@ -344,6 +347,13 @@ internal static class RepoContextToolHandlers
                 {
                     GuardBody(RepoContextBodyFraming.UpdateBodyLocation, field.Value);
                 }
+                else
+                {
+                    // Every other field is guarded for the credential shape but not
+                    // for framing: the shape corrupts whichever field carries it,
+                    // whereas leaked tool-call framing is a body-shaped problem.
+                    GuardText(DescribeFieldLocation(field.Key), field.Value);
+                }
             }
         }
 
@@ -352,13 +362,21 @@ internal static class RepoContextToolHandlers
     }
 
     /// <summary>
-    /// Refuses a body that ends in leaked MCP tool-call framing, completing the
-    /// rule the seam already applies to an unknown field name and a malformed link
-    /// target by extending it, for this one field, to the value.
+    /// Refuses a body that ends in leaked MCP tool-call framing, or that carries a
+    /// URL with a password-bearing userinfo component.
     /// </summary>
+    /// <remarks>
+    /// This is the <c>body</c>-specific guard, which is the only field framing
+    /// contamination can meaningfully reach. The credential check it delegates to
+    /// <see cref="GuardText"/> runs over every stored free-text field, because that
+    /// defect is not field-specific.
+    /// </remarks>
     /// <param name="location">Names how the offending body was supplied.</param>
     /// <param name="body">The candidate body.</param>
-    /// <exception cref="McpException">The body ends in tool-call framing.</exception>
+    /// <exception cref="McpException">
+    /// The body ends in tool-call framing, or carries a URL of the shape an upstream
+    /// redaction rewrites into a value this store can no longer decode.
+    /// </exception>
     private static void GuardBody(string location, string? body)
     {
         var framing = RepoContextBodyFraming.Inspect(body);
@@ -367,6 +385,82 @@ internal static class RepoContextToolHandlers
             throw new McpException(
                 RepoContextBodyFraming.DescribeRejection(location, framing.DisplacedArguments));
         }
+
+        // Framing is checked first because it means the *call* was malformed and
+        // arguments were silently dropped, which the caller must know about before
+        // anything else. A credential-bearing URL is a problem with the body's
+        // content, and the body arrived intact.
+        GuardText(location, body);
+    }
+
+    /// <summary>
+    /// Refuses any stored free-text value carrying a URL with a password-bearing
+    /// userinfo component.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>This is deliberately wider than the framing guard, and the asymmetry
+    /// is the point.</strong> Framing contamination is genuinely specific to a
+    /// <c>body</c>: it is leaked tool-call text at the end of a long free-form
+    /// field, and it cannot meaningfully appear in an author identity. The
+    /// credential-shaped URL is not specific to any field. The rewrite that mangles
+    /// it happens in transit, before this store sees the call, and the structural
+    /// character it swallows belongs to the serialised record rather than to the
+    /// field. A <c>title</c> carrying the shape therefore freezes an entry exactly
+    /// as a <c>body</c> does.
+    /// </para>
+    /// <para>
+    /// Guarding only <c>body</c> would leave that path open while reading as
+    /// closed, which is the worse of the two failure modes: a partial guard invites
+    /// the conclusion that the seam is covered.
+    /// </para>
+    /// </remarks>
+    /// <param name="location">How the offending value was supplied.</param>
+    /// <param name="text">The candidate value. May be <see langword="null"/>.</param>
+    private static void GuardText(string location, string? text)
+    {
+        var credentials = RepoContextBodyCredentials.Inspect(text);
+        if (credentials.CarriesCredentialUrl)
+        {
+            throw new McpException(
+                RepoContextBodyCredentials.DescribeRejection(location, credentials));
+        }
+    }
+
+    /// <summary>
+    /// The <c>fields</c> entry names this surface will name back to a caller in a
+    /// rejection message.
+    /// </summary>
+    /// <remarks>
+    /// A rejection message must never echo caller-supplied text, which is why
+    /// <see cref="RepoContextBodyCredentialInspection"/> carries no strings at all.
+    /// A field <em>name</em> is caller-supplied too, so
+    /// <see cref="DescribeFieldLocation"/> emits the matched constant from this set
+    /// rather than the caller's own string, and falls back to an unnamed
+    /// description otherwise. The guarantee is then structural in both directions.
+    /// </remarks>
+    private static readonly string[] NameableFields =
+    [
+        "body", "title", "author", "provenance", "digest", "language", "kind",
+    ];
+
+    /// <summary>
+    /// Names where in an <c>update</c> call a rejected value was supplied, without
+    /// echoing the caller's own field name.
+    /// </summary>
+    /// <param name="fieldName">The caller-supplied field name.</param>
+    /// <returns>A location description built only from this surface's constants.</returns>
+    private static string DescribeFieldLocation(string fieldName)
+    {
+        foreach (var known in NameableFields)
+        {
+            if (string.Equals(known, fieldName, StringComparison.OrdinalIgnoreCase))
+            {
+                return "The '" + known + "' entry of the 'fields' argument";
+            }
+        }
+
+        return "An entry of the 'fields' argument";
     }
 
     /// <summary>
