@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Internal;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -174,6 +176,10 @@ internal sealed partial class BPlusLeafGrain
     /// ceiling is not an override of it: the operator sets the headroom this
     /// process may take, and this mechanism declines headroom the heap cannot
     /// currently afford. It never takes headroom the operator did not grant.
+    /// (Issue #2816 later narrowed the <c>DOTNET_PROCESSOR_COUNT</c> half of that
+    /// ruling on the same reasoning - the default ceiling is now the lesser of
+    /// that figure and the enforced container CPU grant, which can only lower it -
+    /// but the principle stated here is unchanged.)
     /// </para>
     /// </summary>
     private static int _withheldReplayPermits;
@@ -281,8 +287,9 @@ internal sealed partial class BPlusLeafGrain
     /// Lazily resolves the per-silo replay concurrency gate from
     /// <paramref name="options"/>. A non-positive
     /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> resolves
-    /// to <see cref="Environment.ProcessorCount"/>. The gate is sized once on
-    /// first use and is a process-wide structural constant thereafter.
+    /// to the lesser of <see cref="Environment.ProcessorCount"/> and the
+    /// container's enforced CPU grant. The gate is sized once on first use and is
+    /// a process-wide structural constant thereafter.
     /// <para>
     /// <b><see cref="Environment.ProcessorCount"/> does not always honour the
     /// container CPU quota, and this gate is where that bites (issue #2278).</b>
@@ -304,21 +311,66 @@ internal sealed partial class BPlusLeafGrain
     /// whose completion would have made the next one cheap.
     /// </para>
     /// <para>
-    /// Nothing here can read the cgroup quota portably, and it deliberately does
-    /// not try: <c>DOTNET_PROCESSOR_COUNT</c> is a documented, supported override
-    /// doing exactly what it is specified to do, so library code that reached
-    /// past it would silently defeat an operator instruction that every other
-    /// .NET subsystem in the process obeys, leaving the process holding two
-    /// conflicting beliefs about its own CPU count (ruled out on issue #2279).
-    /// What this does instead is make the number <em>observable</em>: the
-    /// resolved ceiling is logged once alongside the configured option and
-    /// <see cref="Environment.ProcessorCount"/>, so an operator diagnosing a
-    /// replay storm can read the figure the process actually chose rather than
-    /// inferring it from the host's vCPU count. The sizing remedy needs no code
-    /// at all - pin
-    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>
-    /// explicitly wherever the quota and <see cref="Environment.ProcessorCount"/>
-    /// can disagree, since it already takes precedence over the default.
+    /// <b>The default now takes the minimum of the two figures</b>
+    /// (issue #2816):
+    /// <c>Math.Min(Environment.ProcessorCount, ContainerCpuGrant.Read())</c>,
+    /// treating an unreadable or unlimited quota as <em>unknown</em> and
+    /// therefore as no constraint at all, rather than as zero. This reverses the
+    /// ruling on issue #2279, which declined to read the quota here at all, and
+    /// the reversal is worth stating plainly because the earlier reasoning is
+    /// otherwise sound and would be re-derived by the next reader.
+    /// </para>
+    /// <para>
+    /// #2279 argued that <c>DOTNET_PROCESSOR_COUNT</c> is a documented, supported
+    /// override, so library code reaching past it would silently defeat an
+    /// operator instruction every other .NET subsystem obeys and leave the
+    /// process holding two conflicting beliefs about its own CPU count. That
+    /// argument holds exactly as far as <em>replacing</em> the figure, and it is
+    /// why this does not replace it. <b>A minimum can only ever lower this
+    /// ceiling, never raise it</b>, so an operator who lowers
+    /// <c>DOTNET_PROCESSOR_COUNT</c> is still obeyed to the letter; what the
+    /// minimum refuses is to exceed a ceiling the kernel enforces on this process
+    /// whatever the process believes. The thread pool, the GC heap count, and
+    /// every other subsystem keep reading the overridden figure untouched, so no
+    /// second belief about the CPU count is introduced anywhere: this is one
+    /// admission gate declining to admit more CPU-bound work than the cgroup will
+    /// run in parallel.
+    /// </para>
+    /// <para>
+    /// The conflation #2279 made is between <em>how many threads to run</em> -
+    /// which is properly the operator's call, and which the override rightly
+    /// settles - and <em>how many concurrent CPU-bound replays to admit</em>,
+    /// which is bounded by the CPU the cgroup will actually schedule and is not a
+    /// matter of belief. The remedy #2279 prescribed (pin
+    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> on a
+    /// constrained host) is still available, still takes precedence, and is still
+    /// the right tool for a deliberate value; it is simply not an acceptable
+    /// <em>default</em>, because it requires an operator to already know about a
+    /// failure whose whole character is that it is invisible from inside the
+    /// process. The same shape was settled for the memory half of this gate on
+    /// issue #2788: prefer the container's grant when the runtime's figure
+    /// exceeds it, and treat unreadable or unlimited as unknown.
+    /// </para>
+    /// <para>
+    /// Two deliberate non-decisions. The grant's ceiling rounding is left alone:
+    /// <c>ContainerCpuGrant.Read()</c> rounds a fractional grant up
+    /// (<c>--cpus=4.5</c> yields 5), which is mildly oversubscribed by design and
+    /// is depended on by its other caller, so this site consumes that contract
+    /// rather than quietly imposing a floor on it; taking the minimum with
+    /// <see cref="Environment.ProcessorCount"/> still lowers the ceiling wherever
+    /// the two disagree, which is the property that matters here. And no
+    /// lower clamp is applied to the result, because both inputs are already
+    /// positive at their source: <see cref="Environment.ProcessorCount"/> is
+    /// documented as at least 1, and a non-null grant is at least 1 by the
+    /// reader's own final clamp. A defensive <c>Math.Max(1, ...)</c> here would
+    /// be unreachable, and an unreachable clause that looks like a safety net is
+    /// worse than none.
+    /// </para>
+    /// <para>
+    /// The resolved ceiling remains observable: it is logged once alongside the
+    /// configured option, <see cref="Environment.ProcessorCount"/>, and the
+    /// quota-derived grant, so an operator diagnosing a replay storm can read the
+    /// figure the process actually chose and the two figures it chose between.
     /// </para>
     /// </summary>
     private static SemaphoreSlim ResolveReplayConcurrencyGate(LatticeOptions options, Func<ILogger?> loggerAccessor)
@@ -329,18 +381,21 @@ internal sealed partial class BPlusLeafGrain
 
         bool sizedHere;
         int max;
+        int? containerCpuGrant;
         lock (_replayConcurrencyGateLock)
         {
             if (_replayConcurrencyGate is null)
             {
-                max = options.WalMaterialiserMaxConcurrentReplays;
-                if (max <= 0)
-                    // The core library deliberately does not read the cgroup grant itself
-                    // (issues #2278/#2279); an operator pins WalMaterialiserMaxConcurrentReplays
-                    // or DOTNET_PROCESSOR_COUNT on a constrained host, and the disagreement is
-                    // surfaced by LogResolvedReplayConcurrencyGate below rather than resolved here.
-                    // grant-exempt: the library sizes this gate from Environment.ProcessorCount by design (issues #2278/#2279).
-                    max = Environment.ProcessorCount;
+                // One statement, deliberately. The grant is read in the same
+                // statement that reads the processor count, so the repository-wide
+                // ProcessorCountPoolSizingGuardTests sees the consultation textually
+                // and this site needs no grant-exempt marker to satisfy it. Routing
+                // the read through a local would have needed one, which would have
+                // exempted the very site this issue is about.
+                (max, containerCpuGrant) = ResolveGateSizing(
+                    options.WalMaterialiserMaxConcurrentReplays,
+                    Environment.ProcessorCount,
+                    ContainerCpuGrant.Read());
                 _replayConcurrencyGate = new SemaphoreSlim(max, max);
                 _replayConcurrencyCeiling = max;
                 Volatile.Write(ref _withheldReplayPermits, 0);
@@ -348,13 +403,14 @@ internal sealed partial class BPlusLeafGrain
             }
             else
             {
-                (sizedHere, max) = (false, 0);
+                (sizedHere, max, containerCpuGrant) = (false, 0, null);
             }
         }
 
         if (sizedHere)
         {
-            LogResolvedReplayConcurrencyGate(max, options.WalMaterialiserMaxConcurrentReplays, loggerAccessor);
+            LogResolvedReplayConcurrencyGate(
+                max, options.WalMaterialiserMaxConcurrentReplays, containerCpuGrant, loggerAccessor);
 
             // Zero-prime both arms of the backpressure counter (issue #2781,
             // discipline of #2764). This is the one site that proves the gate was
@@ -373,6 +429,70 @@ internal sealed partial class BPlusLeafGrain
 
         return Volatile.Read(ref _replayConcurrencyGate)!;
     }
+
+    /// <summary>
+    /// Resolves the <em>default</em> replay ceiling (the one used when
+    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> is
+    /// unset) from the two figures that bound it: the CPU count the runtime
+    /// reports, and the CPU grant the container's cgroup actually enforces.
+    /// </summary>
+    /// <param name="processorCount">The runtime's reported processor count,
+    /// which <c>DOTNET_PROCESSOR_COUNT</c> may have overridden upward.</param>
+    /// <param name="containerCpuGrant">The enforced container CPU grant, or
+    /// <see langword="null"/> when no quota is enforced or none could be read.
+    /// Null means <em>unknown</em>, and therefore no constraint - never
+    /// zero.</param>
+    /// <returns>The lesser of the two, which is
+    /// <paramref name="processorCount"/> whenever the grant is unknown.</returns>
+    /// <remarks>
+    /// Pure and parameterised so the whole decision is testable without a
+    /// container: the gate itself is sized once per process and has no reset
+    /// seam, so a fixture that tried to observe it by driving a real activation
+    /// would pass or fail on test-execution order. Deliberately has no lower
+    /// clamp - see the argument on
+    /// <see cref="ResolveReplayConcurrencyGate"/> for why one would be
+    /// unreachable.
+    /// </remarks>
+    internal static int ResolveDefaultReplayCeiling(int processorCount, int? containerCpuGrant)
+        => Math.Min(processorCount, containerCpuGrant ?? int.MaxValue);
+
+    /// <summary>
+    /// Resolves both figures the gate's one-per-process record needs: the
+    /// ceiling the semaphore is sized to, and the container CPU grant that was
+    /// read while deciding it.
+    /// </summary>
+    /// <param name="configured">
+    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> as the
+    /// operator set it. A positive value supersedes both derived figures.</param>
+    /// <param name="processorCount">The runtime's reported processor count.</param>
+    /// <param name="containerCpuGrant">The enforced container CPU grant, or
+    /// <see langword="null"/> when unknown.</param>
+    /// <returns>The resolved ceiling, and the grant that was read.</returns>
+    /// <remarks>
+    /// <para>
+    /// The grant is returned <b>whether or not it constrained the ceiling</b>,
+    /// and that is the point of this method existing rather than the caller
+    /// branching inline. An operator who has pinned the option is exactly the
+    /// operator most likely to have pinned it to the wrong number, and the
+    /// disagreement between the pin and the grant is the thing worth writing
+    /// down. Reading the grant only on the defaulting path would suppress the
+    /// record precisely in the case where it is most diagnostic.
+    /// </para>
+    /// <para>
+    /// Returning the grant rather than reading it at the call site is also what
+    /// makes that behaviour testable. The gate is sized once per process behind
+    /// a static latch, and a non-Linux or unquotaed host reads a null grant, so
+    /// a fixture driving the real sizing path could not distinguish "reported
+    /// the grant it read" from "reported null because it read nothing". As a
+    /// parameterised pure function it is falsifiable on any host.
+    /// </para>
+    /// </remarks>
+    internal static (int Ceiling, int? ContainerCpuGrant) ResolveGateSizing(
+        int configured, int processorCount, int? containerCpuGrant)
+        => (configured > 0
+                ? configured
+                : ResolveDefaultReplayCeiling(processorCount, containerCpuGrant),
+            containerCpuGrant);
 
     /// <summary>
     /// Emits the one-per-process record of the resolved gate ceiling.
@@ -403,7 +523,8 @@ internal sealed partial class BPlusLeafGrain
     /// can actually regress.
     /// </para>
     /// </summary>
-    internal static void LogResolvedReplayConcurrencyGate(int max, int configured, Func<ILogger?> loggerAccessor)
+    internal static void LogResolvedReplayConcurrencyGate(
+        int max, int configured, int? containerCpuGrant, Func<ILogger?> loggerAccessor)
     {
         try
         {
@@ -414,18 +535,22 @@ internal sealed partial class BPlusLeafGrain
             logger.LogInformation(
                 "Leaf WAL replay concurrency gate sized to {MaxConcurrentReplays} permit(s) for this silo. "
                 + "Configured WalMaterialiserMaxConcurrentReplays={ConfiguredMaxConcurrentReplays} "
-                + "(non-positive means unset, in which case the ceiling follows Environment.ProcessorCount), "
-                + "and Environment.ProcessorCount reports {ProcessorCount}. Each permit admits one whole-window "
+                + "(non-positive means unset, in which case the ceiling is the lesser of "
+                + "Environment.ProcessorCount and the enforced container CPU grant), "
+                + "Environment.ProcessorCount reports {ProcessorCount}, and the container CPU grant read "
+                + "from the cgroup filesystem is {ContainerCpuGrant}. Each permit admits one whole-window "
                 + "WAL replay, which is CPU bound, so a ceiling above the CPU this process can actually obtain "
                 + "oversubscribes it. Environment.ProcessorCount honours a container CPU quota only while "
-                + "DOTNET_PROCESSOR_COUNT does not override it, so compare these figures against the container's "
-                + "real quota rather than assuming the runtime already reflects it, and pin "
-                + "WalMaterialiserMaxConcurrentReplays explicitly on a constrained host. The gate is sized once "
-                + "per process and is never re-created or topped up.",
+                + "DOTNET_PROCESSOR_COUNT does not override it, which is why the default takes the minimum "
+                + "rather than trusting the runtime figure alone; an explicit "
+                + "WalMaterialiserMaxConcurrentReplays still takes precedence over both. The gate is sized "
+                + "once per process and is never re-created or topped up.",
                 max,
                 configured,
                 // grant-exempt: reporting the resolved processor count in a diagnostic, not sizing a pool.
-                Environment.ProcessorCount);
+                Environment.ProcessorCount,
+                containerCpuGrant?.ToString(CultureInfo.InvariantCulture)
+                    ?? "unreadable or unlimited, so it did not constrain the ceiling");
         }
         catch
         {
@@ -620,13 +745,11 @@ internal sealed partial class BPlusLeafGrain
         // IsEnabled probe or the templated call itself lost the permit for the
         // lifetime of the process: the gate is sized once by
         // ResolveReplayConcurrencyGate and is never re-created or topped up. It
-        // defaults to Environment.ProcessorCount, which is cgroup-aware only
-        // when DOTNET_PROCESSOR_COUNT does not override it (issue #2278), so on
-        // a 2-vCPU host two such throws - ever - stop the silo activating
+        // defaults to the lesser of Environment.ProcessorCount and the enforced
+        // container CPU grant (issue #2816), so on a 2-vCPU host two such throws
+        // - ever - stop the silo activating
         // leaves entirely, and the symptom is a silent wait on WaitAsync rather
-        // than an error. Note the override cuts both ways: it can also size the
-        // gate ABOVE the quota, which does not exhaust it but oversubscribes
-        // the CPU behind it. A throwing logging sink is transient and
+        // than an error. A throwing logging sink is transient and
         // environmental, which is exactly the fault a unit test never sees.
         //
         // The acquisition moved inside the try for issue #2280 and this

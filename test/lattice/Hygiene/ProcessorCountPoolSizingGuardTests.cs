@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// loss before issue #2610 corrected it. This fixture makes the whole class
 /// visible: every <c>Environment.ProcessorCount</c> code site under <c>src/</c>
 /// and <c>apps/</c> must either consult the shared
-/// <see cref="Api.Mcp.RepoContext.ContainerCpuGrant"/> reader in the same
+/// <see cref="Orleans.Lattice.Internal.ContainerCpuGrant"/> reader in the same
 /// statement, or carry a documented, reasoned <c>// grant-exempt: &lt;reason&gt;</c>
 /// marker on its own line or the line immediately above it.
 /// </summary>
@@ -80,7 +80,7 @@ public sealed class ProcessorCountPoolSizingGuardTests
         Assert.That(violations, Is.Empty,
             "A pool sized from Environment.ProcessorCount ignores the enforced container CPU grant. "
             + "Under a fractional cgroup grant this oversubscribes and is throttled (issue #2613). "
-            + "Fix the site to consult Orleans.Lattice.Api.Mcp.RepoContext.ContainerCpuGrant.Read() "
+            + "Fix the site to consult Orleans.Lattice.Internal.ContainerCpuGrant.Read() "
             + "in the same statement, e.g. Math.Max(1, ContainerCpuGrant.Read() ?? "
             + "Environment.ProcessorCount); or, if the site genuinely must not (a reporting or "
             + "diagnostic use, or a deliberate architectural exception), add a "

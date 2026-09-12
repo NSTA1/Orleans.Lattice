@@ -2011,14 +2011,21 @@ public class LatticeOptions
     /// than a thread-pool stampede; replays release the permit as soon as the
     /// tail is drained. Defaults to
     /// <see cref="DefaultWalMaterialiserMaxConcurrentReplays"/> (<c>0</c>),
-    /// which resolves to <see cref="Environment.ProcessorCount"/> at runtime.
-    /// Set to a positive value to pin the ceiling explicitly.
+    /// which resolves at runtime to the lesser of
+    /// <see cref="Environment.ProcessorCount"/> and the CPU grant the
+    /// container's cgroup actually enforces, so a host that raises
+    /// <c>DOTNET_PROCESSOR_COUNT</c> above its quota cannot oversubscribe this
+    /// CPU-bound path (issue #2816). An unreadable or unlimited quota is treated
+    /// as unknown and imposes no constraint. Set to a positive value to pin the
+    /// ceiling explicitly; an explicit value always wins over both figures.
     /// </summary>
     public int WalMaterialiserMaxConcurrentReplays { get; set; } = DefaultWalMaterialiserMaxConcurrentReplays;
 
     /// <summary>
     /// Default value for <see cref="WalMaterialiserMaxConcurrentReplays"/>
-    /// (<c>0</c>, resolved to <see cref="Environment.ProcessorCount"/>).
+    /// (<c>0</c>, resolved to the lesser of
+    /// <see cref="Environment.ProcessorCount"/> and the enforced container CPU
+    /// grant).
     /// </summary>
     public const int DefaultWalMaterialiserMaxConcurrentReplays = 0;
 

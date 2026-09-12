@@ -195,7 +195,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalGcInterval`](#walgcinterval) | `TimeSpan` | 1 hour (band ceiling) | No (global; read from the default options) |
 | [`WalGcMinInterval`](#walgcmininterval) | `TimeSpan` | 30 seconds (band floor) | No (global; read from the default options) |
 | [`WalGcStartupDelay`](#walgcstartupdelay) | `TimeSpan` | 30 seconds | No (global; read at silo start) |
-| [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) | `int` | `0` (auto = `Environment.ProcessorCount`) | Yes |
+| [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) | `int` | `0` (auto = the lesser of `Environment.ProcessorCount` and the container CPU grant) | Yes |
 | [`WalMaterialiserPinFlushIntervalMs`](#walmaterialiserpinflushintervalms) | `int` | 250 | Yes |
 | [`WalMaterialiserPinBuckets`](#walmaterialiserpinbuckets) | `int` | 1 (disabled) | No (durable-store migration; see below) |
 | [`WalMaterialiserPinShards`](#walmaterialiserpinshards) | `int` | 8 | No (durable-store migration; see below) |
@@ -1511,9 +1511,13 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `WalMaterialiserMaxConcurrentReplays`
 
-Per-silo ceiling on the number of leaf grains that may run their activation-time WAL replay concurrently (default: `0`, which resolves to `Environment.ProcessorCount` at runtime). A mass reactivation (for example after a `docker restart` or a silo rejoin) can otherwise stampede the scheduler as every reactivating leaf replays its WAL backlog at once; the ceiling makes the surplus queue on a process-wide gate and drain in waves instead. A no-op activation (a leaf with no tree binding) consumes no permit.
+Per-silo ceiling on the number of leaf grains that may run their activation-time WAL replay concurrently (default: `0`, which resolves at runtime to the **lesser** of `Environment.ProcessorCount` and the container's enforced CPU grant). A mass reactivation (for example after a `docker restart` or a silo rejoin) can otherwise stampede the scheduler as every reactivating leaf replays its WAL backlog at once; the ceiling makes the surplus queue on a process-wide gate and drain in waves instead. A no-op activation (a leaf with no tree binding) consumes no permit.
 
-Set to a positive value to pin the ceiling explicitly. Must be `>= 0`; the validator rejects negative values.
+**Why the grant and not the processor count alone.** A replay is CPU bound, so the ceiling is only meaningful against the CPU the process can actually obtain. `Environment.ProcessorCount` reflects the cgroup quota *only while* `DOTNET_PROCESSOR_COUNT` is unset - that variable overrides it, and overriding it is a legitimate thing to do for the thread pool's sake. A container granted 6 CPUs whose environment carries `DOTNET_PROCESSOR_COUNT=16` therefore used to size this gate at 16, a 2.67x oversubscription of a CPU-bound path, with nothing in the process able to tell (issue #2816). The default now reads `/sys/fs/cgroup/cpu.max` (and the cgroup v1 pair) directly and takes the minimum of the two figures, so a quota the kernel actually enforces can lower the ceiling but never raise it. An operator who lowers `DOTNET_PROCESSOR_COUNT` is still obeyed exactly, and every other subsystem sized from the processor count is untouched. An unreadable or unlimited quota - a non-Linux host, a container with no CPU limit - is treated as **unknown**, not as zero, and leaves the processor count as the ceiling.
+
+The resolved ceiling, the configured option, the processor count, and the grant are all written to the log once per process at silo start, so the effective figure can be read off the log rather than inferred from the host's vCPU count.
+
+Set to a positive value to pin the ceiling explicitly; an explicit value supersedes both figures. Must be `>= 0`; the validator rejects negative values.
 
 ### `WalReplayMaxRecordsPerTurn`
 

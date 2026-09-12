@@ -496,7 +496,9 @@ Three instances in this one deployment:
    once, as a structural constant. `Environment.ProcessorCount` *is* cgroup-aware, so
    adding `cpus: 2.0` silently shrank that gate from 16 permits to 2 - an 8x cut to
    leaf-activation concurrency, invisible in configuration and unattributable from the
-   logs. `DOTNET_PROCESSOR_COUNT: "16"` decouples the two.
+   logs. `DOTNET_PROCESSOR_COUNT: "16"` decouples the two - with a second effect that
+   was not noticed when it was introduced, and that later became this deployment's
+   own instance of the class: see the note below.
 2. **The GC heap count.** Server GC allocates a heap and a GC thread per core, and
    takes that count from `DOTNET_PROCESSOR_COUNT` when it is set. On `repocontext`
    that variable is pinned to 16 for instance 1's reasons, so server GC would
@@ -517,6 +519,23 @@ to the enforced cgroup quota read from `/sys/fs/cgroup/cpu.max` rather than to
 `Environment.ProcessorCount`, and the server logs its provenance (declared, derived
 from the grant, or derived from the processor count) at startup.
 
+**Instance 1 became this class's own fourth instance, and is fixed in the source as of
+#2816.** The decoupling in instance 1 was introduced to stop a `cpus` limit shrinking
+the gate, and it did that. What it also did was remove the only thing holding the gate
+at the grant: with `DOTNET_PROCESSOR_COUNT: "16"` set against a 6.0-CPU grant, the gate
+resolved to **16 permits on 6 CPUs**, a 2.67x oversubscription of a CPU-bound path,
+measured live on this rig. The only remedy the library offered was to pin
+`LATTICE_WAL_MAX_CONCURRENT_REPLAYS` by hand - an operator knob nobody had reason to
+know to set, which would drift from the `cpus` limit the moment either changed. The
+gate's default is now the **lesser** of `Environment.ProcessorCount` and the enforced
+cgroup grant, read the same way the embedder reads it. `DOTNET_PROCESSOR_COUNT` still
+decouples the GC heap count and the thread pool from the grant exactly as before,
+because a minimum can only lower the ceiling and never raise it; it simply can no
+longer raise the replay ceiling above what the kernel will actually schedule. The
+resolved ceiling, the configured option, the processor count, and the grant are now
+stated together in one startup log line, so the disagreement this passage describes is
+read rather than inferred.
+
 **It is not yet exercised in this deployment.** The tuning overlay sets
 `EMBED_INTRA_THREADS: "4"` explicitly, and the deployed embedder image predates
 #2610, so the value in force is the declared one and the derived path has never run
@@ -534,10 +553,14 @@ wins over the quota, so an embedder that copied the `repocontext` environment bl
 would silently restore the 4x oversubscription. That is why the fix reads the quota
 directly.
 
-**The point of naming the class is the fourth instance, which has not been found yet.**
-When adding a container limit, or a setting that sizes anything per core, check which
-figure the runtime actually reads. `Assert-ContainerProvenance.ps1` and the effective
-configuration report (#2593, #2600) exist so the answer is read rather than assumed.
+**The point of naming the class was the fourth instance, and naming it is what found
+one.** The fourth turned out not to be a new setting at all but the *remedy* applied to
+instance 1, which reintroduced the same defect in the opposite direction - so the
+fifth is still out there. When adding a container limit, or a setting that sizes
+anything per core, check which figure the runtime actually reads, and check it again
+after changing anything that decouples a runtime figure from the grant.
+`Assert-ContainerProvenance.ps1` and the effective configuration report (#2593, #2600)
+exist so the answer is read rather than assumed.
 
 One caution on the throttling figures quoted in instance 3, because they have already
 been misread once: they measure **CPU scatter**, not pool size against grant, and they

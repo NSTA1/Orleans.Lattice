@@ -1,6 +1,7 @@
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Orleans.Lattice.Internal;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
