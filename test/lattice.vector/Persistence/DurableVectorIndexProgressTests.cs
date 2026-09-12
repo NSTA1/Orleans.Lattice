@@ -54,7 +54,12 @@ public sealed class DurableVectorIndexProgressTests
         {
             Assert.That(phases, Does.Contain(VectorIndexBuildPhase.Ingesting));
             Assert.That(phases, Does.Contain(VectorIndexBuildPhase.Training));
-            Assert.That(phases, Does.Contain(VectorIndexBuildPhase.Persisting));
+            Assert.That(phases, Does.Not.Contain(VectorIndexBuildPhase.Persisting),
+                "Persisting is a within-step transient, never a resting phase observed between " +
+                "steps. Nothing durable distinguishes it from Training - the manifest on disk is " +
+                "still the pre-training one - so AdoptBuildState normalises a durable Persisting " +
+                "back to Training, and a build that yielded here would re-train and re-yield " +
+                "forever under a one-step activation budget. See #2791.");
             Assert.That(phases[^1], Is.EqualTo(VectorIndexBuildPhase.Ready));
             Assert.That(phases.Select(phase => (int)phase), Is.Ordered.Ascending,
                 "A build never moves backwards, so a consumer can trust the phase as a watermark.");
