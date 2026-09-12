@@ -77,6 +77,118 @@ Assert.That(result, Is.True);
 
 Do **not** use classic assert (`Assert.AreEqual`, `Assert.IsNull`, etc.).
 
+## False greens - a green check that never exercised its property
+
+A false green is worse than a red. A red is a defect to fix; a green that never
+ran the property it names is a defect *plus* a standing claim that there is no
+defect, which is why these survive for so long. Two shapes have cost real time on
+this repository and both are cheap to avoid once named. A third - an
+emulator-gated run that prints `Passed!` while 89 tests silently vanish - is
+documented under Tier 3 above.
+
+The common structure is worth holding onto, because it generalises past testing:
+**an artefact produced by an action cannot be validated by a check that runs
+before that action.** Every false green below is an instance of checking the
+wrong side of a boundary.
+
+### Reflection past the public seam proves the unit and exempts the wiring
+
+A fixture that reaches its subject through
+`BindingFlags.Instance | BindingFlags.NonPublic` and `MethodInfo.Invoke` proves
+the member behaves correctly **when called**. It proves nothing about whether
+anything calls it. Those are two different claims and only the first is tested.
+
+This has already shipped a defect here. A leaf-split helper was covered by a
+fixture that invoked it directly, and its single production call site was gated
+behind a predicate that declined on every tree large enough to need the split.
+The fixture stayed green while a deployment sat on an unsplit 21.3 GB tree. The
+helper was never broken. The wiring was, and the wiring was exactly what the
+reflection stepped over.
+
+**The discriminator is not "is the member non-public". It is "who calls it, and
+can that caller regress?"** Non-public alone is a red herring: several fixtures
+in this repository reach a non-public member perfectly safely. Judge the caller
+instead.
+
+- **Framework-owned caller - no exposure.** `ExecuteAsync` on a
+  `BackgroundService` is reached by `BackgroundService.StartAsync` in the .NET
+  runtime. Invoking it by reflection is the ordinary way to drive a hosted
+  service deterministically, and there is no call site of *ours* that could
+  regress. `ViewActivationServiceTests` and `ReplicationDriverActivationServiceTests`
+  are both this shape.
+- **Our own caller - cover it.** If the path from a public entry point to the
+  member runs through a predicate, a branch, or an options value we own, then
+  that predicate is the single most likely thing to break, and a reflected test
+  is blind to precisely it.
+
+When you do reach past the public seam:
+
+1. **Cover the path as well as the unit.** Keep the reflected test for the
+   precision it buys, and add at least one test that reaches the same member
+   through a public entry point, under conditions that make the production call
+   site actually fire. That second test is the one that fails when the wiring
+   regresses; the first one never will.
+2. **If that is genuinely impractical, name the production call site in a
+   comment beside the reflection** - one sentence, so the next reader can check
+   the claim instead of re-deriving it. `RawEntryCollectorTests` carries the
+   idiom: its comment records that the helper "is proved reachable here rather
+   than assumed".
+3. **Prefer arranging by reflection over asserting by it.** Reading or writing a
+   private field to construct a state that is otherwise unreachable, and then
+   driving the real public method, keeps the wiring inside the test.
+   `WalCommitLogWriterWedgeDiagnosticsTests` is the model: it reaches a private
+   static tracker to wedge a partition, then asserts through the public
+   `AppendAsync`.
+4. **Assert the member resolved, with a message that says what to do.**
+   `Assert.That(method, Is.Not.Null, "X was renamed; update this guard test.")`.
+   Without it, a rename degrades the fixture into a `NullReferenceException`
+   whose message names no cause - or, when the lookup sits in a helper that
+   returns early, into a silent pass.
+
+### Restoring a perturbed source file with Copy-Item keeps the perturbed binary
+
+Deliberately breaking something to watch a check go red is the only way to know
+the check works, and it is prescribed by the bug-hunter agent's "demonstrate the
+predicted failure first" step. The restore is where it goes wrong.
+
+**`Copy-Item` propagates the source file's `LastWriteTime` to the copy.** So
+restoring a file from a backup taken before the perturbation writes back the
+*original, older* timestamp. MSBuild's up-to-date check compares source
+timestamps against build outputs, sees a source older than the assembly that was
+just built from the perturbed text, decides nothing needs doing, and **keeps the
+perturbed binary**. The next run reports on code you believe you reverted.
+
+The asymmetry is what makes it dangerous. Measured:
+
+| step | resulting `LastWriteTime` |
+| --- | --- |
+| original file | `01:32:33.609` |
+| perturb with `[IO.File]::WriteAllText` | `07:32:34.921` (now) |
+| restore with `Copy-Item` | `01:32:33.609` (six hours stale) |
+
+`WriteAllText` stamps the current time, so the **perturbed** arm always rebuilds
+correctly and behaves exactly as expected. Only the **restored baseline** is
+wrong. That is the more misleading direction: the arm you trust is the arm that
+lies, so the reverted run keeps showing the perturbed result and you go looking
+for a defect in code that is already correct.
+
+Remedies, in order of preference:
+
+1. **Restore with `git checkout -- <path>` or `git restore <path>`.** Git writes
+   the file fresh and stamps it now. This is also the only restore that cannot
+   drift from the committed text.
+2. **If you must restore from a copy, stamp it afterwards**:
+   `(Get-Item <path>).LastWriteTime = Get-Date`.
+3. **Never diagnose a surprising post-restore result before confirming the
+   rebuild happened.** `dotnet build` printing no compile line for the project
+   you perturbed is the tell.
+
+Prefer perturbing a **copy of the input** over perturbing the source at all.
+Several guards here take that route already: `MeterFieldDeclarationOrderTests`
+runs its ordering logic against a synthetic in-memory probe type rather than
+reordering a real metrics class, so nothing on disk is ever perturbed and there
+is nothing to restore.
+
 ## File Organization
 
 - One test class per file, mirroring the source layout:
