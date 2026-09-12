@@ -539,6 +539,28 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         }
         finally
         {
+            // Adopt anything still sitting in the channel. WaitToReadAsync
+            // observes cancellation before the TryRead loop above ever
+            // runs, so a commit enqueued moments before disposal can
+            // never have reached _pending - and the fault loop below
+            // only walks _pending. Left unadopted, that commit's
+            // Completion is never settled at all: EnqueueAsync's caller
+            // does not get ObjectDisposedException, it waits forever,
+            // across disposal and beyond. DisposeAsync has already
+            // completed the writer, so this drains a closed channel and
+            // cannot race a further arrival.
+            while (_arrivals.Reader.TryRead(out var stranded))
+            {
+                _pending.Add(stranded);
+            }
+
+            // Those offsets are no longer vouched for, exactly as on
+            // the commit-failure path - including that path's ordering:
+            // discard before faulting, never after, so a caller woken
+            // by the ObjectDisposedException below can never observe
+            // the worker still vouching for a commit it just abandoned.
+            DiscardAcceptedRanges();
+
             // Fault any commits still pending at shutdown.
             foreach (var leftover in _pending)
             {
@@ -546,10 +568,6 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     new ObjectDisposedException(nameof(PhaseTwoWorker)));
             }
             _pending.Clear();
-
-            // Those offsets are no longer vouched for, exactly as on
-            // the commit-failure path.
-            DiscardAcceptedRanges();
         }
     }
 
@@ -709,6 +727,31 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            // The producer will resync from the persisted TAIL, so the
+            // worker can no longer vouch for anything above what it
+            // actually committed.
+            //
+            // Stop vouching BEFORE faulting anyone. That ordering is
+            // load-bearing, not cosmetic, and it mirrors the success
+            // path above, which likewise prunes the accepted ranges
+            // before completing its commits.
+            //
+            // A caller awaiting EnqueueAsync resumes the moment
+            // TrySetException runs below, and its Completion is created
+            // with RunContinuationsAsynchronously, so it resumes on the
+            // thread pool CONCURRENTLY with the remainder of this catch
+            // block rather than after it. Were the discard left below
+            // the fault loops, that caller could observe the fault and
+            // then call GetHighestOffsetAsync - which folds
+            // ContiguousAcceptedEndOffsetInclusive over the persisted
+            // TAIL - while the ranges this transaction just failed to
+            // write were still in the set, and be handed an offset that
+            // is durable nowhere. That is exactly the over-reporting the
+            // accepted set exists to prevent (issue #2528), and the
+            // caller likeliest to hit the window is the one that just
+            // received the fault, because it is the one resyncing.
+            DiscardAcceptedRanges();
+
             // Azure Tables transactions are all-or-nothing, so a
             // failure faults every commit in the coalesced group.
             // Also fault every later still-pending commit - their
@@ -725,11 +768,6 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                 pending.Completion.TrySetException(ex);
             }
             _pending.Clear();
-
-            // The producer will resync from the persisted TAIL, so the
-            // worker can no longer vouch for anything above what it
-            // actually committed.
-            DiscardAcceptedRanges();
             LatticeMetrics.ProviderRetryExhausted.Add(
                 1,
                 new System.Diagnostics.TagList
