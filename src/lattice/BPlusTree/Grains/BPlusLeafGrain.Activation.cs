@@ -145,6 +145,139 @@ internal sealed partial class BPlusLeafGrain
     internal static SemaphoreSlim? ReplayConcurrencyGateForTest => Volatile.Read(ref _replayConcurrencyGate);
 
     /// <summary>
+    /// The ceiling <see cref="_replayConcurrencyGate"/> was sized to, or
+    /// <c>0</c> before it is sized. Captured because a <see cref="SemaphoreSlim"/>
+    /// does not expose its own maximum, and the withholding floor below is
+    /// expressed relative to it.
+    /// </summary>
+    private static int _replayConcurrencyCeiling;
+
+    /// <summary>
+    /// Count of permits currently <b>withheld</b> from
+    /// <see cref="_replayConcurrencyGate"/> by the memory-adaptive backpressure of
+    /// issue #2781, so the effective ceiling is
+    /// <c>_replayConcurrencyCeiling - _withheldReplayPermits</c>.
+    /// <para>
+    /// Withholding is not a resize. The gate is sized once and never re-created,
+    /// so backpressure works by <b>declining to return</b> a permit the failing
+    /// replay already holds, and recovery works by returning one extra permit on a
+    /// clean replay. That gives the mechanism its load-bearing property: it can
+    /// only ever put <b>fewer</b> permits into circulation than the configured
+    /// ceiling, never more, for <b>any</b> sequence of inputs.
+    /// </para>
+    /// <para>
+    /// This matters beyond tidiness. Issues #2278/#2279 settled that the core
+    /// library must not silently defeat an operator's
+    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> or
+    /// <c>DOTNET_PROCESSOR_COUNT</c>, and a reviewer who remembers that will reach
+    /// for the objection on sight. A dynamic floor <b>beneath</b> the configured
+    /// ceiling is not an override of it: the operator sets the headroom this
+    /// process may take, and this mechanism declines headroom the heap cannot
+    /// currently afford. It never takes headroom the operator did not grant.
+    /// </para>
+    /// </summary>
+    private static int _withheldReplayPermits;
+
+    /// <summary>
+    /// Test-only view of <see cref="_withheldReplayPermits"/>.
+    /// </summary>
+    internal static int WithheldReplayPermitsForTest => Volatile.Read(ref _withheldReplayPermits);
+
+    /// <summary>
+    /// Test-only view of <see cref="_replayConcurrencyCeiling"/>. Exposed so a
+    /// fixture can assert the gate is <b>quiescent</b> before it perturbs it -
+    /// a withholding test whose baseline was already depressed would compare
+    /// against the wrong number and could pass for the wrong reason.
+    /// </summary>
+    internal static int ReplayConcurrencyCeilingForTest => Volatile.Read(ref _replayConcurrencyCeiling);
+
+    /// <summary>
+    /// Resets the memory-adaptive backpressure state. Test-only: the gate and its
+    /// withholding are process-wide statics, so a fixture that exercises one must
+    /// be able to return the process to its unsized state.
+    /// </summary>
+    internal static void ResetReplayConcurrencyGateForTest()
+    {
+        lock (_replayConcurrencyGateLock)
+        {
+            _replayConcurrencyGate = null;
+            _replayConcurrencyCeiling = 0;
+            Volatile.Write(ref _withheldReplayPermits, 0);
+        }
+    }
+
+    /// <summary>
+    /// Decides whether the caller's replay permit should be <b>withheld</b> rather
+    /// than returned, because the replay failed for memory pressure (issue #2781).
+    /// Returns <see langword="true"/> when the caller must <b>not</b> release.
+    /// </summary>
+    /// <remarks>
+    /// At least one permit always stays in circulation. Withholding the last one
+    /// would convert a memory stall into a total stall, and a gate that admits
+    /// nothing can never observe the clean replay that recovers it - the mechanism
+    /// would latch, exactly the defect issue #2783 reports elsewhere.
+    /// </remarks>
+    internal static bool TryWithholdReplayPermitOnPressure()
+    {
+        var ceiling = Volatile.Read(ref _replayConcurrencyCeiling);
+        while (true)
+        {
+            var withheld = Volatile.Read(ref _withheldReplayPermits);
+
+            // The floor. `ceiling - 1` is the most that may ever be withheld, so
+            // this comparison - not the caller, and not the configuration - is
+            // what makes over-withholding unreachable.
+            if (withheld >= ceiling - 1)
+                return false;
+
+            if (Interlocked.CompareExchange(ref _withheldReplayPermits, withheld + 1, withheld) == withheld)
+            {
+                LatticeMetrics.WalReplayPermitAdaptations.Add(
+                    1,
+                    LatticeMetrics.PermitAdaptationWithheld,
+                    LatticeTenantLabel.Platform);
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Decides whether a clean replay should return one <b>extra</b> permit to the
+    /// gate, restoring capacity previously withheld under pressure (issue #2781).
+    /// Returns <see langword="true"/> when the caller must release one more than it
+    /// acquired.
+    /// </summary>
+    /// <remarks>
+    /// The guard is <c>withheld &gt; 0</c>, and it is the invariant rather than a
+    /// nicety. Each withheld permit is one the gate never got back, so the gate's
+    /// count is at most <c>ceiling - withheld</c> and returning exactly
+    /// <c>withheld</c> extras restores it to <c>ceiling</c> and no further. Should
+    /// that accounting ever be wrong in the dangerous direction, the
+    /// <see cref="SemaphoreSlim"/> was constructed with a maximum and throws
+    /// <see cref="SemaphoreFullException"/> rather than silently over-admitting -
+    /// the failure mode is loud, which is why the ceiling is passed to the
+    /// constructor at all.
+    /// </remarks>
+    internal static bool TryRestoreWithheldReplayPermit()
+    {
+        while (true)
+        {
+            var withheld = Volatile.Read(ref _withheldReplayPermits);
+            if (withheld <= 0)
+                return false;
+
+            if (Interlocked.CompareExchange(ref _withheldReplayPermits, withheld - 1, withheld) == withheld)
+            {
+                LatticeMetrics.WalReplayPermitAdaptations.Add(
+                    1,
+                    LatticeMetrics.PermitAdaptationRestored,
+                    LatticeTenantLabel.Platform);
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
     /// Lazily resolves the per-silo replay concurrency gate from
     /// <paramref name="options"/>. A non-positive
     /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> resolves
@@ -209,6 +342,8 @@ internal sealed partial class BPlusLeafGrain
                     // grant-exempt: the library sizes this gate from Environment.ProcessorCount by design (issues #2278/#2279).
                     max = Environment.ProcessorCount;
                 _replayConcurrencyGate = new SemaphoreSlim(max, max);
+                _replayConcurrencyCeiling = max;
+                Volatile.Write(ref _withheldReplayPermits, 0);
                 sizedHere = true;
             }
             else
@@ -218,7 +353,23 @@ internal sealed partial class BPlusLeafGrain
         }
 
         if (sizedHere)
+        {
             LogResolvedReplayConcurrencyGate(max, options.WalMaterialiserMaxConcurrentReplays, loggerAccessor);
+
+            // Zero-prime both arms of the backpressure counter (issue #2781,
+            // discipline of #2764). This is the one site that proves the gate was
+            // created, so priming here - and nowhere earlier - distinguishes
+            // "backpressure is present and has never engaged" from "this build
+            // has no backpressure", which an absent series cannot.
+            LatticeMetrics.WalReplayPermitAdaptations.Add(
+                0,
+                LatticeMetrics.PermitAdaptationWithheld,
+                LatticeTenantLabel.Platform);
+            LatticeMetrics.WalReplayPermitAdaptations.Add(
+                0,
+                LatticeMetrics.PermitAdaptationRestored,
+                LatticeTenantLabel.Platform);
+        }
 
         return Volatile.Read(ref _replayConcurrencyGate)!;
     }
@@ -446,6 +597,14 @@ internal sealed partial class BPlusLeafGrain
         bool advanced;
         SemaphoreSlim? replayPermit = null;
 
+        // Memory-adaptive backpressure state for this activation (issue #2781).
+        // Both are read only in the finally, and both default to the inert value
+        // so that every path which does not explicitly set them - including one
+        // that never reaches the replay at all - leaves the gate exactly as it
+        // found it.
+        bool withholdReplayPermitOnPressure = false;
+        bool replayCompletedCleanly = false;
+
         // Declared here rather than at its assignment inside the try because
         // the resident-footprint registration at step 1.35 (issue #2767) reads
         // it after the guarded region has closed, and issue #2280 moved the
@@ -570,9 +729,25 @@ internal sealed partial class BPlusLeafGrain
             // tree id. Any successful activation is an intervening success, and
             // a leaf that never recorded a streak removes nothing.
             ForgetColdReplayCancellations(this.GetGrainId());
+
+            // Recovery evidence for the replay gate (issue #2781). Set last, so
+            // it can only be true when the whole guarded region completed - a
+            // partial replay is not evidence the heap has room again.
+            replayCompletedCleanly = true;
         }
         catch (Exception ex)
         {
+            // Memory-adaptive backpressure (issue #2781). Decided here, applied
+            // in the finally.
+            //
+            // Guarded on `replayPermit is not null` because a permit that was
+            // never acquired cannot be withheld, and incrementing the withheld
+            // count without a matching unreleased permit would overstate the
+            // reduction - and, on recovery, return a permit the gate never lost,
+            // which SemaphoreSlim would raise as SemaphoreFullException.
+            if (replayPermit is not null && IsReadMemoryPressure(ex))
+                withholdReplayPermitOnPressure = TryWithholdReplayPermitOnPressure();
+
             // Activation-failure observation (issue #2280). OBSERVE AND
             // RETHROW - never swallow. "Failures propagate" above is
             // load-bearing: an activation that ate its cancellation would come
@@ -674,7 +849,40 @@ internal sealed partial class BPlusLeafGrain
         }
         finally
         {
-            replayPermit?.Release();
+            if (replayPermit is not null)
+            {
+                // Memory-adaptive backpressure (issue #2781).
+                //
+                // Withholding is expressed here, at the single release site,
+                // rather than as a resize: the gate is sized once and never
+                // re-created, so the only lever available is whether this permit
+                // goes back. Declining to return one is a strictly subtractive
+                // act, which is what makes it incapable of exceeding the
+                // operator's ceiling for any input - see _withheldReplayPermits.
+                //
+                // The condition is deliberately narrower than "the replay
+                // failed". A cancelled or faulted replay is not evidence the
+                // heap is short; only IsReadMemoryPressure is, and withholding
+                // on anything else would shrink the gate for faults that have
+                // nothing to do with memory.
+                if (withholdReplayPermitOnPressure)
+                {
+                    // Not released, by design: this permit is now withheld, and
+                    // _withheldReplayPermits was incremented to account for it.
+                }
+                else
+                {
+                    replayPermit.Release();
+
+                    // Recovery. A replay that completed without memory pressure
+                    // is the evidence that the heap can afford more concurrency
+                    // again, so exactly one withheld permit returns per such
+                    // replay - gradually, so a single lucky replay cannot undo a
+                    // sustained reduction in one step.
+                    if (replayCompletedCleanly && TryRestoreWithheldReplayPermit())
+                        replayPermit.Release();
+                }
+            }
         }
 
         // Step 1.35 - account this activation's resident footprint against the

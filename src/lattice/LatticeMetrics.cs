@@ -1594,6 +1594,44 @@ public static class LatticeMetrics
             description: "Activation-time leaf replays whose own post-range-filter applied-entry count exceeded the configured replay budget with an intact WAL, tagged by tree and WAL partition.");
 
     /// <summary>
+    /// Tag marking a permit <b>withheld</b> from the replay concurrency gate on
+    /// <see cref="WalReplayPermitAdaptations"/>, because a replay failed for
+    /// memory pressure.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PermitAdaptationWithheld = new(TagOutcome, "withheld");
+
+    /// <summary>
+    /// Tag marking a previously withheld permit <b>restored</b> to the replay
+    /// concurrency gate on <see cref="WalReplayPermitAdaptations"/>, because a
+    /// replay completed without memory pressure.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PermitAdaptationRestored = new(TagOutcome, "restored");
+
+    /// <summary>
+    /// Counter of adaptations to the per-silo WAL replay concurrency gate, tagged
+    /// with <see cref="TagOutcome"/> (<see cref="PermitAdaptationWithheld"/> when a
+    /// permit was withheld from circulation after a replay failed for memory
+    /// pressure, <see cref="PermitAdaptationRestored"/> when one was returned after
+    /// a replay completed cleanly). Issue #2781.
+    /// <para>
+    /// <b>Deliberately not tagged by tree.</b> The gate is process-wide, so a
+    /// per-tree tag would imply a per-tree ceiling that does not exist and would
+    /// invite a reader to sum arms that share one underlying resource.
+    /// </para>
+    /// <para>
+    /// The difference <c>withheld - restored</c> is the number of permits currently
+    /// withheld, so the effective ceiling is
+    /// <c>configured - (withheld - restored)</c>. Both arms are <b>zero-primed</b>
+    /// when the gate is sized, which is the one site that proves the gate was
+    /// actually created: without priming, "backpressure never engaged" and "this
+    /// build does not have backpressure" would both read as an absent series.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalReplayPermitAdaptations =
+        Meter.CreateCounter<long>("orleans.lattice.wal.replay.permit_adaptations", unit: "{permit}",
+            description: "Adaptations to the per-silo WAL replay concurrency gate under memory pressure, tagged by outcome. Zero-primed on both arms when the gate is sized.");
+
+    /// <summary>
     /// Counter of activation-time leaf replays that re-entered from a persisted
     /// checkpoint which had <b>not advanced</b> since the same leaf partition's
     /// previous replay on this silo, emitted by <c>BPlusLeafGrain</c>'s
