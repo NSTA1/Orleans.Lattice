@@ -546,6 +546,15 @@ The meter is created at assembly load time, so adding it before the silo starts
 is sufficient - every subsequently-activated grain publishes into the already-
 subscribed pipeline.
 
+`AddMeter` matches a meter name exactly and does not cascade, so each lattice
+meter a host registers packages for needs its own call. A deployment that will
+be operated, rather than only demonstrated, should also register the two runtime
+meters - `Microsoft.Orleans` (grain activations and activation latency) and
+`System.Runtime` (GC heap, process working set, thread pool). Neither is in the
+lattice family, and without them the endpoint carries no heap, process-memory,
+or activation-latency series at all. See
+[Dashboards configuration](../lattice.dashboards/configuration.md#why-register-the-two-runtime-meters).
+
 ## Exposing metrics to an AI agent
 
 Once the `orleans.lattice` meter is scraped into a Prometheus-compatible
