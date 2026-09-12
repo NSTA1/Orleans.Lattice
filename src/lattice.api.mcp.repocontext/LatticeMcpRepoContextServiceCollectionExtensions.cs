@@ -159,7 +159,10 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<EmbeddingRepoContextVectorIngestor>>(),
                 sp.GetService<IEmbeddingProvider>()));
         services.TryAddSingleton<RepoContextVectorCache>();
-        services.TryAddSingleton<RepoContextVectorPlaneReDeriver>();
+        services.TryAddSingleton(sp => new RepoContextVectorPlaneReDeriver(
+            sp.GetRequiredService<IGrainFactory>(),
+            sp.GetRequiredService<ILogger<RepoContextVectorPlaneReDeriver>>(),
+            sp.GetRequiredService<TimeProvider>()));
         services.TryAddSingleton<RepoContextCoverageDigestStore>();
         services.TryAddSingleton<RepoContextVectorWriter>();
         services.TryAddSingleton<RepoContextEmbeddingGapScanner>();
