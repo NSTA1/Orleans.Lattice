@@ -282,7 +282,7 @@ public sealed class TenantMetricDimensionHygieneTests
         // key prefix, so LatticeTenantLabel.ForTree would resolve to one constant for
         // every plane on the host - one series, no discrimination - while falsely
         // implying a tenant attribution. The progress tag carries the signal, and all
-        // four arms are pre-minted so a zero on the starved arm is a measured absence
+        // five arms are pre-minted so a zero on the starved arm is a measured absence
         // rather than an arm that never existed.
         "_slices",
         // repocontext.ann.sweep.arming - the sweep's arming calls partitioned by

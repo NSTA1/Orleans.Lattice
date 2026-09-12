@@ -5,16 +5,16 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// What one approximate-index build step did to the build it advances. The values
-/// are exhaustive over a step that was taken - three outcomes for a step that
+/// are exhaustive over a step that was taken - four outcomes for a step that
 /// completed, plus one for a step that threw - which is what lets them be counted
 /// as a partition rather than as unrelated tallies.
 /// </summary>
 internal enum RepoContextAnnBuildSliceOutcome
 {
     /// <summary>
-    /// The step moved the build on: it banked at least one more vector, or it
-    /// carried the build into a later phase. This is the ordinary arm, and it is
-    /// the one that makes the other two interpretable.
+    /// The step banked progress: at least one more vector indexed, or at least one
+    /// more partition resolved. This is the only arm that claims the build got
+    /// closer to serving, and it is the one that makes the others interpretable.
     /// </summary>
     Advanced = 0,
 
@@ -26,10 +26,12 @@ internal enum RepoContextAnnBuildSliceOutcome
     Starved = 1,
 
     /// <summary>
-    /// The step completed without advancing the build and without its slice being
-    /// deadlined empty-handed. A converged coordinator re-opening its in-memory
-    /// handle takes this arm, and so does a slice that banked nothing for any
-    /// reason other than a spent deadline.
+    /// The step completed having changed nothing the build reports: no vector
+    /// banked, no partition resolved, no phase moved, and no slice deadlined
+    /// empty-handed. A converged coordinator re-opening its in-memory handle takes
+    /// this arm, and so does a step that did nothing for any reason other than a
+    /// spent deadline. It is distinct from <see cref="Churned"/>, which did move the
+    /// phase: this arm says the step was inert, that one says it was busy.
     /// </summary>
     Idle = 2,
 
@@ -41,28 +43,47 @@ internal enum RepoContextAnnBuildSliceOutcome
     /// embedding throughput that would explain an empty corpus.
     /// </summary>
     Faulted = 3,
+
+    /// <summary>
+    /// The step moved the build's phase and banked nothing: no further vector was
+    /// indexed and no further partition was resolved. The step unambiguously did
+    /// something, so it is not idle - but it got no closer to a servable index, so
+    /// it is not progress either.
+    /// <para>
+    /// This is the arm that makes a livelock visible. A build oscillating between
+    /// phases - the <c>Training -&gt; Persisting -&gt; Training</c> cycle recorded in
+    /// issue #2791 - emits a step on this arm every time round, so a rising
+    /// <c>churned</c> beside a flat <c>advanced</c> names a build that is running
+    /// hard and getting nowhere. Folded into <see cref="Advanced"/>, as it was
+    /// before issue #2818, that same livelock was indistinguishable from a build
+    /// making real progress.
+    /// </para>
+    /// </summary>
+    Churned = 4,
 }
 
 /// <summary>
 /// A point-in-time reading of the build-slice counters, cumulative since process
 /// start.
 /// </summary>
-/// <param name="Advanced">Steps that moved the build on.</param>
+/// <param name="Advanced">Steps that banked a vector or resolved a partition.</param>
 /// <param name="Starved">Steps whose slice was deadlined having banked nothing.</param>
-/// <param name="Idle">Steps that neither advanced the build nor were deadlined empty-handed.</param>
+/// <param name="Idle">Steps that changed nothing the build reports.</param>
 /// <param name="Faulted">Steps that threw rather than completing.</param>
+/// <param name="Churned">Steps that moved the phase while banking nothing.</param>
 internal readonly record struct RepoContextAnnBuildSliceSnapshot(
     long Advanced,
     long Starved,
     long Idle,
-    long Faulted)
+    long Faulted,
+    long Churned)
 {
     /// <summary>
-    /// Every step counted, across all four arms. Non-zero exactly when the build
+    /// Every step counted, across all five arms. Non-zero exactly when the build
     /// coordinator has taken at least one step in this process, which is the fact
     /// no other series in the approximate-index family can report.
     /// </summary>
-    public long Total => Advanced + Starved + Idle + Faulted;
+    public long Total => Advanced + Starved + Idle + Faulted + Churned;
 }
 
 /// <summary>
@@ -92,8 +113,20 @@ internal readonly record struct RepoContextAnnBuildSliceSnapshot(
 /// even establish which defect it was looking at. This counter separates them:
 /// its total advances on every completed step, so a zero total beside an armed
 /// sweep is a coordinator that is not stepping, and a rising
-/// <c>progress=starved</c> arm is a coordinator that is stepping and getting
-/// nowhere.
+/// <c>progress=starved</c> or <c>progress=churned</c> arm is a coordinator that is
+/// stepping and getting nowhere.
+/// </para>
+/// <para>
+/// <b>Only <c>advanced</c> claims progress, and that is the point of the
+/// partition.</b> A step that moves the build's phase without banking a vector or
+/// resolving a partition is counted on <c>churned</c>, not on <c>advanced</c>.
+/// Before issue #2818 the two were one arm, so the
+/// <c>Training -&gt; Persisting -&gt; Training</c> oscillation recorded in issue
+/// #2791 emitted a steadily rising <c>advanced</c> reading while banking nothing,
+/// and the series advertised as the progress discriminator could not discriminate.
+/// A healthy build churns at most once per phase transition, so its churn arm is
+/// bounded by the phase count; read <c>churned</c> rising WITHOUT BOUND beside
+/// <c>advanced</c> flat as a livelocked build.
 /// </para>
 /// <para>
 /// <b>Why a series and not the log line that already existed.</b> The coordinator
@@ -142,11 +175,14 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     /// <summary>The tag value for a step whose slice was deadlined having banked nothing.</summary>
     internal const string ProgressStarvedTag = "starved";
 
-    /// <summary>The tag value for a step that neither advanced nor was deadlined empty-handed.</summary>
+    /// <summary>The tag value for a step that changed nothing the build reports.</summary>
     internal const string ProgressIdleTag = "idle";
 
     /// <summary>The tag value for a step that threw rather than completing.</summary>
     internal const string ProgressFaultedTag = "faulted";
+
+    /// <summary>The tag value for a step that moved the phase while banking nothing.</summary>
+    internal const string ProgressChurnedTag = "churned";
 
     // Declared above the instrument it constructs, and the instrument is built from
     // this field, so reordering throws at type-initialisation rather than publishing
@@ -160,6 +196,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     private long _starved;
     private long _idle;
     private long _faulted;
+    private long _churned;
 
     /// <summary>Creates the reporter, its instrument, and every one of its series.</summary>
     public RepoContextAnnBuildSliceReporter()
@@ -170,20 +207,27 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
             unit: "{step}",
             description:
                 "Approximate-index build steps that completed, partitioned by what the step did to the build: "
-                + "'advanced' (it banked at least one more vector or carried the build into a later phase), "
+                + "'advanced' (it banked at least one more vector or resolved at least one more partition, so the "
+                + "build got closer to serving), 'churned' (it moved the build's phase while banking no vector and "
+                + "resolving no partition - a healthy build churns at most once per phase transition, so this arm "
+                + "is bounded by the phase count on a build that completes, and an arm rising WITHOUT BOUND beside "
+                + "a flat 'advanced' is a build oscillating between phases and banking nothing; it is counted apart "
+                + "from 'advanced' precisely so that livelock cannot read as progress), "
                 + "'starved' (its ingest slice was stopped by the wall-clock budget having banked nothing, so the "
                 + "cursor did not move and no larger budget repairs it), or 'idle' (it neither advanced the build "
-                + "nor was deadlined empty-handed, which is what a converged coordinator re-opening its in-memory "
+                + "nor moved its phase nor was deadlined empty-handed, which is what a converged coordinator "
+                + "re-opening its in-memory "
                 + "handle does), or 'faulted' (the step threw rather than completing, so the store-of-record read "
                 + "could not be served at all - which needs the projection or the store behind it looked at, rather "
                 + "than the access gate or the embedding throughput that would explain an empty corpus). Every "
                 + "other instrument on this plane fires only at a terminal moment - a build "
                 + "that reached Ready, a plane that finished building, a sweep that armed a coordinator - so "
                 + "between arming and Ready the plane emitted nothing, and a build consuming nothing was "
-                + "byte-identical in telemetry to a build that never ran. The TOTAL across all four arms is the "
+                + "byte-identical in telemetry to a build that never ran. The TOTAL across all five arms is the "
                 + "figure that separates them: zero beside a non-zero 'ann.sweep{outcome=armed}' means the "
                 + "coordinator is not stepping, while a rising 'starved' arm means it is stepping and getting "
-                + "nowhere and a rising 'faulted' arm means it is stepping and throwing.");
+                + "nowhere, a rising 'churned' arm means it is stepping, moving, and banking nothing, and a rising "
+                + "'faulted' arm means it is stepping and throwing.");
 
         // Pre-mint every series with a zero-valued add, so a correctly configured
         // host reports progress=starved at 0 rather than omitting it. An absent
@@ -193,6 +237,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
         _slices.Add(0, new KeyValuePair<string, object?>(ProgressTagKey, ProgressStarvedTag), LatticeTenantLabel.Platform);
         _slices.Add(0, new KeyValuePair<string, object?>(ProgressTagKey, ProgressIdleTag), LatticeTenantLabel.Platform);
         _slices.Add(0, new KeyValuePair<string, object?>(ProgressTagKey, ProgressFaultedTag), LatticeTenantLabel.Platform);
+        _slices.Add(0, new KeyValuePair<string, object?>(ProgressTagKey, ProgressChurnedTag), LatticeTenantLabel.Platform);
     }
 
     /// <summary>
@@ -239,16 +284,40 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
             return RepoContextAnnBuildSliceOutcome.Starved;
         }
 
-        // Phase is compared for INEQUALITY rather than for a forward move. The
-        // phases are ordered, but a rebuild legitimately returns the build to an
-        // earlier one, and a step that reset the build has unambiguously done
-        // something - calling that idle would under-report a plane churning through
-        // repeated rebuilds as one sitting still, which is the opposite of what this
-        // counter is for.
-        return current.VectorsIndexed > previous.VectorsIndexed
-            || current.PartitionsTotal > previous.PartitionsTotal
-            || current.Phase != previous.Phase
-            ? RepoContextAnnBuildSliceOutcome.Advanced
+        // A PHASE MOVE IS COUNTED, BUT IT IS NOT COUNTED AS PROGRESS. Three-way, and
+        // each leg answers a different question.
+        //
+        // Phase is still compared for INEQUALITY rather than for a forward move, and
+        // that half is unchanged and deliberate: the phases are ordered, but a
+        // rebuild legitimately returns the build to an EARLIER one, and a step that
+        // reset the build has unambiguously done something. Calling that idle would
+        // under-report a plane churning through repeated rebuilds as one sitting
+        // still, which is the opposite of what this counter is for. Do not
+        // "tighten" this into a forward-only comparison; it would reintroduce
+        // exactly that blindness.
+        //
+        // What issue #2818 corrected is the CONCLUSION drawn from it. "Not idle" was
+        // treated as equivalent to "advanced", because the outcome set offered no
+        // third option - so a build oscillating Training -> Persisting -> Training
+        // (issue #2791) banked not one vector and still emitted a steadily rising
+        // 'advanced' arm, on the one series whose job is to say whether the build is
+        // progressing. The two questions are separate and both need answering:
+        //
+        //   did the step BANK anything?  -> VectorsIndexed or PartitionsTotal rose:
+        //                                   Advanced. Real, servable progress.
+        //   did the step DO anything?    -> only the phase moved: Churned. Something
+        //                                   happened; nothing was banked. A rising
+        //                                   churned arm beside a flat advanced one
+        //                                   IS the livelock signature.
+        //   neither                      -> Idle.
+        if (current.VectorsIndexed > previous.VectorsIndexed
+            || current.PartitionsTotal > previous.PartitionsTotal)
+        {
+            return RepoContextAnnBuildSliceOutcome.Advanced;
+        }
+
+        return current.Phase != previous.Phase
+            ? RepoContextAnnBuildSliceOutcome.Churned
             : RepoContextAnnBuildSliceOutcome.Idle;
     }
 
@@ -274,6 +343,9 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                 case RepoContextAnnBuildSliceOutcome.Faulted:
                     _faulted++;
                     break;
+                case RepoContextAnnBuildSliceOutcome.Churned:
+                    _churned++;
+                    break;
                 default:
                     _idle++;
                     break;
@@ -287,7 +359,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     {
         lock (_gate)
         {
-            return new RepoContextAnnBuildSliceSnapshot(_advanced, _starved, _idle, _faulted);
+            return new RepoContextAnnBuildSliceSnapshot(_advanced, _starved, _idle, _faulted, _churned);
         }
     }
 
@@ -304,6 +376,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
         RepoContextAnnBuildSliceOutcome.Advanced => ProgressAdvancedTag,
         RepoContextAnnBuildSliceOutcome.Starved => ProgressStarvedTag,
         RepoContextAnnBuildSliceOutcome.Faulted => ProgressFaultedTag,
+        RepoContextAnnBuildSliceOutcome.Churned => ProgressChurnedTag,
         _ => ProgressIdleTag,
     };
 

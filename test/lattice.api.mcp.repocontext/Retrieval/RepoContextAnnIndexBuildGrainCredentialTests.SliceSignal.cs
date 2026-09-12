@@ -256,9 +256,20 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
                 "every tick that took a build step must be counted, not only the one that reached "
                 + "Ready. A record placed under the Ready check would total 1 here however long "
                 + "the build ran, which is the blindness this counter exists to remove");
-            Assert.That(slices.Advanced, Is.EqualTo(ticks),
-                "and a healthy build advances on every step, so the whole total sits on the "
-                + "'advanced' arm");
+            Assert.That(slices.Advanced, Is.GreaterThan(0),
+                "a healthy build banks vectors, and those steps are the advanced arm");
+            Assert.That(slices.Advanced + slices.Churned, Is.EqualTo(ticks),
+                "a healthy build's steps are exactly the ones that bank ('advanced') and the "
+                + "handful of phase transitions that bank nothing ('churned'); nothing here is "
+                + "idle, starved or faulted");
+            Assert.That(slices.Churned, Is.LessThan(Enum.GetValues<VectorIndexBuildPhase>().Length),
+                "THE CONTRAST WITH A LIVELOCK. A healthy build churns at most once per phase "
+                + "transition, so its churn arm is BOUNDED by the phase count however long the "
+                + "build runs. A livelocked build's churn arm rises without bound, which is what "
+                + "makes the two tellable apart - and would not be, had the churn been folded "
+                + "into 'advanced' (#2818)");
+            Assert.That(slices.Idle, Is.Zero,
+                "a build that is moving is not idle");
             Assert.That(slices.Starved, Is.Zero,
                 "a build whose source delivers is never starved");
         });
@@ -354,19 +365,55 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
     }
 
     [Test]
-    public void A_phase_move_alone_is_classified_advanced()
+    public void A_phase_move_alone_is_classified_churned()
     {
         // Training banks no further vector, so a classifier keyed only on the vector
         // count would report the whole training and persisting tail of every build
-        // as idle - which would put a healthy build's steps on the arm that means
-        // 'going nowhere'.
+        // as idle - which would say the build was sitting still when it was not.
+        // It is counted on its own arm rather than merged into 'advanced' (issue
+        // #2818), because a phase move that banks nothing is exactly what a
+        // livelock looks like and it must not read as progress.
         var previous = Progress(VectorIndexBuildPhase.Ingesting, vectors: 64, deadlined: 0, starved: 0);
         var current = Progress(VectorIndexBuildPhase.Training, vectors: 64, deadlined: 0, starved: 0);
 
         Assert.That(
             RepoContextAnnBuildSliceReporter.Classify(previous, current),
+            Is.EqualTo(RepoContextAnnBuildSliceOutcome.Churned),
+            "carrying the build into another phase without banking a vector is activity, not "
+            + "progress: it must be counted, and it must not be counted as an advance");
+    }
+
+    [Test]
+    public void A_phase_move_that_also_banks_a_vector_is_classified_advanced()
+    {
+        // The other side of the same split, and the arm that keeps the fixture above
+        // from being satisfied by a classifier that never advances at all. A healthy
+        // build moves phase AND banks, and that must still read as progress.
+        var previous = Progress(VectorIndexBuildPhase.Ingesting, vectors: 64, deadlined: 0, starved: 0);
+        var current = Progress(VectorIndexBuildPhase.Training, vectors: 65, deadlined: 0, starved: 0);
+
+        Assert.That(
+            RepoContextAnnBuildSliceReporter.Classify(previous, current),
             Is.EqualTo(RepoContextAnnBuildSliceOutcome.Advanced),
-            "carrying the build into a later phase is progress even when it banks no vector");
+            "banking a vector is progress whatever the phase did, and splitting the churn arm "
+            + "out must not have cost the advanced arm its ordinary case");
+    }
+
+    [Test]
+    public void A_rebuild_that_returns_the_build_to_an_earlier_phase_is_not_idle()
+    {
+        // THE BEHAVIOUR THE ORIGINAL INEQUALITY DEFENDS, pinned so a later reader
+        // cannot "tighten" the comparison into a forward-only move. A rebuild
+        // legitimately walks the build BACKWARDS, and a plane churning through
+        // repeated rebuilds must not read as one sitting still.
+        var previous = Progress(VectorIndexBuildPhase.Ready, vectors: 64, deadlined: 0, starved: 0);
+        var current = Progress(VectorIndexBuildPhase.Ingesting, vectors: 64, deadlined: 0, starved: 0);
+
+        Assert.That(
+            RepoContextAnnBuildSliceReporter.Classify(previous, current),
+            Is.EqualTo(RepoContextAnnBuildSliceOutcome.Churned),
+            "a step that reset the build has unambiguously done something; reporting it as idle "
+            + "would under-report a repeatedly rebuilding plane as a still one");
     }
 
     [Test]
@@ -406,7 +453,7 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
             Assert.That(outcomes, Is.Not.Empty,
                 "positive control: the reflection must find members, or every assertion below "
                 + "passes over an empty set and reports nothing");
-            Assert.That(outcomes, Has.Length.EqualTo(4),
+            Assert.That(outcomes, Has.Length.EqualTo(5),
                 "a member added without a tag of its own would fall onto 'idle' and be silently "
                 + "merged with it; add the tag and update this count together");
             Assert.That(tags, Is.Unique,
@@ -515,6 +562,126 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
                 + "distinguishes 'stepping and getting nowhere' from 'not stepping', and the "
                 + "faulted arm distinguishes 'stepping and throwing' from both - claims only a "
                 + "present series can make");
+        });
+    }
+
+    /// <summary>
+    /// THE LIVELOCK REGRESSION (issue #2818). A build that oscillates between
+    /// phases while banking no vector and resolving no partition must not raise the
+    /// arm that reads as healthy.
+    /// <para>
+    /// Issue #2791 recorded a real <c>Training -&gt; Persisting -&gt; Training</c>
+    /// oscillation. Under a classifier that treats any phase change as an advance,
+    /// every step of that livelock lands on <c>progress=advanced</c>, so an
+    /// operator, a dashboard, and the epic #2368 deploy gate all read a steadily
+    /// rising <c>advanced</c> arm on a build that has banked nothing at all. That is
+    /// the one arm read as progress, which makes a livelock indistinguishable from
+    /// the healthy case by exactly the series advertised as the discriminator.
+    /// </para>
+    /// <para>
+    /// The oscillation is driven through <see cref="RepoContextAnnBuildSliceReporter.RecordSlice"/>
+    /// rather than asserted one <c>Classify</c> call at a time, because the defect
+    /// is a property of the <i>accumulated</i> arms: a single classification reads
+    /// as a defensible judgement about one step, and only the running totals show
+    /// one arm rising while the build banks nothing.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void A_phase_oscillation_that_banks_nothing_does_not_raise_the_advanced_arm()
+    {
+        using var reporter = new RepoContextAnnBuildSliceReporter();
+
+        var training = Progress(VectorIndexBuildPhase.Training, vectors: 64, deadlined: 0, starved: 0);
+        var persisting = Progress(VectorIndexBuildPhase.Persisting, vectors: 64, deadlined: 0, starved: 0);
+
+        // Training -> Persisting -> Training -> Persisting -> Training: four steps,
+        // not one, so the assertion is about an arm that RISES rather than about a
+        // single classification that could be argued either way.
+        VectorIndexBuildProgress[] oscillation = [persisting, training, persisting, training];
+        var previous = training;
+        foreach (var current in oscillation)
+        {
+            reporter.RecordSlice(RepoContextAnnBuildSliceReporter.Classify(previous, current));
+            previous = current;
+        }
+
+        var livelocked = reporter.Read();
+
+        // THE DISCRIMINATOR. Without it this fixture would be satisfied by a
+        // classifier that never reports an advance at all, which would break the
+        // phase-inequality behaviour the original comment correctly defends: a
+        // build whose tail phases bank no further vector must still read as
+        // advancing while it is genuinely moving.
+        using var control = new RepoContextAnnBuildSliceReporter();
+        control.RecordSlice(RepoContextAnnBuildSliceReporter.Classify(
+            training,
+            Progress(VectorIndexBuildPhase.Persisting, vectors: 65, deadlined: 0, starved: 0)));
+        var banked = control.Read();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(banked.Advanced, Is.EqualTo(1),
+                "positive control: a step that banks a vector must still reach the advanced arm, "
+                + "or this fixture is green because nothing ever advances rather than because "
+                + "the livelock is being told apart from progress");
+            Assert.That(livelocked.Total, Is.EqualTo(oscillation.Length),
+                "positive control: every oscillating step must have been counted somewhere, or "
+                + "the flat advanced arm below is measuring an absence of steps");
+            Assert.That(livelocked.Advanced, Is.Zero,
+                "a step that banks no vector and resolves no partition has moved the build "
+                + "NOWHERE, whatever it did to the phase. Counting it as advanced is what lets a "
+                + "Training -> Persisting -> Training livelock (#2791) emit a steadily rising "
+                + "advanced arm, and read as progress on the one series that exists to say "
+                + "whether the build is progressing");
+            Assert.That(livelocked.Starved, Is.Zero,
+                "no slice was deadlined empty-handed, and reporting starvation here would send "
+                + "the investigation at the source read rather than at the build");
+        });
+    }
+
+    /// <summary>
+    /// THE LIVELOCK REGRESSION, POSITIVE HALF (issue #2818). The same oscillation
+    /// must be counted on the arm that says "it did something and banked nothing".
+    /// <para>
+    /// Deliberately a separate fixture from the negative half above, and the split
+    /// is load-bearing rather than cosmetic. The two halves fail under DIFFERENT
+    /// defects: classifying a phase move as an advance raises <c>advanced</c> and
+    /// leaves <c>idle</c> at zero, while collapsing the churn arm back into
+    /// <c>idle</c> leaves <c>advanced</c> at zero and raises <c>idle</c>. Asserted
+    /// together in one fixture, both defects present as the same single red test and
+    /// nothing distinguishes them; asserted apart, each has a fixture that reddens
+    /// for it alone.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void A_phase_oscillation_that_banks_nothing_is_counted_as_churn_and_not_as_idle()
+    {
+        using var reporter = new RepoContextAnnBuildSliceReporter();
+
+        var training = Progress(VectorIndexBuildPhase.Training, vectors: 64, deadlined: 0, starved: 0);
+        var persisting = Progress(VectorIndexBuildPhase.Persisting, vectors: 64, deadlined: 0, starved: 0);
+
+        VectorIndexBuildProgress[] oscillation = [persisting, training, persisting, training];
+        var previous = training;
+        foreach (var current in oscillation)
+        {
+            reporter.RecordSlice(RepoContextAnnBuildSliceReporter.Classify(previous, current));
+            previous = current;
+        }
+
+        var livelocked = reporter.Read();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(livelocked.Churned, Is.EqualTo(oscillation.Length),
+                "every oscillating step must land on the arm that says 'it did something and "
+                + "banked nothing'. A churn arm that stayed flat while the build churned would "
+                + "leave the livelock invisible just as surely as counting it as an advance");
+            Assert.That(livelocked.Idle, Is.Zero,
+                "an oscillating build is not a still one, and reporting it as idle would "
+                + "under-report a plane churning through repeated rebuilds - which is the "
+                + "behaviour the phase INEQUALITY comparison exists to preserve, and which is "
+                + "the failure mode of 'fixing' this defect by deleting the comparison");
         });
     }
 
