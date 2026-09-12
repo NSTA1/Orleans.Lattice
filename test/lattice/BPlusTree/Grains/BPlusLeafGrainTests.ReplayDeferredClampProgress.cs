@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// ledger is saturated, that clamp evaluates to <c>minDeferred - 1 == 0</c> on
 /// every slice, so an activation that is torn down part-way banks NOTHING and
 /// the next one replays the identical window. That defect is tracked as
-/// <c>#2747</c> and its reproduction ships here <c>[Ignore]</c>d; the three
+/// <c>#2746</c> and its reproduction ships here <c>[Ignore]</c>d; the three
 /// arms that DO run are the controls that isolate it and the tripwire that
 /// bounds it.
 /// <para>
@@ -145,10 +145,10 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    [Ignore("Reproduces the open defect in issue #2747: the deferred-terminal clamp banks nothing "
+    [Ignore("Reproduces the open defect in issue #2746: the deferred-terminal clamp banks nothing "
         + "when a replay window opens with a deferred range delete and the ledger cannot absorb the "
         + "offset. Un-ignore this to verify the fix - a GREEN here means an interrupted replay now "
-        + "banks its scanned prefix instead of repeating the identical window forever, and #2747 can "
+        + "banks its scanned prefix instead of repeating the identical window forever, and #2746 can "
         + "be closed. Do not delete or weaken this arm to make the suite green.")]
     public async Task An_interrupted_replay_banks_progress_even_when_a_deferred_range_delete_opens_the_window()
     {
