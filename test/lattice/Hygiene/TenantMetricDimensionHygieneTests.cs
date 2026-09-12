@@ -247,7 +247,8 @@ public sealed class TenantMetricDimensionHygieneTests
         "_corpusCoverage",
         "_terminalDenials",
         // repocontext.ann.build.slice - approximate-index build steps partitioned by
-        // what the step achieved (advanced / starved / idle), issue #2651. It is the
+        // what the step achieved (advanced / starved / idle / faulted), issues #2651
+        // and #2739. It is the
         // one series on this plane that fires BEFORE a build reaches Ready, which is
         // what makes "the coordinator is stepping and consuming nothing" separable
         // from "the coordinator never stepped"; every other instrument here is
@@ -260,9 +261,23 @@ public sealed class TenantMetricDimensionHygieneTests
         // key prefix, so LatticeTenantLabel.ForTree would resolve to one constant for
         // every plane on the host - one series, no discrimination - while falsely
         // implying a tenant attribution. The progress tag carries the signal, and all
-        // three arms are pre-minted so a zero on the starved arm is a measured absence
+        // four arms are pre-minted so a zero on the starved arm is a measured absence
         // rather than an arm that never existed.
         "_slices",
+        // repocontext.ann.sweep.arming - the sweep's arming calls partitioned by
+        // result (armed / deferred / faulted), counted once per REPOSITORY
+        // VISITED rather than once per sweep, issue #2751. Unscopable for exactly the
+        // same reason as _annSweeps, which it sits beside: it is emitted from the same
+        // single host-process background loop, and the repositories it iterates are
+        // registered at runtime rather than owned by a tenant. It is a separate
+        // instrument from _annSweeps rather than more arms on it because the two
+        // partition different populations - sweeps there, repository visits here - so
+        // neither decomposes the other. That separation is the point: a sweep that
+        // armed one of ten and deferred nine was previously indistinguishable from one
+        // that armed ten of ten, and a sweep on which every coordinator deferred was
+        // counted as 'empty', indistinguishable from an empty store. All four arms are
+        // pre-minted so a zero on the deferred arm is a measured absence.
+        "_armingAttempts",
         // repocontext.ann.partitioning - whether each approximate plane holds a
         // trained partitioning, and repocontext.ann.repartition - the outcome of a
         // threshold-crossing training, issue #2706. Both are the sentinel for a
