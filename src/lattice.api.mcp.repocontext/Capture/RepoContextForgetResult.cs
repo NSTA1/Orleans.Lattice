@@ -32,4 +32,19 @@ public sealed record RepoContextForgetResult
     /// a hard delete or an absent key.
     /// </summary>
     public string? ExpiresAtUtc { get; init; }
+
+    /// <summary>
+    /// Whether the entry that was forgotten held a value this server could not
+    /// decode.
+    /// <para>
+    /// A lapse over a malformed entry deliberately succeeds - retiring a record
+    /// does not require reading it, and refusing would leave an unreadable entry
+    /// with no remedy but destruction. Reporting it is what keeps that tolerance
+    /// honest: without this flag a store could quietly shed records it could not
+    /// read, which is a worse failure than the one the tolerance fixes. A caller
+    /// seeing <see langword="true"/> has learned that the entry was corrupt, which
+    /// is a fact about the store worth acting on, not merely about this call.
+    /// </para>
+    /// </summary>
+    public bool Undecodable { get; init; }
 }

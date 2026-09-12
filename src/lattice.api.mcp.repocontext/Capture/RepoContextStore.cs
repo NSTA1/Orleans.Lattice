@@ -124,7 +124,7 @@ internal sealed partial class RepoContextStore
         if (evaluateStaleness
             && parsed.Kind == RepoContextRecordKind.Memory
             && versioned.Value is { } bytes
-            && RepoContextMemoryCodec.Fold(bytes, _serializer) is { } record)
+            && RepoContextMemoryCodec.Fold(bytes, _serializer, key) is { } record)
         {
             view = await EvaluateStalenessAsync(view, record, cancellationToken)
                 .ConfigureAwait(false);
@@ -575,7 +575,7 @@ internal sealed partial class RepoContextStore
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
 
         var existing = RepoContextMemoryCodec.Fold(
-            await tree.GetAsync(key, cancellationToken).ConfigureAwait(false), _serializer);
+            await tree.GetAsync(key, cancellationToken).ConfigureAwait(false), _serializer, key);
         await EnforceFenceAsync(key, existing, fencingToken, cancellationToken).ConfigureAwait(false);
         var created = existing is null;
 
@@ -749,7 +749,7 @@ internal sealed partial class RepoContextStore
         byte[] patchInput;
         if (parsed.Kind == RepoContextRecordKind.Memory)
         {
-            var folded = RepoContextMemoryCodec.Fold(existing, _serializer)!;
+            var folded = RepoContextMemoryCodec.Fold(existing, _serializer, key)!;
             await EnforceFenceAsync(key, folded, fencingToken, cancellationToken).ConfigureAwait(false);
             patchInput = _serializer.SerializeToArray(folded);
         }
@@ -844,11 +844,21 @@ internal sealed partial class RepoContextStore
 
         if (parsed.Kind == RepoContextRecordKind.Memory)
         {
-            await EnforceFenceAsync(
-                key,
-                await ReadMemoryAsync(tree, key, cancellationToken).ConfigureAwait(false),
-                fencingToken,
-                cancellationToken).ConfigureAwait(false);
+            // A forget is fenced exactly as a patch is, but it is also the only
+            // remedy for a record whose stored value cannot be decoded, so the fence
+            // here must not be the thing that forecloses it. When the value folds,
+            // the fence is resolved off the record as usual; when it does not, it is
+            // resolved against the lock instead - which preserves the exclusion
+            // invariant rather than relaxing it (see the fallback's remarks).
+            var stored = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+            if (RepoContextMemoryCodec.TryFold(stored, _serializer, key, out var existing))
+            {
+                await EnforceFenceAsync(key, existing, fencingToken, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await EnforceFenceOverUndecodableAsync(key, fencingToken, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         if (!lapse)
@@ -882,6 +892,7 @@ internal sealed partial class RepoContextStore
             };
         }
 
+        var undecodable = false;
         if (parsed.Kind == RepoContextRecordKind.Memory)
         {
             // Lapse a memory record through the multi-value-register accessor so the
@@ -889,11 +900,34 @@ internal sealed partial class RepoContextStore
             // soft-delete converges across clusters instead of racing an LWW rewrite.
             // Fold first so the lapse re-authors the merged record, not one arm of a
             // conflict set.
-            var accessor = RepoContextMemoryCodec.Accessor(tree, key);
-            var folded = RepoContextMemoryCodec.Fold(value, _serializer);
+            //
+            // A malformed stored value must not foreclose the retirement. The
+            // fallback below already anticipated "nothing folded, so lapse the stored
+            // bytes as they are"; an undecodable value takes that same path rather
+            // than throwing, because a record that cannot be read is exactly the
+            // record that most needs retiring, and refusing here would leave a hard
+            // delete as the only remedy - losing the entry rather than its formatting.
+            // The tolerance is scoped to this path alone: every other read-modify-write
+            // still fails loudly, so this cannot quietly absorb an unrelated decode
+            // fault. It is reported on the result so the shedding is never silent.
+            undecodable = !RepoContextMemoryCodec.TryFold(value, _serializer, key, out var folded);
             var lapseBytes = folded is null ? value : _serializer.SerializeToArray(folded);
-            await accessor.SetAsync(_replicaId, lapseBytes, TimeSpan.FromSeconds(seconds), cancellationToken)
-                .ConfigureAwait(false);
+
+            if (undecodable)
+            {
+                // The accessor's own read-modify-write would re-decode the same
+                // malformed bytes, so the register path cannot carry this lapse.
+                // A direct write of the stored bytes under the short time-to-live
+                // retires the entry without ever decoding it.
+                await tree.SetAsync(key, lapseBytes, TimeSpan.FromSeconds(seconds), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                var accessor = RepoContextMemoryCodec.Accessor(tree, key);
+                await accessor.SetAsync(_replicaId, lapseBytes, TimeSpan.FromSeconds(seconds), cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         else
         {
@@ -908,6 +942,7 @@ internal sealed partial class RepoContextStore
             Mode = "lapse",
             Existed = true,
             ExpiresAtUtc = ToExpiryIso(lapsed.ExpiresAtTicks),
+            Undecodable = undecodable,
         };
     }
 

@@ -683,7 +683,11 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Removes a repository-context entry. By default it hard-deletes the entry immediately; set "
                     + "'lapse' to true to instead re-write it with a short time-to-live (default 60 seconds) so it "
-                    + "lapses on its own, which lets concurrent readers drain gracefully. Fails closed: offered "
+                    + "lapses on its own, which lets concurrent readers drain gracefully. A lapse succeeds even "
+                    + "when the stored value is malformed and cannot be decoded - retiring a record does not "
+                    + "require reading it, so a corrupt entry is recoverable without the hard delete that would "
+                    + "destroy it - and that case is reported back as 'undecodable', so a store can never quietly "
+                    + "shed records it could not read. Fails closed: offered "
                     + "only to a caller who cleared the authorization gate and for whom the host opted writes in. "
                     + "Destructive.",
                 ReadOnly = false,
