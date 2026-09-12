@@ -99,6 +99,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.shard_root.forward.timeouts` | counter | `tree` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.shard_root.scan_page.stalls` | counter | `tree`, `shard`, `phase` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.shard_root.scan_page.ceiling_outcomes` | counter | `tree`, `shard`, `outcome` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
+| `orleans.lattice.shard_root.scan_page.leaf_read_outcomes` | counter | `tree`, `shard`, `outcome` | CommitPath | Scan-page leaf-read coalescing (issued, joined, served) |
 | `orleans.lattice.scan.stall_resumptions` | counter | `tree`, `phase`, `outcome` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.scan.stall_futility_outcomes` | counter | `tree`, `phase`, `outcome` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.shard_root.flush.retries_suspended` | counter | `tree`, `shard`, `kind` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |

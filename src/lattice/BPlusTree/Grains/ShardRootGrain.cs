@@ -2943,7 +2943,7 @@ internal sealed partial class ShardRootGrain(
             // at the source - avoids transferring keys that would be
             // discarded here. The optional predicate is evaluated inside the
             // leaf so non-matching values never cross the wire.
-            var leafKeys = await leafGrain.GetKeysAsync(effectiveStart, endExclusive, afterExclusive: continuationToken, predicate: predicate);
+            var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             foreach (var key in leafKeys)
@@ -3089,7 +3089,7 @@ internal sealed partial class ShardRootGrain(
             // Pass the effective upper boundary as beforeExclusive so the leaf
             // filters at the source - avoids transferring keys that would be
             // discarded here.
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: effectiveBefore, predicate: predicate);
+            var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, startInclusive, endExclusive, afterExclusive: null, beforeExclusive: effectiveBefore, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             // Walk the leaf's keys in reverse order.
@@ -3222,7 +3222,7 @@ internal sealed partial class ShardRootGrain(
             // Pass continuationToken as afterExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(effectiveStart, endExclusive, continuationToken, predicate: predicate);
+            var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             foreach (var entry in leafEntries)
@@ -3357,7 +3357,7 @@ internal sealed partial class ShardRootGrain(
             // Pass continuationToken as beforeExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: effectiveBefore, predicate: predicate);
+            var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, startInclusive, endExclusive, afterExclusive: null, beforeExclusive: effectiveBefore, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             for (int i = leafEntries.Count - 1; i >= 0; i--)
@@ -3496,7 +3496,7 @@ internal sealed partial class ShardRootGrain(
         {
             StandDownIfCeilingFired(scan, leafId);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafKeys = await leafGrain.GetKeysAsync(effectiveStart, endExclusive, afterExclusive: continuationToken, predicate: predicate);
+            var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             foreach (var key in leafKeys)
@@ -3612,7 +3612,7 @@ internal sealed partial class ShardRootGrain(
         {
             StandDownIfCeilingFired(scan, leafId);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafEntries = await leafGrain.GetEntriesAsync(effectiveStart, endExclusive, continuationToken, predicate: predicate);
+            var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
 
             foreach (var entry in leafEntries)

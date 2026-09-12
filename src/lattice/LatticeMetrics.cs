@@ -3256,6 +3256,62 @@ public static class LatticeMetrics
         new(TagOutcome, "discarded");
 
     /// <summary>
+    /// Count of bounded leaf reads issued by a stall-guarded shard-root page
+    /// fill, tagged with whether the read was issued, attached to one already
+    /// in flight, or answered from a retained result (issue 2585).
+    /// <para>
+    /// This is the convergence counterpart to
+    /// <see cref="ScanPageCeilingOutcomes"/>. That counter reports whether a
+    /// ceiling fire kept the rows it had; this one reports whether the
+    /// <em>next</em> attempt had to pay for them again. A livelocked walk shows
+    /// <c>issued</c> climbing in step with
+    /// <see cref="ScanPageStalls"/> while <c>joined</c> and <c>served</c> stay
+    /// at zero: every retry re-reading the same leaf from scratch is the
+    /// signature of the defect.
+    /// </para>
+    /// <para>
+    /// <b>Reading a zero.</b> All three arms are primed at zero on first
+    /// guarded use, through the same recorder the live path uses, so a zero
+    /// here is a measured absence rather than an absent measurement. An
+    /// unguarded walk never reports, by design - it cannot strand a read, so it
+    /// has nothing to attach to.
+    /// </para>
+    /// <para>
+    /// <b>One name is not one cause.</b> <c>issued</c> is the ordinary steady
+    /// state of a healthy scan as well as the signature above; it is only
+    /// diagnostic read <em>against</em> <see cref="ScanPageStalls"/>, never on
+    /// its own.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanPageLeafReadOutcomes =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.leaf_read_outcomes", unit: "{read}",
+            description: "Count of stall-guarded shard-root page-fill leaf reads by whether the read was issued, joined in flight, or served from a retained result.");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>issued</c> (no identical read was held, so
+    /// the read went to the leaf).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafReadIssuedTag =
+        new(TagOutcome, "issued");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>joined</c> (an identical read was already
+    /// in flight, so this walk attached to it instead of enqueueing a duplicate
+    /// behind it).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafReadJoinedTag =
+        new(TagOutcome, "joined");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>served</c> (an identical read had already
+    /// settled and was still within its retention, so the walk took its result
+    /// without reading the leaf at all). This is the arm that converts a
+    /// repeating stall into progress.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafReadServedTag =
+        new(TagOutcome, "served");
+
+    /// <summary>
     /// Count of client-side resilient scans
     /// (<see cref="Orleans.Lattice.LatticeExtensions.ScanKeysAsync"/> and its
     /// siblings) that met a
