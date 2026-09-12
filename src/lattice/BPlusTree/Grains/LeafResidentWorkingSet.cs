@@ -35,9 +35,33 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <b>The budget is derived, never configured</b>, for the same reason #2766's
 /// is: a bound that only works once an operator sets it does not fix a process
 /// that is already exhausting its heap, and raising the container's memory limit
-/// was explicitly excluded as a remedy. The ceiling comes from
-/// <see cref="GCMemoryInfo.TotalAvailableMemoryBytes"/>, the same cgroup-derived
-/// figure the heap hard limit itself is sized from.
+/// was explicitly excluded as a remedy.
+/// </para>
+/// <para>
+/// <b>What it is derived from, and why that took two attempts</b> (issue #2788).
+/// The original derivation took <see cref="GCMemoryInfo.TotalAvailableMemoryBytes"/>
+/// alone, on the stated ground that it is "the same cgroup-derived figure the
+/// heap hard limit itself is sized from". That ground is false in one direction
+/// that matters: when no heap hard limit is configured, the property does not
+/// report zero, it reports <b>host physical memory</b>. The
+/// <c>heapHardLimitBytes &lt;= 0</c> branch is therefore near-dead, and the live
+/// branch could derive a budget larger than the whole container grant - on a
+/// 56 GiB host in a 12 GiB container, a 14 GiB budget inside a 12 GiB grant. A
+/// bound whose threshold the process cannot reach before dying never engages,
+/// and reports its non-engagement as a zero shed count indistinguishable from
+/// healthy quiescence.
+/// </para>
+/// <para>
+/// So the grant is now taken as the <b>smaller of the two independently
+/// observed ceilings</b>: the runtime's heap hard limit and the container's own
+/// cgroup memory limit, each of which may independently be unknown. Taking the
+/// smaller is the only choice that is safe in both directions - the heap limit
+/// can exceed the container grant (the case above), and the container grant can
+/// exceed a deliberately smaller configured heap limit, in which case the heap
+/// limit is the real ceiling and must win. Unknown inputs degrade to the other,
+/// and two unknowns degrade to <see cref="UnknownHeapLimitBudgetBytes"/>, which
+/// is exactly the pre-existing behaviour, so detection failing is never worse
+/// than not detecting.
 /// </para>
 /// </summary>
 internal sealed class LeafResidentWorkingSet
@@ -76,10 +100,36 @@ internal sealed class LeafResidentWorkingSet
     /// </summary>
     internal const long UnknownHeapLimitBudgetBytes = 1024L * 1024 * 1024;
 
+    /// <summary>
+    /// At or above this, a cgroup memory limit is read as "unlimited" rather
+    /// than as a ceiling. cgroup v1 spells unlimited as a page-aligned
+    /// saturation of the page counter near <see cref="long.MaxValue"/>, which is
+    /// a well-formed positive number and would otherwise be believed.
+    /// <para>
+    /// 4 EiB is not a boundary any real deployment sits near, so this does not
+    /// trade a false positive for a false negative: no container is granted
+    /// exabytes, and a limit that large is unlimited in every sense that matters
+    /// to a bound denominated in leaf bytes.
+    /// </para>
+    /// </summary>
+    internal const long CgroupUnlimitedSentinelFloor = 1L << 62;
+
+    /// <summary>
+    /// Canonical cgroup memory limit paths, v2 first. Probed in order; the first
+    /// that yields a real limit wins.
+    /// </summary>
+    private static readonly string[] CgroupMemoryLimitPaths =
+    [
+        "/sys/fs/cgroup/memory.max",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+    ];
+
     private static readonly Lazy<LeafResidentWorkingSet> SharedInstance =
         new(
             () => new LeafResidentWorkingSet(
-                ResolveBudgetBytes(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes)),
+                ResolveBudgetBytes(
+                    GC.GetGCMemoryInfo().TotalAvailableMemoryBytes,
+                    ReadContainerMemoryLimitBytes())),
             LazyThreadSafetyMode.ExecutionAndPublication);
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> PrimedShedTrees = new(StringComparer.Ordinal);
@@ -117,19 +167,146 @@ internal sealed class LeafResidentWorkingSet
     }
 
     /// <summary>
-    /// Sizes the working set from the runtime's heap hard limit. Separated from
-    /// <see cref="Shared"/> so the sizing rule is testable without a container:
-    /// the value it consumes is environmental, and a rule that can only be
-    /// exercised by arranging the environment is a rule that is never exercised.
+    /// Sizes the working set from the two ceilings the process can observe.
+    /// Separated from <see cref="Shared"/> so the sizing rule is testable
+    /// without a container: the values it consumes are environmental, and a rule
+    /// that can only be exercised by arranging the environment is a rule that is
+    /// never exercised.
     /// </summary>
     /// <param name="heapHardLimitBytes">
-    /// <see cref="GCMemoryInfo.TotalAvailableMemoryBytes"/>, or a non-positive
-    /// value when the runtime reports no limit.
+    /// <see cref="GCMemoryInfo.TotalAvailableMemoryBytes"/>. Note this is
+    /// <b>host physical memory</b>, not zero, when no heap hard limit is
+    /// configured, which is why it cannot be the sole input (issue #2788).
     /// </param>
-    internal static long ResolveBudgetBytes(long heapHardLimitBytes)
-        => heapHardLimitBytes <= 0
+    /// <param name="containerMemoryLimitBytes">
+    /// The cgroup memory limit from <see cref="ReadContainerMemoryLimitBytes"/>,
+    /// or a non-positive value when there is none or it could not be read.
+    /// </param>
+    internal static long ResolveBudgetBytes(long heapHardLimitBytes, long containerMemoryLimitBytes)
+    {
+        var grant = SmallerKnownLimit(heapHardLimitBytes, containerMemoryLimitBytes);
+
+        return grant <= 0
             ? UnknownHeapLimitBudgetBytes
-            : Math.Max(MinimumBudgetBytes, heapHardLimitBytes / HeapBudgetDivisor);
+            : Math.Max(MinimumBudgetBytes, grant / HeapBudgetDivisor);
+    }
+
+    /// <summary>
+    /// Returns the smaller of two ceilings, treating a non-positive value as
+    /// unknown rather than as a ceiling of zero. Unknown on both sides returns a
+    /// non-positive value, which the caller maps to the conservative fallback.
+    /// </summary>
+    private static long SmallerKnownLimit(long first, long second)
+    {
+        if (first <= 0)
+        {
+            return second;
+        }
+
+        return second <= 0 ? first : Math.Min(first, second);
+    }
+
+    /// <summary>
+    /// Reads the container's memory limit from the cgroup filesystem, returning
+    /// a non-positive value when there is no limit, the platform has no cgroups,
+    /// or the value cannot be read or parsed.
+    /// </summary>
+    /// <remarks>
+    /// Every failure degrades to "unknown", which
+    /// <see cref="ResolveBudgetBytes"/> maps to the heap hard limit alone - the
+    /// behaviour before this method existed. Detection failing is therefore
+    /// never worse than not detecting, which is what licenses the deliberately
+    /// narrow probe: the two canonical mount paths and nothing else. A silo in
+    /// an exotic cgroup layout gets today's budget rather than a wrong one.
+    /// <para>
+    /// The <see cref="OperatingSystem.IsLinux"/> short-circuit is a cost guard
+    /// and is deliberately <b>not</b> claimed as tested behaviour. Removing it
+    /// reddens nothing and cannot: on a non-Linux host the two paths resolve
+    /// against the current drive root and do not exist, so the loop returns the
+    /// same zero by a slower route. It is kept because it is free and states the
+    /// intent, not because a test pins it.
+    /// </para>
+    /// </remarks>
+    internal static long ReadContainerMemoryLimitBytes()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return 0L;
+        }
+
+        foreach (var path in CgroupMemoryLimitPaths)
+        {
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    continue;
+                }
+
+                var parsed = ParseCgroupMemoryLimit(File.ReadAllText(path));
+                if (parsed > 0)
+                {
+                    return parsed;
+                }
+            }
+            catch (IOException)
+            {
+                // Unreadable cgroup file. Fall through to the next candidate and
+                // ultimately to unknown.
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        return 0L;
+    }
+
+    /// <summary>
+    /// Parses a cgroup memory limit file body, returning <b>zero</b> for every
+    /// form that means "no limit" and for every form that cannot be read as one.
+    /// </summary>
+    /// <remarks>
+    /// Three distinct spellings of unlimited have to be recognised, and missing
+    /// any one of them yields a budget derived from a nonsense ceiling rather
+    /// than a safe fallback:
+    /// <list type="bullet">
+    /// <item>cgroup v2 writes the literal string <c>max</c>;</item>
+    /// <item>cgroup v1 writes a page-aligned saturation of the counter, which is
+    /// a positive <see cref="long"/> near <see cref="long.MaxValue"/> and so
+    /// parses perfectly well as a number - this is the one that does damage
+    /// quietly, because it divides by four into a budget of about two exabytes
+    /// that no bound can ever reach;</item>
+    /// <item>some kernels write that same saturation as an <b>unsigned</b>
+    /// 64-bit value that overflows <see cref="long"/> entirely.</item>
+    /// </list>
+    /// <para>
+    /// Only two clauses are needed to cover all three, and the shape is the
+    /// result of a perturbation arm rather than of taste. An earlier revision
+    /// had four: an explicit <c>max</c>/empty branch, a zero check, a
+    /// <c>value &gt; (ulong)long.MaxValue</c> overflow guard, and the sentinel
+    /// comparison. Reverting each in isolation showed the first three reddened
+    /// <b>nothing</b> - the <c>max</c> and empty cases are already rejected by
+    /// the parse, zero already returns zero, and an unsigned value above
+    /// <see cref="long.MaxValue"/> already wraps to a negative that the caller
+    /// reads as unknown. They were dead clauses that read as careful handling,
+    /// which is worse than no handling because it invites trust. Comparing the
+    /// sentinel in <see cref="ulong"/> space instead lets the one live clause
+    /// cover both saturation spellings, so the guard that remains is the guard
+    /// that is tested.
+    /// </para>
+    /// </remarks>
+    internal static long ParseCgroupMemoryLimit(string? contents)
+    {
+        var text = contents?.Trim();
+
+        if (!ulong.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            return 0L;
+        }
+
+        return value >= (ulong)CgroupUnlimitedSentinelFloor ? 0L : (long)value;
+    }
 
     /// <summary>
     /// Accounts <paramref name="residentBytes"/> against the working set for an

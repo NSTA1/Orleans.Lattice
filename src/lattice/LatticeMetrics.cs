@@ -1941,6 +1941,50 @@ public static class LatticeMetrics
         new(TagKind, "unbanked");
 
     /// <summary>
+    /// Name of the observable gauge reporting the <b>resolved</b> resident leaf
+    /// working-set budget in bytes (issue #2788). Registered lazily by
+    /// <c>LeafResidencyMetrics</c>.
+    /// <para>
+    /// This reports the number the bound actually enforces, not the inputs it
+    /// was derived from, because the question it exists to answer is asked of
+    /// the outcome: an all-zero <see cref="LeafResidencySheds"/> is ambiguous
+    /// between "the working set is correctly quiescent under its budget" and
+    /// "the budget is so large the bound can never engage", and only the
+    /// resolved figure separates them. Read it against the container's memory
+    /// grant: a budget of the same order as the whole grant means the bound is
+    /// structurally unable to fire and the zero is meaningless.
+    /// </para>
+    /// </summary>
+    public const string LeafResidencyBudgetBytesName = "orleans.lattice.leaf.residency.budget_bytes";
+
+    /// <summary>
+    /// Name of the observable gauge reporting the bytes currently accounted to
+    /// live, un-shed leaf registrations (issue #2788). Registered lazily by
+    /// <c>LeafResidencyMetrics</c>.
+    /// <para>
+    /// Together with <see cref="LeafResidencyBudgetBytesName"/> this is the
+    /// headroom reading: the ratio of the two says how close the working set is
+    /// to its first shed, which a counter of sheds cannot say while it reads
+    /// zero.
+    /// </para>
+    /// </summary>
+    public const string LeafResidencyResidentBytesName = "orleans.lattice.leaf.residency.resident_bytes";
+
+    /// <summary>
+    /// Name of the observable gauge reporting the number of leaf registrations
+    /// currently held by the resident working set (issue #2788). Registered
+    /// lazily by <c>LeafResidencyMetrics</c>.
+    /// <para>
+    /// This is the arm that distinguishes an <b>empty</b> ledger from a
+    /// <b>populated but under-budget</b> one. Those have opposite remedies -
+    /// registration is broken, versus the bound is working - and
+    /// <see cref="LeafResidencySheds"/> reads zero for both, because a counter
+    /// observes an <i>action</i> and the question is about <i>state</i>.
+    /// </para>
+    /// </summary>
+    public const string LeafResidencyRegistrationsName = "orleans.lattice.leaf.residency.registrations";
+
+    /// <summary>
     /// Counter of leaf-snapshot capture <b>attempts</b>, emitted by
     /// <c>BPlusLeafGrain.CaptureSnapshotCoreAsync</c> once per attempt that
     /// passes the eligibility gates, tagged with <see cref="TagTree"/>,

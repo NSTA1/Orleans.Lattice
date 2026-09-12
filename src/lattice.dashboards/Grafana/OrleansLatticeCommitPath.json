@@ -933,6 +933,42 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, kind) (rate(orleans_lattice_leaf_residency_sheds_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "shed {{kind}} {{tree}}/s" }
       ]
+    },
+    {
+      "id": 143,
+      "title": "Resident leaf working-set budget (bytes) - issue #2788 (absent = build did not land)",
+      "description": "The byte budget the per-silo resident leaf working set is actually enforcing (orleans.lattice.leaf.residency.budget_bytes). THIS PANEL EXISTS TO MAKE A ZERO SHED COUNT READABLE. The shed counter directly below reads zero both when the bound is correctly quiescent and when it cannot engage at all, and those have opposite remedies. READ THIS AGAINST THE CONTAINER MEMORY GRANT. A budget of the same order as the whole grant means the process dies before the threshold can ever be reached, so the bound is present, plausible-looking and doing nothing - which is exactly what issue #2788 fixes. Originally the budget was derived from GCMemoryInfo.TotalAvailableMemoryBytes alone, on the assumption that it reports zero when no heap hard limit is configured. It does not: it reports HOST PHYSICAL MEMORY, so on a large host running a small container the derivation produced a budget larger than the grant. The budget is now the smaller of the heap hard limit and the cgroup memory limit, divided by four, floored at 64 MiB, and falls back to 1 GiB only when NEITHER ceiling can be observed. A flat line at exactly 1073741824 therefore means both detections failed and should be investigated as a detection defect, not read as a tuned value. This is a GAUGE and not a counter on purpose: a counter observes an action and could only ever report that a shed happened, while the question an operator has here is about STATE - what bound is in force - which a counter structurally cannot answer at any level of priming.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 251 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (instance) (orleans_lattice_leaf_residency_budget_bytes{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "budget {{instance}}" }
+      ]
+    },
+    {
+      "id": 144,
+      "title": "Resident leaf working-set resident bytes - issue #2788 (absent = build did not land)",
+      "description": "Bytes currently accounted to live, un-shed leaf registrations in the per-silo resident leaf working set (orleans.lattice.leaf.residency.resident_bytes). STACK THIS AGAINST THE BUDGET PANEL ABOVE: the ratio between the two is the headroom, and it is the only reading that distinguishes an estate comfortably under bound from one about to start shedding. A resident figure pinned near the budget with a steady shed rate below is the bound working. A resident figure that stays a small fraction of the budget while the process is dying of memory exhaustion means the budget is too large to be a bound at all - compare the budget line against the container grant rather than concluding that leaf residency is not the cost. A resident figure that is FLAT AT ZERO while leaves are demonstrably activating means registration is not happening, which is a wiring defect and not quiescence; the registrations panel below separates those two.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 258 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (instance) (orleans_lattice_leaf_residency_resident_bytes{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "resident {{instance}}" }
+      ]
+    },
+    {
+      "id": 145,
+      "title": "Resident leaf working-set registrations - issue #2788 (absent = build did not land)",
+      "description": "Leaf registrations currently held by the per-silo resident leaf working set (orleans.lattice.leaf.residency.registrations). THIS IS THE PANEL THAT SETTLES WHETHER A ZERO SHED COUNT IS QUIESCENCE OR A DEAD LEDGER. An empty ledger and a populated ledger that is correctly under budget are indistinguishable on the shed counter, because a counter reports events and both of these are the absence of an event. A non-zero registration count with zero sheds is the bound populated and under budget, which is healthy. A registration count that is FLAT AT ZERO while the silo is activating leaves means the registration path is not running at all and the bound is inert, which is a defect. Priming the shed counter at zero per tree fixed present-and-zero versus absent and could not fix this, because the instrument observes the action while the question is about the state.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 265 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (instance) (orleans_lattice_leaf_residency_registrations{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "registrations {{instance}}" }
+      ]
     }
   ]
 }
