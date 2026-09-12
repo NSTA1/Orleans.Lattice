@@ -84,7 +84,7 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Snapshot_load_that_runs_out_of_memory_is_counted_as_resource_exhausted()
+    public void Snapshot_load_that_runs_out_of_memory_is_counted_as_resource_exhausted()
     {
         var treeId = UniqueSnapshotLoadFailureTree();
 
@@ -102,19 +102,26 @@ public partial class BPlusLeafGrainTests
                 new OutOfMemoryException("Exception of type 'System.OutOfMemoryException' was thrown.")));
 
         var records = CaptureSnapshotLoadFailures(treeId, out var listener);
-        bool rehydrated;
+        LeafSnapshotUnaffordableException? thrown;
         using (listener)
         {
-            rehydrated = await grain.TryRehydrateFromSnapshotAsync(CancellationToken.None);
+            thrown = Assert.ThrowsAsync<LeafSnapshotUnaffordableException>(
+                async () => await grain.TryRehydrateFromSnapshotAsync(CancellationToken.None));
         }
 
         Assert.Multiple(() =>
         {
-            Assert.That(rehydrated, Is.False,
-                "The decline is deliberately unchanged: a failed load must not block the leaf coming "
-                + "online. This fix makes the decline observable, it does not make it fatal.");
+            Assert.That(thrown, Is.Not.Null,
+                "SUPERSEDED BY ISSUE #2765. This assertion previously pinned the OPPOSITE behaviour - "
+                + "that the decline was deliberately non-fatal, so a failed load would not block the leaf "
+                + "coming online. That reasoning was right for a storage fault and exactly wrong for a "
+                + "memory one, because the fall-through it preserved escalates to the whole-window WAL "
+                + "replay, which allocates MORE than the load that just failed. The compounding was even "
+                + "documented in this file's own counter, and it is what ran a deployed process into a "
+                + "restart loop. Declining one leaf costs one leaf; escalating costs the silo.");
             Assert.That(records, Has.Count.EqualTo(1),
-                "A failed snapshot load must be counted exactly once.");
+                "A failed snapshot load must be counted exactly once - the counter is emitted before "
+                + "the throw, so making the arm fatal does not cost the observation #2364 added.");
         });
 
         var tags = records.Single().Tags;

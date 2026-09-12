@@ -513,6 +513,14 @@ internal static class TypeAliases
     // serializable rather than a bare OutOfMemoryException.
     internal const string WalReadUnderPressure = "ol.wrp";
 
+    // Activation-time counterpart of the above. Raised when a leaf cannot
+    // materialise its persisted snapshot within the available heap, so the
+    // activation is declined rather than escalated into the whole-window
+    // replay that allocates more than the load which just failed
+    // (issue 2765). Crosses the activation boundary, so it is serializable
+    // rather than a bare OutOfMemoryException.
+    internal const string LeafSnapshotUnaffordable = "ol.lsu";
+
     // WAL saturation back-pressure surface (push + poll + await
     // shapes exposed to callers driving offered load into ILattice;
     // see IWalSaturationSignal / IWalSaturationObserver).

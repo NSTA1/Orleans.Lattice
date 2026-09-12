@@ -340,4 +340,29 @@ internal sealed class LeafNodeState
     /// </para>
     /// </summary>
     [Id(21)] public List<UnresolvedReplayWorkEntry>? UnresolvedReplayWork { get; set; }
+
+    /// <summary>
+    /// Bytes this leaf's persisted snapshot last occupied on the wire, recorded
+    /// so the next activation can reserve hydration budget accurately from its
+    /// very first moment instead of re-learning the size by overshooting
+    /// (issue #2765).
+    /// <para>
+    /// This is what makes the admission gate's progress <b>durable</b>. Without
+    /// it every claim on a cold start begins from the same generic guess, so a
+    /// process that died part-way through a storm restarts knowing nothing more
+    /// than the one before it did, and the corpus of oversized leaves the gate
+    /// exists to shepherd through division is re-measured from scratch on every
+    /// restart. With it, the estimate a restart starts from is the size the
+    /// previous run actually observed.
+    /// </para>
+    /// <para>
+    /// Stamped in memory only, at snapshot capture and after a successful load,
+    /// and persisted by whichever ordinary <c>WriteStateAsync</c> comes next.
+    /// It is deliberately never worth a write of its own: forcing a state write
+    /// per leaf during a cold-start storm would add exactly the kind of
+    /// unbounded concurrent work this issue is about. Zero means "not yet
+    /// observed", and the caller falls back to a conservative bound.
+    /// </para>
+    /// </summary>
+    [Id(23)] public long SnapshotLoadHintBytes { get; set; }
 }
