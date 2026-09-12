@@ -329,6 +329,44 @@ public class BPlusLeafGrainColdActivationAdmissionTests
     }
 
     [Test]
+    public async Task A_queued_claim_that_fits_is_still_held_behind_a_queued_one_that_does_not()
+    {
+        // The arrival-order rule has to hold at the moment capacity is HANDED
+        // BACK, not merely at the moment a claim arrives. A gate that refuses to
+        // barge on arrival but then scans its queue for whatever happens to fit
+        // when a lease is released has the same starvation behaviour by a slower
+        // route: the oversized leaf at the head is passed over every time a
+        // smaller one is waiting behind it.
+        var admission = new LeafSnapshotHydrationAdmission(
+            LeafSnapshotHydrationAdmission.ToHeapCostBytes(200L));
+
+        var held = await admission.AcquireAsync(100L, CancellationToken.None);
+        var transient = await admission.AcquireAsync(50L, CancellationToken.None);
+
+        var head = admission.AcquireAsync(150L, CancellationToken.None);
+        var tail = admission.AcquireAsync(40L, CancellationToken.None);
+        await SpinUntilAsync(() => admission.QueuedCount == 2, "both later claims to queue");
+
+        // Releasing the transient lease leaves 100 stored units of headroom.
+        // The head wants 150 and still does not fit; the tail wants 40 and
+        // plainly does. Only the head-of-line rule keeps the tail waiting, so
+        // the assertion below is about that rule and nothing else.
+        transient.Dispose();
+        await SpinUntilAsync(() => admission.AdmittedCount == 1, "the released lease to settle");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(head.IsCompleted, Is.False, "the head does not fit in the freed capacity");
+            Assert.That(tail.IsCompleted, Is.False,
+                "and the tail - which WOULD fit - must not be admitted over it");
+        });
+
+        held.Dispose();
+        (await head.WaitAsync(TimeSpan.FromSeconds(10))).Dispose();
+        (await tail.WaitAsync(TimeSpan.FromSeconds(10))).Dispose();
+    }
+
+    [Test]
     public void The_budget_is_derived_from_the_heap_hard_limit_and_never_configured()
     {
         // Self-sizing is a requirement, not an implementation detail: a bound
