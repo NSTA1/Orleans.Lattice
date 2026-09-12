@@ -1607,6 +1607,18 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_wal_gc_passes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\",outcome=\"blocked\"}[5m]))", "legendFormat": "{{tree}}" }
       ]
+    },
+    {
+      "id": 71,
+      "title": "WAL GC blocked-leaf reactivations by outcome (ops/s) - issue #2710",
+      "description": "Reactivations of a dormant leaf whose durable materialiser pin was blocking its tree's WAL cursor floor (orleans.lattice.wal.gc.blocked_leaf_reactivations, issue #2710 Limitation 2). Read it against the blocked-passes panel beside it: that panel is the condition, this one is the remedy acting on it. A blocking consumer is by construction one whose leaf is NOT activated, because the floor skips every consumer present in the live cursor registry before it evaluates the pin - so no leaf-local trigger can reach this population and the retention path has to be the one to touch it. attempted = the scheduler reactivated a named blocking leaf, rate-limited by a minimum block age, a retry cooldown and a hard attempt budget; healed = a previously-touched consumer stopped blocking, which is evidence the sweep is working rather than proof it caused the heal, since ordinary traffic could have touched the leaf first; abandoned = a consumer stayed blocked across every permitted attempt and will not be swept again. ABANDONED IS THE ALARM: it means the block is not clearable by activation alone, so the leaf's snapshot capture is failing for a separate reason - an oversized leaf that cannot be serialised is the known case - and the WAL stays retained until that is fixed. All three outcomes share one instrument so a zero on healed is a measured zero rather than an unpublished series, which is what lets a reader tell a sweep that ran without effect from one that was never reached. Like the lagging-consumers panel this query omits the 'or vector(0)' fallback used elsewhere: this instrument is deliberately not zero-primed, so an absent series honestly means no tree has ever been blocked long enough to sweep, and fabricating a zero would present that healthy absence as a measured observation it is not. The blocking leaf is named on the paired warning log rather than as a tag here, because the leaf population is unbounded and would be an unbounded metric dimension.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 239 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_wal_gc_blocked_leaf_reactivations_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{outcome}}" }
+      ]
     }
   ]
 }

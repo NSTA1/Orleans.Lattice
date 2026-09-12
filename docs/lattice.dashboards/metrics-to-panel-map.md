@@ -74,6 +74,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.storage.policy.trim_triggered` | counter | `tree`, `reason` | Overview | Byte-pressure trim activity |
 | `orleans.lattice.storage.policy.bytes_reclaimed` | counter (`By`) | `tree` | Overview | Byte-pressure trim activity |
 | `orleans.lattice.wal.gc.passes` | counter (`{pass}`) | `tree`, `outcome` | Replication, CommitPath | WAL GC pass rate by outcome; WAL GC blocked passes by tree. Also charted on CommitPath alongside `leaf.snapshot.coverage_repairs`, where the `reclaimed` arm is the counterpart a zero-coverage repair is meant to unblock (issue #2692) |
+| `orleans.lattice.wal.gc.blocked_leaf_reactivations` | counter (`{reactivation}`) | `tree`, `outcome` | Replication | Reactivations of a dormant leaf whose unusable durable pin was blocking its tree's cursor floor, by `attempted`/`healed`/`abandoned` (issue #2710 Limitation 2). Chart beside `wal.gc.passes{outcome="blocked"}`, which is the series this sweep exists to drive to zero. All three outcomes share one instrument so a zero on `healed` is a measured zero rather than an unpublished series: a sweep that touches leaves and achieves nothing reads identically to one that was never reached. `abandoned` is the alarm arm - the leaf stayed blocked across every permitted attempt, so activation alone cannot clear it and its snapshot capture is failing for a separate reason. Deliberately not tagged with the leaf identity, which is unbounded; the blocking consumer is named on the paired warning log (issue #2464) |
 | `orleans.lattice.wal.gc.interval` | histogram (`s`) | `tree` | Replication | WAL GC adaptive interval |
 | `orleans.lattice.wal.gc.backlog_bytes` | histogram (`By`) | `tree` | Replication | WAL GC retained backlog after pass |
 | `orleans.lattice.wal.gc.backlog_bytes_unavailable` | counter (`{pass}`) | `tree`, `reason` | Replication | WAL GC backlog bytes unavailable by reason |
@@ -432,7 +433,7 @@ Every instrument here carries the derived `tenant` label with the reserved `_pla
 | `repocontext.ann.sweep` | counter (`{sweep}`) | `outcome` = `armed`, `empty`, `faulted` | (none) | **not charted** |
 | `repocontext.ann.build.corpus` | counter (`{build}`) | `coverage` = `nonempty`, `unrestricted`, `filtered`, `denied`, `unknown` | (none) | **not charted** |
 | `repocontext.ann.build.denial_terminal` | counter (`{coordinator}`) | (none) | (none) | **not charted** |
-| `repocontext.ann.build.slice` | counter (`{step}`) | `progress` = `advanced`, `starved`, `idle` | (none) | **not charted** |
+| `repocontext.ann.build.slice` | counter (`{step}`) | `progress` = `advanced`, `starved`, `idle`, `faulted` | (none) | **not charted** |
 | `repocontext.ann.partitioning` | counter (`{observation}`) | `state` = `partitioned`, `unpartitioned-small`, `unpartitioned-large` | (none) | **not charted** |
 | `repocontext.ann.repartition` | counter (`{training}`) | `outcome` = `partitioned`, `declined` | (none) | **not charted** |
 | `repocontext.retrieval.ann.search` | counter (`{query}`) | `state` = `bootstrapping`, `exhaustive`, `approximate` | (none) | **not charted** |

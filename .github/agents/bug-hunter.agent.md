@@ -233,6 +233,8 @@ Write the failing test before touching the production code. The test must:
 
    The `Failed: 1` line and the assertion message are the proof artefact. **A test that passes on `main` is not a proof of the bug** - either the bug doesn't exist, the test doesn't exercise the bug, or the bug only manifests under a condition the test isn't reproducing. In any of those cases, return to Phase 2.
 
+   **Revert with `git restore <path>`, never by copying a backup file over the source.** `Copy-Item` propagates the backup's original `LastWriteTime`, so MSBuild sees a source older than the assembly it just built from your perturbed text, skips the rebuild, and keeps the **perturbed binary** - the "reverted" run then reports on code you believe you restored. Only the restored arm is affected, because `[IO.File]::WriteAllText` stamps the current time and so always rebuilds correctly, which makes the trustworthy-looking arm the lying one. See "Restoring a perturbed source file with Copy-Item keeps the perturbed binary" in `.github/instructions/testing.instructions.md`.
+
 5. **Be minimal.** A 200-line reproduction is a maintenance liability. Carve it to the smallest input that fails.
 
 ### Phase 4 - Fix

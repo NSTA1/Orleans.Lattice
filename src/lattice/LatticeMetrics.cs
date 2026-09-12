@@ -2087,6 +2087,66 @@ public static class LatticeMetrics
         new(TagOutcome, "exhausted");
 
     /// <summary>
+    /// Reactivations of a dormant leaf whose unusable durable materialiser pin
+    /// was blocking its tree's WAL cursor floor (issue #2710 Limitation 2),
+    /// tagged by tree and outcome
+    /// (<c>attempted</c>/<c>healed</c>/<c>abandoned</c>).
+    /// <para>
+    /// All three outcomes share one instrument so that a zero on
+    /// <c>healed</c> is a measured zero rather than an unpublished series. That
+    /// distinction is load-bearing here: a sweep that reactivates a leaf and
+    /// moves on cannot tell "the pin lifted" from "the capture failed again",
+    /// and a deployment can sit indefinitely in the second state while the
+    /// first is what the sweep was built to produce. Counting only successes
+    /// would make those two indistinguishable from outside the process, which
+    /// is the same ambiguity that hid the defect this sweep exists to clear.
+    /// </para>
+    /// <para>
+    /// <c>abandoned</c> is the alarm condition. It means a leaf stayed blocked
+    /// across every permitted attempt, so the block is not one activation away
+    /// from clearing and something downstream of the touch is failing - a
+    /// capture that cannot complete, for instance. The leaf identity is carried
+    /// on the paired warning rather than as a tag, because the leaf population
+    /// is unbounded and would be an unbounded metric dimension.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcBlockedLeafReactivations =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome (attempted/healed/abandoned). All outcomes share one instrument so that a zero on 'healed' is a measured zero and not an unpublished series.");
+
+    /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
+    public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a touch that was issued
+    /// to a blocking leaf. Counts the cost the sweep imposes, independently of
+    /// whether it achieved anything.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationAttempted =
+        new(TagOutcome, "attempted");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a previously-swept
+    /// consumer that stopped blocking its tree. This is the only evidence that
+    /// a reactivation accomplished anything, so it is what distinguishes a
+    /// working sweep from one that is merely running.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationHealed =
+        new(TagOutcome, "healed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a consumer that stayed
+    /// blocked across every permitted attempt and will not be swept again.
+    /// Emitted once, at the moment the budget is spent, so the series counts
+    /// stranded leaves rather than retries.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationAbandoned =
+        new(TagOutcome, "abandoned");
+
+    /// <summary>
     /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a
     /// leaf that was over the byte bound and was divided back under it.
     /// </summary>

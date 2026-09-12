@@ -116,11 +116,19 @@ internal sealed partial class BPlusLeafGrain
     /// write-path predicate alone cannot do that: it is only evaluated when a
     /// leaf is written, so a leaf that grew oversized and then went quiet would
     /// stay oversized, stay uncapturable, and keep its tree's WAL trim floor
-    /// pinned at zero forever. This entry point is reached from the
-    /// zero-coverage repair driver, whose activation-time arm runs for a leaf
-    /// that entered the activation without durable snapshot coverage - which is
-    /// precisely the stuck population, and which it reaches even on a tree that
-    /// has stopped taking writes entirely.
+    /// pinned at zero forever. This entry point is reached from
+    /// <c>CaptureSnapshotCoreAsync</c>, the single seam every snapshot-capture
+    /// driver passes through, so a leaf is divided before its payload is
+    /// materialised whichever driver brought it to capture - including on a
+    /// tree that has stopped taking writes entirely.
+    /// <para>
+    /// It was previously reached only from the zero-coverage repair driver,
+    /// behind that driver's <c>HasCheckpointedPartitionWithoutCoverage</c>
+    /// predicate. A tree with no proven-checkpointed partition never satisfied
+    /// it, so no leaf on such a tree was ever divided and every capture route
+    /// threw <see cref="OutOfMemoryException"/> instead (issue #2733). Do not
+    /// re-add a call behind a driver-specific predicate: the guard is only
+    /// sound where every driver passes.
     /// </para>
     /// <para>
     /// Returns whether any split occurred. A leaf that cannot be divided (one
@@ -163,10 +171,52 @@ internal sealed partial class BPlusLeafGrain
         if (Cache.Count <= 1 && Cache.StateBytes > maxLeafBytes)
         {
             RecordLeafByteOverflow(LatticeMetrics.LeafByteOverflowIrreducible);
+
+            // Say it ONCE per activation, not once per capture.
+            //
+            // This seam is now reached by every capture route, and the hottest
+            // of them is the cadence recheck, which fires after every durable
+            // checkpoint flush. On the deployment that motivated issue #2733
+            // that produced 86 identical capture failures in 19 minutes across
+            // 32 leaves - 2,761 OutOfMemoryException lines - each saying the
+            // capture "will retry on next periodic recheck or reactivation".
+            // An irreducible leaf makes that retry loop unbounded and
+            // structurally hopeless: no number of further attempts can divide a
+            // single entry larger than the bound, so repeating the message per
+            // attempt buries the one fact an operator needs.
+            //
+            // The latch is per-activation, which needs no explicit reset: an
+            // Orleans activation is a fresh grain instance, so the field starts
+            // false each time the leaf comes online. That is the behaviour we
+            // want - a condition that survives a restart is re-announced once,
+            // rather than being silenced for the life of the process.
+            if (!_irreducibleByteOverflowAnnounced)
+            {
+                _irreducibleByteOverflowAnnounced = true;
+                ResolveLogger()?.LogWarning(
+                    "Leaf {GrainId} on tree {TreeId} holds a single entry of {StateBytes} bytes, "
+                    + "over the {MaxLeafBytes}-byte MaxLeafBytes bound, and cannot be divided - a "
+                    + "split needs at least two entries to pivot on. Snapshot capture for this "
+                    + "leaf will keep failing if the payload exceeds what can be serialised "
+                    + "contiguously, which holds its tree's WAL trim floor at zero. This is "
+                    + "reported once per activation; the leaf_byte_overflow_total counter carries "
+                    + "the per-attempt series under outcome=irreducible.",
+                    context.GrainId,
+                    state.State.TreeId ?? string.Empty,
+                    Cache.StateBytes,
+                    maxLeafBytes);
+            }
         }
 
         return splits > 0;
     }
+
+    /// <summary>
+    /// Latches the once-per-activation irreducible-leaf warning above. An
+    /// Orleans activation is a fresh grain instance, so this starts false every
+    /// time the leaf comes online and needs no explicit reset.
+    /// </summary>
+    private bool _irreducibleByteOverflowAnnounced;
 
     private void RecordLeafByteOverflow(KeyValuePair<string, object?> outcome)
     {
