@@ -186,12 +186,105 @@ internal sealed class LatticeWalGcScheduler(
     /// aimed at precisely the leaves least able to absorb it.
     /// </para>
     /// <para>
-    /// Giving up is therefore the correct behaviour and not a gap: the block is
-    /// reported as an alarm that needs a different remedy, rather than being
-    /// retried forever at the cadence floor.
+    /// Exhausting the budget stops the sweep <b>for a cycle</b>, not for the
+    /// life of the process. See <see cref="ReactivationRearmBaseBackoff"/> for
+    /// why a permanent stop was wrong and what replaced it.
     /// </para>
     /// </remarks>
     private const int MaxReactivationAttempts = 3;
+
+    /// <summary>
+    /// How many faulted touches a cycle may refund before faults start
+    /// consuming the attempt budget like any other outcome.
+    /// </summary>
+    /// <remarks>
+    /// Refunding a faulted touch is correct (see the budget comment in
+    /// <see cref="ObserveAndHealBlockedTreeAsync"/>) because a fault measures
+    /// the silo, not the leaf. Refunding <i>without limit</i> is not: a leaf
+    /// that faults every time would then be touched once per
+    /// <see cref="ReactivationRetryCooldown"/> for the life of the process,
+    /// never reaching abandonment and so never entering the escalating backoff
+    /// that exists to make a hopeless tree cheap. The cap keeps the worst case
+    /// finite at <c>MaxReactivationRefunds + MaxReactivationAttempts</c> touches
+    /// per cycle, after which a permanently-faulting tree decays on exactly the
+    /// same schedule as a permanently-blocked one.
+    /// </remarks>
+    private const int MaxReactivationRefunds = 3;
+
+    /// <summary>
+    /// Delay from a consumer's abandonment before its attempt budget is
+    /// restored and the sweep tries again.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Abandonment used to be permanent, which was a defect (issue #2783): the
+    /// conditions that make a reactivation futile - memory pressure, an ingest
+    /// burst saturating the replay gate, a silo mid-recovery - are <b>transient
+    /// by nature</b>, while the budget they consume was not. A budget spent
+    /// during a burst is spent against precisely the window in which no touch
+    /// could have worked, and the sweep then stayed extinguished through the
+    /// quiet period in which it would have succeeded. That is a system that
+    /// cannot converge without an operator restarting the silo, which is the
+    /// one remedy this subsystem is not allowed to require.
+    /// </para>
+    /// <para>
+    /// The replacement is a bounded periodic retry, not an unbounded one: the
+    /// budget is restored, never widened, so each cycle still costs at most
+    /// <see cref="MaxReactivationAttempts"/> touches spaced by
+    /// <see cref="ReactivationRetryCooldown"/>, and the interval between cycles
+    /// doubles toward <see cref="ReactivationRearmMaxBackoff"/>. A genuinely
+    /// unfixable tree therefore converges on a handful of touches every few
+    /// hours rather than either stopping forever or looping hot.
+    /// </para>
+    /// <para>
+    /// This is per consumer, which matters given issue #2772's per-consumer
+    /// budget map: a tree working through several distinct blocking leaves
+    /// re-arms each on its own schedule, so one hopeless leaf decaying to the
+    /// ceiling never slows the retry of a sibling that has only just been
+    /// abandoned.
+    /// </para>
+    /// </remarks>
+    private static readonly TimeSpan ReactivationRearmBaseBackoff = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Ceiling on the re-arm backoff, so a consumer that can never be healed
+    /// settles at a floor rate instead of doubling away to never retrying.
+    /// </summary>
+    /// <remarks>
+    /// The doubling is what keeps a hopeless tree cheap; the ceiling is what
+    /// keeps it <i>alive</i>. Without one, a silo up for a week would push the
+    /// interval past any window in which a repair could plausibly be noticed,
+    /// which is permanent abandonment again with extra steps.
+    /// </remarks>
+    private static readonly TimeSpan ReactivationRearmMaxBackoff = TimeSpan.FromHours(6);
+
+    /// <summary>
+    /// Shortest interval a re-arm may ever wait, including when evidence says
+    /// the blocking condition has lifted.
+    /// </summary>
+    /// <remarks>
+    /// A completed capture elsewhere in the process collapses the escalated
+    /// backoff (see <see cref="ReactivationRearmBaseBackoff"/>) to this floor,
+    /// because it is direct evidence that whatever made this consumer's touches
+    /// futile is no longer in force. The floor is what stops that evidence
+    /// becoming a hot loop: a process healing many leaves in quick succession
+    /// can re-arm a stranded one at most once per floor interval, no matter how
+    /// much evidence arrives.
+    /// </remarks>
+    private static readonly TimeSpan ReactivationRearmMinBackoff = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// Count of blocked leaves this silo has seen stop blocking after the sweep
+    /// touched them. Read only as a change detector: a consumer whose budget was
+    /// abandoned while this counter held one value, observing a different value,
+    /// has direct evidence that some leaf completed a capture since - so
+    /// whatever made its own touches futile is no longer in force.
+    /// </summary>
+    /// <remarks>
+    /// An instance field rather than a static one, so it cannot leak between
+    /// schedulers in a host running several, nor between test fixtures.
+    /// </remarks>
+    private long _reactivationHealEpoch;
 
     /// <summary>
     /// How long a tree's cursor floor may stay continuously blocked with the
@@ -291,7 +384,44 @@ internal sealed class LatticeWalGcScheduler(
     /// </summary>
     /// <param name="Attempts">How many reactivations the sweep has issued for this consumer.</param>
     /// <param name="Abandoned">Whether the budget has been spent and reported.</param>
-    private readonly record struct ConsumerReactivationBudget(int Attempts, bool Abandoned);
+    /// <param name="AbandonedAt">When the budget was last spent, if it ever has been.</param>
+    /// <param name="Cycles">How many times the budget has been restored after a backoff.</param>
+    /// <param name="Refunds">Faulted touches excused in the current cycle.</param>
+    /// <param name="HealEpochAtAbandonment">
+    /// The value of <see cref="_reactivationHealEpoch"/> when the budget was
+    /// last spent. A later value is evidence that some leaf has healed since,
+    /// which collapses this consumer's backoff to
+    /// <see cref="ReactivationRearmMinBackoff"/>.
+    /// </param>
+    private readonly record struct ConsumerReactivationBudget(
+        int Attempts,
+        bool Abandoned,
+        DateTimeOffset? AbandonedAt = null,
+        int Cycles = 0,
+        int Refunds = 0,
+        long HealEpochAtAbandonment = 0);
+
+    /// <summary>
+    /// What a single reactivation touch established about the blocking leaf.
+    /// </summary>
+    private enum ReactivationOutcome
+    {
+        /// <summary>The leaf was resolved and touched without error.</summary>
+        Completed,
+
+        /// <summary>
+        /// The consumer id did not resolve to a leaf, so nothing was touched.
+        /// A permanent property of the id, so it still consumes budget.
+        /// </summary>
+        Unresolvable,
+
+        /// <summary>
+        /// The touch was attempted and threw. Evidence about the silo, not
+        /// about the leaf, so it is refundable up to
+        /// <see cref="MaxReactivationRefunds"/>.
+        /// </summary>
+        Faulted,
+    }
 
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -794,6 +924,27 @@ internal sealed class LatticeWalGcScheduler(
         RecordPass(0, LatticeMetrics.OutcomeIdle, treeTag, tenantTag);
         RecordPass(0, LatticeMetrics.OutcomeBlocked, treeTag, tenantTag);
         RecordPass(0, LatticeMetrics.OutcomeFailed, treeTag, tenantTag);
+
+        // Zero-prime every blocked-leaf reactivation outcome (issue #2783).
+        // Absence on this instrument has already been read as evidence twice on
+        // this epic - once as "the sweep healed nothing" and once as "the sweep
+        // never abandoned" - and neither reading was available, because a
+        // Counter exports nothing at all until its first Add. An absent series
+        // was equally consistent with the build not having landed.
+        //
+        // This is the reachability proof, and the site is what makes it one:
+        // PrimeRetentionSeries is called at the top of CollectTreeAsync, above
+        // every early return and before the collection itself, so a minted zero
+        // says a GC pass ran and evaluated this tree. An absent series therefore
+        // means the scheduler is not running here - a positive statement - and a
+        // flat zero on 'abandoned' means measured-and-never-abandoned rather
+        // than silence. 'rearmed' matters most of all: it is the series that
+        // distinguishes a build carrying the re-arm from one that predates it,
+        // which is precisely the question a reader will ask of a stranded tree.
+        RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationAttempted, treeTag, tenantTag, 0);
+        RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationHealed, treeTag, tenantTag, 0);
+        RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationAbandoned, treeTag, tenantTag, 0);
+        RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationRearmed, treeTag, tenantTag, 0);
     }
 
     /// <summary>
@@ -978,19 +1129,63 @@ internal sealed class LatticeWalGcScheduler(
                 // The budget is spent and the leaf is still blocking, so the
                 // block is not one activation away from clearing. Say so once,
                 // loudly, and stop paying for touches that do not work.
-                budgets[blockingConsumerId] = budget with { Abandoned = true };
+                //
+                // This pauses the sweep for this consumer; it no longer stops it
+                // for the life of the process (issue #2783). The stamp below is
+                // what lets it resume: see TryRearm.
+                budget = budget with
+                {
+                    Abandoned = true,
+                    AbandonedAt = now,
+                    HealEpochAtAbandonment = _reactivationHealEpoch,
+                };
+                budgets[blockingConsumerId] = budget;
                 _blockedConsumers[treeId] = observation with { AnyAbandoned = true };
-                LatticeMetrics.WalGcBlockedLeafReactivations.Add(
-                    1, treeTag, LatticeMetrics.BlockedLeafReactivationAbandoned, tenantTag);
+                RecordBlockedLeafReactivation(
+                    LatticeMetrics.BlockedLeafReactivationAbandoned, treeTag, tenantTag);
 
                 logger.LogWarning(
-                    "WAL GC gave up reactivating consumer {Consumer} on tree {Tree} after {Attempts} attempts; it is still blocking the cursor floor, so the block is not clearable by activation alone and the WAL stays retained. Investigate why the leaf's snapshot capture does not complete.",
+                    "WAL GC gave up reactivating consumer {Consumer} on tree {Tree} after {Attempts} attempts; it is still blocking the cursor floor, so the block is not clearable by activation alone and the WAL stays retained. The sweep will try again after {Backoff}. Investigate why the leaf's snapshot capture does not complete.",
                     blockingConsumerId,
                     treeId,
-                    budget.Attempts);
+                    budget.Attempts,
+                    RearmBackoff(budget.Cycles));
+
+                return;
             }
 
-            return;
+            if (TryRearm(budget, now) is not { } rearmed)
+            {
+                // Still inside the backoff for this consumer.
+                return;
+            }
+
+            budget = rearmed;
+            budgets[blockingConsumerId] = budget;
+            RecordBlockedLeafReactivation(
+                LatticeMetrics.BlockedLeafReactivationRearmed, treeTag, tenantTag);
+
+            logger.LogInformation(
+                "WAL GC restored the reactivation budget for consumer {Consumer} on tree {Tree} after a backoff (cycle {Cycle}); its cursor floor is still blocked, and the conditions that make a touch futile are transient, so the sweep tries again rather than staying stopped.",
+                blockingConsumerId,
+                treeId,
+                budget.Cycles);
+
+            // Fall through: the restored budget is spendable on this very pass,
+            // subject to the same block-age and cooldown gates as any other
+            // attempt. The first touch of a new cycle is never made to serve a
+            // further cooldown on top of the backoff it has already waited out,
+            // but nothing here clears the cooldown stamp to achieve that - the
+            // stamp lives on the observation and the re-arm only rebuilds the
+            // budget. It falls out of the constants instead:
+            // ReactivationRearmMinBackoff (the shortest backoff any re-arm can
+            // serve) is >= ReactivationRetryCooldown, and AbandonedAt is stamped
+            // no earlier than the last attempt, so
+            // now - lastAttempt >= now - AbandonedAt >= backoff >= cooldown
+            // holds by transitivity and the cooldown gate below always passes.
+            // Lowering ReactivationRearmMinBackoff under ReactivationRetryCooldown
+            // would break that chain and silently delay the first touch of each
+            // new cycle, so keep the two in that order.
         }
 
         // The escalation for a block the sweep cannot get purchase on at all.
@@ -1039,10 +1234,39 @@ internal sealed class LatticeWalGcScheduler(
             LastAnyAttempt = now,
         };
 
-        LatticeMetrics.WalGcBlockedLeafReactivations.Add(
-            1, treeTag, LatticeMetrics.BlockedLeafReactivationAttempted, tenantTag);
+        RecordBlockedLeafReactivation(
+            LatticeMetrics.BlockedLeafReactivationAttempted, treeTag, tenantTag);
 
-        await TryReactivateBlockedLeafAsync(treeId, blockingConsumerId, stoppingToken).ConfigureAwait(false);
+        var outcome = await TryReactivateBlockedLeafAsync(treeId, blockingConsumerId, stoppingToken)
+            .ConfigureAwait(false);
+
+        // Refund a faulted touch, within a cap. Charging the budget before the
+        // call is right for the cooldown - it is what stops a fast-failing leaf
+        // being retried every pass - but it is wrong for the give-up decision.
+        // A fault proves the silo was too busy to find out whether activation
+        // would heal the leaf, not that it would not; and the pressure that
+        // produces one is exactly the transient condition the re-arm exists to
+        // outlast. Without the refund a burst of faults spends the whole budget
+        // without ever testing the leaf even once, so abandonment would be a
+        // verdict on the burst rather than on the leaf.
+        //
+        // The cap is what keeps that safe. Unlimited refunds would let a leaf
+        // that faults on every touch be retried once per cooldown for the life
+        // of the process, never reaching abandonment and so never entering the
+        // escalating backoff - trading a permanent stall for a permanent retry,
+        // which is the failure mode this whole change exists to remove.
+        if (outcome == ReactivationOutcome.Faulted)
+        {
+            var current = budgets[blockingConsumerId];
+            if (current.Refunds < MaxReactivationRefunds)
+            {
+                budgets[blockingConsumerId] = current with
+                {
+                    Attempts = current.Attempts - 1,
+                    Refunds = current.Refunds + 1,
+                };
+            }
+        }
     }
 
     /// <summary>
@@ -1100,7 +1324,7 @@ internal sealed class LatticeWalGcScheduler(
     /// one.
     /// </para>
     /// </remarks>
-    private static void CreditHealedConsumers(
+    private void CreditHealedConsumers(
         BlockedConsumerObservation observation,
         in KeyValuePair<string, object?> treeTag,
         in KeyValuePair<string, object?> tenantTag)
@@ -1109,11 +1333,123 @@ internal sealed class LatticeWalGcScheduler(
         {
             if (budget.Attempts > 0 && !budget.Abandoned)
             {
-                LatticeMetrics.WalGcBlockedLeafReactivations.Add(
-                    1, treeTag, LatticeMetrics.BlockedLeafReactivationHealed, tenantTag);
+                // Advance the heal epoch before recording. A credited heal is
+                // direct evidence that a blocked leaf managed to activate,
+                // replay and capture a snapshot in this process right now - so
+                // whatever headroom a stranded leaf needs demonstrably exists,
+                // and any consumer abandoned before this moment is entitled to
+                // retry on the shortened backoff rather than serve out an
+                // escalation earned under conditions that have since lifted.
+                //
+                // A consumer re-armed after abandonment is creditable here
+                // again, because the re-arm clears Abandoned: its budget is
+                // live, and if it stops blocking it healed in exactly the sense
+                // this counter means.
+                _reactivationHealEpoch++;
+                RecordBlockedLeafReactivation(
+                    LatticeMetrics.BlockedLeafReactivationHealed, treeTag, tenantTag);
             }
         }
     }
+
+    /// <summary>
+    /// Restores an abandoned consumer's attempt budget once its backoff has
+    /// elapsed, or returns <see langword="null"/> while it has not.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The budget is <b>restored, not widened</b>: a new cycle buys the same
+    /// <see cref="MaxReactivationAttempts"/> touches at the same cooldown as
+    /// the first, so the sweep's cost per cycle is unchanged and only the gap
+    /// between cycles grows.
+    /// </para>
+    /// <para>
+    /// Two signals gate the wait, and the choice between them is the substance
+    /// of issue #2783. The floor is elapsed time with an escalating backoff,
+    /// which is a bare timer and the weakest acceptable signal - but strictly
+    /// better than never retrying. Above it sits evidence: if any blocked leaf
+    /// in this process has healed since this consumer was abandoned, the
+    /// backoff collapses to <see cref="ReactivationRearmMinBackoff"/>. That is
+    /// preferred to a timer because it is a statement about the blocking
+    /// condition rather than about the clock - a completed capture means the
+    /// memory headroom and replay capacity a stranded leaf needs were available
+    /// moments ago.
+    /// </para>
+    /// <para>
+    /// <see cref="ConsumerReactivationBudget.Refunds"/> resets with the cycle,
+    /// so each cycle gets its own refund allowance. A restored budget is
+    /// spendable on the caller's very next gate rather than after a further
+    /// cooldown, which holds because
+    /// <see cref="ReactivationRearmMinBackoff"/> is not shorter than
+    /// <see cref="ReactivationRetryCooldown"/> - not because anything clears the
+    /// cooldown stamp, which lives on the observation and is untouched here.
+    /// </para>
+    /// </remarks>
+    private ConsumerReactivationBudget? TryRearm(ConsumerReactivationBudget budget, DateTimeOffset now)
+    {
+        if (budget.AbandonedAt is not { } abandonedAt)
+        {
+            return null;
+        }
+
+        var backoff = RearmBackoff(budget.Cycles);
+        if (_reactivationHealEpoch != budget.HealEpochAtAbandonment)
+        {
+            backoff = ReactivationRearmMinBackoff;
+        }
+
+        if (now - abandonedAt < backoff)
+        {
+            return null;
+        }
+
+        return budget with
+        {
+            Attempts = 0,
+            Abandoned = false,
+            AbandonedAt = null,
+            Refunds = 0,
+            Cycles = budget.Cycles + 1,
+        };
+    }
+
+    /// <summary>
+    /// The backoff a consumer serves before its <paramref name="cycles"/>'th
+    /// re-arm: <see cref="ReactivationRearmBaseBackoff"/> doubling per cycle
+    /// and saturating at <see cref="ReactivationRearmMaxBackoff"/>.
+    /// </summary>
+    private static TimeSpan RearmBackoff(int cycles)
+    {
+        var ticks = ReactivationRearmBaseBackoff.Ticks;
+        var ceiling = ReactivationRearmMaxBackoff.Ticks;
+
+        for (var i = 0; i < cycles && ticks < ceiling; i++)
+        {
+            ticks *= 2;
+        }
+
+        return ticks >= ceiling ? ReactivationRearmMaxBackoff : TimeSpan.FromTicks(ticks);
+    }
+
+    /// <summary>
+    /// The single site that writes
+    /// <see cref="LatticeMetrics.WalGcBlockedLeafReactivations"/>.
+    /// </summary>
+    /// <remarks>
+    /// Both the real emissions and the zero primes route through here, so a
+    /// primed series and the emission it anticipates carry an identical tag set
+    /// by construction rather than by inspection. A prime whose tags differ
+    /// from its emission is worse than no prime at all: it mints a second
+    /// series that is permanently zero while the one a reader queries stays
+    /// absent, so the absence the prime exists to remove survives behind a
+    /// series that looks like it answers the question.
+    /// </remarks>
+    private static void RecordBlockedLeafReactivation(
+        KeyValuePair<string, object?> outcome,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag,
+        long delta = 1) =>
+        LatticeMetrics.WalGcBlockedLeafReactivations.Add(delta, treeTag, outcome, tenantTag);
 
     /// <summary>
     /// Resolves a blocking consumer id back to its owning leaf and touches it,
@@ -1125,7 +1461,7 @@ internal sealed class LatticeWalGcScheduler(
     /// path existed - so a fault is logged and the pass continues rather than
     /// failing the collection of every other tree.
     /// </remarks>
-    private async Task TryReactivateBlockedLeafAsync(
+    private async Task<ReactivationOutcome> TryReactivateBlockedLeafAsync(
         string treeId,
         string blockingConsumerId,
         CancellationToken stoppingToken)
@@ -1133,7 +1469,11 @@ internal sealed class LatticeWalGcScheduler(
         var factory = grainFactory;
         if (factory is null || !TryResolveLeafGrainId(treeId, blockingConsumerId, out var leafGrainId))
         {
-            return;
+            // Not refundable. An id that does not resolve is a permanent
+            // property of the id, so it would resolve to nothing again on every
+            // retry - refunding it would produce an unbounded attempted counter
+            // with no touches behind it.
+            return ReactivationOutcome.Unresolvable;
         }
 
         try
@@ -1150,6 +1490,8 @@ internal sealed class LatticeWalGcScheduler(
                 leafGrainId,
                 treeId,
                 blockingConsumerId);
+
+            return ReactivationOutcome.Completed;
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -1163,6 +1505,8 @@ internal sealed class LatticeWalGcScheduler(
                 leafGrainId,
                 treeId,
                 blockingConsumerId);
+
+            return ReactivationOutcome.Faulted;
         }
     }
 
