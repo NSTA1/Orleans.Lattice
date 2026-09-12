@@ -88,6 +88,15 @@ public static class LatticeServiceCollectionExtensions
         // sample here so a meter scrape never fans out to grains.
         builder.Services.AddSingleton<LatticeAdmissionMetrics>();
 
+        // Resident leaf working-set gauges (issue #2788). Registered eagerly
+        // here rather than from a DI singleton's constructor like the two sinks
+        // above, because those register only when something first resolves them
+        // and these must be present from silo build: a scrape taken before the
+        // first leaf activation would otherwise show no series at all, which is
+        // the absent-versus-zero ambiguity these gauges exist to remove. The
+        // call is process-wide and idempotent.
+        BPlusTree.Grains.LeafResidencyMetrics.EnsureRegistered();
+
         // Per-silo background poller that drives every registered tree's
         // storage-usage aggregator on a cadence so the gauges populate
         // without any caller invoking ILattice.GetStorageUsageAsync. Each
