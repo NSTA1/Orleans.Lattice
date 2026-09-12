@@ -132,7 +132,8 @@ public partial class BPlusLeafGrainTests
     /// before partition 1 is touched, and returns whatever blob the leaf banked
     /// (<see langword="null"/> when it banked nothing).
     /// </summary>
-    private static async Task<LeafSnapshotBlob?> RunCancelledColdReplayAndLoadBankedBlobAsync()
+    private static async Task<LeafSnapshotBlob?> RunCancelledColdReplayAndLoadBankedBlobAsync(
+        long[]? persistedCheckpoints = null)
     {
         const int partitions = 2;
 
@@ -182,7 +183,7 @@ public partial class BPlusLeafGrainTests
             partitions,
             partition0,
             partition1,
-            new[] { ColdBankReachedCheckpoint, ColdBankUnreachedCheckpoint });
+            persistedCheckpoints ?? new[] { ColdBankReachedCheckpoint, ColdBankUnreachedCheckpoint });
 
         Assert.ThrowsAsync<OperationCanceledException>(
             async () => await ((IGrainBase)leaf).OnActivateAsync(cts.Token),

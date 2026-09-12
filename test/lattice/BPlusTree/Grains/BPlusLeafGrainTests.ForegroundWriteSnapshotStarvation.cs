@@ -46,30 +46,39 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// slow, it is unreachable.
 /// </para>
 /// <para>
-/// RED (pre-fix): no snapshot is ever written, so the leaf's rows exist only as
-/// un-replayed WAL and the block pin is retained forever - the shared-shard WAL
-/// GC early-returns <c>outcome="idle"</c> and the tree's WAL grows without
-/// bound. GREEN (post-fix, "Half A"): a leaf holding live cache rows is captured
-/// even with no checkpoint, so its rows gain a durable copy.
+/// Half A responded by capturing such a leaf anyway. Issue #2725 then showed
+/// that the capture could not have helped and this file's assertions had been
+/// reading the wrong signal: a leaf that has never checkpointed can stamp no
+/// coverage, <c>LeafSnapshotStorageGrain.HasCapturedPrefix</c> refuses exactly
+/// that shape, and so <c>LoadAsync</c> reports the blob absent forever. Half A's
+/// comment claimed "the durability of this leaf's rows is earned by writing the
+/// blob"; it was not, because nothing would ever read the blob back. Asserting
+/// <c>SaveAsync</c> against an NSubstitute stub could not detect that - the stub
+/// has no load gate - which is why the round-trip proof now lives in
+/// <c>BPlusLeafGrainTests.UnloadableSnapshotBlob.cs</c>, driven through the real
+/// storage grain.
 /// </para>
 /// <para>
-/// Half A deliberately stops there and does NOT make retention bounded. Writing
-/// the blob earns <em>durability</em> for this leaf's rows; it does not earn
-/// <em>authority to trim</em>, which is a claim about what other consumers still
-/// need, and a blob holding these rows says nothing about whether the
-/// materialiser has consumed the corresponding WAL entries. The two retention
-/// planes are coupled by a documented handoff -
+/// So the contract this file pins is now: such a leaf is DECLINED, under its own
+/// reason <c>no_coverage_claim</c>, distinct from the <c>not_eligible</c> a
+/// genuinely empty leaf earns. That distinction is what Half A was actually
+/// reaching for and is the part worth keeping - "this leaf holds rows it cannot
+/// yet claim coverage for" becomes a counted, legible population instead of a
+/// silent write nothing can read. Its rows remain fully recoverable by WAL
+/// replay, which is why declining is safe.
+/// </para>
+/// <para>
+/// The pin assertions below are unchanged and remain the most load-bearing in
+/// the file. The two retention planes are coupled by a documented handoff -
 /// <c>ComputeMaterialiserOffsetFloorAsync</c> skips a <c>-1</c> pin precisely
 /// because "WAL retention is already enforced by the HLC block-pin branch" - so
 /// lifting the block on an un-replayed partition would drop both protections at
 /// once. On an existing deployment that would fire across every previously
 /// starved leaf simultaneously and trim a large prefix no consumer has read.
-/// The assertions below therefore pin BOTH halves of the contract: the capture
-/// must happen, and the pin must NOT advance.
 /// </para>
 /// <para>
-/// The empty-cache control must stay a no-op either way, so the fix keys on
-/// cache liveness rather than simply deleting the gate.
+/// The empty-cache control must stay a no-op, and must keep declining for the
+/// OTHER reason, so that the two declines cannot be confused for one another.
 /// </para>
 /// </summary>
 public partial class BPlusLeafGrainTests
@@ -80,7 +89,7 @@ public partial class BPlusLeafGrainTests
         FakePersistentState<LeafNodeState> State,
         Func<IReadOnlyList<MaterialiserPinReport>?> LastFlush,
         ILeafSnapshotStorageGrain SnapshotStub)
-        CreateNeverCheckpointedLeaf(int walPartitions, bool bornAtDefault = false)
+        CreateNeverCheckpointedLeaf(int walPartitions, bool bornAtDefault = false, string? treeId = null)
     {
         IReadOnlyList<MaterialiserPinReport>? captured = null;
         var reporter = Substitute.For<ILeafCursorReporter>();
@@ -112,7 +121,7 @@ public partial class BPlusLeafGrainTests
         context.ActivationServices.Returns(services);
 
         var state = new FakePersistentState<LeafNodeState>();
-        state.State.TreeId = ForegroundStarvationTreeId;
+        state.State.TreeId = treeId ?? ForegroundStarvationTreeId;
 
         // The leaf under test has never absorbed a WAL entry on ANY partition:
         // the scalar slot and every per-partition slot sit at the "nothing
@@ -185,19 +194,21 @@ public partial class BPlusLeafGrainTests
             await grain.CaptureSnapshotAsync();
         }
 
-        // HALF A (the fix under test): a leaf holding live cache rows is now
-        // captured even though no partition has ever checkpointed, so its rows
-        // gain a durable copy instead of existing only as un-replayed WAL.
-        await snapshotStub.Received().SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+        // ISSUE #2725. The capture is DECLINED, and that is the correct
+        // outcome rather than a regression of Half A. A leaf with no
+        // checkpoint on any partition can stamp no coverage, and
+        // LeafSnapshotStorageGrain.HasCapturedPrefix refuses precisely that
+        // shape, so a blob written here could never be read back - it would be
+        // storage spent on something LoadAsync reports as absent, and which
+        // ClearAsync (also gated on HasCapturedPrefix) would then refuse to
+        // reclaim. The rows are not orphaned by declining: they remain in the
+        // WAL, and WAL replay is what recovers this leaf, exactly as the pin
+        // assertions below require.
+        await snapshotStub.DidNotReceive().SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
 
-        // ...and that is ALL it does. Writing the blob earns DURABILITY for
-        // this leaf's rows; it does not earn AUTHORITY TO TRIM, which is a
-        // claim about what other consumers still need. A partition with rows
-        // but no checkpoint makes no offset claim, so coverage stays at the
-        // sentinel.
         Assert.That(grain.DurableSnapshotCoverageForPartition(dataPartition), Is.EqualTo(-1L),
-            "capturing a never-checkpointed partition must NOT stamp an offset claim: the blob proves the "
-            + "rows are durable, not that the materialiser has consumed the corresponding WAL entries");
+            "a never-checkpointed partition must claim no offset, declined or not: coverage states what the "
+            + "materialiser has consumed, and it has consumed nothing");
 
         // The guard that matters most. The two retention planes are coupled by
         // a documented handoff: ComputeMaterialiserOffsetFloorAsync SKIPS a -1
@@ -238,31 +249,42 @@ public partial class BPlusLeafGrainTests
     }
 
     /// <summary>
-    /// ACCEPTANCE CRITERION 7. The two tests above reach Half A's widened branch
-    /// by seeding an explicit <c>-1</c>, which only the operator-driven
-    /// projection rebuild ever writes. Acceptance criterion 8 is explicit that
-    /// their green therefore does NOT evidence the production path, and this
-    /// pair supplies what it asks for: the same branch driven by a leaf built
-    /// the way production builds one, with partition 0 left at the CLR default
-    /// and no presence marker.
+    /// ACCEPTANCE CRITERION 7. The two tests above reach the widened branch by
+    /// seeding an explicit <c>-1</c>, which only the operator-driven projection
+    /// rebuild ever writes. Acceptance criterion 8 is explicit that their green
+    /// therefore does NOT evidence the production path, and this pair supplies
+    /// what it asks for: the same branch driven by a leaf built the way
+    /// production builds one, with partition 0 left at the CLR default and no
+    /// presence marker.
     /// <para>
-    /// This arm is the positive half - live rows are captured - and it is
-    /// deliberately NOT the discriminating one. A birth leaf reaches a capture
-    /// pre-fix too, just by the other route: reading the ambiguous <c>0</c> as
-    /// real progress made <c>anyPartitionCheckpointed</c> true, which
-    /// short-circuited the gate and passed control to the ordinary capture. The
-    /// assertion that distinguishes the two routes is on the COVERAGE STAMP.
-    /// Pre-fix the ordinary route runs <c>BuildCheckpointCoverage</c>, which
-    /// stamps <c>offsets[0]</c> straight from the birth scalar and publishes an
-    /// offset-0 trim entitlement for a partition that has consumed nothing;
-    /// post-fix the widened branch earns durability and claims nothing.
+    /// This arm is the live-rows half. Since issue #2725 both arms of the pair
+    /// DECLINE, so "did it save?" no longer discriminates between them and the
+    /// discriminating signal is the decline REASON. That is a strictly stronger
+    /// acceptance criterion than the old one, not a weaker one: the reason is
+    /// emitted from inside the widened branch and nowhere else, and the two arms
+    /// emit DIFFERENT reasons, so a single assertion now witnesses both that the
+    /// branch executed and which side of its live-data test the leaf fell on.
+    /// The previous formulation could not do that - it asserted a
+    /// <c>SaveAsync</c> against a stub, which a pre-#2692 leaf reached too, just
+    /// by the other route.
+    /// </para>
+    /// <para>
+    /// The coverage-stamp assertions are retained unchanged. They remain the
+    /// data-loss guard for the birth-zero ambiguity of issue #2703: reading the
+    /// ambiguous <c>0</c> as real progress would make
+    /// <c>anyPartitionCheckpointed</c> true, skip this branch entirely, and run
+    /// <c>BuildCheckpointCoverage</c>, which stamps <c>offsets[0]</c> straight
+    /// from the birth scalar and publishes an offset-0 trim entitlement for a
+    /// partition that has consumed nothing.
     /// </para>
     /// </summary>
     [Test]
-    public async Task Born_at_default_leaf_with_live_rows_takes_the_widened_capture_branch()
+    public async Task Born_at_default_leaf_with_live_rows_is_declined_as_no_coverage_claim()
     {
         const int partitions = 8;
-        var (grain, state, _, snapshotStub) = CreateNeverCheckpointedLeaf(partitions, bornAtDefault: true);
+        var treeId = UniqueSnapshotCaptureTree();
+        var (grain, state, _, snapshotStub) = CreateNeverCheckpointedLeaf(
+            partitions, bornAtDefault: true, treeId: treeId);
         var projection = AsProjection(grain);
         var (dataKey, dataPartition) = FirstKeyInNonZeroPartition(partitions);
 
@@ -279,27 +301,35 @@ public partial class BPlusLeafGrainTests
                 $"precondition: partition {p} reports nothing applied, partition 0 included");
         }
 
-        projection.Apply(BuildSet(dataKey, Encoding.UTF8.GetBytes("v"), hlcPhysical: 500, treeId: ForegroundStarvationTreeId));
+        projection.Apply(BuildSet(dataKey, Encoding.UTF8.GetBytes("v"), hlcPhysical: 500, treeId: treeId));
 
-        await grain.CaptureSnapshotAsync();
+        var reasons = CaptureSnapshotDeclineObservations(treeId, out var listener);
+        using (listener)
+        {
+            await grain.CaptureSnapshotAsync();
+        }
 
-        await snapshotStub.Received().SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+        await snapshotStub.DidNotReceive().SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
         Assert.Multiple(() =>
         {
+            Assert.That(reasons, Is.EquivalentTo(new[] { "no_coverage_claim" }),
+                "THE acceptance assertion (issue #2725). no_coverage_claim is emitted from inside the "
+                + "widened branch and from nowhere else, and only on its live-data side, so this single "
+                + "reading witnesses that a leaf built the PRODUCTION way entered that branch and was "
+                + "found to hold rows. not_eligible here would mean the live-data test misread a "
+                + "populated cache as empty; an empty bag would mean the branch never ran at all");
             Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(-1L),
                 "THE data-loss assertion. Partition 0 never applied anything, so no offset floor may "
                 + "be published for it. Reading its birth value as a real checkpoint stamps coverage 0, "
                 + "which turns min(checkpoint, covered) from -1 into 0 and converts a correct block pin "
                 + "into an unearned trim entitlement - silently, on upgrade, across every such leaf");
             Assert.That(grain.DurableSnapshotCoverageForPartition(dataPartition), Is.EqualTo(-1L),
-                "and the partition holding the rows earns durability, not trim authority");
+                "and the partition holding the rows claims nothing either");
         });
     }
 
     /// <summary>
-    /// ACCEPTANCE CRITERION 7, the discriminating arm. This is the assertion
-    /// that can only pass when the widened branch actually EXECUTED, because
-    /// declining an empty cache is something only that branch does.
+    /// ACCEPTANCE CRITERION 7, the other arm.
     /// <para>
     /// Pre-fix a birth leaf reported <c>0</c>, so <c>anyPartitionCheckpointed</c>
     /// was true on the first iteration, the widening was skipped entirely, and
@@ -310,18 +340,24 @@ public partial class BPlusLeafGrainTests
     /// capturing.
     /// </para>
     /// <para>
-    /// Paired with the arm above, the two bracket the branch from both sides:
-    /// live rows are captured, an empty cache is not. No other path through
-    /// <c>CaptureSnapshotCoreAsync</c> makes the capture decision turn on cache
-    /// liveness for a leaf with no proven checkpoint, so the pair cannot be
-    /// satisfied without the branch having run.
+    /// Paired with the arm above, the two bracket the branch from both sides
+    /// and - since issue #2725 turned the live-rows arm into a decline too - do
+    /// so by the reason they emit rather than by whether a save happened. Both
+    /// decline; they must decline DIFFERENTLY. <c>not_eligible</c> here and
+    /// <c>no_coverage_claim</c> there is what keeps "this leaf has nothing"
+    /// distinguishable from "this leaf has rows it cannot claim coverage for",
+    /// which is the whole operational value of the reason tag. If either arm
+    /// ever emitted the other's reason the branch's live-data test would have
+    /// inverted, and no assertion on <c>SaveAsync</c> would notice.
     /// </para>
     /// </summary>
     [Test]
-    public async Task Born_at_default_leaf_with_an_empty_cache_is_declined_by_the_widened_branch()
+    public async Task Born_at_default_leaf_with_an_empty_cache_is_declined_as_not_eligible()
     {
         const int partitions = 8;
-        var (grain, state, _, snapshotStub) = CreateNeverCheckpointedLeaf(partitions, bornAtDefault: true);
+        var treeId = UniqueSnapshotCaptureTree();
+        var (grain, state, _, snapshotStub) = CreateNeverCheckpointedLeaf(
+            partitions, bornAtDefault: true, treeId: treeId);
 
         Assert.Multiple(() =>
         {
@@ -333,12 +369,23 @@ public partial class BPlusLeafGrainTests
         Assert.That(grain.EntriesForTest, Is.Empty,
             "precondition: the cache is genuinely empty, so the widened branch has a reason to decline");
 
-        await grain.CaptureSnapshotAsync();
+        var reasons = CaptureSnapshotDeclineObservations(treeId, out var listener);
+        using (listener)
+        {
+            await grain.CaptureSnapshotAsync();
+        }
 
         await snapshotStub.DidNotReceive().SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
-        Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(-1L),
-            "a birth leaf with nothing in it must be declined by the widened branch. Reading its "
-            + "partition 0 as checkpointed skips that branch altogether and captures an empty leaf, "
-            + "which is how the gate was proven unreachable in production");
+        Assert.Multiple(() =>
+        {
+            Assert.That(reasons, Is.EquivalentTo(new[] { "not_eligible" }),
+                "an empty leaf must decline as not_eligible, NOT as no_coverage_claim. The two reasons "
+                + "mean different things to an operator - nothing to store, versus rows whose only "
+                + "durable copy is the WAL - and collapsing them would retire the starved-leaf signal");
+            Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(-1L),
+                "a birth leaf with nothing in it must be declined by the widened branch. Reading its "
+                + "partition 0 as checkpointed skips that branch altogether and captures an empty leaf, "
+                + "which is how the gate was proven unreachable in production");
+        });
     }
 }
