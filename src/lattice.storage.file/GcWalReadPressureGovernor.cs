@@ -45,11 +45,42 @@ internal sealed class GcWalReadPressureGovernor : IWalReadPressureGovernor
 
     /// <summary>
     /// The floor the budget collapses to at <see cref="CriticalOccupancy"/>.
-    /// Sixty-four kibibytes: large enough that a replay still makes real
-    /// forward progress per page, small enough that hundreds of concurrent
-    /// leaf activations fit in the headroom left at critical occupancy.
+    /// <para>
+    /// One mebibyte, and the size is a deliberate trade rather than the most
+    /// conservative value available. Narrowing harder is not obviously safer,
+    /// because a leaf does not become trimmable by reading the log - it
+    /// becomes trimmable by registering a cursor, and it registers only once
+    /// it has applied an entry inside its own key range. A page carrying few
+    /// entries is a page likely to carry none of this leaf's, so every
+    /// halving of the floor multiplies the number of pages a leaf must read
+    /// before its first registration. The floor therefore trades directly
+    /// against time to recovery, and the two costs are asymmetric: an
+    /// over-wide read fails, narrows, and retries inside one activation,
+    /// whereas an over-narrow read costs whole extra activations. The floor
+    /// should be the largest value whose failure is cheap, not the largest
+    /// value that never fails.
+    /// </para>
+    /// <para>
+    /// What makes a megabyte cheap is that this is a budget, not an
+    /// allocation size. The page is staged as pooled fixed-size chunks, so
+    /// the largest single contiguous request stays at the chunk size whatever
+    /// this floor is set to. Raising the floor raises the number of pooled
+    /// chunks in flight, never the size of the block the allocator must find
+    /// - which is the quantity that actually fails on a fragmented,
+    /// nearly-full heap. The concurrency arithmetic that made the configured
+    /// ceiling unaffordable does not bite here either: a ceiling paid once
+    /// per in-flight read, with replay permits multiplied by partitions
+    /// putting on the order of a hundred reads in flight, asks for gigabytes
+    /// at 16 MiB and tens of mebibytes at this floor.
+    /// </para>
+    /// <para>
+    /// A megabyte is also the natural stopping point rather than an arbitrary
+    /// one. At representative entry sizes it admits about as many entries as
+    /// the replay loop's own per-slice entry cap allows, so beyond this the
+    /// entry cap binds first and further widening buys nothing.
+    /// </para>
     /// </summary>
-    internal const long MinimumBudgetBytes = 64L * 1024L;
+    internal const long MinimumBudgetBytes = 1024L * 1024L;
 
     /// <summary>
     /// The pure, allocation-free core of the narrowing rule, separated from

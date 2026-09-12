@@ -375,6 +375,58 @@ public sealed class FileWalReadPressureTests
     }
 
     [Test]
+    public async Task The_largest_contiguous_request_is_independent_of_the_budget()
+    {
+        // THE PROPERTY THAT MAKES THE FLOOR'S SIZE A CHEAP DECISION.
+        //
+        // The floor trades against time to recovery: a leaf becomes trimmable
+        // by registering a cursor, and it registers only once a page carries
+        // an entry in its own key range, so a narrower page means more pages
+        // before a leaf's first registration. That argues for a wide floor.
+        // The usual objection is that a wider budget is a bigger allocation
+        // and therefore likelier to fail on a nearly-full heap - which is
+        // exactly what the configured 16 MiB ceiling did.
+        //
+        // That objection does not apply here, and this test is why. The
+        // budget bounds how many bytes a page may carry; it does not bound
+        // any single allocation, because the page is staged as pooled
+        // fixed-size chunks. The largest block the allocator is ever asked
+        // for is one chunk, whatever the budget is. So widening the floor
+        // adds pooled chunks, never a bigger block - and block size, not
+        // total bytes, is what fails on a fragmented heap.
+        //
+        // If this ever stopped holding, the floor would silently become a
+        // contiguous allocation of its own size and the decision to widen it
+        // would turn from cheap into the original bug.
+        var governor = new ScriptedGovernor
+        {
+            LargestAffordableAllocation = PooledPayloadSequence.ChunkBytes,
+        };
+
+        using (var seed = CreateProvider(maxReadBatchBytes: 16 * 1024 * 1024, governor))
+        {
+            await AppendAsync(seed, count: 24, valueBytes: 96 * 1024);
+        }
+
+        governor.AllocationRequests.Clear();
+
+        foreach (var budget in new[] { 4096, 64 * 1024, 1024 * 1024, 16 * 1024 * 1024 })
+        {
+            using var sut = CreateProvider(maxReadBatchBytes: budget, governor);
+
+            var page = await PageAsync(sut, -1, maxEntries: 24);
+
+            Assert.That(page, Is.Not.Empty, $"Budget {budget} yielded nothing.");
+            Assert.That(
+                governor.AllocationRequests,
+                Is.Empty,
+                $"At a budget of {budget} bytes the decode path asked the allocator for a block of its "
+                + "own, rather than staging into pooled chunks. Widening the floor would then widen the "
+                + "contiguous request, which is the failure mode the configured ceiling already had.");
+        }
+    }
+
+    [Test]
     public async Task Chunked_decode_round_trips_payloads_that_straddle_many_chunks()
     {
         // Segment boundaries are where a hand-rolled ReadOnlySequence goes
