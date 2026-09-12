@@ -22,7 +22,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// silent-degradation failure this work exists to remove. Until the build reaches
 /// <see cref="VectorIndexBuildPhase.Ready"/> the handle reports
 /// <see cref="RepoContextAnnServingState.Bootstrapping"/> and answers nothing, so
-/// the caller serves the exact scan and recall stays complete throughout.
+/// the caller serves the exact scan. Recall then stays complete for as long as
+/// that scan can complete - which is not unconditional: where a gather has already
+/// stalled, the caller's breaker withholds it and keyword recall serves instead,
+/// reported as <see cref="RepoContextRetrievalPath.KeywordExactFallbackSuppressed"/>
+/// (issue #2720).
 /// </para>
 /// <para>
 /// <b>Why it catches up on open.</b> Maintenance updates are flushed in batches, so

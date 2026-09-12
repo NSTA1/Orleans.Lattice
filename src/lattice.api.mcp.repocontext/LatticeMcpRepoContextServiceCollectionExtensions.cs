@@ -168,8 +168,11 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // so a restart reloads it instead of re-scanning every stored vector, and its
         // query cost is sub-linear in the corpus rather than proportional to it. The
         // brute-force exact scan stays registered either way - it answers while an
-        // index is still building, and it remains the correctness oracle the recall
-        // measurements are taken against. A host selects between them with
+        // index is still building, unless a gather over that repository has already
+        // stalled, in which case the breaker below withholds it and the response
+        // reports keyword.exact_fallback_suppressed rather than implying a scan that
+        // is not running (issue #2720) - and it remains the correctness oracle the
+        // recall measurements are taken against. A host selects between them with
         // RepoContextIndexingOptions.SemanticRetrieval; whichever answers, the
         // response says which guarantee it carries through its retrieval path.
         services.TryAddSingleton<ExactKnnSemanticIndex>();

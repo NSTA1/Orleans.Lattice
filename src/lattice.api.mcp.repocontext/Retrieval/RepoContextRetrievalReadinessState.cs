@@ -215,7 +215,8 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
         }
 
         if (string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordVectorPlaneUnavailable, StringComparison.Ordinal)
-            || string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordIndexDegraded, StringComparison.Ordinal))
+            || string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordIndexDegraded, StringComparison.Ordinal)
+            || string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordExactFallbackSuppressed, StringComparison.Ordinal))
         {
             MarkUnavailable(retrievalPath);
         }
@@ -467,6 +468,11 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
         if (string.Equals(cause, RepoContextRetrievalPath.KeywordIndexDegraded, StringComparison.Ordinal))
         {
             return RepoContextRetrievalPath.KeywordIndexDegraded;
+        }
+
+        if (string.Equals(cause, RepoContextRetrievalPath.KeywordExactFallbackSuppressed, StringComparison.Ordinal))
+        {
+            return RepoContextRetrievalPath.KeywordExactFallbackSuppressed;
         }
 
         return string.Equals(cause, ProbeCause, StringComparison.Ordinal) ? ProbeCause : UnknownCause;

@@ -262,6 +262,10 @@ internal sealed class RepoContextSearchService
         /// <summary>The semantic index ran but is degraded: it threw, or ranked candidates that no longer hydrate.</summary>
         internal static SemanticOutcome IndexDegraded { get; } =
             new(null, RepoContextRetrievalPath.KeywordIndexDegraded);
+
+        /// <summary>The plane is not serving and the exact fallback that would answer is suppressed by a guard.</summary>
+        internal static SemanticOutcome ExactFallbackSuppressed { get; } =
+            new(null, RepoContextRetrievalPath.KeywordExactFallbackSuppressed);
     }
 
     private async Task<SemanticOutcome> TrySemanticAsync(
@@ -318,8 +322,25 @@ internal sealed class RepoContextSearchService
 
         if (matches.Count == 0)
         {
-            // The index answered but holds nothing to compare in this embedding space:
-            // the plane is empty, mid-replay, or re-deriving after a fall-off. That is a
+            // The index answered but returned nothing. Two different facts produce
+            // that, and they have opposite remedies, so they are separated here
+            // rather than both reported as an unavailable plane (issue #2720).
+            //
+            // Asking the index is a racy snapshot and is safe only because it can
+            // only ever fall back to the older classification: a suppression lifted
+            // between the search and this read reports the plane as unavailable,
+            // which is what this branch reported before the distinction existed.
+            if (_index.IsExactFallbackSuppressed(repoId))
+            {
+                // A gather over this repository has already stalled, so the exact
+                // scan that would answer with complete recall is being withheld. The
+                // plane's contents are not what stopped this query; a guard is, and
+                // it retries on its own through a half-open probe.
+                return SemanticOutcome.ExactFallbackSuppressed;
+            }
+
+            // The index holds nothing to compare in this embedding space: the plane
+            // is empty, mid-replay, or re-deriving after a fall-off. That is a
             // vector-plane availability fact, not a degraded index.
             return SemanticOutcome.VectorPlaneUnavailable;
         }
