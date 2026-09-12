@@ -264,7 +264,7 @@ internal sealed partial class BPlusLeafGrain
         }
         else if (hasExistingRow && !existingDeferred)
         {
-            typedState = shape.DeserializeState(existing.Value!);
+            typedState = shape.DeserializeState(StripStateForFold(existing.Value!));
         }
         else if (hasExistingRow)
         {
@@ -274,7 +274,7 @@ internal sealed partial class BPlusLeafGrain
             // the row and decode it so correctness never depends on the
             // invariant holding.
             Cache.TryGetRow(key, out existing);
-            typedState = shape.DeserializeState(existing.Value!);
+            typedState = shape.DeserializeState(StripStateForFold(existing.Value!));
         }
         else
         {

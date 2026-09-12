@@ -2,8 +2,9 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Minimal core seam that reads the per-value schema-version tag from a stored
-/// value and strips the version envelope from a CRDT delta immediately before it
-/// is folded. It is the merge / apply-path complement to
+/// value and strips the version envelope from CRDT fold input - both the delta and
+/// the stored state it folds into - immediately before each is deserialized. It is
+/// the merge / apply-path complement to
 /// <see cref="ILatticeValueDecoder"/> (the read-boundary seam): the decoder
 /// upcasts a value on its way out to a client, whereas this codec never upcasts -
 /// it only reports the stamped version (so the post-merge observer can dispatch a
@@ -65,14 +66,21 @@ public interface ILatticeEnvelopeCodec
     uint ReadVersion(byte[]? value);
 
     /// <summary>
-    /// Strips the per-value version envelope from a CRDT <paramref name="delta"/>,
-    /// returning the raw typed-CRDT body to be deserialized and folded. Returns
-    /// <paramref name="delta"/> itself (same reference) when it carries no envelope,
-    /// so an unversioned tree's deltas are handed through untouched. This operation
-    /// is version-agnostic and never upcasts - see the determinism remarks on
-    /// <see cref="ILatticeEnvelopeCodec"/>.
+    /// Strips the per-value version envelope from CRDT fold input, returning the raw
+    /// typed-CRDT body to be deserialized. Returns the argument itself (same
+    /// reference) when it carries no envelope, so an unversioned tree's bytes are
+    /// handed through untouched. This operation is version-agnostic and never
+    /// upcasts - see the determinism remarks on <see cref="ILatticeEnvelopeCodec"/>.
     /// </summary>
-    /// <param name="delta">The stored (possibly enveloped) CRDT delta bytes.</param>
-    /// <returns>The raw typed-CRDT delta body.</returns>
+    /// <remarks>
+    /// Applies to <b>both</b> halves of a fold: the incoming delta and the stored
+    /// state it is folded into. Callers must strip both. Stripping only the delta
+    /// leaves the stored value carrying its header, and since the envelope magic is
+    /// never a valid UTF-8 lead byte the state decode fails at byte zero - producing
+    /// a row that still reads back correctly but can never be written again, because
+    /// every read-modify-write retry re-decodes the same bytes.
+    /// </remarks>
+    /// <param name="delta">The stored (possibly enveloped) CRDT delta or state bytes.</param>
+    /// <returns>The raw typed-CRDT body.</returns>
     byte[] StripForFold(byte[] delta);
 }

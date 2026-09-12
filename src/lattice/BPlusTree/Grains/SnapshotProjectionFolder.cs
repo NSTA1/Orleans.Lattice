@@ -345,16 +345,25 @@ internal sealed class SnapshotProjectionFolder(
         // The durable WAL delta is stored enveloped at the version it was ingested /
         // upcast to, and this restore-replay fold recovers the same raw body the
         // live leaf's apply folded, so the rebuilt projection is byte-identical.
-        var foldDelta = envelopeCodec is not null and not NullLatticeEnvelopeCodec && envelopeCodec.IsActive(treeId)
-            ? envelopeCodec.StripForFold(delta)
-            : delta;
-        var typedDelta = shape.DeserializeDelta(foldDelta);
+        //
+        // The delta and the stored state both route through this one local function
+        // deliberately. They were previously two expressions and only the delta one
+        // stripped, which handed the shape an enveloped state whose 0xFE magic fails
+        // a JSON decode at byte zero - a row that still reads back cleanly but can
+        // never be written again, because every retry re-decodes the same bytes.
+        // Sharing the expression makes that asymmetry non-expressible here.
+        byte[] StripForFold(byte[] bytes) =>
+            envelopeCodec is not null and not NullLatticeEnvelopeCodec && envelopeCodec.IsActive(treeId)
+                ? envelopeCodec.StripForFold(bytes)
+                : bytes;
+
+        var typedDelta = shape.DeserializeDelta(StripForFold(delta));
         object typedState;
         if (_entries.TryGetValue(key, out var existing)
             && !existing.IsTombstone
             && existing.Value is { Length: > 0 } existingBytes)
         {
-            typedState = shape.DeserializeState(existingBytes);
+            typedState = shape.DeserializeState(StripForFold(existingBytes));
         }
         else
         {
