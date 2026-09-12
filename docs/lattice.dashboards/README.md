@@ -47,8 +47,15 @@ builder.Services.AddOpenTelemetry()
     .WithMetrics(b => b
         .AddMeter("orleans.lattice")
         .AddMeter("orleans.lattice.replication")  // omit if no replication
+        .AddMeter("Microsoft.Orleans")            // Orleans runtime: activations, activation latency, directory
+        .AddMeter("System.Runtime")               // .NET runtime: GC heap, working set, thread pool
         .AddPrometheusExporter());
 ```
+
+The two runtime meters back no bundled panel, but without them the endpoint
+carries no heap, process-memory, or activation-latency series at all - see
+[Configuration](configuration.md#why-register-the-two-runtime-meters) for why
+they are registered and what they cost.
 
 Retrieve the dashboard JSON by kind:
 

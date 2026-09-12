@@ -16,8 +16,15 @@ builder.Services.AddOpenTelemetry()
         .AddMeter("orleans.lattice.membership")   // Authorization (only if the membership package is registered)
         .AddMeter("orleans.lattice.backup")       // Backup (only if the backup package is registered)
         .AddMeter("orleans.lattice.scaling")      // Scaling (only if the scaling package is registered)
+        .AddMeter("Microsoft.Orleans")            // Orleans runtime: activations, activation latency, directory, messaging
+        .AddMeter("System.Runtime")               // .NET runtime: GC heap, allocation, pause time, working set, thread pool
         .AddPrometheusExporter());
 ```
+
+`AddMeter` matches a meter name **exactly** and does not cascade to child
+namespaces, so each name above has to be registered in its own right. A silo
+that registers only `orleans.lattice` exports none of its siblings, and one that
+registers only the `orleans.lattice` family exports no runtime telemetry at all.
 
 | Meter | Emitted by | Dashboards that need it |
 |---|---|---|
@@ -27,8 +34,54 @@ builder.Services.AddOpenTelemetry()
 | `orleans.lattice.auth`, `orleans.lattice.membership` | the auth / membership packages, only when registered on the silo | `Authorization` |
 | `orleans.lattice.backup` | the backup package, only when registered on the silo | `Backup` |
 | `orleans.lattice.scaling` | the scaling package, only when registered on the silo | `Scaling` |
+| `Microsoft.Orleans` | the Orleans runtime, always | none of the bundled dashboards; registered for operational diagnosis |
+| `System.Runtime` | the .NET runtime, always | none of the bundled dashboards; registered for operational diagnosis |
 
 If you do not register the replication package, omit the replication meter and do not import the `Replication` dashboard - its panels would resolve to no data.
+
+### Why register the two runtime meters
+
+Neither runtime meter backs a bundled dashboard panel, so it is tempting to leave
+both out. Do not. They are what turns an unexplained restart into a diagnosable
+one, and their absence is indistinguishable on the endpoint from an instrument
+that was never declared:
+
+| Meter | Exact name | What it carries |
+|---|---|---|
+| Orleans runtime | `Microsoft.Orleans` | grain activation counts and activation **latency** (`orleans-catalog-activation-latency`), activation collection, grain directory, scheduler, messaging |
+| .NET runtime | `System.Runtime` | GC heap size and total allocation, GC pause time, process working set, thread-pool depth and queue length, lock contention |
+
+Without `System.Runtime` the endpoint carries **no heap or process-memory series
+whatsoever**, so a silo in an out-of-memory restart loop has to be diagnosed by
+inferring heap composition from activation counts. Without `Microsoft.Orleans`
+there is no direct measure of activation cost, only a grain-call-duration proxy
+that cannot separate activation from call.
+
+Two details are worth getting right rather than assuming:
+
+- **`System.Runtime` is built into .NET from .NET 9** and needs no package
+  reference. The older `OpenTelemetry.Instrumentation.Runtime` package and its
+  `AddRuntimeInstrumentation()` call publish an equivalent, differently-named
+  `process.runtime.dotnet.*` series set; on a modern target framework prefer the
+  built-in meter and skip the dependency.
+- **`Microsoft.Orleans.Runtime`, `Microsoft.Orleans.Application` and their
+  siblings are `ActivitySource` names for tracing, not meter names.** Passing one
+  of those to `AddMeter` matches nothing, throws nothing, and leaves the endpoint
+  looking exactly as it did before. The meter name is the bare
+  `Microsoft.Orleans`. Re-verify it on an Orleans major upgrade.
+
+### Cardinality cost
+
+Measured on a single silo rather than estimated: `Microsoft.Orleans` produced 54
+distinct series and `System.Runtime` 29.
+
+Every `System.Runtime` dimension is a fixed enumeration (GC generation, CPU
+mode), so its cost does not grow with load at all. The only Orleans dimension
+that grows is the `type` tag on `orleans-grains` and `orleans-system-targets`,
+which is bounded by the number of grain **types** in the image - a compile-time
+constant - not by the number of grain activations. Neither meter carries a
+per-key, per-tree, or per-activation tag, so neither is a cardinality risk on a
+large keyspace.
 
 ## 2. Choose which dashboards to surface
 

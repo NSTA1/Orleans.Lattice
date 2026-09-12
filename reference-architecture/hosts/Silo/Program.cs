@@ -609,9 +609,44 @@ if (requireApiAuthorization)
 // entries/bytes-behind, ship duration, membership, auth, backup, or scaling series.
 // The "orleans.lattice*" wildcard exports the entire family (and any future lattice
 // meter) in one registration.
+//
+// Two meters OUTSIDE the lattice family are registered alongside it, because a
+// lattice-only registration silently discards every runtime series and leaves an
+// endpoint that is byte-identical to one where the instrument was never declared:
+//
+//   "Microsoft.Orleans" - the Orleans runtime meter. Grain activation counts and
+//     activation LATENCY (orleans-catalog-activation-latency), activation
+//     collection, the grain directory, the scheduler, and messaging. Without it an
+//     operator cannot measure activation cost directly and has to infer it from a
+//     call-duration proxy that cannot separate activation from call.
+//   "System.Runtime" - the .NET runtime meter, built in from .NET 9 and needing no
+//     package reference. GC heap size and allocation, GC pause time, process
+//     working set, thread-pool depth, lock contention. Without it the endpoint
+//     carries no heap or process-memory series at all, so an OOM restart loop has
+//     to be diagnosed by inferring heap composition from activation counts.
+//
+// Both names are EXACT, deliberately, and were read off the pinned dependency
+// rather than recalled: "Microsoft.Orleans" is the name of the single Meter that
+// Orleans.Core 10.2.2 constructs (Orleans.Runtime.OrleansInstruments, built from
+// IMeterFactory), and "System.Runtime" is the name the .NET 10 runtime publishes
+// its 19 built-in instruments on. Note that the similar-looking
+// "Microsoft.Orleans.Runtime", "Microsoft.Orleans.Application" and siblings are
+// ActivitySource names for TRACING, not meters - registering one of those with
+// AddMeter would match nothing and fail silently, which is the same failure this
+// block exists to close. Re-verify both names on an Orleans or .NET major upgrade.
+//
+// Cardinality, measured rather than assumed, on a single silo: "Microsoft.Orleans"
+// produced 54 series and "System.Runtime" 29. Every System.Runtime dimension is a
+// fixed enumeration (GC generation, cpu mode), so its cost does not grow with load
+// at all. The only Orleans dimension that grows is the `type` tag on
+// orleans-grains and orleans-system-targets, which is bounded by the number of
+// grain TYPES in the image - a compile-time constant - not by the number of grain
+// activations. Neither meter carries a per-key, per-tree, or per-activation tag.
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics => metrics
         .AddMeter($"{LatticeMetrics.MeterName}*")
+        .AddMeter("Microsoft.Orleans")
+        .AddMeter("System.Runtime")
         .AddPrometheusExporter());
 
 var app = builder.Build();
