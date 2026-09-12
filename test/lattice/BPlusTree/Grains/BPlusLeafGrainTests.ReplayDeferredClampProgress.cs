@@ -17,9 +17,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// ledger is saturated, that clamp evaluates to <c>minDeferred - 1 == 0</c> on
 /// every slice, so an activation that is torn down part-way banks NOTHING and
 /// the next one replays the identical window. That defect is tracked as
-/// <c>#2746</c> and its reproduction ships here <c>[Ignore]</c>d; the three
-/// arms that DO run are the controls that isolate it and the tripwire that
-/// bounds it.
+/// <c>#2746</c> and its reproduction ships here <c>[Ignore]</c>d; the four
+/// arms that DO run are the controls that isolate it, the tripwire that
+/// bounds it, and the measured bound on its reachability.
 /// <para>
 /// For a PREPARE the clamp is retired - #2165's
 /// <c>EnsureUnresolvedPrepareRecorded</c> records unconditionally and
@@ -48,27 +48,60 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// An earlier revision of this file read that prune as a general bound and
-/// said the cap was "only reachable WITHIN one activation". That was wrong,
-/// and it is corrected here rather than quietly deleted because it is the
-/// inference a reader is most likely to make again. It holds only for a leaf
-/// pinned at checkpoint 0, where EVERY entry is above the checkpoint and the
-/// ledger does prune to empty on every activation. Above checkpoint 0 the
-/// ledger genuinely carries in, and the two kinds it carries are asymmetric: a
-/// kept deferred TERMINAL is handed to pass 2 and drains, but a kept
-/// unresolved PREPARE is re-applied and nothing reaps it (#2304).
+/// said the cap was "only reachable WITHIN one activation". Its REASONING was
+/// wrong and its CONCLUSION turned out to be right, which is the most
+/// dangerous combination to leave undocumented, so both halves are corrected
+/// here rather than quietly deleted.
 /// </para>
 /// <para>
-/// So a STOCK route to the cap exists, with no configuration deviation.
-/// Prepares accumulate through <c>EnsureUnresolvedPrepareRecorded</c>, which
-/// is UNCAPPED by design (#2183) yet shares one list with the capped terminal
-/// writer, so they consume the budget that bounds terminals. Once the shared
-/// list reaches the deployed cap, an ordinary deferred terminal at a window
-/// head is refused and this clamp fires at 1024. That route needs a tree that
-/// runs sagas, and the candidate nominated for it -
-/// <c>repo-context-vector-index</c> - is written NON-ATOMICALLY and carries no
-/// prepares at all, which is why the deferred arm is the only clamp that can
-/// fire there. The stock accumulation route and that candidate are therefore
-/// mutually exclusive: both are real, neither is reachable on the same tree.
+/// The reasoning was wrong because the prune alone does not bound anything:
+/// it holds only for a leaf pinned at checkpoint 0, where EVERY entry is above
+/// the checkpoint and the ledger does prune to empty. Above checkpoint 0 the
+/// prune KEEPS entries, and the two kinds it keeps are asymmetric - a kept
+/// deferred TERMINAL is handed to pass 2 and drains, but a kept unresolved
+/// PREPARE is re-applied and nothing reaps it (#2304). Read off the prune
+/// alone, a leaf therefore looks able to inherit a ledger already at the cap
+/// and starve on its first deferred terminal, reaching this defect at the
+/// SHIPPING cap with no configuration deviation.
+/// </para>
+/// <para>
+/// The conclusion survives anyway, because the prune is not the only gate.
+/// <c>ReplayWalSinceCheckpointAsync</c> passes a <c>checkpointOverride</c>,
+/// and a cold-start cache-empty rebuild sets it to <c>-1</c> for EVERY
+/// partition, since the rebuild covers the full readable window of every
+/// partition. The restore resolves <c>checkpointOverride ?? persisted</c>, so
+/// on a cold rebuild the ENTIRE ledger is discarded - including entries far
+/// below the persisted checkpoint that the prune would have kept. A leaf that
+/// dies during replay, which is precisely the case #2746 is about,
+/// re-activates with an empty cache by construction. Carry-in therefore cannot
+/// saturate the cap on the activation that matters, and accumulation WITHIN
+/// one activation is the only route to the refusal at the deployed cap.
+/// <see cref="A_cold_cache_rebuild_discards_the_whole_ledger_which_bounds_this_defects_reachability"/>
+/// pins that, and is the only arm here that was arrived at by EXECUTION
+/// refuting a reading rather than by reading alone.
+/// </para>
+/// <para>
+/// WHAT FILLS THE LEDGER WITHIN ONE ACTIVATION. An earlier revision said this
+/// needed a tree that runs sagas, and that the candidate nominated for it -
+/// <c>repo-context-vector-index</c> - carries no prepares at all, so the stock
+/// route and that candidate were "mutually exclusive". That is RETRACTED. The
+/// deferral branch is not saga-only: <see cref="MutationKind.DeleteRange"/>
+/// sits in the deferral condition alongside the transaction terminals, and
+/// <c>LatticeVectorIndexStore.DeletePrefixAsync</c> issues
+/// <c>DeleteRangeAsync</c> as its PRIMARY arm whenever the prefix has a finite
+/// upper bound - the per-key walk is only the unbounded fallback. So a
+/// prepare-free tree fills its own ledger with range-delete terminals: on a
+/// multi-partition tree only the partition absorbed LAST drains inline
+/// (#1831), so every other partition defers, and an activation torn down in
+/// pass 1 never reaches the pass-2 drain that would strike them off.
+/// </para>
+/// <para>
+/// Prepares remain a second, independent filler:
+/// <c>EnsureUnresolvedPrepareRecorded</c> is UNCAPPED by design (#2183) yet
+/// shares one list with the capped terminal writer, so on a tree that does run
+/// sagas they consume the budget that bounds terminals. Neither route has been
+/// shown to FIRE on a live tree - what is established is the mechanism, not a
+/// count - and this file should not be read as claiming otherwise.
 /// </para>
 /// <para>
 /// OBSERVABILITY. Whether this fires in production is currently unanswerable
@@ -80,7 +113,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// refuses at <c>work.Count &gt;= cap</c>, so the FIRST refusal happens at a
 /// count of exactly <c>cap</c>, while the instrument fires only at
 /// <c>work.Count &gt; cap</c>. A ledger resting exactly at the cap drops every
-/// terminal offered to it and never increments anything.
+/// terminal offered to it and never increments anything. <c>#2757</c> is
+/// raised against both halves: it meters the drop site and makes that
+/// threshold inclusive.
 /// </para>
 /// <para>
 /// <see cref="A_red_here_means_the_durable_ledger_now_accumulates_and_this_defect_is_live"/>
@@ -144,14 +179,21 @@ public partial class BPlusLeafGrainTests
         int succeedReads,
         long deferredAt,
         int maxDurableUnresolvedReplayWork,
-        int preSeededLedgerEntries = 0)
+        int preSeededLedgerEntries = 0,
+        long? seededLedgerPartitionCheckpoint = null,
+        FakePersistentState<LeafNodeState>? existingState = null)
     {
-        var state = NewFlushCeilingState();
+        var state = existingState ?? NewFlushCeilingState();
 
         // Reproduces a durable ledger carried in from earlier activations.
-        // The seeded offsets sit far ABOVE this replay's window and on the
-        // other partition, so they consume ledger capacity without clamping
-        // any ceiling themselves - the cap is global, not per-partition.
+        // Whether these entries SURVIVE the restore is decided entirely by
+        // seededLedgerPartitionCheckpoint, and that is the point of the
+        // parameter: the seed itself is identical in both directions, so the
+        // prune direction is the single variable between
+        // A_red_here_means_the_durable_ledger_now_accumulates_and_this_defect_is_live
+        // (checkpoint left unset, every entry above it, all DROPPED) and
+        // A_replay_whose_window_opens_with_a_deferred_terminal_banks_progress_at_the_shipping_cap
+        // (checkpoint set above them, all KEPT).
         if (preSeededLedgerEntries > 0)
         {
             var ledger = state.State.UnresolvedReplayWork ??= [];
@@ -161,6 +203,16 @@ public partial class BPlusLeafGrainTests
                     1,
                     100_000L + i,
                     BuildDeleteRange("m0", "m9", hlcPhysical: 500, treeId: FlushCeilingTreeId)));
+            }
+
+            if (seededLedgerPartitionCheckpoint is long seededCheckpoint)
+            {
+                // Partition 1 only. Partition 0 is deliberately left on the
+                // unassigned scalar so it still resolves to the "nothing
+                // applied" sentinel and its window still OPENS at offset 1,
+                // which is the position the defect needs.
+                state.State.ProjectionCheckpointOffsetsByPartition =
+                    [0L, seededCheckpoint, -1L];
             }
         }
 
@@ -322,5 +374,80 @@ public partial class BPlusLeafGrainTests
             + "persisted checkpoint, so the deferred-terminal clamp is now reachable at the shipping "
             + "MaxDurableUnresolvedReplayWork cap and an interrupted replay can make zero durable "
             + "progress in production. This is a live WAL-replay correctness defect, not a broken test.");
+    }
+
+    [Test]
+    public async Task A_cold_cache_rebuild_discards_the_whole_ledger_which_bounds_this_defects_reachability()
+    {
+        // REACHABILITY BOUND, and it exists because an earlier revision of
+        // this file asserted the opposite. That revision reasoned that since
+        // RestoreUnresolvedReplayWork KEEPS entries at or below their
+        // partition checkpoint, an activation could inherit a ledger already
+        // at the cap and starve on its very first deferred terminal - a route
+        // to the defect at the SHIPPING cap with no configuration deviation.
+        // That reasoning was read off the prune and never executed. Executing
+        // it refutes it.
+        //
+        // The prune is not the only gate. ReplayWalSinceCheckpointAsync passes
+        // a checkpointOverride, and a cold-start cache-empty rebuild sets it
+        // to -1 for EVERY partition, "because the cache rebuild covers the
+        // full readable window of every partition"
+        // (BPlusLeafGrain.Activation.cs). The restore resolves
+        // checkpointOverride ?? persisted, so on a cold rebuild every entry is
+        // above the effective checkpoint and the ENTIRE ledger is discarded -
+        // including entries far below the persisted checkpoint that the
+        // ordinary prune would have kept.
+        //
+        // That is the bound: carry-in cannot saturate the cap on a cold
+        // activation, so at the deployed cap the ONLY route to the refusal is
+        // accumulation WITHIN a single activation. It matters because a leaf
+        // that dies during replay - the case #2746 is about - re-activates
+        // with an empty cache by construction, which is exactly the condition
+        // that discards the ledger.
+        //
+        // HOW THIS ARM AVOIDS THE TRAP THAT HID IT. The obvious test is to run
+        // two activations and check the ledger is non-empty afterwards. That
+        // is VACUOUS: the second activation re-reads the same window and
+        // re-records the same offsets, so a ledger that was discarded and then
+        // rebuilt from scratch is indistinguishable from one that survived. An
+        // earlier draft of this arm passed for precisely that reason. The
+        // seeded offsets here are 100_000+, which appear in NO partition's WAL
+        // window, so they cannot be re-recorded and their presence or absence
+        // is unambiguous.
+        //
+        // The partition-1 checkpoint is deliberately set ABOVE every seeded
+        // offset, so the ordinary prune would KEEP all of them. The only thing
+        // that can drop them is the override. That is what makes this arm a
+        // test of the override specifically rather than of the prune - the
+        // tripwire arm above already covers the prune, using the identical
+        // seed with the checkpoint left unset.
+        var state = NewFlushCeilingState();
+        var (_, _, fault) = await RunInterruptedDeferredReplayAsync(
+            succeedReads: 2,
+            deferredAt: 1,
+            maxDurableUnresolvedReplayWork: LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
+            preSeededLedgerEntries: LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
+            seededLedgerPartitionCheckpoint: 100_000L + LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
+            existingState: state);
+
+        Assert.That(fault, Is.InstanceOf<OperationCanceledException>());
+
+        var seededSurvivors = (state.State.UnresolvedReplayWork ?? [])
+            .Where(e => e.Offset >= 100_000L)
+            .Select(e => e.Offset)
+            .ToList();
+
+        // Assert on the count, not the list: a failure here retains up to the
+        // whole cap, and dumping 1,024 offsets buries the explanation that
+        // follows it.
+        Assert.That(seededSurvivors.Count, Is.Zero,
+            "A cold-cache rebuild retained durable ledger entries. Every seeded offset sits at or below "
+            + "its partition's persisted checkpoint, so the ordinary prune would keep them; the "
+            + "cold-start override is what must discard them, and it is what bounds this defect's "
+            + "reachability at the shipping cap. If entries now survive a cold rebuild, a ledger can be "
+            + "inherited at capacity and the deferred-terminal clamp of issue #2746 becomes reachable "
+            + "with no configuration deviation at all. Re-derive that bound before trusting it. "
+            + $"Survivors: {seededSurvivors.Count}, first few: "
+            + $"[{string.Join(", ", seededSurvivors.Take(5))}].");
     }
 }
