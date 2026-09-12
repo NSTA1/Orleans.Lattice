@@ -40,29 +40,71 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// Reproducing it needs both at once.
 /// </para>
 /// <para>
-/// REACHABILITY - this is a bounded residue rather than a live defect, and the
-/// bound is load-bearing enough to carry its own guard. The obvious
-/// escalation, that a repeatedly-failing leaf accumulates unresolved deferred
-/// terminals across activations until the shipping cap of 1024 is reached,
-/// DOES NOT HAPPEN: <c>RestoreUnresolvedReplayWork</c> drops every entry above
+/// REACHABILITY. <c>RestoreUnresolvedReplayWork</c> drops every entry ABOVE
 /// its partition's persisted checkpoint, because the replay is about to
-/// re-read it and the WAL must stay its single source. On a leaf whose
-/// checkpoint is still 0 that prunes the ledger to empty on every activation.
-/// The cap is therefore only reachable WITHIN one activation, by 1024 deferred
-/// terminals on partitions swept before the one whose window opens with a
-/// range delete - which has not been shown to happen on any tree here.
+/// re-read it and the WAL must stay its single source; entries at or below the
+/// checkpoint are KEPT. The invariant is exactly "the ledger covers the
+/// offsets this replay will not re-read".
+/// </para>
+/// <para>
+/// An earlier revision of this file read that prune as a general bound and
+/// said the cap was "only reachable WITHIN one activation". That was wrong,
+/// and it is corrected here rather than quietly deleted because it is the
+/// inference a reader is most likely to make again. It holds only for a leaf
+/// pinned at checkpoint 0, where EVERY entry is above the checkpoint and the
+/// ledger does prune to empty on every activation. Above checkpoint 0 the
+/// ledger genuinely carries in, and the two kinds it carries are asymmetric: a
+/// kept deferred TERMINAL is handed to pass 2 and drains, but a kept
+/// unresolved PREPARE is re-applied and nothing reaps it (#2304).
+/// </para>
+/// <para>
+/// So a STOCK route to the cap exists, with no configuration deviation.
+/// Prepares accumulate through <c>EnsureUnresolvedPrepareRecorded</c>, which
+/// is UNCAPPED by design (#2183) yet shares one list with the capped terminal
+/// writer, so they consume the budget that bounds terminals. Once the shared
+/// list reaches the deployed cap, an ordinary deferred terminal at a window
+/// head is refused and this clamp fires at 1024. That route needs a tree that
+/// runs sagas, and the candidate nominated for it -
+/// <c>repo-context-vector-index</c> - is written NON-ATOMICALLY and carries no
+/// prepares at all, which is why the deferred arm is the only clamp that can
+/// fire there. The stock accumulation route and that candidate are therefore
+/// mutually exclusive: both are real, neither is reachable on the same tree.
+/// </para>
+/// <para>
+/// OBSERVABILITY. Whether this fires in production is currently unanswerable
+/// in either direction. The refusal at
+/// <c>BPlusLeafGrain.Activation.cs</c> emits no metric, no log and no counter
+/// - it simply falls back to <c>deferredOffsets.Add</c>. The one adjacent
+/// instrument, <c>LeafUnresolvedPrepareLedgerBeyondCap</c>, belongs to the
+/// prepare path and is off by one in the blind direction: the terminal writer
+/// refuses at <c>work.Count &gt;= cap</c>, so the FIRST refusal happens at a
+/// count of exactly <c>cap</c>, while the instrument fires only at
+/// <c>work.Count &gt; cap</c>. A ledger resting exactly at the cap drops every
+/// terminal offered to it and never increments anything.
+/// </para>
+/// <para>
 /// <see cref="A_red_here_means_the_durable_ledger_now_accumulates_and_this_defect_is_live"/>
-/// is the guard on exactly that, and its name says what a red means.
+/// guards the prune DIRECTION only, which is the part that is load-bearing
+/// here. It is not a guard against accumulation as such, because accumulation
+/// below the checkpoint is legitimate and expected.
 /// </para>
 /// </summary>
 public partial class BPlusLeafGrainTests
 {
     /// <summary>
-    /// Partition 0 opens its window with a deferred range delete and is
-    /// deliberately given the SMALLER backlog, because pass 1 sweeps by
-    /// backlog ascending (#2089) and only the partition absorbed LAST is
-    /// drain-eligible. That makes partition 0 genuinely non-last, so its range
-    /// delete defers rather than draining inline.
+    /// Three partitions, because two cannot reach the defect at a positive
+    /// cap. Pass 1 sweeps by backlog ASCENDING (#2089) and only the partition
+    /// absorbed LAST is drain-eligible, so with two partitions the one whose
+    /// window opens with a range delete is either swept FIRST, where the
+    /// ledger is still empty and its offset records fine, or swept LAST, where
+    /// the range delete drains inline (#1831). Neither reaches the refusal.
+    /// Only a MIDDLE partition is neither, so a third is required.
+    /// <para>
+    /// Backlogs are therefore chosen for sweep POSITION, not for size:
+    /// partition 1 (8) is absorbed first and its own deferred range delete is
+    /// what fills the ledger; partition 0 (12) is the middle one under test;
+    /// partition 2 (20) is absorbed last and is the drain-eligible one.
+    /// </para>
     /// </summary>
     private static ILeafReplayCoordinatorGrain[] BuildDeferredClampCoordinators(
         Action<int>? onPartitionZeroRead,
@@ -72,14 +114,24 @@ public partial class BPlusLeafGrainTests
         for (var i = 1; i <= 12; i++)
             p0[i - 1] = i == deferredAt ? FlushDeleteRange(i) : FlushSet(i, $"z{i:D2}");
 
-        var p1 = new CommitLogSliceEntry[20];
+        // Swept FIRST. Its range delete defers (this partition is not the last
+        // absorbed) and so is recorded durably, occupying the ledger before
+        // partition 0 is swept at all. This is what saturates a positive cap
+        // WITHOUT any pre-seeding, which matters because a pre-seeded entry
+        // cannot survive into the window on a checkpoint-0 leaf.
+        var p1 = new CommitLogSliceEntry[8];
+        for (var i = 1; i <= 8; i++)
+            p1[i - 1] = i == 4 ? FlushDeleteRange(i) : FlushSet(i, $"y{i:D2}");
+
+        var p2 = new CommitLogSliceEntry[20];
         for (var i = 1; i <= 20; i++)
-            p1[i - 1] = FlushSet(i, $"y{i:D2}");
+            p2[i - 1] = FlushSet(i, $"x{i:D2}");
 
         return
         [
             BuildObservableCoordinator(head: 12, sliceSize: 4, tail: 0, onRead: onPartitionZeroRead, p0),
-            BuildObservableCoordinator(head: 20, sliceSize: 4, tail: 0, onRead: null, p1),
+            BuildObservableCoordinator(head: 8, sliceSize: 4, tail: 0, onRead: null, p1),
+            BuildObservableCoordinator(head: 20, sliceSize: 4, tail: 0, onRead: null, p2),
         ];
     }
 
@@ -153,17 +205,38 @@ public partial class BPlusLeafGrainTests
     public async Task An_interrupted_replay_banks_progress_even_when_a_deferred_range_delete_opens_the_window()
     {
         // THE ARM UNDER TEST. Partition 0's window opens with a deferred
-        // DeleteRange at offset 1 and the ledger is saturated, so the offset
-        // falls back to the in-memory clamp: every foot-of-loop flush computes
-        // a ceiling of minDeferred - 1 == 0, which has not passed the
-        // persisted checkpoint of 0, so nothing is persisted. The slice is
-        // still SCANNED. The activation is then torn down having banked
-        // nothing, and the next one faces the identical window - the #1513
-        // livelock, reached through the one clamp arm #2165 did not retire.
+        // DeleteRange at offset 1 and the ledger is genuinely SATURATED, so
+        // the offset falls back to the in-memory clamp: every foot-of-loop
+        // flush computes a ceiling of minDeferred - 1 == 0, which has not
+        // passed the persisted checkpoint of 0, so nothing is persisted. The
+        // slice is still SCANNED. The activation is then torn down having
+        // banked nothing, and the next one faces the identical window - the
+        // #1513 livelock, reached through the one clamp arm #2165 did not
+        // retire.
+        //
+        // WHICH DOOR THIS GOES THROUGH, because it is the whole point of the
+        // arm. TryRecordUnresolvedReplayWork has two false returns:
+        //
+        //     if (cap <= 0)            return false;   // #2165 SWITCHED OFF
+        //     if (work.Count >= cap)   return false;   // ledger SATURATED
+        //
+        // An earlier revision of this arm passed cap 0, which exits at the
+        // first and never evaluates saturation at all - so it proved the much
+        // weaker "with #2165 disabled, a head-of-window terminal banks
+        // nothing". A positive cap reached by real deferrals during the sweep
+        // takes the second door, which is the one that matters.
+        //
+        // HONESTY: cap 1 is still a configuration perturbation, not the
+        // deployed setting, and this arm must not be written up as "clamps at
+        // deployed settings". What it establishes is that saturation reaches
+        // the drop branch and the clamp pins. The branch is cap-RELATIVE
+        // (work.Count >= cap), so the deployed cap of 1024 behaves identically
+        // at 1025 entries; the arm is small for speed, not because the
+        // property is small.
         var (checkpoint, persists, fault) = await RunInterruptedDeferredReplayAsync(
             succeedReads: 2,
             deferredAt: 1,
-            maxDurableUnresolvedReplayWork: 0);
+            maxDurableUnresolvedReplayWork: 1);
 
         Assert.That(fault, Is.InstanceOf<OperationCanceledException>(),
             "The teardown must actually have ended the activation, or this arm proves nothing.");
@@ -179,6 +252,8 @@ public partial class BPlusLeafGrainTests
     public async Task The_same_replay_banks_normally_when_the_deferred_offset_is_ledgered()
     {
         // CONTROL - isolates ledger saturation as a necessary condition.
+        // Identical to the arm under test except that the cap is large enough
+        // to absorb both deferred offsets, so nothing falls back to the clamp.
         var (checkpoint, _, fault) = await RunInterruptedDeferredReplayAsync(
             succeedReads: 2,
             deferredAt: 1,
@@ -194,11 +269,15 @@ public partial class BPlusLeafGrainTests
     {
         // CONTROL - isolates the head-of-window position as the other
         // necessary condition, so the failing arm is not merely "a saturated
-        // ledger breaks banking".
+        // ledger breaks banking". Runs at the SAME positive cap as the arm
+        // under test and is refused by the SAME saturation branch; the only
+        // variable that moves is where the deferred terminal sits. Its offset
+        // of 5 leaves a bankable prefix below it, so the clamp lands at 4 and
+        // progress is made.
         var (checkpoint, _, fault) = await RunInterruptedDeferredReplayAsync(
             succeedReads: 2,
             deferredAt: 5,
-            maxDurableUnresolvedReplayWork: 0);
+            maxDurableUnresolvedReplayWork: 1);
 
         Assert.That(fault, Is.InstanceOf<OperationCanceledException>());
         Assert.That(checkpoint, Is.GreaterThan(0L),
@@ -209,22 +288,27 @@ public partial class BPlusLeafGrainTests
     public async Task A_red_here_means_the_durable_ledger_now_accumulates_and_this_defect_is_live()
     {
         // ESCALATION TRIPWIRE - a red here is NOT "a test broke". It means the
-        // pruning invariant that bounds the clamp above has been weakened, the
-        // cross-activation accumulation route has opened, and the head-of-
-        // window clamp is reachable at the SHIPPING cap rather than only at an
-        // artificial cap of 0. Treat it as a live correctness defect in WAL
-        // replay and escalate rather than adjusting this test.
+        // pruning invariant has been weakened, so entries the imminent replay
+        // is about to RE-READ are being retained instead of dropped. Treat it
+        // as a live correctness defect in WAL replay and escalate rather than
+        // adjusting this test.
         //
         // The invariant it guards is in RestoreUnresolvedReplayWork:
         //
         //     if (entry.Offset > checkpoint)
         //         continue; // Replay re-reads it; the WAL stays the single source.
         //
-        // Every entry above its partition's persisted checkpoint is dropped,
-        // so a leaf whose checkpoint is still 0 prunes its ledger to empty on
-        // every activation and can never carry a full ledger in. This arm
-        // seeds a FULL ledger at the shipping cap and asserts that it still
-        // does not starve the flush.
+        // SCOPE, because this is easy to over-read. The arm guards the prune
+        // DIRECTION - above the checkpoint is dropped - and nothing more. It
+        // is NOT a guard against the ledger accumulating, because accumulation
+        // at or below the checkpoint is legitimate, expected, and the stock
+        // route to the cap described on the class. The seeded entries here sit
+        // far ABOVE this replay's window precisely so that retaining even one
+        // of them is unambiguously the invariant breaking rather than ordinary
+        // carry-in.
+        //
+        // This arm seeds a FULL ledger at the shipping cap and asserts that it
+        // still does not starve the flush.
         var (checkpoint, _, fault) = await RunInterruptedDeferredReplayAsync(
             succeedReads: 2,
             deferredAt: 1,
