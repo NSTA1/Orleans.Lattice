@@ -48,13 +48,16 @@ public class BPlusLeafGrainColdActivationAdmissionTests
         LeafSnapshotHydrationAdmission admission,
         string treeId,
         Func<Task<LeafSnapshotBlob?>> load,
-        long maxLeafBytes = 64L * 1024 * 1024)
+        long maxLeafBytes = 64L * 1024 * 1024,
+        FallOffLogDecision? fallOffDecision = null,
+        long projectionCheckpoint = 0L,
+        long walHead = 10L)
     {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>()).Returns(_ => load());
 
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
-        coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(10L));
+        coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(walHead));
         coord.ReadSliceAsync(
                 Arg.Any<long>(),
                 Arg.Any<long>(),
@@ -70,6 +73,20 @@ public class BPlusLeafGrainColdActivationAdmissionTests
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
         sc.AddSingleton(Substitute.For<ILeafCursorReporter>());
         sc.AddSingleton(admission);
+        if (fallOffDecision is { } decision)
+        {
+            var detector = Substitute.For<ILatticeFallOffLogDetector>();
+            detector.ClassifyAsync(
+                    Arg.Any<string>(),
+                    Arg.Any<int>(),
+                    Arg.Any<long>(),
+                    Arg.Any<TimeSpan>(),
+                    Arg.Any<ResolvedLatticeOptions>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(decision));
+            sc.AddSingleton(detector);
+        }
+
         var services = sc.BuildServiceProvider();
 
         var leafKey = Guid.NewGuid();
@@ -79,13 +96,14 @@ public class BPlusLeafGrainColdActivationAdmissionTests
 
         var state = new FakePersistentState<LeafNodeState>();
         state.State.TreeId = treeId;
-        state.State.ProjectionCheckpointOffset = 0L;
+        state.State.ProjectionCheckpointOffset = projectionCheckpoint;
 
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: new LatticeOptions
             {
                 MaterialiserCheckpointInterval = TimeSpan.Zero,
                 MaxLeafBytes = maxLeafBytes,
+                WalPartitions = 1,
             },
             maxLeafKeys: 128,
             shardCount: 1,
@@ -459,6 +477,81 @@ public class BPlusLeafGrainColdActivationAdmissionTests
             Assert.That(state.State.SnapshotLoadHintBytes, Is.EqualTo(4242L),
                 "the observed wire size is stamped onto the persisted state, so it rides the next "
                 + "ordinary write rather than costing a write of its own during the storm");
+        });
+    }
+
+    /// <summary>
+    /// The half of clause 3 that makes progress genuinely survive a restart.
+    /// The rehydrate-path stamp above records the size in memory only - it must,
+    /// because forcing a state write per leaf during a cold-start storm would
+    /// add back exactly the unbounded concurrent work being removed. So the
+    /// value only becomes durable by riding a write the leaf was making anyway,
+    /// and the capture path is that write.
+    /// </summary>
+    [Test]
+    public async Task A_capture_banks_the_measured_size_onto_a_write_it_was_already_making()
+    {
+        var admission = new LeafSnapshotHydrationAdmission(budgetBytes: 1024L * 1024);
+        var (grain, state, snapshot, _) = CreateGatedGrain(
+            admission,
+            UniqueAdmissionTree(),
+            () => Task.FromResult<LeafSnapshotBlob?>(null),
+            fallOffDecision: FallOffLogDecision.SnapshotPending,
+            projectionCheckpoint: 12L,
+            walHead: 12L);
+
+        LeafSnapshotBlob? saved = null;
+        snapshot
+            .When(x => x.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>()))
+            .Do(ci => saved = ci.Arg<LeafSnapshotBlob>());
+
+        // The hint observed at each persist, so the test can tell "stamped onto
+        // the state object" from "stamped and actually written down" - which is
+        // the whole difference between surviving a restart and not.
+        var hintAtEachWrite = new List<long>();
+        state.OnWriteState = s => hintAtEachWrite.Add(s.SnapshotLoadHintBytes);
+
+        grain.EntriesForTest["k"] = new LwwValue<byte[]>
+        {
+            Value = [1, 2, 3, 4, 5],
+            Timestamp = HybridLogicalClock.Zero,
+        };
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await ((IBPlusLeafGrain)grain).CaptureSnapshotAsync();
+
+        Assert.That(saved, Is.Not.Null,
+            "precondition: the capture must actually have reached the store, otherwise there "
+            + "is no measured size to bank and this test would pass for the wrong reason.");
+
+        var measured = saved!.EncodedRows is { Length: > 0 } frame
+            ? frame.Length
+            : saved.SnapshotBytes;
+
+        Assert.That(measured, Is.GreaterThan(0),
+            "precondition: a zero-sized capture would make the assertions below vacuous.");
+
+        Assert.That(hintAtEachWrite, Does.Not.Contain(measured),
+            "precondition, and the reason the assertion below is worth making: the capture "
+            + "itself buys no write. Like the durable snapshot-coverage record stamped beside "
+            + "it, the hint reaches storage only on the leaf's NEXT ordinary persist, and that "
+            + "is deliberate - forcing a write per leaf here would add back exactly the "
+            + "unbounded concurrent work this issue removes.");
+
+        // An ordinary checkpoint advance: the persist the leaf was going to make
+        // anyway, which is the write the hint is designed to ride.
+        await ((ILeafProjection)grain).SetCheckpointOffsetAsync(13L, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.SnapshotLoadHintBytes, Is.EqualTo(measured),
+                "the size the leaf will have to read back is learned at the one moment it is "
+                + "known for free - immediately after the blob has been written.");
+            Assert.That(hintAtEachWrite, Does.Contain(measured),
+                "and it must land on PERSISTED state rather than an activation-local field, or "
+                + "a restart inherits nothing and the gate overshoots every leaf all over "
+                + "again. That failure is invisible in memory: a transient stamp is plainly "
+                + "there for the rest of this activation's life.");
         });
     }
 
