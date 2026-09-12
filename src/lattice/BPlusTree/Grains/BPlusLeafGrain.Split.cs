@@ -43,7 +43,7 @@ internal sealed partial class BPlusLeafGrain
     /// unaffected.
     /// </para>
     /// </summary>
-    private async Task<SplitResult?> SplitIfNeededUnderGateAsync(int maxLeafKeys)
+    private async Task<SplitResult?> SplitIfNeededUnderGateAsync(int maxLeafKeys, long maxLeafBytes = 0)
     {
         // Non-blocking acquire: the loser of the race does NOT wait for
         // the in-flight split's cross-grain migration to drain. Its
@@ -59,7 +59,7 @@ internal sealed partial class BPlusLeafGrain
             // already split this leaf and removed our overflow's
             // entries to the sibling, leaving Cache.Count back under
             // the threshold; in that case we have nothing to do.
-            if (Cache.Count <= maxLeafKeys)
+            if (!IsLeafOverCapacity(maxLeafKeys, maxLeafBytes))
                 return null;
             return await SplitAsync();
         }
@@ -67,6 +67,115 @@ internal sealed partial class BPlusLeafGrain
         {
             _splitGate.Release();
         }
+    }
+
+    /// <summary>
+    /// The leaf overflow predicate: whether the leaf exceeds either the
+    /// structural key-count bound or the <see cref="LatticeOptions.MaxLeafBytes"/>
+    /// byte bound. Both call sites on the write path and the snapshot-capture
+    /// self-repair path evaluate it through here, so the two can never drift
+    /// into disagreeing about what "over capacity" means.
+    /// <para>
+    /// The byte arm carries an extra condition the count arm does not need:
+    /// <c>Cache.Count &gt; 1</c>. A split pivots on the median key, so a leaf
+    /// holding one entry has no median: <c>SplitAsync</c> would choose that
+    /// single key as the split key, migrate every entry to the sibling, and
+    /// leave an empty donor. The predicate would then hold on the sibling,
+    /// which would split again, forever, allocating a fresh leaf grain each
+    /// time and never making progress. Excluding the single-entry case makes
+    /// the predicate strictly progress-bounded: every leaf it fires on has at
+    /// least two entries, so a split always leaves both sides non-empty and
+    /// strictly smaller than the original.
+    /// </para>
+    /// <para>
+    /// A value larger than the bound on its own is therefore irreducible by
+    /// splitting and is reported rather than repaired; see
+    /// <see cref="LatticeMetrics.LeafByteOverflowIrreducible"/>.
+    /// </para>
+    /// </summary>
+    private bool IsLeafOverCapacity(int maxLeafKeys, long maxLeafBytes)
+        => Cache.Count > maxLeafKeys
+            || (maxLeafBytes > 0 && Cache.Count > 1 && Cache.StateBytes > maxLeafBytes);
+
+    /// <summary>
+    /// Per-pass ceiling on consecutive byte-overflow splits. Each split halves
+    /// the donor, so the passes needed are logarithmic in the overshoot: eight
+    /// admits a leaf 256 times the bound, which is far beyond anything the
+    /// key-count bound can let accumulate. It exists to keep the loop provably
+    /// terminating rather than because the limit is expected to bind.
+    /// </summary>
+    private const int MaxByteOverflowSplitsPerPass = 8;
+
+    /// <summary>
+    /// Divides a leaf that is over the <see cref="LatticeOptions.MaxLeafBytes"/>
+    /// bound back under it, splitting repeatedly because one split only halves
+    /// the donor and a leaf may be several multiples of the bound.
+    /// <para>
+    /// <b>This is the self-repair half of the byte bound, and it is what makes
+    /// an already-oversized deployment recover without operator action.</b> The
+    /// write-path predicate alone cannot do that: it is only evaluated when a
+    /// leaf is written, so a leaf that grew oversized and then went quiet would
+    /// stay oversized, stay uncapturable, and keep its tree's WAL trim floor
+    /// pinned at zero forever. This entry point is reached from the
+    /// zero-coverage repair driver, whose activation-time arm runs for a leaf
+    /// that entered the activation without durable snapshot coverage - which is
+    /// precisely the stuck population, and which it reaches even on a tree that
+    /// has stopped taking writes entirely.
+    /// </para>
+    /// <para>
+    /// Returns whether any split occurred. A leaf that cannot be divided (one
+    /// entry larger than the bound) is reported on
+    /// <see cref="LatticeMetrics.LeafByteOverflows"/> as <c>irreducible</c> and
+    /// left intact; see <see cref="IsLeafOverCapacity"/> for why splitting it
+    /// anyway would not terminate.
+    /// </para>
+    /// </summary>
+    private async Task<bool> TrySplitForByteOverflowAsync(int maxLeafKeys, long maxLeafBytes)
+    {
+        if (maxLeafBytes <= 0 || Cache.StateBytes <= maxLeafBytes)
+        {
+            return false;
+        }
+
+        var splits = 0;
+        while (splits < MaxByteOverflowSplitsPerPass
+               && IsLeafOverCapacity(maxLeafKeys, maxLeafBytes))
+        {
+            // A contended gate returns null, as does a re-check that finds the
+            // leaf already back under bound. Either way there is no progress to
+            // make on this turn, so stop rather than spin.
+            if (await SplitIfNeededUnderGateAsync(maxLeafKeys, maxLeafBytes) is null)
+            {
+                break;
+            }
+
+            splits++;
+        }
+
+        if (splits > 0)
+        {
+            RecordLeafByteOverflow(LatticeMetrics.LeafByteOverflowSplit);
+        }
+
+        // Report separately from the split outcome rather than as an else: a
+        // leaf can both split usefully and still end up irreducible, when the
+        // divisions strand a single oversized entry on one side.
+        if (Cache.Count <= 1 && Cache.StateBytes > maxLeafBytes)
+        {
+            RecordLeafByteOverflow(LatticeMetrics.LeafByteOverflowIrreducible);
+        }
+
+        return splits > 0;
+    }
+
+    private void RecordLeafByteOverflow(KeyValuePair<string, object?> outcome)
+    {
+        var treeId = state.State.TreeId ?? string.Empty;
+        LatticeMetrics.LeafByteOverflows.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            outcome,
+            LatticeTenantLabel.ForTree(treeId));
     }
 
     /// <summary>

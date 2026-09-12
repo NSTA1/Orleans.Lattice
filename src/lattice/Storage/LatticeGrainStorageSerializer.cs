@@ -99,10 +99,24 @@ public sealed class LatticeGrainStorageSerializer : IGrainStorageSerializer
         }
 
         // Write the magic and the payload into one buffer so the returned
-        // BinaryData wraps the writer's array directly. BinaryData is
-        // contiguous by contract, so one buffer the size of the payload is
-        // the floor here; what this avoids is the additional 2.7x
-        // contiguous UTF-16 intermediate the JSON path cannot avoid.
+        // BinaryData wraps the writer's array directly.
+        //
+        // On the transient cost, stated accurately because this is the comment
+        // someone reads while diagnosing an OutOfMemoryException on this line.
+        // BinaryData is contiguous by contract, so ONE buffer the size of the
+        // payload is the irreducible floor. The buffer below does NOT achieve
+        // that floor: ArrayBufferWriter starts at a small default capacity and
+        // grows by doubling, and each growth step holds the old array and the
+        // new one at the same time, so the peak is around 3x the payload rather
+        // than 1x. It cannot be pre-sized away, because the serialized length
+        // is not known until the value has been serialized.
+        //
+        // What this path does buy over the JSON fallback is the additional 2.7x
+        // contiguous UTF-16 intermediate that path cannot avoid. That is a real
+        // and substantial saving, but it lowers the multiplier rather than
+        // removing it, so a payload large enough still fails here. Bounding the
+        // payload is the only thing that removes the failure; see
+        // LatticeOptions.MaxLeafBytes.
         var writer = new ArrayBufferWriter<byte>();
         BinaryMagic.CopyTo(writer.GetSpan(BinaryMagic.Length));
         writer.Advance(BinaryMagic.Length);

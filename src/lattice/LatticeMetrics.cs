@@ -612,7 +612,25 @@ public static class LatticeMetrics
     /// <summary>Counter of leaf-level splits (leaf capacity exceeded, sibling allocated).</summary>
     public static readonly Counter<long> LeafSplits =
         Meter.CreateCounter<long>("orleans.lattice.leaf.splits", unit: "{split}",
-            description: "Leaf-node splits triggered by MaxLeafKeys overflow.");
+            description: "Leaf-node splits triggered by MaxLeafKeys or MaxLeafBytes overflow.");
+
+    /// <summary>
+    /// Counter of leaves observed over the <see cref="BPlusTree.LatticeOptions.MaxLeafBytes"/>
+    /// byte bound, tagged with <see cref="TagOutcome"/> = <c>split</c> when the
+    /// leaf was divided back under the bound, or <c>irreducible</c> when it
+    /// could not be, because a split pivots on a median key and a leaf holding
+    /// a single oversized entry has no median to pivot on.
+    /// <para>
+    /// The <c>irreducible</c> series is the one to alert on. It names the only
+    /// case this bound cannot repair, and such a leaf stays uncapturable, which
+    /// keeps its tree's WAL trim floor pinned at zero. The remedy is at the
+    /// application layer (store the oversized value across several keys), so
+    /// the condition has to be visible rather than silently tolerated.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafByteOverflows =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.byte.overflow", unit: "{leaf}",
+            description: "Leaves observed over the MaxLeafBytes bound, by whether they could be split.");
 
     /// <summary>
     /// Histogram of per-step latency on the leaf commit path
@@ -2044,6 +2062,24 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> CoverageRepairExhausted =
         new(TagOutcome, "exhausted");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a
+    /// leaf that was over the byte bound and was divided back under it.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafByteOverflowSplit =
+        new(TagOutcome, "split");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a
+    /// leaf that is over the byte bound and cannot be divided, because it holds
+    /// a single entry larger than the bound and a split has no median key to
+    /// pivot on. Splitting anyway would move every entry to the sibling and
+    /// leave an empty donor, re-triggering forever without making progress, so
+    /// the leaf is deliberately left intact and reported here instead.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafByteOverflowIrreducible =
+        new(TagOutcome, "irreducible");
 
     /// <summary>
     /// Counter of resident unresolved saga prepares recorded into

@@ -265,6 +265,17 @@ internal sealed class LeafSnapshotStorageGrain(
         // blob whose row payload does not read back is reported as absent, so
         // the caller falls through to WAL replay rather than treating an
         // unreadable snapshot as coverage.
+        // Returns state.State BY REFERENCE, not a projection of it. That is an
+        // invariant later changes depend on and it is invisible at the call
+        // site, so: the deep copy Orleans performs on this response is what
+        // isolates the caller from the grain's live persisted state. The blob's
+        // payload members are marked [Immutable] so the bulk is shared rather
+        // than reallocated (issue #2481 - the second contiguous copy is what
+        // exhausts the heap on a large leaf), but the SHELL is still copied,
+        // deliberately, and must stay that way. Do not mark the blob type
+        // [Immutable] or wrap this return in Immutable<T>: either would alias a
+        // caller to state this grain still writes to, since
+        // GetSnapshotByteSizeAsync back-fills SnapshotBytes on it below.
         if (!HasUsableSnapshot(state.State))
         {
             return Task.FromResult<LeafSnapshotBlob?>(null);

@@ -494,7 +494,7 @@ internal sealed partial class BPlusLeafGrain
 
         var options = await GetOptionsAsync();
         SplitResult? splitResult = null;
-        if (batch is null && Cache.Count > options.MaxLeafKeys)
+        if (batch is null && IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
         {
             splitResult = await SplitAsync();
         }
@@ -605,7 +605,7 @@ internal sealed partial class BPlusLeafGrain
         // pushed the leaf over the bound.
         var options = await GetOptionsAsync();
         SplitResult? splitResult = null;
-        if (Cache.Count > options.MaxLeafKeys)
+        if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
         {
             splitResult = await SplitAsync();
         }

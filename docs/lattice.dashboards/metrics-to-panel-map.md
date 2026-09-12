@@ -51,6 +51,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.compaction.shard.skipped` | counter | `tree` | Overview | Compaction shard retries / skips |
 | `orleans.lattice.leaf.tombstone.ratio` | histogram (`{ratio}`) | `tree` | Overview | Leaf tombstone ratio p95 |
 | `orleans.lattice.leaf.splits` | counter | `tree` | Overview | Splits committed |
+| `orleans.lattice.leaf.byte.overflow` | counter | `tree`, `outcome` | Overview | Splits committed |
 | `orleans.lattice.leaf.commit.duration` | histogram (ms) | `tree`, `step` | CommitPath | Commit-step latency p50/p95/p99 |
 | `orleans.lattice.cache.hits` | counter | `tree` | Overview | Cache hit ratio |
 | `orleans.lattice.cache.misses` | counter | `tree` | Overview | Cache hit ratio |
