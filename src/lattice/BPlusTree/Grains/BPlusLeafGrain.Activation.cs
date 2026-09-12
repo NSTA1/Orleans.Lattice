@@ -446,6 +446,14 @@ internal sealed partial class BPlusLeafGrain
         bool advanced;
         SemaphoreSlim? replayPermit = null;
 
+        // Declared here rather than at its assignment inside the try because
+        // the resident-footprint registration at step 1.35 (issue #2767) reads
+        // it after the guarded region has closed, and issue #2280 moved the
+        // rehydrate inside that region. It shares the COLD-by-default reasoning
+        // of replayCheckpointOverride above: an activation that fails before
+        // step 0 completes has, by definition, not rehydrated from a snapshot.
+        bool rehydratedFromSnapshot = false;
+
         // The acquisition sits INSIDE the try, whose finally is the only thing
         // that returns the permit (issue #2256). The observation block below
         // used to run outside it, so a throw from the metric add, the
@@ -475,7 +483,7 @@ internal sealed partial class BPlusLeafGrain
         {
             // Step 0 (see above).
             _replayAdmissionPhase = ReplayAdmissionPhase.RehydratingSnapshot;
-            var rehydratedFromSnapshot = await TryRehydrateFromSnapshotAsync(cancellationToken);
+            rehydratedFromSnapshot = await TryRehydrateFromSnapshotAsync(cancellationToken);
 
             // Step 0.5 (see above).
             replayCheckpointOverride =
