@@ -440,15 +440,22 @@ internal sealed class LatticeWalGcScheduler(
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
 
-        // Zero-prime the WAL-retention counters whose healthy steady state is
-        // "never fired". A Counter publishes no series until its first Add, so
-        // a tree that has never shed a pin report and never held a snapshot pin
-        // is silent on both - a shape indistinguishable from a dead subsystem or
-        // a broken instrument (issue #2694). Priming here, once per tree, turns
-        // that silence into an exported zero, which is a measurement. The WAL GC
-        // scheduler is the right primer because it enumerates exactly the trees
-        // whose retention is being collected, which is the population the
-        // question is asked about. Adding zero cannot perturb either value.
+        // Zero-prime the WAL-retention series a reader has to interpret an
+        // absence on. A Counter publishes no series until its first Add, so a
+        // tree that has never shed a pin report, never held a snapshot pin, and
+        // never reclaimed is silent on all three - a shape indistinguishable
+        // from a dead subsystem or a broken instrument (issues #2694, #2774).
+        // Priming here, once per tree, turns that silence into an exported
+        // zero, which is a measurement. The WAL GC scheduler is the right
+        // primer because it enumerates exactly the trees whose retention is
+        // being collected, which is the population the question is asked about.
+        // Adding zero cannot perturb any of the values.
+        //
+        // The call site is load-bearing and must stay the first statement of
+        // the pass: above the snapshot reconcile, above the try, and above
+        // every early return. That is what makes "no series at all for a tree"
+        // mean precisely "the scheduler never evaluated this tree", rather than
+        // leaving it ambiguous with "evaluated and returned early".
         PrimeRetentionSeries(treeId, treeTag, tenantTag);
 
         // Re-derive the tree's live snapshot-pin set from the cursor registry.
@@ -500,12 +507,12 @@ internal sealed class LatticeWalGcScheduler(
             var blocked = !reclaimed
                 && report.CursorFloorState == WalGcCursorFloorState.BlockedByUnusablePin;
 
-            LatticeMetrics.WalGcPasses.Add(
+            RecordPass(
                 1,
-                treeTag,
                 reclaimed
                     ? LatticeMetrics.OutcomeReclaimed
                     : blocked ? LatticeMetrics.OutcomeBlocked : LatticeMetrics.OutcomeIdle,
+                treeTag,
                 tenantTag);
 
             // Backlog metering. Byte accounting is a provider capability, so this
@@ -563,7 +570,7 @@ internal sealed class LatticeWalGcScheduler(
         }
         catch (Exception ex)
         {
-            LatticeMetrics.WalGcPasses.Add(1, treeTag, LatticeMetrics.OutcomeFailed, tenantTag);
+            RecordPass(1, LatticeMetrics.OutcomeFailed, treeTag, tenantTag);
             logger.LogDebug(
                 ex,
                 "WAL GC pass failed for tree {Tree}; will retry on the next tick.",
@@ -628,11 +635,11 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
-    /// Emits a one-time zero observation for each WAL-retention counter whose
-    /// healthy steady state is "never incremented", so the series exists and
-    /// reads a true zero instead of being absent. Idempotent per tree: the
-    /// primed set is consulted on every pass and the instrument is touched only
-    /// on the first.
+    /// Emits a one-time zero observation for each WAL-retention series that a
+    /// reader must be able to distinguish "measured, never happened" from "not
+    /// reporting" on, so the series exists before its first real event.
+    /// Idempotent per tree: the primed set is consulted on every pass and the
+    /// instruments are touched only on the first.
     /// </summary>
     private void PrimeRetentionSeries(
         string treeId,
@@ -652,17 +659,61 @@ internal sealed class LatticeWalGcScheduler(
         // 0 for a tree holding no pin, instead of no series at all.
         snapshotPins?.Track(treeId);
 
-        // The blocked-pass counter is primed for the mirror-image reason. The
-        // others are primed so the series appears before a first event; this one
-        // is primed so it survives a return to zero. A repair that unblocks a
-        // tree makes the counter stop advancing, and an unprimed counter that
-        // never fired on this silo exports nothing at all - so "healthy, never
-        // blocked" and "not reporting" would be identical at exactly the moment
-        // a reader needs to tell them apart, which is when confirming a fix
-        // held. Priming per tree also keeps a single re-stranded tree visible
-        // rather than averaged away across the fleet.
-        LatticeMetrics.WalGcPasses.Add(0, treeTag, LatticeMetrics.OutcomeBlocked, tenantTag);
+        // Every outcome arm of the pass counter is primed, not just one (issue
+        // #2774). Two distinct reasons converge on the same remedy.
+        //
+        // The blocked arm is primed so it survives a return to zero. A repair
+        // that unblocks a tree makes the counter stop advancing, and an
+        // unprimed counter that never fired on this silo exports nothing at
+        // all - so "healthy, never blocked" and "not reporting" would be
+        // identical at exactly the moment a reader needs to tell them apart,
+        // which is when confirming a fix held.
+        //
+        // The other three are primed so an absent arm cannot be read as a
+        // verdict. The reclaimed arm is the acute case, because it backs an
+        // acceptance criterion: unprimed, "reclamation never happened" and
+        // "the instrument is unwired" are the same reading, so a system that
+        // reclaimed perfectly is indistinguishable from one that never ran - a
+        // success misread as a failure, which is the most expensive wrong
+        // answer a predicate can give.
+        //
+        // There is a second, subtler property this replaces. The three
+        // non-failed arms are selected by a ternary inside a single Add call,
+        // so today the presence of any one of them proves the site executed
+        // for this tree - which is why a scrape carrying only blocked and idle
+        // was still readable as evidence. That inference is incidental to how
+        // the expression happens to be written: splitting the ternary into
+        // three calls would destroy it silently, with no test failing. Priming
+        // each arm makes the guarantee structural, so a reader no longer has
+        // to know the shape of the emission to interpret an absence.
+        //
+        // Priming per tree also keeps a single re-stranded tree visible rather
+        // than averaged away across the fleet.
+        RecordPass(0, LatticeMetrics.OutcomeReclaimed, treeTag, tenantTag);
+        RecordPass(0, LatticeMetrics.OutcomeIdle, treeTag, tenantTag);
+        RecordPass(0, LatticeMetrics.OutcomeBlocked, treeTag, tenantTag);
+        RecordPass(0, LatticeMetrics.OutcomeFailed, treeTag, tenantTag);
     }
+
+    /// <summary>
+    /// The single site that writes <see cref="LatticeMetrics.WalGcPasses"/>.
+    /// </summary>
+    /// <remarks>
+    /// Both the real pass emissions and the zero primes route through here, so
+    /// a primed series and the emission it anticipates carry an identical tag
+    /// set by construction rather than by inspection. Repeating the tag list at
+    /// each call site makes a divergence expressible, and a prime whose tags
+    /// differ from its emission is worse than no prime at all: it mints a
+    /// second series that is permanently zero while the one a reader queries
+    /// stays absent, so the absence the prime exists to remove survives behind
+    /// a decoy that looks like the fix landed.
+    /// </remarks>
+    private static void RecordPass(
+        long delta,
+        in KeyValuePair<string, object?> outcome,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag)
+        => LatticeMetrics.WalGcPasses.Add(delta, treeTag, outcome, tenantTag);
 
     /// <summary>
     /// Adds <paramref name="addTicks"/> to <paramref name="nowTicks"/>,
