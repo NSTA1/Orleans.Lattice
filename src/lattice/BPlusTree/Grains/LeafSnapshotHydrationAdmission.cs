@@ -102,13 +102,18 @@ internal sealed class LeafSnapshotHydrationAdmission
     /// cold start that is already the slow path.
     /// </para>
     /// <para>
-    /// The arithmetic against the measured corpus, on the deployed 12 GiB
-    /// limit: the budget is 1.5 GiB; the largest leaf is 226 MB stored, so it
-    /// costs about 1.13 GiB and exactly <b>one</b> such hydration is admitted at
-    /// a time, with the second queuing. The mean leaf is about 613 KB, costing
-    /// roughly 3 MB, so several hundred ordinary leaves still activate together.
-    /// That is the intended asymmetry - the gate is invisible to a healthy tree
-    /// and binds hard precisely on the population that was killing the process.
+    /// A worked example, purely to show the shape of the asymmetry - the gate
+    /// derives its budget at runtime and carries no assumption about container
+    /// size, so none of these figures appear anywhere in the code. On the 12 GiB
+    /// limit the reported defect was measured against, the budget resolves to
+    /// 1.5 GiB; the largest leaf in that corpus is 226 MB stored, so it costs
+    /// about 1.13 GiB and exactly <b>one</b> such hydration is admitted at a
+    /// time, with the second queuing. The mean leaf there is about 613 KB,
+    /// costing roughly 3 MB, so several hundred ordinary leaves still activate
+    /// together. That is the intended asymmetry - the gate is invisible to a
+    /// healthy tree and binds hard precisely on the population that was killing
+    /// the process - and it holds at any limit, because both the budget and the
+    /// charge scale with it.
     /// </para>
     /// </summary>
     internal const int HydrationHeapAmplification = 5;
