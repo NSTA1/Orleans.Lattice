@@ -64,8 +64,17 @@ public sealed class DurableVectorIndexOptions
 
     /// <summary>
     /// The largest number of centroids or vectors one durable record carries, so
-    /// no record grows with the corpus. Defaults to 1024, which at a typical
-    /// embedding width is a record of a few megabytes.
+    /// no record grows with the corpus. Defaults to 1024.
+    /// <para>
+    /// This is a ceiling, not the size a record is actually written at. An item
+    /// count bounds a record only in units of <i>vectors</i>, and the store of
+    /// record cares about units of <i>bytes</i>: those coincide only at a fixed
+    /// dimensionality, which is exactly what an index does not have. At 768
+    /// dimensions a 1024-item record is 3.15 MiB, and every full record is that
+    /// size to the byte because every full record holds the same item count. See
+    /// <see cref="MaxChunkBytes"/> for the bound that is denominated in the unit
+    /// the store actually needs.
+    /// </para>
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value is not positive.</exception>
     public int MaxItemsPerChunk
@@ -76,6 +85,69 @@ public sealed class DurableVectorIndexOptions
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(value);
             _maxItemsPerChunk = value;
         }
+    }
+
+    /// <summary>
+    /// A flush accumulates chunk records up to this many bytes before issuing a
+    /// write, so one round trip stays bounded no matter how large a partition or
+    /// an ingest batch is.
+    /// </summary>
+    internal const int WriteBatchBytes = 4 * 1024 * 1024;
+
+    /// <summary>
+    /// How many chunk records one store write is expected to coalesce. Batching
+    /// only coalesces anything if a batch can hold several records: a record
+    /// sized at most <see cref="MaxItemsPerChunk"/> items can occupy nearly a
+    /// whole batch on a wide embedding, which leaves the batch carrying barely
+    /// more than one record and makes the bound above inert.
+    /// </summary>
+    internal const int MinChunksPerWriteBatch = 16;
+
+    /// <summary>
+    /// The byte ceiling one chunk record is sized against, so a record is a small
+    /// fraction of a write batch rather than the whole of one.
+    /// </summary>
+    internal const int MaxChunkBytes = WriteBatchBytes / MinChunksPerWriteBatch;
+
+    /// <summary>
+    /// The number of items a chunk record is actually written at: the largest
+    /// count that keeps a record within <see cref="MaxChunkBytes"/>, capped by the
+    /// configured <see cref="MaxItemsPerChunk"/>.
+    /// <para>
+    /// The count is derived from the index's own dimensionality rather than from
+    /// anything about the host, so a narrow index keeps its configured item count
+    /// and a wide one is bounded by bytes instead. Nothing has to be tuned and no
+    /// setting has to change for a record to stay a reasonable size.
+    /// </para>
+    /// </summary>
+    internal int EffectiveItemsPerChunk => ResolveItemsPerChunk(Index?.Dimensions ?? 0, MaxItemsPerChunk);
+
+    /// <summary>
+    /// The item count a chunk of the given dimensionality is written at.
+    /// </summary>
+    /// <param name="dimensions">The index's dimensionality; a non-positive value leaves the ceiling in force.</param>
+    /// <param name="maxItemsPerChunk">The configured ceiling on a record's item count.</param>
+    internal static int ResolveItemsPerChunk(int dimensions, int maxItemsPerChunk)
+    {
+        // A vector chunk carries a header, then each item as its coordinates
+        // followed by its identifier. Centroid chunks carry no identifier, so
+        // sizing both against the vector stride keeps a centroid record under the
+        // same ceiling rather than over it.
+        //
+        // A dimensionality of zero is the "not yet known" case, and it needs no
+        // branch of its own: the stride degenerates to the identifier alone, the
+        // quotient runs far past any sane ceiling, and the clamp hands back the
+        // configured count. A negative one cannot arrive, because
+        // VectorIndexOptions.Dimensions rejects a non-positive value on the way
+        // in.
+        var stride = ((long)dimensions * sizeof(float)) + sizeof(long);
+        var budget = MaxChunkBytes
+            - VectorIndexFormat.ChunkHeaderSize
+            - VectorIndexPersistenceFormat.RecordHeaderSize;
+
+        // A single item wider than the whole budget still has to be written, so
+        // the floor is one item rather than none.
+        return (int)Math.Clamp(budget / stride, 1, maxItemsPerChunk);
     }
 
     /// <summary>

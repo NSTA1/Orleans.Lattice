@@ -44,6 +44,34 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
     /// <summary>Resets <see cref="BytesWritten"/> so a test can measure one phase in isolation.</summary>
     internal void ResetBytesWritten() => BytesWritten = 0;
 
+    /// <summary>
+    /// The largest single record ever handed to <see cref="WriteAsync"/>.
+    /// <para>
+    /// This is the figure a log-structured store cares about and an item count
+    /// does not bound: a record is one entry in the write-ahead log and one
+    /// contiguous allocation on the read path, so a chunk sized in vectors grows
+    /// without limit as the dimensionality rises. Measuring it here is what makes
+    /// a chunk-sizing regression a red test rather than a production incident.
+    /// </para>
+    /// </summary>
+    internal int LargestRecordBytes { get; private set; }
+
+    /// <summary>The largest single batch, in bytes, ever handed to <see cref="WriteAsync"/>.</summary>
+    internal int LargestBatchBytes { get; private set; }
+
+    /// <summary>The number of records in the largest batch, by record count.</summary>
+    internal int LargestBatchEntries { get; private set; }
+
+    /// <summary>
+    /// The mean number of records per write batch, across every batch that
+    /// carried at least one record. A batching bound that a single record can
+    /// exceed on its own is inert, and this is the quantity that shows it.
+    /// </summary>
+    internal double MeanEntriesPerBatch => _batches == 0 ? 0 : (double)_batchedEntries / _batches;
+
+    private int _batches;
+    private long _batchedEntries;
+
     /// <summary>The number of records currently held.</summary>
     internal int RecordCount => _records.Count;
 
@@ -123,10 +151,32 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
         }
 
         Writes++;
+        var batchBytes = 0;
         foreach (var entry in entries)
         {
             BytesWritten += entry.Value.Length;
+            batchBytes += entry.Value.Length;
+            if (entry.Value.Length > LargestRecordBytes)
+            {
+                LargestRecordBytes = entry.Value.Length;
+            }
+
             _records[entry.Key] = entry.Value;
+        }
+
+        if (entries.Count > 0)
+        {
+            _batches++;
+            _batchedEntries += entries.Count;
+            if (batchBytes > LargestBatchBytes)
+            {
+                LargestBatchBytes = batchBytes;
+            }
+
+            if (entries.Count > LargestBatchEntries)
+            {
+                LargestBatchEntries = entries.Count;
+            }
         }
 
         return Task.CompletedTask;

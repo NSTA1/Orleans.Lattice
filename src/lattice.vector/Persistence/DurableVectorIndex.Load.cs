@@ -51,11 +51,11 @@ public sealed partial class DurableVectorIndex
             }
         }
 
-        if (manifestRecord is null && buildRecord is null && _keys.Count == 0)
+        if (manifestRecord is null && _keys.Count == 0 && TryAdoptUncommittedBuild(buildRecord))
         {
-            // A store with nothing on it. Not a fault, and nothing to sweep: the
-            // index simply has not been built yet.
-            ResetInMemory();
+            // A store with nothing committed on it. Not a fault, and nothing to
+            // sweep: the index simply has not been built yet, or has been started
+            // and has not banked anything.
             return;
         }
 
@@ -144,6 +144,22 @@ public sealed partial class DurableVectorIndex
         _resident = resident;
         _persistedPartitions = partitionSlots;
         _restored = true;
+
+        // The append-only ingest prefix is addressed by chunk index, so it can
+        // only be appended to while the chunks already on the store hold the same
+        // number of items each one is written at now. A durable prefix whose
+        // committed count is not that multiple was laid out at a different item
+        // count - by an earlier configuration, or by a build whose dimensionality
+        // resolves to a different one - and appending to it would number new
+        // chunks over a different range of vectors. Falling back to a full
+        // rewrite re-lays the prefix at the current size instead, which costs one
+        // rewrite of what has been ingested so far and then resumes appending.
+        if (manifest.Header.PartitionCount == 0 &&
+            chunkCounts[0] > 0 &&
+            manifest.IndexedCount != (long)chunkCounts[0] * _options.EffectiveItemsPerChunk)
+        {
+            _ingestAppendOnly = false;
+        }
 
         // Every partition's durable form matches what is now in memory, so the
         // next flush writes only what a subsequent mutation dirties.
@@ -313,6 +329,55 @@ public sealed partial class DurableVectorIndex
                 await _keys.RemoveAsync(id, cancellationToken).ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    /// Adopts the build state of a build that has started but committed nothing,
+    /// so an interrupted build resumes from where it got to instead of starting
+    /// again.
+    /// <para>
+    /// A build state is written by the first build step, which counts the source;
+    /// a manifest is written only by the first ingest checkpoint, which is later.
+    /// Between the two the store holds a build state and no manifest, and reading
+    /// that as damage costs the count and forces the phase back to
+    /// <see cref="VectorIndexBuildPhase.NotStarted"/>. A build whose activation is
+    /// long enough to take one step and no more then never gets past that step:
+    /// it re-counts the source, is discarded, and re-counts it again, without
+    /// ever ingesting a vector or reaching a terminating condition.
+    /// </para>
+    /// <para>
+    /// Adoption stays conservative, because the risk is not symmetric. There is
+    /// no committed content to be wrong about, but a cursor is a claim that the
+    /// vectors before it are durable, and with no manifest that claim is false -
+    /// resuming from it would skip them silently. A state carrying a cursor or an
+    /// ingested count is therefore still refused, and only the one that accounts
+    /// for nothing is adopted.
+    /// </para>
+    /// </summary>
+    /// <param name="buildRecord">The persisted build-state record, or null when the store holds none.</param>
+    /// <returns><see langword="true"/> when the in-memory state now reflects the store.</returns>
+    private bool TryAdoptUncommittedBuild(byte[]? buildRecord)
+    {
+        if (buildRecord is null)
+        {
+            ResetInMemory();
+            return true;
+        }
+
+        if (!VectorIndexBuildState.TryReadRecord(buildRecord, out var build) ||
+            build.Ingested != 0 ||
+            build.Cursor is not null)
+        {
+            return false;
+        }
+
+        ResetInMemory();
+        _generation = build.Generation;
+        _phase = build.Phase == VectorIndexBuildPhase.Persisting
+            ? VectorIndexBuildPhase.Training
+            : build.Phase;
+        _expected = build.Expected;
+        return true;
     }
 
     private void AdoptBuildState(VectorIndexManifest manifest, byte[]? buildRecord)

@@ -39,7 +39,20 @@ public sealed partial class DurableVectorIndex
                 break;
             case VectorIndexBuildPhase.Training:
                 Train();
-                await WriteBuildStateAsync(cancellationToken).ConfigureAwait(false);
+
+                // Training continues straight into persisting rather than
+                // yielding between them. The boundary cannot be an activation
+                // boundary: AdoptBuildState deliberately normalises a durable
+                // Persisting back to Training, because the manifest on disk is
+                // the pre-training one and the partitioning that phase was about
+                // to write does not exist. That normalisation is correct, but it
+                // makes a build-state write at this boundary dead - the value
+                // written is always read back as the value before it - so a host
+                // that grants one build step per activation would re-train and
+                // re-yield forever, never reaching Ready. Persisting here keeps
+                // the recovery semantics (a crash mid-persist still resumes at
+                // Training) while guaranteeing the step makes durable progress.
+                await PersistTrainedAsync(cancellationToken).ConfigureAwait(false);
                 break;
             case VectorIndexBuildPhase.Persisting:
                 await PersistTrainedAsync(cancellationToken).ConfigureAwait(false);
@@ -201,7 +214,7 @@ public sealed partial class DurableVectorIndex
     {
         var budget = _options.IngestBatchSize;
         var consumed = 0;
-        var chunkSize = _options.MaxItemsPerChunk;
+        var chunkSize = _options.EffectiveItemsPerChunk;
 
         // The wall-clock half of the bound. A step is capped by work count AND by
         // elapsed time, because those two are only interchangeable while the
