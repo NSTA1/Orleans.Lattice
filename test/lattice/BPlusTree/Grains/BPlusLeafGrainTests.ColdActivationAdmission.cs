@@ -516,7 +516,8 @@ public class BPlusLeafGrainColdActivationAdmissionTests
 
         Assert.That(state.State.SnapshotLoadHintBytes, Is.Zero, "nothing observed yet");
 
-        var rehydrated = await grain.TryRehydrateFromSnapshotAsync(CancellationToken.None);
+        var rehydrated = await grain.TryRehydrateFromSnapshotAsync(CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(15));
 
         Assert.Multiple(() =>
         {
@@ -629,7 +630,11 @@ public class BPlusLeafGrainColdActivationAdmissionTests
             + "a claim sized from the banked 5000-byte hint queues here");
 
         occupant.Dispose();
-        Assert.That(await rehydrate, Is.True);
+
+        // Bounded: without the sole-occupant rule this claim can never fit, and
+        // an unbounded await here would hang a perturbation run rather than
+        // redden it.
+        Assert.That(await rehydrate.WaitAsync(TimeSpan.FromSeconds(15)), Is.True);
     }
 
     // ---------------------------------------------------------------------
@@ -669,7 +674,10 @@ public class BPlusLeafGrainColdActivationAdmissionTests
             treeId,
             () => Task.FromResult<LeafSnapshotBlob?>(NewSizedBlob(offset: 10L, snapshotBytes: 10L)));
 
-        Assert.That(await grain.TryRehydrateFromSnapshotAsync(CancellationToken.None), Is.True);
+        Assert.That(
+            await grain.TryRehydrateFromSnapshotAsync(CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(15)),
+            Is.True);
 
         List<(string Outcome, long Value)> observed;
         lock (records)
