@@ -111,6 +111,7 @@ public sealed class RepoContextAnnIndexBuildGrainTests
 
             var reminders = Substitute.For<IReminderRegistry>();
             var corpusReporter = new RepoContextAnnBuildCorpusReporter();
+            var sliceReporter = new RepoContextAnnBuildSliceReporter();
             var grain = new RepoContextAnnIndexBuildGrain(
                 context,
                 reminders,
@@ -120,6 +121,7 @@ public sealed class RepoContextAnnIndexBuildGrainTests
                 new NullRepoIndexRunAuthority(),
                 UnrestrictedCorpusGateProbe.Instance,
                 corpusReporter,
+                sliceReporter,
                 NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
                 State);
 

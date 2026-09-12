@@ -265,6 +265,12 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         /// <summary>The reporter whose series the denial signal is asserted against.</summary>
         public RepoContextAnnBuildCorpusReporter Reporter { get; } = new();
 
+        /// <summary>
+        /// The reporter whose series records what each build STEP did, as opposed to
+        /// what the finished build held. See issue #2651.
+        /// </summary>
+        public RepoContextAnnBuildSliceReporter SliceReporter { get; } = new();
+
         public RepoContextAnnIndexRegistry Registry { get; private set; } = null!;
 
         public RepoContextAnnIndexBuildGrain Grain { get; private set; } = null!;
@@ -322,6 +328,7 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
                 authority,
                 Probe,
                 Reporter,
+                SliceReporter,
                 NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
                 State);
         }
@@ -364,6 +371,7 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         {
             Registry?.Dispose();
             Reporter.Dispose();
+            SliceReporter.Dispose();
         }
     }
 

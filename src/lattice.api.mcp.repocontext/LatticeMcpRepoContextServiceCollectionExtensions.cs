@@ -220,6 +220,17 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddSingleton<IRepoContextCorpusGateProbe, LatticeRepoContextCorpusGateProbe>();
         services.TryAddSingleton<RepoContextAnnBuildCorpusReporter>();
 
+        // The corpus reporter above fires only when a build reaches Ready, as the
+        // partitioning and sweep reporters fire only at their own terminal moments,
+        // so between an armed sweep and a Ready build the plane emitted no series at
+        // all. A build consuming nothing and a build that never ran were therefore
+        // the same observation - every arm primed to zero - which is precisely the
+        // reading the acceptance rig produced and could not interpret. This reporter
+        // counts every completed build step, so the total separates them. Singleton
+        // for the same reason as the corpus reporter: it owns a Meter, and a
+        // per-activation instance would leak one per repository. See issue #2651.
+        services.TryAddSingleton<RepoContextAnnBuildSliceReporter>();
+
         // The build scheduler and its startup sweep. The index build is what makes
         // queries fast, so arming it from a query made the acceleration reachable
         // only from the thing it accelerates: nothing resumed it after a process

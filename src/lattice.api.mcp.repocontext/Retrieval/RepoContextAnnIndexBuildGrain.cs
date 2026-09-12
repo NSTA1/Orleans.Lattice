@@ -55,6 +55,7 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     IRepoIndexRunAuthority runAuthority,
     IRepoContextCorpusGateProbe corpusGateProbe,
     RepoContextAnnBuildCorpusReporter corpusReporter,
+    RepoContextAnnBuildSliceReporter sliceReporter,
     ILogger<RepoContextAnnIndexBuildGrain> logger,
     [PersistentState("repoContextAnnIndexBuild", global::Orleans.Lattice.LatticeOptions.StorageProviderName)]
     IPersistentState<RepoContextAnnIndexBuildState> state)
@@ -130,6 +131,24 @@ internal sealed class RepoContextAnnIndexBuildGrain(
 
     /// <summary>Whether the current denial episode has already been counted as terminal.</summary>
     private bool _announcedTerminal;
+
+    /// <summary>
+    /// Progress reported by the previous build step of this activation, against
+    /// which the next step is classified for
+    /// <see cref="RepoContextAnnBuildSliceReporter"/>.
+    /// <para>
+    /// Activation-local, and correctly so on both counts. The coordinator is
+    /// single-threaded and scoped to one repository and embedding space, so no
+    /// other build can perturb it; and the counts it is compared against -
+    /// <see cref="VectorIndexBuildProgress.SlicesDeadlinedWithoutProgress"/> in
+    /// particular - are per index instance and reset with the handle, so carrying a
+    /// baseline across activations would compare a fresh instance's counters
+    /// against a retired one's and manufacture a spurious classification. The
+    /// default baseline names phase <c>NotStarted</c> and zero of everything, which
+    /// is exactly what a build that has not yet stepped holds.
+    /// </para>
+    /// </summary>
+    private VectorIndexBuildProgress _previousProgress;
 
     /// <summary>
     /// The repository this coordinator builds for, parsed once from the grain key.
@@ -314,6 +333,24 @@ internal sealed class RepoContextAnnIndexBuildGrain(
             .ConfigureAwait(true);
 
         _advancedThisActivation = true;
+
+        // THE STEP IS COUNTED HERE, ABOVE EVERY EARLY RETURN BELOW, AND THAT
+        // PLACEMENT IS THE POINT OF THE COUNTER.
+        //
+        // Every other instrument on this plane fires at a terminal moment: the
+        // corpus counter at Ready, the partitioning counter on a finished plane,
+        // the sweep counter at arming. So between an armed sweep and a Ready build
+        // the plane emitted no series whatsoever, and a coordinator grinding
+        // through slices that bank nothing was byte-identical in telemetry to a
+        // coordinator that never took a step - every arm of every counter sitting
+        // at its primed zero. That ambiguity blocked a real diagnosis on the
+        // acceptance rig. Counting the step before any of the returns below is what
+        // makes the total a record of work attempted rather than of work finished;
+        // moving this call under the Ready check would restore exactly the
+        // blindness it was added to remove.
+        sliceReporter.RecordSlice(
+            RepoContextAnnBuildSliceReporter.Classify(_previousProgress, progress));
+        _previousProgress = progress;
 
         // The discriminator this build is otherwise missing. A tick that banks
         // nothing looks identical from outside whether the slice budget merely
