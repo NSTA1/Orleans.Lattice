@@ -72,7 +72,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.storage.policy.over_threshold` | observable gauge (0/1) | `tree` | Overview | Trees over advisory threshold |
 | `orleans.lattice.storage.policy.trim_triggered` | counter | `tree`, `reason` | Overview | Byte-pressure trim activity |
 | `orleans.lattice.storage.policy.bytes_reclaimed` | counter (`By`) | `tree` | Overview | Byte-pressure trim activity |
-| `orleans.lattice.wal.gc.passes` | counter (`{pass}`) | `tree`, `outcome` | Replication | WAL GC pass rate by outcome; WAL GC blocked passes by tree |
+| `orleans.lattice.wal.gc.passes` | counter (`{pass}`) | `tree`, `outcome` | Replication, CommitPath | WAL GC pass rate by outcome; WAL GC blocked passes by tree. Also charted on CommitPath alongside `leaf.snapshot.coverage_repairs`, where the `reclaimed` arm is the counterpart a zero-coverage repair is meant to unblock (issue #2692) |
 | `orleans.lattice.wal.gc.interval` | histogram (`s`) | `tree` | Replication | WAL GC adaptive interval |
 | `orleans.lattice.wal.gc.backlog_bytes` | histogram (`By`) | `tree` | Replication | WAL GC retained backlog after pass |
 | `orleans.lattice.wal.gc.backlog_bytes_unavailable` | counter (`{pass}`) | `tree`, `reason` | Replication | WAL GC backlog bytes unavailable by reason |
