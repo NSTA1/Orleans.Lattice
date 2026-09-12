@@ -540,21 +540,19 @@ internal sealed partial class BPlusLeafGrain
 
         _zeroCoverageRepairAttempts++;
 
-        // Divide an oversized leaf BEFORE attempting the capture, not after a
-        // failure. A leaf over the byte bound is one whose capture has to
-        // materialise a payload too large to allocate contiguously under
-        // ambient heap pressure, so attempting it first would burn an attempt
-        // on a capture that is expected to fail, and would allocate hundreds of
-        // megabytes to discover it. Splitting first makes the very first
-        // capture on this path the one that succeeds.
+        // The byte-overflow pre-split that used to run here now runs inside
+        // CaptureSnapshotCoreAsync, which this method reaches through
+        // TryCaptureSnapshotForAdvisoryAsync below. Behaviour is unchanged for
+        // this path and is now extended to the other six capture routes, which
+        // had no size guard at all (issue #2733).
         //
-        // This is the step that makes an ALREADY-oversized deployment recover
-        // on its own: the driver above runs at activation for any leaf holding
-        // a checkpointed partition without coverage, so it reaches a leaf that
-        // grew oversized and then went quiet, which no write-path predicate
-        // ever would.
-        var splitOptions = await GetOptionsAsync();
-        await TrySplitForByteOverflowAsync(splitOptions.MaxLeafKeys, splitOptions.MaxLeafBytes);
+        // Keeping a second call here would be worse than redundant. Two
+        // mechanisms enforcing one invariant means neither is mutation-testable:
+        // perturbing either leaves the suite green, so the fixtures silently
+        // stop covering the property they were written for. That is the same
+        // reasoning that removed the compensating clamp from
+        // IsPartitionProvenCheckpointed, and it applies here for the same
+        // reason.
 
         // Honour a caller deadline wherever one exists. The activation driver
         // passes the activation token, so a repair capture cannot outlive the
@@ -797,6 +795,64 @@ internal sealed partial class BPlusLeafGrain
         var captureSucceeded = false;
         try
         {
+            // Divide an oversized leaf BEFORE materialising its payload, on
+            // EVERY route into capture rather than on one of them.
+            //
+            // This used to live in TryRepairZeroCoverageAsync, which is one of
+            // seven callers of this method and is BEHIND a predicate
+            // (HasCheckpointedPartitionWithoutCoverage) that a tree with no
+            // proven-checkpointed partition never satisfies. On such a tree no
+            // leaf was ever divided on the byte bound at all, and the remaining
+            // six routes - the grain seam, the activation advisory, the
+            // coverage-deficit escape, the cadence recheck, the deactivation
+            // hook, and cold-replay banking - each reached the capture below
+            // with no size guard whatsoever and threw OutOfMemoryException
+            // trying to allocate the payload contiguously (issue #2733).
+            //
+            // Ordering made it worse than the predicate alone: the activation
+            // advisory runs at Step 1.5 and the coverage-deficit escape above
+            // the repair call in MaybeRunPeriodicSnapshotRecheckAsync, so even
+            // on a tree where the predicate DOES hold, an earlier driver
+            // reached the unguarded capture first. Guarding any single driver
+            // would leave the other six open; this method is the one seam they
+            // all pass through, so the guard belongs here and only here.
+            //
+            // Placed INSIDE the single-flight window deliberately, and this is
+            // stricter than the call site it replaces, which split before the
+            // flag was set. With _snapshotCaptureInFlight already true, every
+            // route that could re-enter capture during the split's PersistAsync
+            // declines on its own guard: this method's single-flight check,
+            // TryRepairZeroCoverageAsync's first conjunct, and the
+            // coverage-deficit escape's !_snapshotCaptureInFlight.
+            //
+            // It is inside the try so that a throwing split still clears the
+            // in-flight flag through the finally; captureStartedAt is re-stamped
+            // afterwards so the duration histogram keeps measuring the capture
+            // proper, while a split that throws is still timed.
+            //
+            // Two routes are deliberately EXCLUDED, and neither exclusion
+            // weakens the self-healing property this guard exists for.
+            //
+            // A non-null coverageOverride means this is TryBankColdReplayProgressAsync,
+            // which runs from the OperationCanceledException handler of
+            // ReplayWalSinceCheckpointAsync - inside a FAILING activation, on
+            // its way to rethrowing. Its claim is a per-partition cold re-read
+            // frontier for rows a split would divide across two leaves, and the
+            // sibling would inherit the rows without inheriting the claim. That
+            // path exists to bank what a cancelled replay already absorbed, so
+            // doing structural work there is against its whole intent.
+            //
+            // An already-cancelled token means a deactivating leaf (issue
+            // #1965). Starting a multi-persist division that cannot finish
+            // before the deadline would leave a half-migrated split behind; the
+            // next activation re-enters this seam and divides then.
+            if (coverageOverride is null && !cancellationToken.IsCancellationRequested)
+            {
+                await TrySplitForByteOverflowAsync(resolved.MaxLeafKeys, resolved.MaxLeafBytes);
+            }
+
+            captureStartedAt = Stopwatch.GetTimestamp();
+
             // Single-threaded copy of the cache rows under the grain
             // turn. EnumerateRows yields the SortedDictionary's
             // key-ordered KeyValuePair sequence; the resulting buffer is
