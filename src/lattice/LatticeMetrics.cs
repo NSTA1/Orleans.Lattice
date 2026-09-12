@@ -3257,20 +3257,28 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Count of bounded leaf reads issued by a stall-guarded shard-root page
-    /// fill, tagged with whether the read was issued, attached to one already
-    /// in flight, or answered from a retained result (issue 2585).
+    /// fill, tagged with whether the read was issued or attached to one
+    /// already in flight (issue 2585).
     /// <para>
     /// This is the convergence counterpart to
     /// <see cref="ScanPageCeilingOutcomes"/>. That counter reports whether a
     /// ceiling fire kept the rows it had; this one reports whether the
     /// <em>next</em> attempt had to pay for them again. A livelocked walk shows
     /// <c>issued</c> climbing in step with
-    /// <see cref="ScanPageStalls"/> while <c>joined</c> and <c>served</c> stay
+    /// <see cref="ScanPageStalls"/> while <c>joined</c> stays
     /// at zero: every retry re-reading the same leaf from scratch is the
     /// signature of the defect.
     /// </para>
     /// <para>
-    /// <b>Reading a zero.</b> All three arms are primed at zero on first
+    /// <b>There is deliberately no third arm for a reused result.</b> Only a
+    /// read still in flight is ever joined: once the leaf's turn ends, later
+    /// writes are ordered after the read, so serving its rows again would be a
+    /// scan page that misses committed writes. An earlier revision retained
+    /// settled results briefly and emitted a <c>served</c> arm; that was
+    /// incorrect at any window length and both were removed.
+    /// </para>
+    /// <para>
+    /// <b>Reading a zero.</b> Both arms are primed at zero on first
     /// guarded use, through the same recorder the live path uses, so a zero
     /// here is a measured absence rather than an absent measurement. An
     /// unguarded walk never reports, by design - it cannot strand a read, so it
@@ -3285,7 +3293,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> ScanPageLeafReadOutcomes =
         Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.leaf_read_outcomes", unit: "{read}",
-            description: "Count of stall-guarded shard-root page-fill leaf reads by whether the read was issued, joined in flight, or served from a retained result.");
+            description: "Count of stall-guarded shard-root page-fill leaf reads by whether the read was issued or joined while still in flight.");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>issued</c> (no identical read was held, so
@@ -3302,14 +3310,6 @@ public static class LatticeMetrics
     public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafReadJoinedTag =
         new(TagOutcome, "joined");
 
-    /// <summary>
-    /// <see cref="TagOutcome"/> = <c>served</c> (an identical read had already
-    /// settled and was still within its retention, so the walk took its result
-    /// without reading the leaf at all). This is the arm that converts a
-    /// repeating stall into progress.
-    /// </summary>
-    public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafReadServedTag =
-        new(TagOutcome, "served");
 
     /// <summary>
     /// Count of client-side resilient scans

@@ -43,15 +43,8 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private sealed class ScanPageLeafReadEntry
     {
-        /// <summary>The read itself, in flight or settled.</summary>
+        /// <summary>The read itself, joinable for as long as it runs.</summary>
         internal required Task Read { get; init; }
-
-        /// <summary>
-        /// When the read settled, or <see langword="null"/> while it is still
-        /// in flight. Drives retention only; an in-flight read is joinable for
-        /// as long as it runs.
-        /// </summary>
-        internal long? SettledTimestamp;
     }
 
     /// <summary>
@@ -79,13 +72,6 @@ internal sealed partial class ShardRootGrain
 
     private bool _scanPageLeafReadOutcomesPrimed;
 
-    /// <summary>
-    /// Ceiling on retained leaf reads. A scan page walks a bounded chain and
-    /// settled entries are evicted on the first access past their retention, so
-    /// this is a backstop against an activation that issues many distinct reads
-    /// without ever coming back for them, not a working limit.
-    /// </summary>
-    private const int MaxRetainedScanPageLeafReads = 64;
 
     /// <summary>
     /// Issues a bounded leaf entry read through the coalescing map, or attaches
@@ -159,32 +145,34 @@ internal sealed partial class ShardRootGrain
     /// ceiling already returns leaf data read at its start.
     /// </para>
     /// <para>
-    /// <b>Retention is what makes it converge, and coalescing alone does
-    /// not.</b> Coalescing fixes divergence: queue depth stops growing. It does
-    /// not fix convergence, because the retry need not land inside the read's
-    /// flight window. A read issued at t=0 that needs 40s is abandoned at the
-    /// 25s ceiling, completes at t=40 having done all the work, and hands its
-    /// rows to a caller that left 15s earlier; a retry arriving at t=60 finds
-    /// nothing to attach to and starts a fresh 40s read that will also be cut
-    /// at 25s. Every attempt resets elapsed read time to zero and the walk
-    /// never advances. Retaining the settled result for one ceiling closes
-    /// that: the first retry after completion is answered from the map, the
-    /// continuation token advances, and it does so in bounded time regardless
-    /// of the caller's backoff, which this shard does not control.
+    /// <b>Why a completed read is never reused, however recently it
+    /// completed.</b> The serialisability argument above is specific to a read
+    /// still in flight and does not extend past its completion by even a
+    /// moment: once the leaf's turn ends, later writes are ordered after the
+    /// read, so handing its rows to a new caller returns a scan page that
+    /// misses committed writes. An earlier revision of this file retained
+    /// settled results for one ceiling, reasoning that the window was short.
+    /// That was wrong, and wrong in kind rather than in degree - a scan that
+    /// misses a committed write is incorrect at any window length, so there is
+    /// no duration at which the trade becomes acceptable.
+    /// </para>
+    /// <para>
+    /// <b>What that costs, and why it is still sufficient.</b> Coalescing alone
+    /// fixes divergence outright: queue depth stops growing, so an attempt is
+    /// no longer strictly worse than the one before it. It converges because
+    /// the read stays in flight and successive retries keep attaching to the
+    /// same one, so elapsed read time accumulates across attempts instead of
+    /// resetting - whichever retry is attached when the read completes carries
+    /// the rows, the continuation token advances, and the walk proceeds. The
+    /// residual case is a retry that arrives after a read completed and before
+    /// the next one is issued: it pays for a fresh read. That is slower, and it
+    /// is correct, which is the right way round.
     /// </para>
     /// <para>
     /// <b>Confined to stall-guarded walks.</b> An unguarded walk cannot strand
-    /// a read - nothing abandons it - so it has neither a duplicate to suppress
-    /// nor a result to retain, and it takes the unmodified path. That keeps
-    /// every behaviour added here on exactly the path whose defect it fixes.
-    /// </para>
-    /// <para>
-    /// <b>A settled entry is evicted, never left to be attached to.</b> Both
-    /// arms of <see cref="ForgetScanPageLeafRead"/> matter. A faulted read left
-    /// in the map would be handed to every later caller forever, turning one
-    /// failure into a permanent one with the same signature as the livelock
-    /// this fixes; a successful one left past its retention would answer a
-    /// caller with rows older than the contract allows.
+    /// a read - nothing abandons it - so it has no duplicate to suppress, and
+    /// it takes the unmodified path. That keeps every behaviour added here on
+    /// exactly the path whose defect it fixes.
     /// </para>
     /// </summary>
     private async Task<TList> ReadLeafAsync<TList>(
@@ -200,14 +188,9 @@ internal sealed partial class ShardRootGrain
 
         PrimeScanPageLeafReadOutcomes();
 
-        var retention = scan.StallDuration;
-        if (TryAttachScanPageLeafRead<TList>(key, retention, out var attached, out var settled))
+        if (TryAttachScanPageLeafRead<TList>(key, out var attached))
         {
-            RecordScanPageLeafReadOutcome(
-                1,
-                settled
-                    ? LatticeMetrics.OutcomeScanPageLeafReadServedTag
-                    : LatticeMetrics.OutcomeScanPageLeafReadJoinedTag);
+            RecordScanPageLeafReadOutcome(1, LatticeMetrics.OutcomeScanPageLeafReadJoinedTag);
 
             // Copied, never shared: the issuing walk owns the instance the leaf
             // returned and appends nothing to it, but handing the same list to
@@ -219,7 +202,7 @@ internal sealed partial class ShardRootGrain
 
         var read = issue();
         var entry = new ScanPageLeafReadEntry { Read = read };
-        RegisterScanPageLeafRead(key, entry, retention);
+        RegisterScanPageLeafRead(key, entry);
         RecordScanPageLeafReadOutcome(1, LatticeMetrics.OutcomeScanPageLeafReadIssuedTag);
 
         _ = read.ContinueWith(
@@ -232,74 +215,80 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Finds a live read for <paramref name="key"/>, evicting one that has
-    /// faulted or outlived <paramref name="retention"/> rather than returning
-    /// it. <paramref name="settled"/> distinguishes a retained result from a
-    /// read still in flight, so the two are measured separately.
+    /// Finds a read for <paramref name="key"/> that is <em>still in flight</em>,
+    /// evicting any that has completed rather than returning it.
+    /// <para>
+    /// <b>Only an in-flight read may be joined, and that restriction is a
+    /// correctness requirement rather than a conservatism.</b> Joining an
+    /// in-flight read is serializable: because the leaf is non-reentrant the
+    /// read holds that leaf's turn for its whole duration, so every write is
+    /// ordered strictly before or strictly after it and a joiner observes
+    /// exactly what the original caller would have. A read that has already
+    /// completed carries no such guarantee - writes may have committed between
+    /// its execution and this lookup, so serving its rows would be a stale
+    /// read, not a cheap one. An earlier revision of this file retained settled
+    /// results for one ceiling on the argument that the window was short; the
+    /// window's length is irrelevant, because a scan that misses a committed
+    /// write is wrong at any duration.
+    /// </para>
+    /// <para>
+    /// Completion is read from the task itself rather than from a flag set by a
+    /// continuation. The continuation runs on <see cref="TaskScheduler.Default"/>
+    /// and can still be pending when a retry looks up, so a flag would report
+    /// "in flight" for a read that had already finished - which is precisely
+    /// the stale-read case this guard exists to refuse.
+    /// </para>
     /// </summary>
     private bool TryAttachScanPageLeafRead<TList>(
         ScanPageLeafReadKey key,
-        TimeSpan retention,
-        out Task<TList> attached,
-        out bool settled)
+        out Task<TList> attached)
     {
         lock (_scanPageLeafReadsGate)
         {
             if (!_scanPageLeafReads.TryGetValue(key, out var entry))
             {
                 attached = default!;
-                settled = false;
                 return false;
             }
 
-            // A faulted or cancelled read is never handed on. Attaching to one
-            // would convert a single failure into a permanent one.
-            if (entry.Read.IsFaulted || entry.Read.IsCanceled)
+            // Completed in any manner - ran to completion, faulted, or
+            // cancelled - is never handed on. Serving a completed success would
+            // be a stale read; attaching to a completed failure would convert a
+            // single failure into a permanent one.
+            if (entry.Read.IsCompleted)
             {
                 _scanPageLeafReads.Remove(key);
                 attached = default!;
-                settled = false;
-                return false;
-            }
-
-            if (entry.SettledTimestamp is { } at && Stopwatch.GetElapsedTime(at) > retention)
-            {
-                _scanPageLeafReads.Remove(key);
-                attached = default!;
-                settled = false;
                 return false;
             }
 
             attached = (Task<TList>)entry.Read;
-            settled = entry.SettledTimestamp is not null;
             return true;
         }
     }
 
-    private void RegisterScanPageLeafRead(ScanPageLeafReadKey key, ScanPageLeafReadEntry entry, TimeSpan retention)
+    private void RegisterScanPageLeafRead(ScanPageLeafReadKey key, ScanPageLeafReadEntry entry)
     {
         lock (_scanPageLeafReadsGate)
         {
-            PruneScanPageLeafReads(retention);
+            PruneScanPageLeafReads();
             _scanPageLeafReads[key] = entry;
         }
     }
 
     /// <summary>
-    /// Records that a read has settled, so retention runs from completion
-    /// rather than from issue.
+    /// Drops a read from the map once it completes, in any manner. Nothing is
+    /// retained past completion, because only an in-flight read may be joined -
+    /// see <see cref="TryAttachScanPageLeafRead{TList}"/> for why.
     /// <para>
-    /// Only success is recorded here. Evicting a failed read is deliberately
-    /// <em>not</em> done in this continuation, and the reason is testability as
-    /// much as correctness: an eviction here and the guard in
-    /// <see cref="TryAttachScanPageLeafRead{TList}"/> would mask each other, so
-    /// neither could be shown to be load-bearing and one of them would be dead
-    /// code nobody could prove was dead. The guard at the point of use is the
-    /// one kept, because it is the only one synchronously ordered with a
-    /// reader - this continuation runs on <see cref="TaskScheduler.Default"/>
-    /// and can therefore still be pending when a retry looks the entry up.
-    /// <see cref="PruneScanPageLeafReads"/> bounds anything never looked up
-    /// again.
+    /// This continuation is a housekeeping optimisation, not a correctness
+    /// guard, and the distinction matters: it runs on
+    /// <see cref="TaskScheduler.Default"/> and can still be pending when a
+    /// retry looks the entry up, so it is not synchronously ordered with a
+    /// reader and nothing may depend on it having run. The authoritative
+    /// refusal is the completion check in
+    /// <see cref="TryAttachScanPageLeafRead{TList}"/>, which reads the task's
+    /// own state and therefore cannot be raced.
     /// </para>
     /// </summary>
     private void SettleScanPageLeafRead(ScanPageLeafReadKey key, ScanPageLeafReadEntry entry)
@@ -313,64 +302,41 @@ internal sealed partial class ShardRootGrain
                 return;
             }
 
-            if (entry.Read.IsCompletedSuccessfully)
-            {
-                entry.SettledTimestamp = Stopwatch.GetTimestamp();
-            }
+            _scanPageLeafReads.Remove(key);
         }
     }
 
     /// <summary>
-    /// Drops settled entries that have outlived their retention, and then, if
-    /// the map is still at its ceiling, the oldest settled entry. In-flight
-    /// entries are never dropped: evicting one would let the next attempt
-    /// enqueue the duplicate this map exists to suppress.
+    /// Drops every entry whose read has completed. In-flight entries are never
+    /// dropped: evicting one would let the next attempt enqueue the duplicate
+    /// this map exists to suppress.
     /// </summary>
-    private void PruneScanPageLeafReads(TimeSpan retention)
+    private void PruneScanPageLeafReads()
     {
-        List<ScanPageLeafReadKey>? expired = null;
+        List<ScanPageLeafReadKey>? completed = null;
         foreach (var (key, entry) in _scanPageLeafReads)
         {
-            if (entry.Read.IsFaulted || entry.Read.IsCanceled)
+            if (entry.Read.IsCompleted)
             {
-                (expired ??= []).Add(key);
-                continue;
-            }
-
-            if (entry.SettledTimestamp is { } at && Stopwatch.GetElapsedTime(at) > retention)
-            {
-                (expired ??= []).Add(key);
+                (completed ??= []).Add(key);
             }
         }
 
-        if (expired is not null)
+        if (completed is not null)
         {
-            foreach (var key in expired)
+            foreach (var key in completed)
             {
                 _scanPageLeafReads.Remove(key);
             }
         }
 
-        if (_scanPageLeafReads.Count < MaxRetainedScanPageLeafReads)
-        {
-            return;
-        }
-
-        ScanPageLeafReadKey? oldest = null;
-        long oldestAt = long.MaxValue;
-        foreach (var (key, entry) in _scanPageLeafReads)
-        {
-            if (entry.SettledTimestamp is { } at && at < oldestAt)
-            {
-                oldest = key;
-                oldestAt = at;
-            }
-        }
-
-        if (oldest is { } evict)
-        {
-            _scanPageLeafReads.Remove(evict);
-        }
+        // Deliberately no eviction past this point. Every entry that survives
+        // the sweep above is still in flight, and evicting one of those would
+        // let the next attempt enqueue behind it the duplicate read this map
+        // exists to suppress - trading a bounded map for the unbounded queue
+        // growth that is the defect. The map is bounded in practice by the
+        // number of leaf reads a single activation can have concurrently in
+        // flight, each of which removes itself on completion.
     }
 
     /// <summary>
@@ -415,6 +381,5 @@ internal sealed partial class ShardRootGrain
         _scanPageLeafReadOutcomesPrimed = true;
         RecordScanPageLeafReadOutcome(0, LatticeMetrics.OutcomeScanPageLeafReadIssuedTag);
         RecordScanPageLeafReadOutcome(0, LatticeMetrics.OutcomeScanPageLeafReadJoinedTag);
-        RecordScanPageLeafReadOutcome(0, LatticeMetrics.OutcomeScanPageLeafReadServedTag);
     }
 }

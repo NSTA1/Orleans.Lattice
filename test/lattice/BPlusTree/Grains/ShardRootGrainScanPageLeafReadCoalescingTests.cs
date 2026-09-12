@@ -31,13 +31,24 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// pins that.
 /// </para>
 /// <para>
-/// <b>Non-convergence.</b> Suppressing the duplicate stops the queue growing
-/// but does not make the walk advance, because the retry need not arrive while
-/// the read is still running: a read that completes after its caller has gone
-/// hands over rows nobody collects, and the next attempt starts a fresh read
-/// with the clock back at zero.
-/// <see cref="A_retry_after_the_read_completes_is_served_from_the_retained_result"/>
-/// pins that, and it is the arm that turns a repeating stall into progress.
+/// <b>Convergence, and why suppressing the duplicate is enough.</b> The
+/// abandoned read stays in flight, so successive retries keep attaching to the
+/// same one and elapsed read time accumulates across attempts instead of
+/// resetting; whichever retry is attached when it completes carries the rows
+/// and the continuation token advances. A retry that arrives after a read
+/// completed and before the next is issued simply pays for a fresh read, which
+/// is slower and correct.
+/// </para>
+/// <para>
+/// <b>What is deliberately not done here.</b> A completed read is never
+/// reused. An earlier revision retained settled results for one ceiling, on the
+/// reasoning that the window was short; that returns scan pages which miss
+/// writes committed after the leaf executed the read, and it broke four
+/// unrelated backup restore-then-scan fixtures. A scan that misses a committed
+/// write is wrong at any window length, so there is no duration at which the
+/// trade becomes acceptable.
+/// <see cref="A_completed_read_is_never_reused_so_a_later_scan_observes_a_later_write"/>
+/// guards against its return.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -76,8 +87,15 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
         /// <summary>Faults the park instead of completing it.</summary>
         public void FaultPark() => _park.TrySetException(new InvalidOperationException("leaf read failed"));
 
-        /// <summary>Completes the parked read with the leaf's rows.</summary>
-        public void ReleasePark() => _park.TrySetResult(Rows);
+        /// <summary>
+        /// Completes the parked read with the leaf's rows <em>as they are
+        /// now</em>. The snapshot is load-bearing: a real leaf read materialises
+        /// its answer when the leaf executes it, so a write landing afterwards
+        /// cannot retroactively appear in it. Handing the live list over would
+        /// make a completed read look as though it tracked later writes, and the
+        /// staleness arm below could not then discriminate.
+        /// </summary>
+        public void ReleasePark() => _park.TrySetResult([.. Rows]);
 
         /// <summary>Re-arms the park for a subsequent read.</summary>
         public void RearmPark() =>
@@ -185,13 +203,27 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
         }
     }
 
+    private static async Task<EntriesPage?> AttemptFromAsync(ShardRootGrain grain, string start)
+    {
+        try
+        {
+            return await grain.GetSortedEntriesBatchAsync(
+                startInclusive: start, endExclusive: null, pageSize: 64, continuationToken: null);
+        }
+        catch (ScanPageStalledException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>
     /// The divergence arm. Two attempts land while one read is still parked;
     /// the shard must issue exactly one read, not two.
     /// <para>
-    /// Reverting the coalescing lookup reddens this and nothing else: with the
-    /// read still in flight there is no retained result for the retention arm
-    /// to serve from, so the retention clause cannot mask its loss.
+    /// Reverting the coalescing lookup reddens this and nothing else. It is the
+    /// only arm that observes a second attempt landing <em>inside</em> the first
+    /// read's flight window, which is the sole condition under which a read is
+    /// ever joined.
     /// </para>
     /// </summary>
     [Test]
@@ -216,86 +248,100 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
     }
 
     /// <summary>
-    /// The convergence arm, and the one the field shape needs. The read
-    /// completes after its caller has given up; the next attempt must collect
-    /// that result rather than start the same read again.
+    /// The correctness arm, and a regression guard for a defect an earlier
+    /// revision of this fix actually shipped. A read that has <em>completed</em>
+    /// must never be reused, however recently it completed, because a write can
+    /// commit between the leaf executing the read and a later attempt asking the
+    /// same question.
     /// <para>
-    /// Reverting the retention clause reddens this and not the divergence test,
-    /// because by the time the retry arrives there is no in-flight read for
-    /// coalescing to attach to.
+    /// The earlier revision retained a settled result for one ceiling and served
+    /// it to the next attempt. That looked like the convergence clause this fix
+    /// needs, and it was wrong: it turned four unrelated
+    /// <c>Orleans.Lattice.Backup</c> restore-then-scan fixtures red with
+    /// <c>Expected keep-*, But was gone-*</c>, a scan returning pre-restore rows.
+    /// The window's shortness is not a mitigation - a scan that misses a
+    /// committed write is incorrect at any window length - so the clause was
+    /// removed outright rather than tightened.
+    /// </para>
+    /// <para>
+    /// The assertion is on the <em>identity of the rows returned</em>, not on
+    /// the scan succeeding: a stale page is a perfectly successful page, so
+    /// asserting success would pass under the very defect this guards.
     /// </para>
     /// </summary>
     [Test]
-    public async Task A_retry_after_the_read_completes_is_served_from_the_retained_result()
-    {
-        var ceiling = TimeSpan.FromMilliseconds(200);
-        var quick = CreateParkableLeaf(ceiling);
-        var stalled = await AttemptAsync(quick.Grain);
-        Assert.That(stalled, Is.Null, "precondition: the first attempt stalls with nothing banked");
-
-        // The read its caller abandoned now completes - all the work done, and
-        // on the pre-fix path handed to nobody.
-        quick.ReleasePark();
-        await Task.Yield();
-
-        var resumed = await AttemptAsync(quick.Grain);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(resumed, Is.Not.Null,
-                "the attempt after completion must succeed - this is the livelock breaking");
-            Assert.That(resumed!.Entries.Select(e => e.Key),
-                Is.EqualTo(quick.Rows.Select(r => r.Key)),
-                "it must return the rows the abandoned read had already fetched");
-            Assert.That(quick.Reads, Has.Count.EqualTo(1),
-                "and it must do so without reading the leaf again - a second read would reset "
-                + "elapsed read time to zero and stall at the same ceiling forever");
-        });
-    }
-
-    /// <summary>
-    /// R2 negative control, and the one that discriminates a correct retention
-    /// from a dangerous one. A retained result must answer only the question
-    /// that produced it.
-    /// <para>
-    /// Asserting merely that a differently-bounded scan succeeds would pass
-    /// even if the map served it the wrong rows, because a successful page is a
-    /// successful page. The assertion is therefore on the <em>identity of the
-    /// rows returned</em>: a scan starting after the retained rows must come
-    /// back empty, which it can only do by reading the leaf afresh.
-    /// </para>
-    /// </summary>
-    [Test]
-    public async Task A_retained_result_is_never_served_to_a_differently_bounded_scan()
+    public async Task A_completed_read_is_never_reused_so_a_later_scan_observes_a_later_write()
     {
         var chain = CreateParkableLeaf(TimeSpan.FromMilliseconds(200));
 
         var stalled = await AttemptAsync(chain.Grain);
-        Assert.That(stalled, Is.Null, "precondition: the first attempt stalls");
+        Assert.That(stalled, Is.Null, "precondition: the first attempt stalls on the parked read");
 
+        // The abandoned read now completes, materialising the pre-write rows.
         chain.ReleasePark();
         await Task.Yield();
 
-        // A different question: everything strictly after the last retained row.
+        // A delete commits after that read executed and before the next attempt.
+        var deleted = chain.Rows[^1].Key;
+        chain.Rows.RemoveAt(chain.Rows.Count - 1);
+
         chain.Park = false;
         var page = await chain.Grain.GetSortedEntriesBatchAsync(
-            startInclusive: "zzzz", endExclusive: null, pageSize: 64, continuationToken: null);
+            startInclusive: null, endExclusive: null, pageSize: 64, continuationToken: null);
 
         Assert.Multiple(() =>
         {
-            Assert.That(page.Entries, Is.Empty,
-                "a scan bounded past every retained row must return nothing; serving it the "
-                + "retained rows would be a wrong answer that still looks like a successful page");
+            Assert.That(page.Entries.Select(e => e.Key), Does.Not.Contain(deleted),
+                "the scan must observe the delete; reusing the completed read's rows would "
+                + "return a row that no longer exists, which is what broke the backup fixtures");
+            Assert.That(page.Entries.Select(e => e.Key), Is.EqualTo(chain.Rows.Select(r => r.Key)),
+                "and must return exactly the live rows");
             Assert.That(chain.Reads, Has.Count.EqualTo(2),
-                "the differently-bounded scan must have gone to the leaf rather than the map");
-            Assert.That(chain.Reads[1].Start, Is.EqualTo("zzzz"),
-                "and it must have carried its own bounds");
+                "which it can only do by reading the leaf again - the completed entry must have "
+                + "been dropped rather than left available to join");
         });
     }
 
     /// <summary>
-    /// A read that faults must be evicted, never retained. Retaining it would
-    /// hand the same failure to every later caller - one transient fault
+    /// R2 negative control on the coalescing key. Only an <em>identical</em>
+    /// read may be joined, so a differently-bounded scan arriving while a read
+    /// is in flight must issue its own.
+    /// <para>
+    /// Asserting merely that the second scan succeeds would pass even if it were
+    /// handed the first read's answer, because a wrong page is still a page. The
+    /// assertion is therefore on the read the leaf actually saw: two reads, the
+    /// second carrying its own bounds. Reverting the key to the leaf id alone
+    /// collapses both reads onto one and reddens exactly this.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_differently_bounded_scan_does_not_join_an_in_flight_read()
+    {
+        var chain = CreateParkableLeaf(TimeSpan.FromMilliseconds(200));
+
+        var unbounded = await AttemptAsync(chain.Grain);
+        Assert.That(unbounded, Is.Null, "precondition: the first attempt stalls, read still parked");
+
+        // A different question, asked while that read is still in flight.
+        var bounded = await AttemptFromAsync(chain.Grain, "zzzz");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bounded, Is.Null, "it stalls too - the fake leaf parks every read");
+            Assert.That(chain.Reads, Has.Count.EqualTo(2),
+                "but it must have issued its own read; joining a read taken over different bounds "
+                + "would answer one question with another question's rows");
+            Assert.That(chain.Reads[1].Start, Is.EqualTo("zzzz"),
+                "and that read must carry its own bounds");
+        });
+
+        chain.ReleasePark();
+        await Task.Yield();
+    }
+
+    /// <summary>
+    /// A faulted read must be dropped, never left available to join. Leaving it
+    /// would hand the same failure to every later caller - one transient fault
     /// becoming permanent, with the same signature as the livelock this fixes.
     /// </summary>
     [Test]
@@ -323,39 +369,6 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
     }
 
     /// <summary>
-    /// A retained result older than the ceiling is not served. Retention is
-    /// bounded by exactly one ceiling, so the staleness a caller can observe is
-    /// the staleness a slow-but-successful page fill already returns - no new
-    /// tolerance is introduced.
-    /// </summary>
-    [Test]
-    public async Task A_retained_result_older_than_the_ceiling_is_not_served()
-    {
-        var ceiling = TimeSpan.FromMilliseconds(150);
-        var chain = CreateParkableLeaf(ceiling);
-
-        var stalled = await AttemptAsync(chain.Grain);
-        Assert.That(stalled, Is.Null, "precondition: the first attempt stalls");
-
-        chain.ReleasePark();
-        await Task.Yield();
-
-        // Outlive the retention window.
-        await Task.Delay(ceiling + TimeSpan.FromMilliseconds(250));
-
-        chain.Park = false;
-        var page = await chain.Grain.GetSortedEntriesBatchAsync(
-            startInclusive: null, endExclusive: null, pageSize: 64, continuationToken: null);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(page.Entries, Is.Not.Empty, "the scan must still succeed");
-            Assert.That(chain.Reads, Has.Count.EqualTo(2),
-                "but on a fresh read - a result retained past one ceiling must not be served");
-        });
-    }
-
-    /// <summary>
     /// The deactivation arm the map's per-activation design requires. A new
     /// activation holds no map, so it must degrade to exactly the behaviour
     /// that shipped before this file existed - issue the read - rather than to
@@ -368,7 +381,7 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
     /// </para>
     /// </summary>
     [Test]
-    public async Task A_new_activation_holds_no_retained_reads_and_falls_back_to_reading_the_leaf()
+    public async Task A_new_activation_holds_no_in_flight_reads_and_falls_back_to_reading_the_leaf()
     {
         var chain = CreateParkableLeaf(TimeSpan.FromMilliseconds(200));
 
@@ -395,7 +408,7 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
     }
 
     /// <summary>
-    /// R6. All three outcome arms are published at zero on first guarded use,
+    /// R6. Both outcome arms are published at zero on first guarded use,
     /// through the same recorder the live path uses, so that a zero reads as a
     /// measured absence rather than an absent measurement.
     /// <para>
@@ -405,7 +418,7 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
     /// </para>
     /// </summary>
     [Test]
-    public async Task All_three_leaf_read_outcomes_are_readable_including_the_ones_that_never_fire()
+    public async Task Both_leaf_read_outcomes_are_readable_including_the_one_that_never_fires()
     {
         var seen = new HashSet<string>();
         using var listener = MeterListening.StartForInstrument(
@@ -426,8 +439,8 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
         _ = await chain.Grain.GetSortedEntriesBatchAsync(
             startInclusive: null, endExclusive: null, pageSize: 64, continuationToken: null);
 
-        Assert.That(seen, Is.SupersetOf(new[] { "issued", "joined", "served" }),
-            "every arm must be primed, so that 'joined' and 'served' sitting at zero is evidence "
-            + "that coalescing did not fire rather than evidence of nothing at all");
+        Assert.That(seen, Is.SupersetOf(new[] { "issued", "joined" }),
+            "both arms must be primed, so that 'joined' sitting at zero is evidence that "
+            + "coalescing did not fire rather than evidence of nothing at all");
     }
 }
