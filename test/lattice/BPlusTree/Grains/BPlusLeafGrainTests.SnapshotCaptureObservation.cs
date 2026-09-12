@@ -149,9 +149,23 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 12,
             walHead: 12);
         failedState.State.TreeId = failedTree;
+        // Counted rather than fixed at one. Since issue #2692 this activation
+        // legitimately drives TWO failing captures: the SnapshotPending capture,
+        // and then the zero-coverage repair, because the first failure left the
+        // leaf's coverage deficit unchanged and that is precisely the state the
+        // repair exists to clear. Both are real attempts against the store, so
+        // the claim under test is not "exactly one" but "every attempt that
+        // reaches the store is counted exactly once, as failed" - which this
+        // counter makes checkable against the store itself.
+        var failedSaves = 0;
         failedStub
             .SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
-            .ThrowsAsync(new InvalidOperationException("simulated snapshot storage failure"));
+            .Returns(_ =>
+            {
+                failedSaves++;
+                return Task.FromException(
+                    new InvalidOperationException("simulated snapshot storage failure"));
+            });
         SeedOneCaptureRow(failedGrain);
 
         var (failedOutcomes, failedDurations) =
@@ -165,12 +179,19 @@ public partial class BPlusLeafGrainTests
         }
 
         // ---- Arm B: no capture is attempted at all. ----
+        // The checkpoint is the -1 "nothing applied" sentinel, not a real
+        // offset. Since issue #2692 a leaf holding a checkpointed partition
+        // with no durable coverage captures on EVERY activation, by design, so
+        // a checkpointed leaf can no longer serve as the never-attempts arm.
+        // The population that attempts nothing is now exactly the population
+        // that has applied nothing, and that is what this arm is.
         var idleTree = UniqueSnapshotCaptureTree();
         var (idleGrain, idleState, idleStub, _) = CreateGrainForProactiveCapture(
             activationDecision: FallOffLogDecision.TailReplay,
-            persistedCheckpoint: 5,
-            walHead: 5);
+            persistedCheckpoint: -1,
+            walHead: -1);
         idleState.State.TreeId = idleTree;
+        idleState.State.ProjectionCheckpointOffset = -1;
         SeedOneCaptureRow(idleGrain);
 
         var (idleOutcomes, idleDurations) =
@@ -181,22 +202,27 @@ public partial class BPlusLeafGrainTests
         }
 
         // Controls: the arms genuinely differed in what they attempted.
-        await failedStub.Received(1).SaveAsync(
-            Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+        Assert.That(failedSaves, Is.GreaterThanOrEqualTo(1),
+            "precondition: the failing arm must actually have reached the store, or the "
+            + "outcome assertions below would hold vacuously.");
         await idleStub.DidNotReceive().SaveAsync(
             Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
 
         Assert.Multiple(() =>
         {
-            Assert.That(failedOutcomes, Is.EquivalentTo(new[] { "failed" }),
-                "a capture attempt whose storage call throws must be counted exactly once, "
-                + "as failed. The advisory handler logs it and previously incremented "
-                + "nothing, so a deployment in which every capture failed exported total "
-                + "silence.");
-            Assert.That(failedDurations, Has.Count.EqualTo(1),
-                "a failed attempt must still be timed: how long a capture took before "
-                + "failing separates a fast rejection from a provider timeout, and those "
-                + "call for different operator responses.");
+            Assert.That(failedOutcomes, Is.Not.Empty.And.All.EqualTo("failed"),
+                "a capture attempt whose storage call throws must be counted as failed. "
+                + "The advisory handler logs it and previously incremented nothing, so a "
+                + "deployment in which every capture failed exported total silence.");
+            Assert.That(failedOutcomes, Has.Count.EqualTo(failedSaves),
+                "each attempt that reached the store must be counted exactly once - "
+                + "neither dropped nor double-counted. Pinning this against the store's "
+                + "own call count rather than a fixed number keeps the claim honest as "
+                + "the number of captures an activation drives changes.");
+            Assert.That(failedDurations, Has.Count.EqualTo(failedSaves),
+                "a failed attempt must still be timed, and timed once per attempt: how "
+                + "long a capture took before failing separates a fast rejection from a "
+                + "provider timeout, and those call for different operator responses.");
 
             Assert.That(idleOutcomes, Is.Empty,
                 "a leaf that never attempts a capture must contribute no sample, so that "
@@ -326,9 +352,23 @@ public partial class BPlusLeafGrainTests
         var stub = Substitute.For<ILeafSnapshotStorageGrain>();
         stub.LoadAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<LeafSnapshotBlob?>(null));
+
+        // The deadline fires only once setup is complete. The checkpoint below
+        // legitimately drives a zero-coverage repair capture (issue #2692) on
+        // the persist path, and that capture reaches this same stub. Cancelling
+        // on it would trip the deadline before deactivation is ever reached, so
+        // the deactivation capture would short-circuit at the checkpoint flush
+        // and this fixture would observe nothing at all - passing vacuously if
+        // its assertions were weaker.
+        var armed = false;
         stub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
+                if (!armed)
+                {
+                    return Task.CompletedTask;
+                }
+
                 // Orleans' deactivation deadline fires while the blob write is
                 // in flight - the shape the real overrun takes.
                 deadline.Cancel();
@@ -341,6 +381,17 @@ public partial class BPlusLeafGrainTests
         // Latch the deactivation capture gate, or no capture runs and the
         // assertions below would pass trivially.
         await CheckpointLeafAsync(leaf, "k1", hlcPhysical: 100, offset: 1);
+
+        // That persist drives the zero-coverage repair capture, which also
+        // CLEARS the checkpoint-advanced gate latched above. Advance a second
+        // time to re-latch it so the deactivation capture still runs. The
+        // second advance cannot drive another repair: the predicate is
+        // "checkpointed with coverage below zero", and the first capture moved
+        // coverage to zero, so the deficit is gone for the rest of the
+        // activation.
+        await CheckpointLeafAsync(leaf, "k2", hlcPhysical: 200, offset: 2);
+
+        armed = true;
 
         var (outcomes, durations) = CaptureSnapshotCaptureObservations(treeId, out var listener);
         using (listener)
@@ -448,12 +499,19 @@ public partial class BPlusLeafGrainTests
         }
 
         // ---- Arm B: the capture path is never entered at all. ----
+        // Checkpoint -1, for the reason given in the failed/never-ran fixture:
+        // since issue #2692 a checkpointed leaf with no durable coverage enters
+        // the capture path on every activation, so only a leaf that has applied
+        // nothing can serve as the never-entered arm. This also makes the two
+        // arms differ in exactly one thing - whether the capture seam is
+        // invoked - which is what the fixture claims to be comparing.
         var untouchedTree = UniqueSnapshotCaptureTree();
         var (untouchedGrain, untouchedState, untouchedStub, _) = CreateGrainForProactiveCapture(
             activationDecision: FallOffLogDecision.TailReplay,
-            persistedCheckpoint: 5,
-            walHead: 5);
+            persistedCheckpoint: -1,
+            walHead: -1);
         untouchedState.State.TreeId = untouchedTree;
+        untouchedState.State.ProjectionCheckpointOffset = -1;
         SeedOneCaptureRow(untouchedGrain);
 
         var untouchedReasons = CaptureSnapshotDeclineObservations(untouchedTree, out var untouchedListener);
