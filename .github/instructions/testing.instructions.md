@@ -81,8 +81,8 @@ Do **not** use classic assert (`Assert.AreEqual`, `Assert.IsNull`, etc.).
 
 A false green is worse than a red. A red is a defect to fix; a green that never
 ran the property it names is a defect *plus* a standing claim that there is no
-defect, which is why these survive for so long. Five shapes have cost real time
-on this repository and each is cheap to avoid once named. A sixth - an
+defect, which is why these survive for so long. Six shapes have cost real time
+on this repository and each is cheap to avoid once named. A seventh - an
 emulator-gated run that prints `Passed!` while 89 tests silently vanish - is
 documented under Tier 3 above.
 
@@ -293,6 +293,28 @@ carries none.
 Finally, **"every arm went red" is the reading to double-check, and "no arm went
 red" is the reading that should alarm you.** A suite in which nothing reddens has
 produced no in-band evidence that it can observe anything at all.
+
+### A fixture CI builds but never selects, and its near-miss twin
+
+CI does not run this project's content gates by listing them. It runs one filter,
+`(FullyQualifiedName~Formal|FullyQualifiedName~Hygiene|FullyQualifiedName~Docs)`,
+so a fixture is included only if its **fully-qualified name** contains one of
+those words. Put a new hygiene fixture in `test/lattice/Hygiene/` but leave it in
+namespace `Orleans.Lattice.Tests`, and CI compiles it on every run and never
+executes a single one of its tests. Nothing reports this: the build is green, the
+gate job is green, and the test count is the only thing that moves.
+`CiContentGateWiringTests` exists to catch exactly that, and the fixture's
+namespace - not its directory - is what satisfies it.
+
+The near-miss is the part worth remembering, because the gate stays green through
+it. A fixture named `PerturbationResidueHygieneTests` in namespace
+`Orleans.Lattice.Tests` **is** selected - not because it is wired up, but because
+the word `Hygiene` happens to appear in its *type name*. It runs today and it
+would silently stop running the day somebody renames the class, with no failing
+check at the moment of the rename. So place the fixture in
+`Orleans.Lattice.Tests.Hygiene` (or the `.Formal` / `.Docs` sibling) and let the
+namespace carry the selection. Matching on a coincidence in the type name is a
+green you did not earn, and it expires without telling you.
 
 ## File Organization
 

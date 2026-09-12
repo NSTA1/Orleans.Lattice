@@ -1,6 +1,6 @@
 using Orleans.Lattice.Testing.Hygiene;
 
-namespace Orleans.Lattice.Tests;
+namespace Orleans.Lattice.Tests.Hygiene;
 
 /// <summary>
 /// Perturbation-residue hygiene gate. Contract logic lives in the shared base.

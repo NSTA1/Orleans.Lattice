@@ -2,7 +2,7 @@ using System.IO;
 using NUnit.Framework;
 using Orleans.Lattice.Testing.Hygiene;
 
-namespace Orleans.Lattice.Tests;
+namespace Orleans.Lattice.Tests.Hygiene;
 
 /// <summary>
 /// Records the issue #2735 audit of test fixtures that invoke a private
