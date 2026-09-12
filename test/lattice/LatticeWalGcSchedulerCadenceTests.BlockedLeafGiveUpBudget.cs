@@ -62,8 +62,16 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         return (scheduler, logs);
     }
 
+    // Reads Counted, not Measurements. Every reactivation outcome is zero-primed
+    // once per tree (issue #2783), so the unfiltered list carries four zeros that
+    // are not events. Counting them would inflate every assertion below - and the
+    // inflation is uniform, so it would read as a behavioural regression rather
+    // than as a harness artefact. Counted filters zero-valued measurements, which
+    // is exactly the "real events only" set these fixtures mean. The priming
+    // itself is asserted by ExecuteAsync_primes_every_reactivation_outcome_at_zero,
+    // which is deliberately the only fixture reading Measurements unfiltered.
     private static string?[] Outcomes(InstrumentRecorder recorder) =>
-        recorder.Measurements.Select(m => m.Tag(LatticeMetrics.TagOutcome) as string).ToArray();
+        recorder.Counted.Select(m => m.Tag(LatticeMetrics.TagOutcome) as string).ToArray();
 
     private static int Count(string?[] outcomes, string outcome) =>
         outcomes.Count(o => string.Equals(o, outcome, StringComparison.Ordinal));
@@ -105,10 +113,27 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         var outcomes = Outcomes(recorder);
         Assert.Multiple(() =>
         {
-            Assert.That(Count(outcomes, "abandoned"), Is.EqualTo(1),
+            // Abandonment is a pause rather than a terminal state (issue #2783),
+            // so the window covers two of them. The schedule is fully determined:
+            // the two leaves alternate at the 5 min cadence floor, each spending
+            // exactly its own budget of 3 (6 attempts, the last at t55); leaf-a
+            // is reported spent at t60 and abandoned; it serves the full 30 min
+            // backoff and re-arms at t90, where the elapsed cooldown lets it take
+            // the first touch of its second cycle (the 7th attempt); leaf-b is
+            // then reported spent at t95 and abandoned.
+            //
+            // These remain the assertions that catch #2772. Were the budget reset
+            // by rotation, no leaf would ever reach its limit: abandoned would be
+            // 0 rather than 2, and attempts would be issued every cadence tick for
+            // the whole window - around 18 rather than 7. Pinning the exact values
+            // keeps that discrimination while describing the re-armed behaviour
+            // truthfully, which a bound of "at most 6" no longer does.
+            Assert.That(Count(outcomes, "abandoned"), Is.EqualTo(2),
                 "a tree that can never heal must be reported as given up on, however the reported blocker rotates.");
-            Assert.That(Count(outcomes, "attempted"), Is.LessThanOrEqualTo(6),
-                "each blocking leaf gets its own budget and no more, so two leaves cost at most two budgets.");
+            Assert.That(Count(outcomes, "attempted"), Is.EqualTo(7),
+                "each blocking leaf gets its own budget per cycle and no more, so two leaves cost two budgets plus the first touch of the one cycle that re-arms inside the window.");
+            Assert.That(Count(outcomes, "rearmed"), Is.EqualTo(1),
+                "exactly one leaf's backoff elapses inside the window, so the retry is periodic and bounded rather than permanent or hot.");
             Assert.That(outcomes, Does.Not.Contain("healed"),
                 "a leaf that rotates off the head of the queue because the sweep activated it has not healed.");
         });
