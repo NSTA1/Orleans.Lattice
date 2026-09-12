@@ -1305,7 +1305,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // projection does so the embedded passage reflects the same converged
                 // entry that recall and keyword search return. Deserializing the
                 // envelope directly as a MemoryRecord would read the wrong shape.
-                var folded = RepoContextMemoryCodec.Fold(record.Value, _serializer);
+                var folded = RepoContextMemoryCodec.Fold(record.Value, _serializer, sourceKey);
                 if (folded is null)
                 {
                     continue;
