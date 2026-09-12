@@ -4,9 +4,10 @@ using Orleans.Lattice.Vector.Persistence;
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
-/// What one approximate-index build step did to the build it advances. The three
-/// values are exhaustive over a step that completed, which is what lets them be
-/// counted as a partition rather than as three unrelated tallies.
+/// What one approximate-index build step did to the build it advances. The values
+/// are exhaustive over a step that was taken - three outcomes for a step that
+/// completed, plus one for a step that threw - which is what lets them be counted
+/// as a partition rather than as unrelated tallies.
 /// </summary>
 internal enum RepoContextAnnBuildSliceOutcome
 {
@@ -31,6 +32,15 @@ internal enum RepoContextAnnBuildSliceOutcome
     /// reason other than a spent deadline.
     /// </summary>
     Idle = 2,
+
+    /// <summary>
+    /// The step did not complete: the build threw. The store-of-record read could
+    /// not be served at all, which is a different condition from a read that was
+    /// served and returned nothing, and it needs a different remedy - the
+    /// projection or the store behind it, rather than the access gate or the
+    /// embedding throughput that would explain an empty corpus.
+    /// </summary>
+    Faulted = 3,
 }
 
 /// <summary>
@@ -40,17 +50,19 @@ internal enum RepoContextAnnBuildSliceOutcome
 /// <param name="Advanced">Steps that moved the build on.</param>
 /// <param name="Starved">Steps whose slice was deadlined having banked nothing.</param>
 /// <param name="Idle">Steps that neither advanced the build nor were deadlined empty-handed.</param>
+/// <param name="Faulted">Steps that threw rather than completing.</param>
 internal readonly record struct RepoContextAnnBuildSliceSnapshot(
     long Advanced,
     long Starved,
-    long Idle)
+    long Idle,
+    long Faulted)
 {
     /// <summary>
-    /// Every step counted, across all three arms. Non-zero exactly when the build
+    /// Every step counted, across all four arms. Non-zero exactly when the build
     /// coordinator has taken at least one step in this process, which is the fact
     /// no other series in the approximate-index family can report.
     /// </summary>
-    public long Total => Advanced + Starved + Idle;
+    public long Total => Advanced + Starved + Idle + Faulted;
 }
 
 /// <summary>
@@ -133,6 +145,9 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     /// <summary>The tag value for a step that neither advanced nor was deadlined empty-handed.</summary>
     internal const string ProgressIdleTag = "idle";
 
+    /// <summary>The tag value for a step that threw rather than completing.</summary>
+    internal const string ProgressFaultedTag = "faulted";
+
     // Declared above the instrument it constructs, and the instrument is built from
     // this field, so reordering throws at type-initialisation rather than publishing
     // an instrument against a null meter. See the metrics conventions in
@@ -144,6 +159,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     private long _advanced;
     private long _starved;
     private long _idle;
+    private long _faulted;
 
     /// <summary>Creates the reporter, its instrument, and every one of its series.</summary>
     public RepoContextAnnBuildSliceReporter()
@@ -158,13 +174,16 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                 + "'starved' (its ingest slice was stopped by the wall-clock budget having banked nothing, so the "
                 + "cursor did not move and no larger budget repairs it), or 'idle' (it neither advanced the build "
                 + "nor was deadlined empty-handed, which is what a converged coordinator re-opening its in-memory "
-                + "handle does). Every other instrument on this plane fires only at a terminal moment - a build "
+                + "handle does), or 'faulted' (the step threw rather than completing, so the store-of-record read "
+                + "could not be served at all - which needs the projection or the store behind it looked at, rather "
+                + "than the access gate or the embedding throughput that would explain an empty corpus). Every "
+                + "other instrument on this plane fires only at a terminal moment - a build "
                 + "that reached Ready, a plane that finished building, a sweep that armed a coordinator - so "
                 + "between arming and Ready the plane emitted nothing, and a build consuming nothing was "
-                + "byte-identical in telemetry to a build that never ran. The TOTAL across all three arms is the "
+                + "byte-identical in telemetry to a build that never ran. The TOTAL across all four arms is the "
                 + "figure that separates them: zero beside a non-zero 'ann.sweep{outcome=armed}' means the "
                 + "coordinator is not stepping, while a rising 'starved' arm means it is stepping and getting "
-                + "nowhere.");
+                + "nowhere and a rising 'faulted' arm means it is stepping and throwing.");
 
         // Pre-mint every series with a zero-valued add, so a correctly configured
         // host reports progress=starved at 0 rather than omitting it. An absent
@@ -173,6 +192,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
         _slices.Add(0, new KeyValuePair<string, object?>(ProgressTagKey, ProgressAdvancedTag), LatticeTenantLabel.Platform);
         _slices.Add(0, new KeyValuePair<string, object?>(ProgressTagKey, ProgressStarvedTag), LatticeTenantLabel.Platform);
         _slices.Add(0, new KeyValuePair<string, object?>(ProgressTagKey, ProgressIdleTag), LatticeTenantLabel.Platform);
+        _slices.Add(0, new KeyValuePair<string, object?>(ProgressTagKey, ProgressFaultedTag), LatticeTenantLabel.Platform);
     }
 
     /// <summary>
@@ -251,6 +271,9 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                 case RepoContextAnnBuildSliceOutcome.Starved:
                     _starved++;
                     break;
+                case RepoContextAnnBuildSliceOutcome.Faulted:
+                    _faulted++;
+                    break;
                 default:
                     _idle++;
                     break;
@@ -264,7 +287,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     {
         lock (_gate)
         {
-            return new RepoContextAnnBuildSliceSnapshot(_advanced, _starved, _idle);
+            return new RepoContextAnnBuildSliceSnapshot(_advanced, _starved, _idle, _faulted);
         }
     }
 
@@ -280,6 +303,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     {
         RepoContextAnnBuildSliceOutcome.Advanced => ProgressAdvancedTag,
         RepoContextAnnBuildSliceOutcome.Starved => ProgressStarvedTag,
+        RepoContextAnnBuildSliceOutcome.Faulted => ProgressFaultedTag,
         _ => ProgressIdleTag,
     };
 

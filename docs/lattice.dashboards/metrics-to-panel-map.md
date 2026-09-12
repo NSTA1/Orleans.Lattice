@@ -432,7 +432,7 @@ Every instrument here carries the derived `tenant` label with the reserved `_pla
 | `repocontext.ann.sweep` | counter (`{sweep}`) | `outcome` = `armed`, `empty`, `faulted` | (none) | **not charted** |
 | `repocontext.ann.build.corpus` | counter (`{build}`) | `coverage` = `nonempty`, `unrestricted`, `filtered`, `denied`, `unknown` | (none) | **not charted** |
 | `repocontext.ann.build.denial_terminal` | counter (`{coordinator}`) | (none) | (none) | **not charted** |
-| `repocontext.ann.build.slice` | counter (`{step}`) | `progress` = `advanced`, `starved`, `idle` | (none) | **not charted** |
+| `repocontext.ann.build.slice` | counter (`{step}`) | `progress` = `advanced`, `starved`, `idle`, `faulted` | (none) | **not charted** |
 | `repocontext.ann.partitioning` | counter (`{observation}`) | `state` = `partitioned`, `unpartitioned-small`, `unpartitioned-large` | (none) | **not charted** |
 | `repocontext.ann.repartition` | counter (`{training}`) | `outcome` = `partitioned`, `declined` | (none) | **not charted** |
 | `repocontext.retrieval.ann.search` | counter (`{query}`) | `state` = `bootstrapping`, `exhaustive`, `approximate` | (none) | **not charted** |
