@@ -311,14 +311,25 @@ internal sealed partial class BPlusLeafGrain
 
     private async Task<SplitResult> SplitAsync()
     {
-        // Only the median key is needed to pivot the split, so avoid
-        // materialising every key into a throwaway List<string>. The cache's
-        // Keys view is the backing SortedDictionary's ordered key collection:
-        // its Count is O(1) and enumerating to the midpoint touches half the
-        // keys without copying the whole set into a new array.
-        var keys = Cache.Keys;
-        int mid = keys.Count() / 2;
-        var splitKey = keys.ElementAt(mid);
+        // Only the median key is needed to pivot the split. Asking the cache's
+        // ordered key view for it looks free - it reads as a projection over an
+        // in-memory dictionary - but Keys calls HydrateAll() first, so placing
+        // the cut used to require materialising every row in the leaf. That is
+        // self-defeating on exactly the leaves this exists to divide: the
+        // larger the leaf, the more certain the hydration fails, and division
+        // is the only thing that would have made it smaller (issue #2771).
+        //
+        // Take the pivot from the frame's ordinal index instead, which decodes
+        // one key and no payload. The fallback is the old path, used when
+        // nothing is lazily hydrated (the leaf is already resident, so the
+        // ordered view costs nothing extra) or when a strictly interior pivot
+        // cannot be established from the frame alone.
+        if (!Cache.TryGetBisectingKeyWithoutHydrating(out var splitKey))
+        {
+            var keys = Cache.Keys;
+            int mid = keys.Count() / 2;
+            splitKey = keys.ElementAt(mid);
+        }
 
         // Snapshot the WAL head per partition before the split's
         // intent is persisted. Under multi-partition replay every
@@ -448,38 +459,103 @@ internal sealed partial class BPlusLeafGrain
             PrevSibling = context.GrainId,
         });
 
-        var rightEntries = new Dictionary<string, LwwValue<byte[]>>();
-        foreach (var (key, lww) in Cache.EnumerateRows())
-        {
-            if (string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
-            {
-                rightEntries[key] = lww;
-            }
-        }
+        // Join the back-pointer fixup before mutating the donor's own
+        // state so a thrown fixup surfaces here (and not on a later
+        // unobserved-task path). Awaited ahead of the transfer rather than
+        // after it, as it was while the transfer was a single pass: the
+        // transfer now removes rows batch by batch, so donor mutation begins
+        // at the first batch rather than after the last. It still overlaps
+        // the InitializeSiblingAsync round-trip above.
+        await oldNextFixup;
 
-        if (rightEntries.Count > 0)
+        // Migrate the >= splitKey rows in bounded batches rather than in one
+        // pass. The single pass read them through Cache.EnumerateRows(), which
+        // - like Keys - calls HydrateAll() first, so it materialised the whole
+        // leaf, built a dictionary holding the entire right half, and handed
+        // that to MergeEntriesAsync to be deep-copied: three whole-leaf-scale
+        // costs alive at once, on a leaf already known to be oversized.
+        //
+        // Batching bounds the peak to one batch regardless of how large the
+        // leaf is, which is the property that makes this a fix rather than a
+        // mitigation: a leaf twice the size divides at the same peak, not at
+        // twice the peak. The batch width is derived at runtime from the
+        // frame's own measured mean row footprint against an option that
+        // already exists and already defaults sanely, so no new constant is
+        // introduced and nothing is tuned to a particular host's memory.
+        //
+        // Crash-safety is unchanged by batching. The split intent - SplitKey,
+        // SplitSiblingId and NextSibling - is already durable before any row
+        // moves (persisted by SplitAsync, or carried by the recovery path), so
+        // a process that dies mid-transfer reactivates with SplitInProgress and
+        // re-runs this method against the same durable SplitKey. The donor's
+        // own remaining rows are the resume cursor: rows already migrated and
+        // removed are simply not seen again, and rows migrated but not yet
+        // removed are re-sent into an idempotent LWW merge. That is the same
+        // contract the single-pass transfer relied on - it too had a durable
+        // window, between the sibling's merge landing and the donor's removals
+        // being persisted, in which a key existed on both leaves - so batching
+        // changes how many such windows occur, not what state they leave
+        // behind.
+        var transferOptions = await GetOptionsAsync();
+        var batchBoundaries = Cache.GetTransferBatchBoundariesWithoutHydrating(
+            splitKey, transferOptions.LeafHydrationResidentBytes);
+
+        var batchStart = splitKey;
+        for (var boundary = 0; boundary <= batchBoundaries.Count; boundary++)
         {
-            // Arm the sibling's read gate BEFORE the migrated entries land
-            // on it. While a cross-shard reshard saga is mid-flight a leaf
-            // can hold an IsMigrated=true value for a key whose atomic
-            // isolation is provided EITHER by a destination-side shadow
-            // marker (_shadowedSagas, installed by the shard shadow-forward)
-            // OR by a locally prepared saga bucket (_pendingTx, when the
-            // saga prepared directly on this leaf). Both are per-key state on
-            // the donor; a split moves only the committed Entries row to the
-            // sibling. Without carrying that isolation the sibling would
-            // surface the migrated pre-saga value ungated, and once the saga
-            // commits a concurrent reader could observe it while sibling keys
-            // already show the post-saga value - the torn read the reshard
-            // chaos fixture catches. Re-arm the sibling with a shadow marker
-            // for every such saga so the read gate rejects a
-            // Committed-without-backstop read until the saga's committed-values
-            // backstop terminal lands on the sibling (it routes there as the
-            // key's current owner and clears the marker). Must precede
-            // MergeEntriesAsync so the gate is armed before the migrated value
-            // becomes visible on the sibling.
-            await TransferShadowMarkersToSiblingAsync(newLeaf, rightEntries.Keys);
-            await newLeaf.MergeEntriesAsync(rightEntries);
+            var batchEndExclusive = boundary < batchBoundaries.Count
+                ? batchBoundaries[boundary]
+                : null;
+
+            // Materialised into a dictionary before any mutation: EnumerateRange
+            // hands back a live view over the backing dictionary, and RemoveEntry
+            // below structurally modifies it.
+            var batch = new Dictionary<string, LwwValue<byte[]>>();
+            foreach (var (key, lww) in Cache.EnumerateRange(batchStart, batchEndExclusive))
+            {
+                batch[key] = lww;
+            }
+
+            if (batch.Count > 0)
+            {
+                // Arm the sibling's read gate BEFORE the migrated entries land
+                // on it. While a cross-shard reshard saga is mid-flight a leaf
+                // can hold an IsMigrated=true value for a key whose atomic
+                // isolation is provided EITHER by a destination-side shadow
+                // marker (_shadowedSagas, installed by the shard shadow-forward)
+                // OR by a locally prepared saga bucket (_pendingTx, when the
+                // saga prepared directly on this leaf). Both are per-key state on
+                // the donor; a split moves only the committed Entries row to the
+                // sibling. Without carrying that isolation the sibling would
+                // surface the migrated pre-saga value ungated, and once the saga
+                // commits a concurrent reader could observe it while sibling keys
+                // already show the post-saga value - the torn read the reshard
+                // chaos fixture catches. Re-arm the sibling with a shadow marker
+                // for every such saga so the read gate rejects a
+                // Committed-without-backstop read until the saga's committed-values
+                // backstop terminal lands on the sibling (it routes there as the
+                // key's current owner and clears the marker). Must precede
+                // MergeEntriesAsync so the gate is armed before the migrated value
+                // becomes visible on the sibling.
+                await TransferShadowMarkersToSiblingAsync(newLeaf, batch.Keys);
+                await newLeaf.MergeEntriesAsync(batch);
+
+                // Drop the batch from the donor before reading the next one, so
+                // the migrated payload is released rather than accumulating
+                // across batches. The rows are resident from the enumeration
+                // just above, so this costs no further hydration.
+                foreach (var key in batch.Keys)
+                {
+                    RemoveEntry(key);
+                }
+            }
+
+            if (batchEndExclusive is null)
+            {
+                break;
+            }
+
+            batchStart = batchEndExclusive;
         }
 
         // Per-partition projection-checkpoint hints on the sibling, applied
@@ -489,16 +565,6 @@ internal sealed partial class BPlusLeafGrain
         if (resolvedHeads is not null)
         {
             await newLeaf.SetCheckpointOffsetHintsAsync(resolvedHeads);
-        }
-
-        // Join the back-pointer fixup before mutating the donor's own
-        // state so a thrown fixup surfaces here (and not on a later
-        // unobserved-task path).
-        await oldNextFixup;
-
-        foreach (var key in rightEntries.Keys)
-        {
-            RemoveEntry(key);
         }
 
         state.State.HighKeyExclusive = splitKey;

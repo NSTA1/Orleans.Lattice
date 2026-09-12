@@ -197,6 +197,23 @@ internal sealed class LeafSnapshotHydrationAdmission
                 : storedBytes * HydrationHeapAmplification;
 
     /// <summary>
+    /// The largest stored snapshot size whose hydration still fits inside the
+    /// whole budget - the inverse of <see cref="ToHeapCostBytes(long)"/>
+    /// evaluated at <see cref="BudgetBytes"/>.
+    /// <para>
+    /// It exists so that a caller reasoning about stored bytes never has to
+    /// divide by the amplification itself. Comparing a stored-byte figure
+    /// against <see cref="BudgetBytes"/> directly is a units error that reads
+    /// perfectly: both sides are bytes, the comparison compiles, and it is
+    /// wrong by the amplification factor. Keeping the only two conversions in
+    /// this class is what the placement of <see cref="ToHeapCostBytes(long)"/>
+    /// is for, and an inverse that callers need but is not offered here is an
+    /// invitation to write the division at the call site instead.
+    /// </para>
+    /// </summary>
+    internal long MaxClaimableStoredBytes => _budgetBytes / HydrationHeapAmplification;
+
+    /// <summary>
     /// Reserves <paramref name="estimatedBytes"/> of hydration budget, waiting in
     /// first-in-first-out order until the reservation fits or the caller is the
     /// only claimant. Dispose the returned lease to release the reservation.

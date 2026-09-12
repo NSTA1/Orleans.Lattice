@@ -1703,11 +1703,17 @@ internal sealed partial class BPlusLeafGrain
             : Math.Max(blob.SnapshotBytes, 0L);
 
     /// <summary>
-    /// Reserves hydration budget for this activation, returning
-    /// <see langword="null"/> when the caller's deadline elapsed while queued.
+    /// The stored-byte estimate this activation's hydration claim is sized
+    /// from: the durable hint when one has been banked, and the leaf's own
+    /// configured size bound otherwise.
     /// </summary>
-    private async Task<LeafSnapshotHydrationLease?> AcquireSnapshotHydrationLeaseAsync(
-        CancellationToken cancellationToken)
+    /// <remarks>
+    /// Shared by the claim and by the failure-path escalation so the two cannot
+    /// drift. They must agree: the escalation's whole job is to raise the value
+    /// the claim will read next time, and if it escalated a different quantity
+    /// it would raise something nothing consults.
+    /// </remarks>
+    private async Task<long> ResolveSnapshotLoadEstimateBytesAsync()
     {
         // The durable hint is the whole point of persisting it: the first claim
         // a restarted process makes is already sized from what the previous run
@@ -1731,6 +1737,119 @@ internal sealed partial class BPlusLeafGrain
             var options = await GetOptionsAsync();
             estimatedBytes = options.MaxLeafBytes;
         }
+
+        return estimatedBytes;
+    }
+
+    /// <summary>
+    /// Banks a strictly larger durable hydration estimate after a load failed
+    /// for want of memory, so the next activation sizes its claim from what
+    /// this failure cost rather than repeating the estimate that just failed.
+    /// </summary>
+    private async Task BankUnaffordableLoadHintAsync()
+    {
+        // Every statement here is bookkeeping for a FUTURE activation, and the
+        // caller is on its way to rethrowing the fault that brought us here.
+        // An observation must never replace the fault it observes - the same
+        // rule the cold-replay cancellation escalation follows - so the whole
+        // body is swallowed. Losing the hint costs one more failed activation;
+        // losing the LeafSnapshotUnaffordableException would rewrite a
+        // diagnosed memory fault as whatever the bookkeeping happened to throw.
+        //
+        // That is not a hypothetical here. We are on the resource-exhaustion
+        // path, so the most likely thing to throw is another
+        // OutOfMemoryException, raised by the very write that is trying to
+        // record why the last one happened.
+        try
+        {
+            // STORED bytes, never the lease's HeldBytes.
+            //
+            // HeldBytes is a heap-cost figure - the gate multiplies every claim
+            // by its amplification on the way in - whereas
+            // SnapshotLoadHintBytes is a stored size, which is what the success
+            // path banks and what the next claim converts. Banking the held
+            // figure would read perfectly (both are bytes, it compiles) and be
+            // wrong by the amplification, compounding on every round because
+            // the inflated value is amplified again when it is next read. That
+            // is the second conversion site ToHeapCostBytes's placement exists
+            // to prevent, and this comment is here because the first draft of
+            // this method did exactly that and the arms caught it.
+            var basis = await ResolveSnapshotLoadEstimateBytesAsync();
+            if (basis <= 0)
+            {
+                return;
+            }
+
+            // Doubling, and NOT a configurable factor. The correct estimate is
+            // unknown by construction - the load failed, so nothing measured it
+            // - and the only fact in hand is that `basis` was too small. A knob
+            // here would have to be tuned per host, which is exactly the
+            // property this fix may not have; doubling reaches any true size in
+            // a logarithmic number of activations without naming one.
+            var ceiling = SnapshotHydrationAdmission.MaxClaimableStoredBytes;
+            var escalated = basis >= ceiling / 2 ? ceiling : basis * 2;
+
+            // Suppresses a redundant durable write once the guess has
+            // saturated the ceiling, which is the only way this condition can
+            // now hold: `basis` is derived from the hint itself, so `escalated`
+            // strictly exceeds it in every case except the clamped one, where
+            // the two are both `ceiling`.
+            //
+            // Without this, every subsequent failed activation of a saturated
+            // leaf would persist a value identical to the one already stored -
+            // an unbounded series of writes that change nothing, falling on
+            // precisely the leaves that are failing repeatedly, which is the
+            // population already under memory pressure. The arm that pins it
+            // asserts the WRITE COUNT rather than the value, because the value
+            // is correct either way and only the write is wasted.
+            //
+            // An earlier draft justified this clause as stopping two
+            // interleaved activations from talking each other back down to a
+            // failing estimate. That was true when the basis was the lease's
+            // held bytes, an externally-supplied quantity that could arrive
+            // smaller than the stored hint. It has not been true since the
+            // basis became the hint itself, and the comment outlived the
+            // mechanism it described - the clause is still needed, for a
+            // different reason than the one originally written down.
+            //
+            // None of this makes the escalation a one-way ratchet: the success
+            // path assigns the MEASURED size unconditionally, so the first load
+            // that completes replaces an inflated guess with the truth,
+            // downward if need be.
+            if (escalated <= state.State.SnapshotLoadHintBytes)
+            {
+                return;
+            }
+
+            state.State.SnapshotLoadHintBytes = escalated;
+
+            // Persisted here rather than stamped in memory, which is the one
+            // place this path must differ from the success path above.
+            //
+            // That path can stamp and leave the flush to whichever ordinary
+            // write comes next, because the activation continues and some write
+            // always does come. This one is about to throw, and the activation
+            // dies with it - so an in-memory stamp is discarded before anything
+            // can read it, and the hint would be lost precisely on the path
+            // whose entire purpose is to remember. The write is bounded by the
+            // number of FAILING leaves, not by the cold-start storm.
+            await PersistAsync();
+        }
+        catch
+        {
+            // Intentionally swallowed. See above: the fault in flight is worth
+            // more than this record of it.
+        }
+    }
+
+    /// <summary>
+    /// Reserves hydration budget for this activation, returning
+    /// <see langword="null"/> when the caller's deadline elapsed while queued.
+    /// </summary>
+    private async Task<LeafSnapshotHydrationLease?> AcquireSnapshotHydrationLeaseAsync(
+        CancellationToken cancellationToken)
+    {
+        var estimatedBytes = await ResolveSnapshotLoadEstimateBytesAsync();
 
         var admission = SnapshotHydrationAdmission;
         LeafSnapshotHydrationLease lease;
@@ -1906,6 +2025,31 @@ internal sealed partial class BPlusLeafGrain
             // arm where the remedy and the fault are the same resource.
             if (IsResourceExhaustion(ex))
             {
+                // ... but breaking the loop is not the same as escaping it, and
+                // until now this arm did neither (issue #2769 section 3).
+                //
+                // The claim this activation made was sized from
+                // SnapshotLoadHintBytes, and that field is written at exactly
+                // one place: after a load SUCCEEDS. A leaf whose load fails for
+                // want of heap therefore banks nothing, so the next activation
+                // sizes its claim from the same hint the last one did, gets
+                // admitted on the same terms, and fails the same way. The
+                // estimate is MEMORYLESS with respect to failure - every
+                // attempt is the first attempt - so a leaf too large to load
+                // under contention is not slow to converge, it does not
+                // converge at all.
+                //
+                // The remedy is to make the failure inform the next estimate.
+                // Banking a strictly larger hint TIGHTENS admission rather than
+                // relaxing it: the gate's claim is what it reserves on this
+                // leaf's behalf, so a bigger claim means fewer concurrent
+                // hydrations alongside it and, at the ceiling, sole occupancy
+                // and the whole budget. That is the opposite of admitting the
+                // leaf anyway - the #2766 decision is untouched, and the leaf
+                // still fails THIS activation. What changes is that the retry
+                // is made under conditions the previous failure paid to learn.
+                await BankUnaffordableLoadHintAsync();
+
                 throw new LeafSnapshotUnaffordableException(
                     state.State.TreeId ?? string.Empty,
                     lease.HeldBytes,
