@@ -110,6 +110,38 @@ internal sealed class LeafNodeState
     [Id(11)] public long ProjectionCheckpointOffset { get; set; }
 
     /// <summary>
+    /// Whether <see cref="ProjectionCheckpointOffset"/> holds a value this leaf
+    /// actually assigned, as opposed to the CLR type default (issue #2703).
+    /// <c>true</c> once the projection has written partition 0's checkpoint at
+    /// least once; <c>null</c> on every row persisted before this slot existed,
+    /// and on a row whose partition 0 has never been checkpointed at all.
+    /// <para>
+    /// The slot exists because <see cref="ProjectionCheckpointOffset"/> has no
+    /// initializer and so is born <c>0</c> rather than at the <c>-1</c>
+    /// "nothing applied" sentinel every other partition uses. A leaf that has
+    /// never checkpointed partition 0 is therefore indistinguishable, from the
+    /// persisted state alone, from one genuinely checkpointed at offset 0 - and
+    /// the serializer omits default-valued members, so the slot is absent from
+    /// the payload in both cases rather than being written as an explicit
+    /// <c>0</c>. Reading that ambiguous <c>0</c> as real progress skipped the
+    /// replay advance that would have recorded the checkpoint, leaving the
+    /// partition permanently uncheckpointed.
+    /// </para>
+    /// <para>
+    /// The remedy is additive and nullable ON PURPOSE. Re-defaulting
+    /// <see cref="ProjectionCheckpointOffset"/> to <c>-1</c> would change the
+    /// meaning of every already-deployed row that omitted the member, silently
+    /// converting real progress into "nothing applied". A new nullable slot
+    /// instead leaves legacy rows reading exactly as they did, and lets
+    /// <c>GetPersistedCheckpointForPartition</c> resolve the remaining
+    /// ambiguity conservatively: an unassigned <c>0</c> reports the sentinel, so
+    /// the partition re-reads at most one WAL entry and then assigns this slot,
+    /// after which it is never ambiguous again.
+    /// </para>
+    /// </summary>
+    [Id(22)] public bool? ProjectionCheckpointOffsetAssigned { get; set; }
+
+    /// <summary>
     /// Incremental XOR-fold projection fingerprint: a 16-byte buffer that holds
     /// the running XxHash128 XOR over per-key contributions of every entry in
     /// the leaf's entry cache. Each entry contributes a deterministic 16-byte

@@ -65,16 +65,42 @@ public partial class BPlusLeafGrainTests
         // trivially because no capture ever runs.
         await CheckpointLeafAsync(leaf, "k1", hlcPhysical: 100, offset: 1);
 
+        // That persist legitimately drives a zero-coverage repair capture
+        // (issue #2692): partition 0 is now checkpointed while no durable
+        // snapshot covers it, which is exactly the state the repair exists to
+        // clear. It runs on the persist path, where there is no ambient caller
+        // token, so it passes CancellationToken.None - correctly, since there
+        // is no deadline to honour there.
+        //
+        // That capture also CLEARS _checkpointAdvancedThisActivation, which is
+        // the gate this test latched above. Advance the checkpoint a second
+        // time to re-latch it, so the deactivation capture still runs. The
+        // second advance cannot drive another repair: the repair predicate is
+        // "checkpointed with coverage < 0", and the first capture moved
+        // coverage to 0, so the deficit is gone for the rest of the activation.
+        await CheckpointLeafAsync(leaf, "k2", hlcPhysical: 200, offset: 2);
+
+        // The original assertion indexed captured[0], which silently assumed
+        // the deactivation capture was the FIRST the store ever saw. Partition
+        // at the deactivation boundary instead and assert on every capture the
+        // hook itself drives. That is strictly stronger than the positional
+        // form: it pins the #1965 contract to the calls actually made under the
+        // deadline, and would still fail if the hook regressed to None even
+        // when other captures precede it.
+        var capturesBeforeDeactivate = captured.Count;
+
         using var deadline = new CancellationTokenSource();
 
         await ((IGrainBase)leaf).OnDeactivateAsync(
             new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"),
             deadline.Token);
 
-        Assert.That(captured, Is.Not.Empty,
+        var deactivationCaptures = captured.Skip(capturesBeforeDeactivate).ToList();
+
+        Assert.That(deactivationCaptures, Is.Not.Empty,
             "precondition: the deactivation capture must actually reach the snapshot "
             + "store, otherwise this test cannot observe which token it was given.");
-        Assert.That(captured[0], Is.EqualTo(deadline.Token),
+        Assert.That(deactivationCaptures, Is.All.EqualTo(deadline.Token),
             "the snapshot capture must be handed the caller's deactivation token so it "
             + "can be interrupted; a hard-coded CancellationToken.None here is what let "
             + "the blob write outrun Orleans' deactivation deadline (issue 1965)");
@@ -99,11 +125,25 @@ public partial class BPlusLeafGrainTests
         var stub = Substitute.For<ILeafSnapshotStorageGrain>();
         stub.LoadAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<LeafSnapshotBlob?>(null));
+        // The hang is armed only once setup is complete. The checkpoint below
+        // legitimately drives a zero-coverage repair capture (issue #2692) on
+        // the persist path, and that path has no caller token to cancel with -
+        // so an unconditionally-hanging store would block setup forever and the
+        // test would die on the blame-hang timeout rather than exercising the
+        // deactivation deadline it exists to test. Arming after setup keeps the
+        // subject of this test exactly what it was: the deadline interrupting an
+        // in-flight capture on the deactivation path.
+        var hangArmed = false;
         // Model a store that never completes on its own and is only released by
         // cancellation - the shape of a contended provider at end-of-replay.
         stub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
             .Returns(async callInfo =>
             {
+                if (!hangArmed)
+                {
+                    return;
+                }
+
                 var token = callInfo.ArgAt<CancellationToken>(1);
                 entered.TrySetResult();
                 await Task.Delay(Timeout.Infinite, token);
@@ -112,6 +152,15 @@ public partial class BPlusLeafGrainTests
         var (leaf, _, _, _, _) =
             CreateLeafWithDurablePinAndSnapshotStore(treeId: PinSeamTreeId, snapshotStub: stub);
         await CheckpointLeafAsync(leaf, "k1", hlcPhysical: 100, offset: 1);
+        // The repair capture driven by that persist also clears
+        // _checkpointAdvancedThisActivation, which is the gate the deactivation
+        // capture opens on. Advance again to re-latch it, so the hook below
+        // still reaches the store. The second advance drives no further repair:
+        // the predicate is "checkpointed with coverage < 0", and the first
+        // capture already moved coverage to 0.
+        await CheckpointLeafAsync(leaf, "k2", hlcPhysical: 200, offset: 2);
+
+        hangArmed = true;
 
         using var deadline = new CancellationTokenSource();
         var deactivate = ((IGrainBase)leaf).OnDeactivateAsync(

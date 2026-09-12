@@ -1783,6 +1783,60 @@ public static class LatticeMetrics
         new(TagReason, "faulted");
 
     /// <summary>
+    /// Counter of off-cadence leaf snapshot captures driven by the zero-coverage
+    /// repair path (issue #2692). Tagged with <see cref="TagTree"/> and
+    /// <see cref="TagOutcome"/>: <c>repaired</c> when a capture gave a
+    /// checkpointed partition the durable coverage it previously lacked, and
+    /// <c>exhausted</c> when an activation spent its entire repair budget with a
+    /// checkpointed partition still uncovered.
+    /// <para>
+    /// <b>Why one instrument carries both outcomes.</b> A counter publishes no
+    /// series at all until its first <c>Add</c>, so a dedicated exhaustion
+    /// counter would sit dark in the healthy case and read identically to an
+    /// instrument that was never wired up. Sharing one instrument means any
+    /// repair traffic whatsoever proves the series is live, after which a zero
+    /// on <c>exhausted</c> is a measured zero rather than silence. That
+    /// distinction is the whole point: this counter exists because the defect it
+    /// watches for was invisible for months behind exactly that ambiguity.
+    /// </para>
+    /// <para>
+    /// <c>exhausted</c> is the alarm condition and is never benign. A
+    /// checkpointed partition with no durable snapshot coverage resolves its
+    /// durable materialiser pin to the Zero block value, which disables
+    /// cursor-based WAL trimming for the leaf's ENTIRE tree - one such leaf
+    /// retains every other leaf's WAL without bound. The leaf identity is
+    /// carried on the paired warning rather than as a tag, because the leaf
+    /// population is unbounded and would be an unbounded metric dimension.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotCoverageRepairs =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.coverage_repairs", unit: "{capture}",
+            description: "Off-cadence leaf snapshot captures driven by the zero-coverage repair path (issue #2692), tagged by tree and outcome (repaired/exhausted). Both outcomes share one instrument so that a zero on 'exhausted' is a measured zero and not an unpublished series.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotCoverageRepairs"/>.</summary>
+    public const string LeafSnapshotCoverageRepairsName = "orleans.lattice.leaf.snapshot.coverage_repairs";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="LeafSnapshotCoverageRepairs"/> for a repair capture after
+    /// which every checkpointed partition holds durable snapshot coverage, so
+    /// the leaf no longer blocks its tree's cursor trim.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageRepairRepaired =
+        new(TagOutcome, "repaired");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="LeafSnapshotCoverageRepairs"/> for an activation that spent
+    /// its entire per-activation repair budget with a checkpointed partition
+    /// still uncovered. Emitted once per activation at the moment the budget is
+    /// spent, not once per attempt, so the series counts stuck activations
+    /// rather than retries.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageRepairExhausted =
+        new(TagOutcome, "exhausted");
+
+    /// <summary>
     /// Counter of resident unresolved saga prepares recorded into
     /// <c>LeafNodeState.UnresolvedReplayWork</c> <b>beyond</b> the
     /// <see cref="LatticeOptions.MaxDurableUnresolvedReplayWork"/> cap, emitted

@@ -625,6 +625,61 @@ internal sealed partial class BPlusLeafGrain
             await TryCaptureSnapshotForAdvisoryAsync();
         }
 
+        // Step 1.5b - zero-coverage repair (issue #2692). The advisory above
+        // fires only when the fall-off-log detector raised it, which is a
+        // proximity heuristic about the WAL TAIL and says nothing about whether
+        // a durable snapshot exists. A leaf can therefore come online holding a
+        // checkpointed partition with no snapshot coverage at all, resolve its
+        // durable pin to the Zero block value, and disable cursor-based WAL
+        // trimming for its ENTIRE tree for the whole life of the activation.
+        //
+        // This site is what makes the repair reach a tree that has stopped
+        // taking writes. The post-persist driver in
+        // MaybeRunPeriodicSnapshotRecheckAsync cannot: it hangs off
+        // CompleteCheckpointFlushTailAsync, so a leaf that never persists
+        // another checkpoint never reaches it, and a corpus that finishes
+        // ingesting leaves exactly that state behind - a large accumulated WAL,
+        // no further writes, and an activation that may never end. Evaluating
+        // the predicate once here, on a path every activation of a seeded leaf
+        // runs, means a quiesced tree heals on its next activation rather than
+        // never.
+        //
+        // Run on every activation of a SEEDED leaf rather than as an `else` on
+        // the advisory: when the advisory already captured, the predicate is
+        // false and this costs one array read per partition, and when the
+        // advisory capture FAILED this is the retry. Coverage is read from the
+        // snapshot rehydrated in Step 0, so it is already populated by the time
+        // control reaches here.
+        //
+        // The TreeId guard is NOT an optimisation and must not be removed. It
+        // is this hook's documented contract ("No-op when the leaf has not been
+        // seeded with a tree id"), and without it this site deadlocks the silo
+        // on first use of any tree. GetOptionsAsync() reads as a local field
+        // read but is a lazily-populated cache whose miss path is
+        // LatticeOptionsResolver.ResolveAsync, and for any id that does not
+        // carry LatticeConstants.SystemTreePrefix - which includes the EMPTY id
+        // an unseeded leaf resolves with - that path calls ILatticeRegistry.
+        // AcquireReplayPermitAsync returns before its own GetOptionsAsync() when
+        // TreeId is empty, so on an unseeded leaf the cache is cold and this
+        // await becomes a registry RPC. LatticeRegistryGrain is a non-reentrant
+        // singleton that implements itself over its own system tree, so
+        // registering a tree for the first time is already executing a turn on
+        // that grain while its Registry.SetAsync activates a newborn system-tree
+        // leaf - and a registry call from here queues behind that turn forever,
+        // exactly as the two-hop cycle documented at LatticeRegistryGrain.cs:286
+        // does. The guard also makes the await below provably a cache hit (a
+        // non-empty TreeId means AcquireReplayPermitAsync already warmed it), so
+        // this step issues no grain call at all. It forfeits no repair: a leaf
+        // with no tree id has no WAL, no checkpoint and no coverage, so the
+        // predicate would be false anyway.
+        if (!string.IsNullOrEmpty(state.State.TreeId))
+        {
+            var coverageRepairOptions = await GetOptionsAsync();
+            await TryRepairZeroCoverageAsync(
+                Math.Max(1, coverageRepairOptions.WalPartitions),
+                cancellationToken);
+        }
+
         // Step 2 - eagerly publish the cursor IFF the materialiser did
         // not already advance the checkpoint. SetCheckpointOffsetAsync
         // routes through FlushPendingCheckpointAsync which already
