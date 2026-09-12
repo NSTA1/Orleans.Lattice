@@ -93,6 +93,137 @@ internal sealed class LatticeOptionsResolver(
     private readonly ConcurrentDictionary<string, int> _walPartitionsCache = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Registry reads for a tree that are in flight right now, so that
+    /// concurrent resolvers share one round trip instead of queueing one each
+    /// behind the registry singleton.
+    /// <para>
+    /// <b>This is not a cache and deliberately not one.</b> An entry lives only
+    /// for the duration of the round trip it represents and is removed before
+    /// its result is published, so a caller arriving after a flight completes
+    /// starts a fresh one. Nothing is retained, so there is no staleness window,
+    /// no invalidation, and - the reason this shape was chosen over a cache - no
+    /// expiry constant to fit to a particular host. It also leaves
+    /// <see cref="State.TreeRegistryEntry.MaxCacheValueBytes"/> honestly
+    /// runtime-mutable, which a memoising cache would silently freeze; callers
+    /// that share a flight observe one instant's value, which is already
+    /// indistinguishable from the single read they would each have made.
+    /// </para>
+    /// <para>
+    /// <b>Why activation needs this.</b> <see cref="ILatticeRegistry"/> is a
+    /// non-reentrant cluster singleton, so N concurrent
+    /// <see cref="ILatticeRegistry.GetEntryAsync"/> calls take N turns in
+    /// series. Every cold leaf activation resolves options exactly once, so a
+    /// cold start with N leaves queues N serialised round trips inside each
+    /// leaf's activation deadline; past a few thousand leaves the leaves at the
+    /// back of that queue are cancelled before they are served. The failure is
+    /// self-reinforcing, because a leaf cancelled during activation captures no
+    /// snapshot and therefore returns cold - and so re-queues - on the next
+    /// start. Coalescing collapses the burst to one round trip, which is what
+    /// breaks the loop. The same amplification was already identified and fixed
+    /// for the foreground commit path by <see cref="_walPartitionsCache"/>
+    /// above; the activation path was still paying it in full.
+    /// </para>
+    /// <para>
+    /// Per-resolver-instance rather than static, matching
+    /// <see cref="_walPartitionsCache"/>, so each silo owns its own coalescing
+    /// and fixtures that construct the resolver directly start clean.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, Task<State.TreeRegistryEntry?>> _inFlightRegistryReads =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Reads <paramref name="treeId"/>'s registry entry, joining the read
+    /// already in flight for that tree when there is one. Seeding a missing
+    /// structural pin happens inside the shared flight, so a cold start seeds
+    /// once rather than once per activation.
+    /// </summary>
+    private Task<State.TreeRegistryEntry?> FetchRegistryEntryCoalescedAsync(string treeId)
+    {
+        if (_inFlightRegistryReads.TryGetValue(treeId, out var joined))
+        {
+            return joined;
+        }
+
+        var flight = new TaskCompletionSource<State.TreeRegistryEntry?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var winner = _inFlightRegistryReads.GetOrAdd(treeId, flight.Task);
+        if (!ReferenceEquals(winner, flight.Task))
+        {
+            return winner;
+        }
+
+        _ = RunFlightAsync();
+        return flight.Task;
+
+        async Task RunFlightAsync()
+        {
+            try
+            {
+                var entry = await FetchRegistryEntryAsync(treeId).ConfigureAwait(false);
+
+                // Retire the flight BEFORE publishing its result. A caller that
+                // arrives after this point must start a fresh read rather than
+                // join a completed one, which is what keeps the shared round
+                // trip from behaving as a zero-length cache.
+                _inFlightRegistryReads.TryRemove(
+                    new KeyValuePair<string, Task<State.TreeRegistryEntry?>>(treeId, flight.Task));
+                flight.TrySetResult(entry);
+            }
+            catch (Exception ex)
+            {
+                _inFlightRegistryReads.TryRemove(
+                    new KeyValuePair<string, Task<State.TreeRegistryEntry?>>(treeId, flight.Task));
+
+                // Every joined caller observes the same fault, exactly as it
+                // would have observed its own. Sharing a failure is not new
+                // behaviour: the alternative is N identical failures against a
+                // registry that is already not answering.
+                flight.TrySetException(ex);
+            }
+        }
+    }
+
+    private async Task<State.TreeRegistryEntry?> FetchRegistryEntryAsync(string treeId)
+    {
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+#if LATTICE_DIAG
+        // DIAG-PATH1: record every resolve so we can see when entry transitions to defaults.
+        // Note this now emits once per FLIGHT rather than once per caller, because
+        // callers that join an in-flight read never reach here.
+        try
+        {
+            Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
+                $"resolve-pre treeId={treeId} entry={(entry is null ? "null" : $"{{mlk={entry.MaxLeafKeys},mic={entry.MaxInternalChildren},sc={entry.ShardCount}}}")}");
+        }
+        catch { }
+#endif
+        if (entry is null ||
+            entry.MaxLeafKeys is null ||
+            entry.MaxInternalChildren is null ||
+            entry.ShardCount is null)
+        {
+            // Lazy first-use seeding: every user tree must have a
+            // structural pin, but callers should not have to register
+            // explicitly for simple scenarios. RegisterAsync is
+            // idempotent and fills nulls with LatticeConstants defaults.
+            await registry.RegisterAsync(treeId, entry).ConfigureAwait(false);
+            entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false) ?? entry;
+#if LATTICE_DIAG
+            try
+            {
+                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
+                    $"resolve-post-register treeId={treeId} entry={(entry is null ? "null" : $"{{mlk={entry.MaxLeafKeys},mic={entry.MaxInternalChildren},sc={entry.ShardCount}}}")}");
+            }
+            catch { }
+#endif
+        }
+
+        return entry;
+    }
+
+    /// <summary>
     /// Trees for which a "configured = true but latched-disabled" warning
     /// has already been logged. Re-resolving the same tree must not spam
     /// the log on every grain activation; the warning is informational
@@ -500,37 +631,7 @@ internal sealed class LatticeOptionsResolver(
         }
         else
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-            var entry = await registry.GetEntryAsync(treeId);
-#if LATTICE_DIAG
-            // DIAG-PATH1: record every resolve so we can see when entry transitions to defaults.
-            try
-            {
-                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
-                    $"resolve-pre treeId={treeId} entry={(entry is null ? "null" : $"{{mlk={entry.MaxLeafKeys},mic={entry.MaxInternalChildren},sc={entry.ShardCount}}}")}");
-            }
-            catch { }
-#endif
-            if (entry is null ||
-                entry.MaxLeafKeys is null ||
-                entry.MaxInternalChildren is null ||
-                entry.ShardCount is null)
-            {
-                // Lazy first-use seeding: every user tree must have a
-                // structural pin, but callers should not have to register
-                // explicitly for simple scenarios. RegisterAsync is
-                // idempotent and fills nulls with LatticeConstants defaults.
-                await registry.RegisterAsync(treeId, entry);
-                entry = await registry.GetEntryAsync(treeId) ?? entry;
-#if LATTICE_DIAG
-                try
-                {
-                    Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
-                        $"resolve-post-register treeId={treeId} entry={(entry is null ? "null" : $"{{mlk={entry.MaxLeafKeys},mic={entry.MaxInternalChildren},sc={entry.ShardCount}}}")}");
-                }
-                catch { }
-#endif
-            }
+            var entry = await FetchRegistryEntryCoalescedAsync(treeId).ConfigureAwait(false);
             mlk = entry?.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys;
             mic = entry?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren;
             sc = entry?.ShardCount ?? LatticeConstants.DefaultShardCount;
