@@ -815,6 +815,19 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_activation_cold_replay_loop_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "loop-escalated cancellations {{tree}}/s" }
       ]
+    },
+    {
+      "id": 135,
+      "title": "Leaf snapshot zero-coverage repairs (rate) by outcome - issue #2692 (absent = healthy)",
+      "description": "Off-cadence leaf snapshot captures driven by the zero-coverage repair path (orleans.lattice.leaf.snapshot.coverage_repairs), split by outcome, charted against the reclaimed WAL GC passes they exist to unblock. A leaf that holds a checkpointed partition with no durable snapshot coverage publishes the Zero block pin, and ONE such leaf disables cursor-based WAL trimming for its ENTIRE tree, so every other leaf's WAL is retained on its behalf and retained bytes grow without bound (issue #2692). outcome=repaired is a capture after which every checkpointed partition holds coverage, so that leaf has stopped blocking its tree. outcome=exhausted is an activation that spent its whole per-activation repair budget with a partition still uncovered: it is emitted ONCE PER ACTIVATION at the moment the budget is spent, not once per attempt, so the series counts stuck leaves rather than retries. Attempts that neither reach coverage nor spend the budget emit nothing, so attempts exceed repaired plus exhausted and this panel is deliberately not an attempt count. ABSENT IS NOT ZERO. These targets omit the 'or vector(0)' fallback most neighbouring panels use, because substituting a literal zero would draw an estate that needs no repairs identically to an instrument that never fired, which is the exact confusion this fix exists to remove: zero snapshot coverage was invisible for months precisely because nothing measured it. Both outcomes are carried on ONE instrument for this reason - the co-located repaired series is what licenses reading an absent exhausted series as a real zero, because it proves the code path is live and reporting. An exhausted series that is present at any sustained rate is the headline fault: those trees are retaining WAL right now, and the paired warning log names the individual leaf, which is deliberately not a tag here because the leaf population is unbounded cardinality. Read series A against series B for the drain: on a backlog of starved leaves repaired rises, then falls toward zero as the population clears, WHILE reclaimed GC passes rise from zero - that crossover is the reclamation actually resuming, and repaired falling while reclaimed stays flat means coverage is being written but something else still pins the offset floor. Leaves whose TreeId is not yet known emit nothing at all, by construction.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 193 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_snapshot_coverage_repairs_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "coverage repairs {{tree}} {{outcome}}/s" },
+        { "refId": "B", "expr": "sum by (tree) (rate(orleans_lattice_wal_gc_passes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\",outcome=\"reclaimed\"}[5m]))", "legendFormat": "reclaimed WAL GC passes {{tree}}/s" }
+      ]
     }
   ]
 }

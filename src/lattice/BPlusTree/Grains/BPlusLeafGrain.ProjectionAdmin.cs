@@ -87,6 +87,9 @@ internal sealed partial class BPlusLeafGrain
         // -1-for-empty-WAL contract, so the materialiser reads from
         // offset 0 inclusive on the next activation.
         state.State.ProjectionCheckpointOffset = -1;
+        // Clear the assignment marker alongside the sentinel so the rebuilt row
+        // reads as "nothing applied" through every path (issue #2703).
+        state.State.ProjectionCheckpointOffsetAssigned = null;
         // Drop the per-partition slot too: a rebuild seeds a fresh
         // single-partition shape and a future write fans out lazily.
         state.State.ProjectionCheckpointOffsetsByPartition = null;

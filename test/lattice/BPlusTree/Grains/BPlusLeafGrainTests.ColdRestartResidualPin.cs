@@ -270,11 +270,29 @@ public partial class BPlusLeafGrainTests
         var projection = AsProjection(grain);
         var (dataKey, dataPartition) = FirstKeyInNonZeroPartition(partitions);
 
-        // Partition 0 captures once (created with checkpoint 0), establishing
-        // the frozen scalar the pre-fix debounce keys on.
+        // Partition 0 captures once, establishing the frozen coverage the
+        // pre-fix debounce keys on.
         await grain.CaptureSnapshotAsync();
-        Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(0L),
-            "precondition: partition 0 is covered at 0");
+        // Partition 0 is "created with checkpoint 0", but that 0 is the type
+        // default of LeafNodeState.ProjectionCheckpointOffset, not an applied
+        // WAL offset - the leaf has absorbed nothing into partition 0. It
+        // therefore covers nothing, and reports the same "nothing applied"
+        // sentinel every other partition has always used for that state
+        // (issue #2703).
+        //
+        // The independent witness that the old expectation was wrong is Half A's
+        // own guard, CaptureSnapshotAsync_no_op_when_checkpoint_is_nothing_applied_sentinel,
+        // which predates this change: coverage is a durable claim that a WAL
+        // offset is safe to trim, so stamping 0 for a partition that applied
+        // nothing hands out an unearned trim entitlement over WAL offset 0. That
+        // is the silent-data-loss shape this whole fix exists not to introduce,
+        // arriving through a type default rather than through advancing a pin.
+        //
+        // This is scaffolding either way - the subject below is the BUSY
+        // non-zero partition's coverage advancing - so the corrected value costs
+        // the test nothing and removes an assertion that pinned the defect.
+        Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(-1L),
+            "precondition: partition 0 applied nothing, so it covers nothing");
 
         // Partition 0 now idles. A non-zero partition takes a write and
         // checkpoints past it. The cadence recheck (threshold 1) fires on the

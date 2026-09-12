@@ -310,7 +310,21 @@ public partial class BPlusLeafGrainTests
         var (first, _) = CreateBudgetUnitsLeaf(firstCoord, logs, partitionHead: 5_000, persistedCheckpoint: 100, maxLeafReplayEntries: 5);
         await ActivateAsync(first);
 
-        Assert.That(logs.Warnings, Is.Empty,
+        // Filtered to stall lines rather than asserting the global warning
+        // stream is empty. The claim being made is about the STALL criterion -
+        // "a single activation is not evidence of a stall" - and the sibling
+        // test of that same property already expresses it this way
+        // (BPlusLeafGrainTests.ReplayStallGateSensitivity.cs:129 asserts
+        // StalledFaultLines(logs), Is.Empty), so this is a harness repair
+        // towards an established pattern rather than a re-pointed expectation.
+        //
+        // It matters here because this leaf is now also a zero-coverage repair
+        // candidate (issue #2692): it holds a checkpointed partition with no
+        // durable snapshot coverage, and its test rig has no working snapshot
+        // store, so the best-effort repair capture fails and logs its own
+        // unrelated warning. Asserting on the undifferentiated warning stream
+        // couples this test to every other subsystem that may legitimately warn.
+        Assert.That(StalledWarnings(logs), Is.Empty,
             "A single activation is not evidence of a stall, and this leaf's own work is under budget.");
 
         // Re-activate the SAME leaf id from the SAME persisted checkpoint: the
