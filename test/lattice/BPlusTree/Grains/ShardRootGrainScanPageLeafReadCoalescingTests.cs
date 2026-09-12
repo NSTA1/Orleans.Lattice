@@ -374,10 +374,19 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
     /// that shipped before this file existed - issue the read - rather than to
     /// anything else.
     /// <para>
-    /// This is the arm that proves losing the map is safe rather than merely
-    /// assumed to be. It is not a duplicate of the coalescing test: that one
-    /// asserts a second read is <em>not</em> issued within one activation, this
-    /// one asserts it <em>is</em> issued across two.
+    /// The previous read is deliberately left <em>in flight</em> rather than
+    /// released first. That is what makes this arm perturbable instead of
+    /// merely descriptive: an entry that outlived its activation would be
+    /// joinable, so the new activation would attach to a read parked by an
+    /// activation that no longer exists and stall on it. Releasing the park
+    /// first would settle the entry, the completed-read guard would decline it
+    /// on its own, and this arm would pass no matter where the map lived -
+    /// green for a reason unrelated to the clause it is supposed to pin.
+    /// </para>
+    /// <para>
+    /// It is not a duplicate of the coalescing test: that one asserts a second
+    /// read is <em>not</em> issued within one activation, this one asserts it
+    /// <em>is</em> issued across two.
     /// </para>
     /// </summary>
     [Test]
@@ -388,10 +397,8 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
         var stalled = await AttemptAsync(chain.Grain);
         Assert.That(stalled, Is.Null, "precondition: the first attempt stalls");
 
-        chain.ReleasePark();
-        await Task.Yield();
-
-        // The shard deactivates and comes back. Nothing carries over.
+        // The shard deactivates and comes back with that read still parked.
+        // Nothing carries over.
         var reactivated = chain.Reactivate();
         chain.Park = false;
         var page = await reactivated.GetSortedEntriesBatchAsync(
@@ -405,6 +412,9 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
                 "by reading the leaf, because a lost activation loses only an index of reads it "
                 + "owned - there is no stale state to carry and nothing to reset");
         });
+
+        chain.ReleasePark();
+        await Task.Yield();
     }
 
     /// <summary>
