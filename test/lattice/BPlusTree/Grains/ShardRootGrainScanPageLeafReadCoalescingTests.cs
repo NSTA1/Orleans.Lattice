@@ -40,19 +40,29 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// is slower and correct.
 /// </para>
 /// <para>
-/// <b>What is deliberately not done here.</b> A completed read is never
-/// reused. An earlier revision retained settled results for one ceiling, on the
-/// reasoning that the window was short; that returns scan pages which miss
-/// writes committed after the leaf executed the read, and it broke four
-/// unrelated backup restore-then-scan fixtures. A scan that misses a committed
-/// write is wrong at any window length, so there is no duration at which the
-/// trade becomes acceptable.
+/// <b>What a settled read may and may not be reused on.</b> Recency is not a
+/// basis and never becomes one. An earlier revision retained settled results
+/// for one ceiling, on the reasoning that the window was short; that returns
+/// scan pages which miss writes committed after the leaf executed the read, and
+/// it broke four unrelated <c>Orleans.Lattice.Backup</c> restore-then-scan
+/// fixtures. A scan that misses a committed write is wrong at any window
+/// length, so there is no duration at which the trade becomes acceptable.
 /// <see cref="A_completed_read_is_never_reused_so_a_later_scan_observes_a_later_write"/>
 /// guards against its return.
 /// </para>
+/// <para>
+/// Issue #2786 supplied a different basis, and the distinction is the whole
+/// point: the leaf's activation-fenced revision cookie, sampled before the read
+/// is issued and compared at attach time, which makes settled rows provably
+/// unchanged rather than merely recent. Those arms live in
+/// <c>ShardRootGrainScanPageLeafReadCoalescingTests.Reuse.cs</c>. The arm above
+/// continues to pass unmodified, and for a reason worth stating rather than
+/// assuming: its fake leaf publishes no cookie at all, so it now exercises the
+/// unstamped-refusal clause.
+/// </para>
 /// </summary>
 [TestFixture]
-public class ShardRootGrainScanPageLeafReadCoalescingTests
+public partial class ShardRootGrainScanPageLeafReadCoalescingTests
 {
     private const string TreeId = "coalesce-tree";
     private const string ShardKey = TreeId + "/0";
@@ -75,6 +85,13 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
         public required ShardRootGrain Grain { get; init; }
 
         public required Func<ShardRootGrain> Reactivate { get; init; }
+
+        /// <summary>
+        /// The leaf this chain is rooted at. Exposed because the reuse arms in
+        /// the Reuse partial publish a revision cookie for it, and the registry
+        /// holding those cookies is process-wide.
+        /// </summary>
+        public required GrainId LeafId { get; init; }
 
         public required List<KeyValuePair<string, byte[]>> Rows { get; init; }
 
@@ -135,13 +152,16 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
         }
     }
 
-    private static ParkableLeaf CreateParkableLeaf(TimeSpan stallDuration, int rows = 2)
+    private static ParkableLeaf CreateParkableLeaf(
+        TimeSpan stallDuration,
+        int rows = 2,
+        string leafKey = "leaf0")
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", ShardKey));
 
         var state = new FakePersistentState<ShardRootState>();
-        var leafId = GrainId.Create("leaf", "leaf0");
+        var leafId = GrainId.Create("leaf", leafKey);
         state.State.RootNodeId = leafId;
         state.State.RootIsLeaf = true;
 
@@ -185,6 +205,7 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
         {
             Grain = Build(),
             Reactivate = Build,
+            LeafId = leafId,
             Rows = payload,
         };
         return chain;
@@ -267,6 +288,20 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
     /// The assertion is on the <em>identity of the rows returned</em>, not on
     /// the scan succeeding: a stale page is a perfectly successful page, so
     /// asserting success would pass under the very defect this guards.
+    /// </para>
+    /// <para>
+    /// <b>Post-issue-#2786, this arm pins the unstamped-refusal clause, and
+    /// that is not the same statement as its name.</b> The fake leaf is a
+    /// substitute that never activates, so it publishes no revision cookie and
+    /// <c>RevisionAtIssue</c> is null - which the reuse gate treats as
+    /// "unknown", never as "unchanged", and refuses. The arm therefore still
+    /// reddens if recency-based reuse returns, and it additionally reddens if
+    /// anyone makes a missing cookie permissive. What it does NOT cover is the
+    /// case where a cookie IS published and moves; that is
+    /// <c>A_settled_read_is_refused_when_the_leaf_revision_cookie_has_advanced</c>
+    /// in the Reuse partial. Saying so here is the point: a green arm whose
+    /// stated purpose has quietly drifted from the clause it reaches is
+    /// indistinguishable from one that still guards it.
     /// </para>
     /// </summary>
     [Test]
@@ -418,7 +453,7 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
     }
 
     /// <summary>
-    /// R6. Both outcome arms are published at zero on first guarded use,
+    /// R6. Every outcome arm is published at zero on first guarded use,
     /// through the same recorder the live path uses, so that a zero reads as a
     /// measured absence rather than an absent measurement.
     /// <para>
@@ -426,9 +461,18 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
     /// indistinguishable from one where the counter was never wired - which is
     /// precisely the reading this fix has to be judged on in production.
     /// </para>
+    /// <para>
+    /// <b>Issue #2793.</b> The priming helper's own remarks promised all three
+    /// arms while priming two, and this arm asserted two, so the shortfall was
+    /// invisible from both directions at once. Issue #2786 added the third
+    /// (<c>served</c>) and all three are now asserted here. The assertion is
+    /// deliberately written as the full set rather than as the arms that happen
+    /// to fire in this test: an arm the code omits then fails loudly, whereas
+    /// an arm neither the code nor the test mentions is simply absent.
+    /// </para>
     /// </summary>
     [Test]
-    public async Task Both_leaf_read_outcomes_are_readable_including_the_one_that_never_fires()
+    public async Task All_leaf_read_outcomes_are_readable_including_those_that_never_fire()
     {
         var seen = new HashSet<string>();
         using var listener = MeterListening.StartForInstrument(
@@ -449,8 +493,9 @@ public class ShardRootGrainScanPageLeafReadCoalescingTests
         _ = await chain.Grain.GetSortedEntriesBatchAsync(
             startInclusive: null, endExclusive: null, pageSize: 64, continuationToken: null);
 
-        Assert.That(seen, Is.SupersetOf(new[] { "issued", "joined" }),
-            "both arms must be primed, so that 'joined' sitting at zero is evidence that "
-            + "coalescing did not fire rather than evidence of nothing at all");
+        Assert.That(seen, Is.SupersetOf(new[] { "issued", "joined", "served" }),
+            "all three arms must be primed, so that 'joined' or 'served' sitting at zero is "
+            + "evidence that coalescing or reuse did not fire rather than evidence of nothing "
+            + "at all");
     }
 }
