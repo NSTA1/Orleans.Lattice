@@ -275,11 +275,6 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    [Ignore("Reproduces the open defect in issue #2746: the deferred-terminal clamp banks nothing "
-        + "when a replay window opens with a deferred range delete and the ledger cannot absorb the "
-        + "offset. Un-ignore this to verify the fix - a GREEN here means an interrupted replay now "
-        + "banks its scanned prefix instead of repeating the identical window forever, and #2746 can "
-        + "be closed. Do not delete or weaken this arm to make the suite green.")]
     public async Task An_interrupted_replay_banks_progress_even_when_a_deferred_range_delete_opens_the_window()
     {
         // THE ARM UNDER TEST. Partition 0's window opens with a deferred
@@ -475,5 +470,161 @@ public partial class BPlusLeafGrainTests
             + "with no configuration deviation at all. Re-derive that bound before trusting it. "
             + $"Survivors: {seededSurvivors.Count}, first few: "
             + $"[{string.Join(", ", seededSurvivors.Take(5))}].");
+    }
+
+    /// <summary>
+    /// Drives the liveness-priority admission of issue #2746 directly, on a
+    /// window whose non-last partition opens with THREE consecutive deferred
+    /// range deletes against a ledger that is already saturated when it is
+    /// swept.
+    /// <para>
+    /// Every other arm in this fixture asserts on the resulting CHECKPOINT,
+    /// which is the end-to-end effect. This one asserts on the durable ledger's
+    /// CONTENTS, because the checkpoint cannot distinguish the two clauses the
+    /// fix is made of - it moves identically whether the head offset alone was
+    /// admitted or every offset was. Asserting on membership rather than on an
+    /// aggregate is deliberate: an aggregate (a count, a maximum, a "did it
+    /// advance") is satisfied by too many wrong implementations to falsify
+    /// either clause on its own.
+    /// </para>
+    /// </summary>
+    private static async Task<(List<(int Partition, long Offset)> Ledger, Exception? Fault)>
+        RunSaturatedHeadOfWindowReplayAsync(int cap)
+    {
+        var state = NewFlushCeilingState();
+
+        // Partition 0: the one under test. Swept SECOND, so it defers rather
+        // than draining inline, and its window opens on a deferred terminal.
+        // Offsets 1, 2 and 3 are all range deletes so the arm can tell the
+        // head offset apart from the ones behind it.
+        var p0 = new CommitLogSliceEntry[12];
+        for (var i = 1; i <= 12; i++)
+            p0[i - 1] = i <= 3 ? FlushDeleteRange(i) : FlushSet(i, $"h{i:D2}");
+
+        // Partition 1: swept FIRST (smallest backlog). Its own deferred range
+        // delete is what saturates the cap before partition 0 is swept at all,
+        // which is the condition the defect needs and the reason this shape
+        // takes three partitions rather than two.
+        var p1 = new CommitLogSliceEntry[8];
+        for (var i = 1; i <= 8; i++)
+            p1[i - 1] = i == 4 ? FlushDeleteRange(i) : FlushSet(i, $"g{i:D2}");
+
+        // Partition 2: swept LAST (largest backlog), so it is the single
+        // drain-eligible partition and contributes nothing to the ledger.
+        var p2 = new CommitLogSliceEntry[20];
+        for (var i = 1; i <= 20; i++)
+            p2[i - 1] = FlushSet(i, $"f{i:D2}");
+
+        using var cts = new CancellationTokenSource();
+        ILeafReplayCoordinatorGrain[] coordinators =
+        [
+            BuildObservableCoordinator(
+                head: 12,
+                sliceSize: 4,
+                tail: 0,
+                onRead: read =>
+                {
+                    // Tear down at the SECOND read, so partition 0's first
+                    // slice (offsets 1-4, carrying all three range deletes) is
+                    // fully absorbed first. Cancelling at the first read would
+                    // abort before the slice is processed and the ledger would
+                    // never see the offers at all. The ledger is only
+                    // observable BECAUSE the activation never reaches pass 2 -
+                    // a completed replay resolves every deferred terminal and
+                    // empties the ledger again.
+                    if (read >= 2)
+                        cts.Cancel();
+                },
+                p0),
+            BuildObservableCoordinator(head: 8, sliceSize: 4, tail: 0, onRead: null, p1),
+            BuildObservableCoordinator(head: 20, sliceSize: 4, tail: 0, onRead: null, p2),
+        ];
+
+        var store = new InMemorySnapshotStore();
+        var grain = BuildFlushCeilingLeaf(
+            state,
+            coordinators,
+            store.Stub,
+            maxDurableUnresolvedReplayWork: cap);
+
+        Exception? fault = null;
+        try
+        {
+            await ((IGrainBase)grain).OnActivateAsync(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            fault = ex;
+        }
+
+        var ledger = (state.State.UnresolvedReplayWork ?? [])
+            .Select(e => (e.Partition, e.Offset))
+            .ToList();
+
+        return (ledger, fault);
+    }
+
+    [Test]
+    public async Task A_saturated_ledger_admits_the_head_of_window_terminal_and_refuses_the_ones_behind_it()
+    {
+        // THE TWO CLAUSES OF ISSUE #2746'S FIX, each falsifiable on its own
+        // from this single arm:
+        //
+        //   ADMISSION - the head offset is recorded even though the ledger is
+        //   already at the cap, because refusing it would clamp the ceiling to
+        //   offset - 1, which is exactly where the window opened, retiring no
+        //   entry at all. The next activation would re-read the identical
+        //   window and freeze identically. Revert this clause and the "contains
+        //   (0, 1)" assertion below goes red.
+        //
+        //   BOUND - offsets 2 and 3 are still REFUSED, because by then an entry
+        //   has been consumed below them, so the clamp lands at a ceiling that
+        //   does retire work and the partition still makes progress. The cap
+        //   keeps its full force for every offer that is not at the head.
+        //   Revert this clause - admit unconditionally once past the cap - and
+        //   the "does not contain (0, 2) / (0, 3)" assertions go red while the
+        //   admission assertion stays green.
+        //
+        // The two assertions therefore fail on DISJOINT perturbations, which is
+        // what makes the arm a test of the fix rather than of its effect.
+        const int cap = 1;
+        var (ledger, fault) = await RunSaturatedHeadOfWindowReplayAsync(cap);
+
+        Assert.That(fault, Is.InstanceOf<OperationCanceledException>(),
+            "The teardown must actually have ended the activation before pass 2, or the ledger would "
+            + "have been drained by the deferred terminals resolving and this arm would prove nothing.");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ledger, Does.Contain((1, 4L)),
+                "Partition 1 is swept first and its deferred range delete is what saturates the cap. "
+                + "If it is absent the ledger was never saturated when partition 0 was swept, so the "
+                + "rest of this arm is not exercising the saturation branch at all.");
+
+            Assert.That(ledger, Does.Contain((0, 1L)),
+                "The head-of-window deferred terminal was refused by the saturated ledger. Refusing it "
+                + "clamps partition 0's flush ceiling to offset 0, which is where its window already "
+                + "opened, so the activation banks nothing and the next one re-reads the identical "
+                + "window - the issue #2746 freeze. It must be admitted past the cap precisely because "
+                + "it is the one offer whose refusal cannot be recovered from.");
+
+            Assert.That(ledger, Does.Not.Contain((0, 2L)),
+                "Offset 2 is NOT at the head of the window - offset 1 precedes it - so refusing it "
+                + "leaves a ceiling that retires real work and the partition still progresses. "
+                + "Admitting it means the cap has stopped bounding the ledger at all, which is the "
+                + "unbounded-growth hazard the cap exists to prevent.");
+
+            Assert.That(ledger, Does.Not.Contain((0, 3L)),
+                "Offset 3 is likewise behind the head and must still be refused. Two admissions in one "
+                + "partition would mean the admission predicate is not self-limiting, and the "
+                + "'at most one row per partition per activation' bound that makes this fix safe "
+                + "without any threshold would no longer hold.");
+
+            Assert.That(ledger, Has.Count.EqualTo(cap + 1),
+                "The ledger must exceed the cap by exactly one row: the single head-of-window "
+                + "admission. This is the whole safety argument for having no tunable - the overshoot "
+                + "is structurally bounded by one row per partition per activation, each one bought "
+                + $"with a strictly shorter window next time. Ledger was: [{string.Join(", ", ledger)}].");
+        });
     }
 }
