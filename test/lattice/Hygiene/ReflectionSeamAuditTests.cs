@@ -77,12 +77,16 @@ public sealed class ReflectionSeamAuditTests
             "Bounds check on DecompressPayload, whose production call sites are unconditional rather than gated.",
         ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.BoundedSplitTransfer.cs"] =
             "SplitAsync is gated by SplitIfNeededUnderGateAsync; SplitGate's Split_proceeds_normally_when_gate_is_free drives that wiring.",
+        ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.RevisionCookieCoverage.cs"] =
+            "Same SplitAsync exemption as BoundedSplitTransfer: gated by SplitIfNeededUnderGateAsync, whose wiring SplitGate's Split_proceeds_normally_when_gate_is_free drives. Reflection here isolates the division from a triggering write, which would mask the cookie bump under its own.",
         ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.MultiPartitionMaterialiser.cs"] =
             "Split-recovery helper; sibling BPlusLeafGrain fixtures drive the public split path.",
         ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.SplitByteBound.cs"] =
             "Known instance of this defect and the one that motivated issue #2735. Owned by issue #2733, not by this audit.",
         ["test/lattice/BPlusTree/Grains/LatticeLockGrainTests.RemindersAndFaultArms.cs"] =
             "ResolveTtl override has no production call site by design; the fixture says so inline and guards the opt-out.",
+        ["test/lattice/BPlusTree/Grains/LeafCacheGrainTests.DivisionCookie.cs"] =
+            "Same SplitAsync exemption as BoundedSplitTransfer: gated by SplitIfNeededUnderGateAsync, whose wiring SplitGate's Split_proceeds_normally_when_gate_is_free drives. Reflection here isolates the division from a triggering write, so the cache refresh is attributed to the division alone.",
         ["test/lattice/BPlusTree/Grains/WalCommitLogWriterWedgeDiagnosticsTests.cs"] =
             "Arrange-only: wedges private tracker state by reflection, then asserts through the public AppendAsync.",
         ["test/lattice/BPlusTree/Grains/WalMaterialiserPinGrainFaultArmsTests.cs"] =

@@ -45,6 +45,33 @@ internal sealed partial class ShardRootGrain
     {
         /// <summary>The read itself, joinable for as long as it runs.</summary>
         internal required Task Read { get; init; }
+
+        /// <summary>
+        /// The leaf's revision cookie as it stood <b>before</b> this read was
+        /// issued, or <see langword="null"/> when the leaf published none.
+        /// Issue #2786.
+        /// <para>
+        /// <b>Sampled before the read, never at its completion, and the order
+        /// is load-bearing.</b> A cookie taken before issue and found unchanged
+        /// at attach time proves the leaf published no mutation across
+        /// <c>[T_issue, T_attach]</c>, a window that strictly contains the
+        /// interval in which the leaf actually executed the read. Sampling at
+        /// completion instead would take it after a write that landed while the
+        /// read was in flight, so the comparison would be against a value that
+        /// already reflects the write - it would report "unchanged" and serve
+        /// rows that predate it. The post-stamp reads more naturally and is
+        /// wrong; see
+        /// <c>A_write_landing_while_the_read_was_in_flight_refuses_reuse</c>,
+        /// which is the only arm that tells the two designs apart.
+        /// </para>
+        /// <para>
+        /// <see langword="null"/> means "unknown", never "unchanged". The leaf
+        /// is activated on another silo, or was not activated anywhere when the
+        /// read was issued; either way nothing here can speak for it, and the
+        /// reuse gate refuses.
+        /// </para>
+        /// </summary>
+        internal long? RevisionAtIssue { get; init; }
     }
 
     /// <summary>
@@ -71,6 +98,16 @@ internal sealed partial class ShardRootGrain
     private readonly object _scanPageLeafReadsGate = new();
 
     private bool _scanPageLeafReadOutcomesPrimed;
+
+    /// <summary>
+    /// How many settled reads this activation will retain for reuse. Issue
+    /// #2786. A settled entry no longer removes itself on completion, so the
+    /// map needs an explicit bound; each distinct range and predicate is its
+    /// own key, so a wide sweep would otherwise retain one entry per page for
+    /// the life of the activation. Reuse is an optimisation, so evicting an
+    /// eligible entry costs at most one re-read and never correctness.
+    /// </summary>
+    private const int MaxRetainedSettledScanPageLeafReads = 64;
 
 
     /// <summary>
@@ -145,16 +182,29 @@ internal sealed partial class ShardRootGrain
     /// ceiling already returns leaf data read at its start.
     /// </para>
     /// <para>
-    /// <b>Why a completed read is never reused, however recently it
-    /// completed.</b> The serialisability argument above is specific to a read
-    /// still in flight and does not extend past its completion by even a
-    /// moment: once the leaf's turn ends, later writes are ordered after the
-    /// read, so handing its rows to a new caller returns a scan page that
-    /// misses committed writes. An earlier revision of this file retained
-    /// settled results for one ceiling, reasoning that the window was short.
-    /// That was wrong, and wrong in kind rather than in degree - a scan that
-    /// misses a committed write is incorrect at any window length, so there is
-    /// no duration at which the trade becomes acceptable.
+    /// <b>Why a completed read is not reused on the strength of recency.</b>
+    /// The serialisability argument above is specific to a read still in flight
+    /// and does not extend past its completion by even a moment: once the
+    /// leaf's turn ends, later writes are ordered after the read, so handing
+    /// its rows to a new caller on the strength of how recently it finished
+    /// returns a scan page that misses committed writes. An earlier revision of
+    /// this file retained settled results for one ceiling, reasoning that the
+    /// window was short. That was wrong, and wrong in kind rather than in
+    /// degree - a scan that misses a committed write is incorrect at any window
+    /// length, so there is no duration at which the trade becomes acceptable.
+    /// </para>
+    /// <para>
+    /// <b>What issue #2786 changed, and what it did not.</b> It did not soften
+    /// the paragraph above; recency is still not a basis for reuse and never
+    /// will be. It supplied the basis that was missing: the leaf's
+    /// activation-fenced revision cookie, sampled BEFORE the read is issued and
+    /// compared at attach time. Equal cookies mean no mutation was published by
+    /// that leaf across a window that strictly contains the read, so the
+    /// settled rows are not merely recent, they are provably unchanged. Every
+    /// way of failing to establish that - an unstamped entry, a leaf that has
+    /// deactivated, a faulted or cancelled read, a cookie that moved - refuses
+    /// reuse and issues afresh. See
+    /// <see cref="CanReuseSettledScanPageLeafRead"/>.
     /// </para>
     /// <para>
     /// <b>What that costs, and why it is still sufficient.</b> Coalescing alone
@@ -164,9 +214,9 @@ internal sealed partial class ShardRootGrain
     /// same one, so elapsed read time accumulates across attempts instead of
     /// resetting - whichever retry is attached when the read completes carries
     /// the rows, the continuation token advances, and the walk proceeds. The
-    /// residual case is a retry that arrives after a read completed and before
-    /// the next one is issued: it pays for a fresh read. That is slower, and it
-    /// is correct, which is the right way round.
+    /// residual case is a retry that arrives after a read completed against a
+    /// leaf that has since been written: it pays for a fresh read. That is
+    /// slower, and it is correct, which is the right way round.
     /// </para>
     /// <para>
     /// <b>Confined to stall-guarded walks.</b> An unguarded walk cannot strand
@@ -188,9 +238,13 @@ internal sealed partial class ShardRootGrain
 
         PrimeScanPageLeafReadOutcomes();
 
-        if (TryAttachScanPageLeafRead<TList>(key, out var attached))
+        if (TryAttachScanPageLeafRead<TList>(key, out var attached, out var servedFromSettled))
         {
-            RecordScanPageLeafReadOutcome(1, LatticeMetrics.OutcomeScanPageLeafReadJoinedTag);
+            RecordScanPageLeafReadOutcome(
+                1,
+                servedFromSettled
+                    ? LatticeMetrics.OutcomeScanPageLeafReadServedTag
+                    : LatticeMetrics.OutcomeScanPageLeafReadJoinedTag);
 
             // Copied, never shared: the issuing walk owns the instance the leaf
             // returned and appends nothing to it, but handing the same list to
@@ -200,8 +254,15 @@ internal sealed partial class ShardRootGrain
             return copy(await attached.ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext));
         }
 
+        // Pre-stamp. The cookie is sampled BEFORE the read is issued, never
+        // after it completes - see ScanPageLeafReadEntry.RevisionAtIssue for
+        // why that order is load-bearing rather than incidental.
+        var revisionAtIssue = BPlusLeafGrain.TryGetLeafRevision(key.LeafId, out var issuedRevision)
+            ? issuedRevision
+            : (long?)null;
+
         var read = issue();
-        var entry = new ScanPageLeafReadEntry { Read = read };
+        var entry = new ScanPageLeafReadEntry { Read = read, RevisionAtIssue = revisionAtIssue };
         RegisterScanPageLeafRead(key, entry);
         RecordScanPageLeafReadOutcome(1, LatticeMetrics.OutcomeScanPageLeafReadIssuedTag);
 
@@ -216,33 +277,45 @@ internal sealed partial class ShardRootGrain
 
     /// <summary>
     /// Finds a read for <paramref name="key"/> that is <em>still in flight</em>,
-    /// evicting any that has completed rather than returning it.
+    /// evicting anything it may not hand on.
     /// <para>
-    /// <b>Only an in-flight read may be joined, and that restriction is a
-    /// correctness requirement rather than a conservatism.</b> Joining an
-    /// in-flight read is serializable: because the leaf is non-reentrant the
-    /// read holds that leaf's turn for its whole duration, so every write is
-    /// ordered strictly before or strictly after it and a joiner observes
-    /// exactly what the original caller would have. A read that has already
-    /// completed carries no such guarantee - writes may have committed between
-    /// its execution and this lookup, so serving its rows would be a stale
-    /// read, not a cheap one. An earlier revision of this file retained settled
-    /// results for one ceiling on the argument that the window was short; the
-    /// window's length is irrelevant, because a scan that misses a committed
-    /// write is wrong at any duration.
+    /// <b>An in-flight read may always be joined, and that is a serialisability
+    /// argument rather than a heuristic.</b> Because the leaf is non-reentrant
+    /// the read holds that leaf's turn for its whole duration, so every write
+    /// is ordered strictly before or strictly after it and a joiner observes
+    /// exactly what the original caller would have.
+    /// </para>
+    /// <para>
+    /// <b>A settled read carries no such guarantee from its own completion, and
+    /// recency never supplies one.</b> Writes may have committed between its
+    /// execution and this lookup, so serving its rows on the strength of how
+    /// recently it finished would be a stale read, not a cheap one. An earlier
+    /// revision of this file retained settled results for one ceiling on the
+    /// argument that the window was short; the window's length is irrelevant,
+    /// because a scan that misses a committed write is wrong at any duration.
+    /// Issue #2786 did not relax that. It added an independent basis - the
+    /// leaf's own revision cookie, sampled before the read was issued - so that
+    /// a settled read is served only when the leaf has published no mutation
+    /// across a window strictly containing it. See
+    /// <see cref="CanReuseSettledScanPageLeafRead"/>, every clause of which
+    /// fails toward refusing.
     /// </para>
     /// <para>
     /// Completion is read from the task itself rather than from a flag set by a
     /// continuation. The continuation runs on <see cref="TaskScheduler.Default"/>
     /// and can still be pending when a retry looks up, so a flag would report
-    /// "in flight" for a read that had already finished - which is precisely
-    /// the stale-read case this guard exists to refuse.
+    /// "in flight" for a read that had already finished - which would bypass
+    /// the cookie check entirely and reinstate exactly the stale read this
+    /// guard exists to refuse.
     /// </para>
     /// </summary>
     private bool TryAttachScanPageLeafRead<TList>(
         ScanPageLeafReadKey key,
-        out Task<TList> attached)
+        out Task<TList> attached,
+        out bool servedFromSettled)
     {
+        servedFromSettled = false;
+
         lock (_scanPageLeafReadsGate)
         {
             if (!_scanPageLeafReads.TryGetValue(key, out var entry))
@@ -251,12 +324,21 @@ internal sealed partial class ShardRootGrain
                 return false;
             }
 
-            // Completed in any manner - ran to completion, faulted, or
-            // cancelled - is never handed on. Serving a completed success would
-            // be a stale read; attaching to a completed failure would convert a
-            // single failure into a permanent one.
+            // Completed in any manner is handed on only with a basis for
+            // believing the leaf has not moved on. Issue #2786 supplies that
+            // basis; where it cannot be established this degrades to the
+            // unconditional refusal that shipped before it - serving a settled
+            // success would be a stale read, and attaching to a settled failure
+            // would convert a single failure into a permanent one.
             if (entry.Read.IsCompleted)
             {
+                if (CanReuseSettledScanPageLeafRead(key, entry))
+                {
+                    servedFromSettled = true;
+                    attached = (Task<TList>)entry.Read;
+                    return true;
+                }
+
                 _scanPageLeafReads.Remove(key);
                 attached = default!;
                 return false;
@@ -266,6 +348,86 @@ internal sealed partial class ShardRootGrain
             return true;
         }
     }
+
+    /// <summary>
+    /// Whether a settled read may be served again: the leaf must still publish
+    /// the same revision cookie it published before the read was issued.
+    /// <para>
+    /// Every clause fails toward refusing reuse, which degrades to the
+    /// behaviour that shipped before issue #2786 rather than to a stale read. A
+    /// faulted or cancelled read is refused so a single failure is not
+    /// converted into a permanent one. An unstamped entry is refused because a
+    /// missing cookie means "unknown", not "unchanged". An unreadable cookie is
+    /// refused for the same reason - the leaf has deactivated or never lived on
+    /// this silo, and either way nothing here can speak for it.
+    /// </para>
+    /// <para>
+    /// The success clause is not redundant with
+    /// <see cref="SettleScanPageLeafRead"/> dropping failures, and the reason
+    /// is the same one that makes this method read the task's own state: that
+    /// continuation runs on <see cref="TaskScheduler.Default"/> and is not
+    /// synchronously ordered with a reader, so a faulted entry can still be in
+    /// the map when this runs. This is the authoritative refusal; the
+    /// continuation is housekeeping.
+    /// </para>
+    /// <para>
+    /// <b>That clause looks dead from the outside and is not - do not delete
+    /// it.</b> No arm driven through the grain's own timing reddens when it is
+    /// removed, because the sweep wins the race in practice every time. The
+    /// unreachability is a property of scheduling, not of this method, so it is
+    /// pinned by an arm that reaches the state at the map's own surface
+    /// instead:
+    /// <c>A_settled_entry_that_faulted_before_the_sweep_reached_it_is_still_refused</c>
+    /// establishes a genuinely reusable entry, proves it is being served, then
+    /// faults it in place. Remove the clause and that arm rethrows the planted
+    /// fault to the caller, which is exactly what a real reader would receive.
+    /// </para>
+    /// <para>
+    /// <b>An unchanged cookie is necessary and not sufficient, because a range
+    /// read is not a pure function of mutation state.</b> It filters rows
+    /// against the wall clock sampled at read time, so a row whose TTL elapses
+    /// leaves the answer with nothing written and the cookie unchanged. The
+    /// cookie proves no writer ran; it proves nothing about the clock. The
+    /// expiry horizon supplies the other half: it is the earliest instant at
+    /// which the surfaced rows could begin to answer differently, so requiring
+    /// <c>now</c> to be strictly below it closes the row-TTL half that the
+    /// cookie cannot see. An absent horizon is "unknown" and refuses, exactly
+    /// as an absent cookie does. See
+    /// <c>BPlusLeafGrain.PublishLeafExpiryHorizon</c>, and the arm
+    /// <c>A_settled_read_is_refused_once_a_surfaced_row_has_expired</c>.
+    /// </para>
+    /// <para>
+    /// <b>The pair is not exhaustive, and the residue is stated rather than
+    /// implied.</b> A leaf holding uncommitted transactional writes resolves
+    /// each one against the transaction registry while answering, and a
+    /// decision outcome can flip as its tombstone expires by the clock: no
+    /// writer runs, so the cookie holds, and that row was never surfaced, so it
+    /// contributes nothing to the horizon. What bounds it is that the read path
+    /// consults the registry at all only when <c>_pendingTx</c> is non-empty,
+    /// and returns early otherwise, so the residue is confined to leaves with
+    /// an in-flight transaction rather than being general. Closing it needs the
+    /// decision horizon folded in at the same seam; this change does not
+    /// attempt it. Claiming exhaustiveness here would be the same error this
+    /// clause exists to correct, one axis further out.
+    /// </para>
+    /// <para>
+    /// Equality, never ordering. The cookie's published contract is that it may
+    /// be compared for equality only: equal means nothing has advanced, and any
+    /// other outcome forces a refresh. It is not a version whose gaps carry
+    /// meaning, and an activation is fenced so that a reactivated leaf cannot
+    /// return to a value a previous activation published (issue #2151), which
+    /// is what makes equality here safe from an ABA.
+    /// </para>
+    /// </summary>
+    private static bool CanReuseSettledScanPageLeafRead(
+        ScanPageLeafReadKey key,
+        ScanPageLeafReadEntry entry)
+        => entry.Read.IsCompletedSuccessfully
+           && entry.RevisionAtIssue is { } issued
+           && BPlusLeafGrain.TryGetLeafRevision(key.LeafId, out var current)
+           && current == issued
+           && BPlusLeafGrain.TryGetLeafExpiryHorizon(key.LeafId, out var horizon)
+           && DateTimeOffset.UtcNow.Ticks < horizon;
 
     private void RegisterScanPageLeafRead(ScanPageLeafReadKey key, ScanPageLeafReadEntry entry)
     {
@@ -277,18 +439,19 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Drops a read from the map once it completes, in any manner. Nothing is
-    /// retained past completion, because only an in-flight read may be joined -
-    /// see <see cref="TryAttachScanPageLeafRead{TList}"/> for why.
+    /// Resolves a read's entry once it completes: a faulted or cancelled read
+    /// is dropped, a successful one is retained for possible reuse. See
+    /// <see cref="TryAttachScanPageLeafRead{TList}"/> for what retention does
+    /// and does not permit - retention is not on its own a licence to serve.
     /// <para>
     /// This continuation is a housekeeping optimisation, not a correctness
     /// guard, and the distinction matters: it runs on
     /// <see cref="TaskScheduler.Default"/> and can still be pending when a
     /// retry looks the entry up, so it is not synchronously ordered with a
     /// reader and nothing may depend on it having run. The authoritative
-    /// refusal is the completion check in
+    /// decision is the completion and cookie check in
     /// <see cref="TryAttachScanPageLeafRead{TList}"/>, which reads the task's
-    /// own state and therefore cannot be raced.
+    /// own state and the leaf's own cookie, and therefore cannot be raced.
     /// </para>
     /// </summary>
     private void SettleScanPageLeafRead(ScanPageLeafReadKey key, ScanPageLeafReadEntry entry)
@@ -302,41 +465,110 @@ internal sealed partial class ShardRootGrain
                 return;
             }
 
+            // Issue #2786. A read that ran to completion is RETAINED rather
+            // than dropped: its rows remain servable to a later identical walk
+            // for as long as the leaf publishes the revision cookie it
+            // published before the read was issued. Dropping it here would
+            // leave nothing to reuse, and this file would behave exactly as it
+            // did before, which is the state issue #2786 exists to change.
+            //
+            // A faulted or cancelled read is still dropped immediately. It
+            // carries no rows to serve, and retaining it would convert a single
+            // failure into a permanent one for every later walk asking the same
+            // question.
+            if (entry.Read.IsCompletedSuccessfully)
+            {
+                return;
+            }
+
             _scanPageLeafReads.Remove(key);
         }
     }
 
     /// <summary>
-    /// Drops every entry whose read has completed. In-flight entries are never
-    /// dropped: evicting one would let the next attempt enqueue the duplicate
-    /// this map exists to suppress.
+    /// Drops every entry that can no longer serve anybody, and caps the number
+    /// of settled entries retained for reuse.
+    /// <para>
+    /// In-flight entries are never dropped: evicting one would let the next
+    /// attempt enqueue the duplicate this map exists to suppress.
+    /// </para>
+    /// <para>
+    /// Issue #2786 changed what "no longer useful" means here. Before it, every
+    /// completed entry was useless by definition and was swept. Now a completed
+    /// entry whose leaf still publishes its issue-time revision cookie is
+    /// servable, so the sweep drops only entries that are faulted, cancelled,
+    /// or whose leaf has moved on - and a cap becomes necessary, because
+    /// entries no longer drain on completion.
+    /// </para>
     /// </summary>
     private void PruneScanPageLeafReads()
     {
-        List<ScanPageLeafReadKey>? completed = null;
+        List<ScanPageLeafReadKey>? unusable = null;
+        var retainedSettled = 0;
+
         foreach (var (key, entry) in _scanPageLeafReads)
         {
-            if (entry.Read.IsCompleted)
+            if (!entry.Read.IsCompleted)
             {
-                (completed ??= []).Add(key);
+                continue;
             }
+
+            if (CanReuseSettledScanPageLeafRead(key, entry))
+            {
+                retainedSettled++;
+                continue;
+            }
+
+            (unusable ??= []).Add(key);
         }
 
-        if (completed is not null)
+        if (unusable is not null)
         {
-            foreach (var key in completed)
+            foreach (var key in unusable)
             {
                 _scanPageLeafReads.Remove(key);
             }
         }
 
-        // Deliberately no eviction past this point. Every entry that survives
-        // the sweep above is still in flight, and evicting one of those would
-        // let the next attempt enqueue behind it the duplicate read this map
-        // exists to suppress - trading a bounded map for the unbounded queue
-        // growth that is the defect. The map is bounded in practice by the
-        // number of leaf reads a single activation can have concurrently in
-        // flight, each of which removes itself on completion.
+        // Cap the retained-for-reuse population. Each distinct range and
+        // predicate is its own key, so without a cap a walk sweeping a wide
+        // keyspace would retain one settled entry per page for the life of the
+        // activation. Only settled entries are eligible for this eviction; an
+        // in-flight entry is never touched, for the reason below.
+        var excess = retainedSettled - MaxRetainedSettledScanPageLeafReads;
+        if (excess > 0)
+        {
+            List<ScanPageLeafReadKey>? evict = null;
+            foreach (var (key, entry) in _scanPageLeafReads)
+            {
+                if (excess <= 0)
+                {
+                    break;
+                }
+
+                if (entry.Read.IsCompleted)
+                {
+                    (evict ??= []).Add(key);
+                    excess--;
+                }
+            }
+
+            if (evict is not null)
+            {
+                foreach (var key in evict)
+                {
+                    _scanPageLeafReads.Remove(key);
+                }
+            }
+        }
+
+        // Deliberately no eviction of in-flight entries, at any population.
+        // Evicting one would let the next attempt enqueue behind it the
+        // duplicate read this map exists to suppress - trading a bounded map
+        // for the unbounded queue growth that is the defect. The in-flight
+        // population is bounded in practice by the number of leaf reads a
+        // single activation can have concurrently outstanding, each of which
+        // resolves itself on completion.
     }
 
     /// <summary>
@@ -381,5 +613,6 @@ internal sealed partial class ShardRootGrain
         _scanPageLeafReadOutcomesPrimed = true;
         RecordScanPageLeafReadOutcome(0, LatticeMetrics.OutcomeScanPageLeafReadIssuedTag);
         RecordScanPageLeafReadOutcome(0, LatticeMetrics.OutcomeScanPageLeafReadJoinedTag);
+        RecordScanPageLeafReadOutcome(0, LatticeMetrics.OutcomeScanPageLeafReadServedTag);
     }
 }

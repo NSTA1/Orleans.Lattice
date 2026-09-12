@@ -194,6 +194,124 @@ internal sealed partial class BPlusLeafGrain
         {
             AdvanceRevisionSeedFloor(Interlocked.Read(ref box.Value));
         }
+
+        LeafExpiryHorizonRegistry.TryRemove(leafId, out _);
+    }
+
+    /// <summary>
+    /// The earliest instant at which a range read of this leaf could begin to
+    /// return a different answer <em>without any mutation having occurred</em>,
+    /// expressed in UTC ticks, or <see cref="long.MaxValue"/> when no such
+    /// instant exists. Issue #2786.
+    /// <para>
+    /// <b>Why a revision cookie cannot cover this.</b> The cookie reports
+    /// mutation, and a range read is not a pure function of mutation state: it
+    /// filters rows against the wall clock sampled at read time (<c>nowTicks</c>
+    /// in <c>GetKeysAsync</c> / <c>GetEntriesAsync</c>). A row whose TTL elapses
+    /// leaves the result silently, with nothing written, nothing published, and
+    /// the cookie unchanged. A reader holding an unchanged cookie has proved
+    /// only that no writer ran; it has proved nothing about the clock. This
+    /// registry supplies the missing half.
+    /// </para>
+    /// <para>
+    /// <b>Necessarily published by the read rather than sampled before it</b>,
+    /// which is the mirror image of the cookie's pre-stamp discipline and worth
+    /// stating because the asymmetry looks like an inconsistency. The cookie
+    /// must be sampled <em>before</em> a read so that equality spans the read;
+    /// this horizon is a property <em>of the rows the read surfaced</em>, so it
+    /// does not exist until the read has walked them. The two are safe together
+    /// because the pair is only ever consulted for an entry whose cookie is
+    /// unchanged: no mutation means the row set is the same set, so a horizon
+    /// derived from the earlier walk still describes it.
+    /// </para>
+    /// <para>
+    /// Merged by minimum and never raised within an activation, so a concurrent
+    /// read over a narrower range can only move the horizon earlier. That is
+    /// the safe direction: an early horizon refuses reuse that would have been
+    /// sound, which costs a re-read, while a late one would serve an expired
+    /// row. Removed with the revision cookie on deactivation, so a reader that
+    /// finds no entry fails closed exactly as it does for an absent cookie.
+    /// </para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<GrainId, StrongBox<long>> LeafExpiryHorizonRegistry = new();
+
+    /// <summary>
+    /// Publishes <paramref name="earliestExpiryTicks"/> as this leaf's expiry
+    /// horizon, keeping the earliest value any read has observed. Called at the
+    /// end of every range read with the minimum finite expiry among the rows
+    /// that read actually surfaced.
+    /// </summary>
+    /// <param name="leafId">The leaf whose horizon is being published.</param>
+    /// <param name="earliestExpiryTicks">
+    /// The earliest expiry among surfaced rows, or <see cref="long.MaxValue"/>
+    /// when none of them expires.
+    /// </param>
+    private static void PublishLeafExpiryHorizon(GrainId leafId, long earliestExpiryTicks)
+    {
+        var box = LeafExpiryHorizonRegistry.GetOrAdd(leafId, static _ => new StrongBox<long>(long.MaxValue));
+
+        // Min-merge under CAS: only ever lower the horizon, never raise it.
+        while (true)
+        {
+            var current = Interlocked.Read(ref box.Value);
+            if (earliestExpiryTicks >= current)
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref box.Value, earliestExpiryTicks, current) == current)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Folds one surfaced row's expiry into a range read's running horizon.
+    /// <para>
+    /// Only rows the read actually <em>surfaced</em> are folded in, and that is
+    /// the precise condition rather than a convenient one. A row already
+    /// filtered out - tombstoned, expired, or rejected by the predicate - stays
+    /// filtered out as the clock advances, because expiry is monotone and the
+    /// other two do not depend on the clock at all, so it can never re-enter
+    /// the answer. Only a row that is in the answer now and expires later can
+    /// change it without a write.
+    /// </para>
+    /// <para>
+    /// An <c>ExpiresAtTicks</c> of zero means "never expires" throughout this
+    /// codebase, so it is skipped rather than treated as an expiry in the
+    /// distant past.
+    /// </para>
+    /// </summary>
+    /// <param name="earliest">The running minimum, seeded at <see cref="long.MaxValue"/>.</param>
+    /// <param name="expiresAtTicks">The surfaced row's expiry, or zero for none.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void TrackEarliestExpiry(ref long earliest, long expiresAtTicks)
+    {
+        if (expiresAtTicks > 0 && expiresAtTicks < earliest)
+        {
+            earliest = expiresAtTicks;
+        }
+    }
+
+    /// <summary>
+    /// Reads the same-silo expiry horizon for <paramref name="leafId"/>.
+    /// Returns <c>true</c> iff a range read of that leaf has published one on
+    /// this silo. A <c>false</c> return means "unknown", never "nothing
+    /// expires", and every caller must treat it as a refusal.
+    /// </summary>
+    /// <param name="leafId">The leaf to read the horizon for.</param>
+    /// <param name="earliestExpiryTicks">The published horizon, when known.</param>
+    internal static bool TryGetLeafExpiryHorizon(GrainId leafId, out long earliestExpiryTicks)
+    {
+        if (LeafExpiryHorizonRegistry.TryGetValue(leafId, out var box))
+        {
+            earliestExpiryTicks = Interlocked.Read(ref box.Value);
+            return true;
+        }
+
+        earliestExpiryTicks = 0;
+        return false;
     }
 
     /// <summary>

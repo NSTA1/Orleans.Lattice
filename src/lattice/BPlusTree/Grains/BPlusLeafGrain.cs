@@ -2785,6 +2785,9 @@ internal sealed partial class BPlusLeafGrain(
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        // Issue #2786: the earliest instant at which this answer could change
+        // with nothing written. See PublishLeafExpiryHorizon.
+        var earliestExpiry = long.MaxValue;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
@@ -2828,7 +2831,10 @@ internal sealed partial class BPlusLeafGrain(
                 {
                     if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
                         && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
+                    {
+                        TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
                         keys.Add(key);
+                    }
                     continue;
                 }
                 // InFlight, Aborted, or orphan-pending (committed bucket whose
@@ -2846,6 +2852,7 @@ internal sealed partial class BPlusLeafGrain(
             if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
                 continue;
 
+            TrackEarliestExpiry(ref earliestExpiry, lww.ExpiresAtTicks);
             keys.Add(key);
         }
 
@@ -2862,9 +2869,11 @@ internal sealed partial class BPlusLeafGrain(
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
             if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)) continue;
+            TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
             keys.Add(key);
         }
         keys.Sort(StringComparer.Ordinal);
+        PublishLeafExpiryHorizon(context.GrainId, earliestExpiry);
 
         var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         LatticeMetrics.LeafScanDuration.Record(elapsedMs,
@@ -2879,6 +2888,9 @@ internal sealed partial class BPlusLeafGrain(
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        // Issue #2786: the earliest instant at which this answer could change
+        // with nothing written. See PublishLeafExpiryHorizon.
+        var earliestExpiry = long.MaxValue;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
@@ -2916,7 +2928,10 @@ internal sealed partial class BPlusLeafGrain(
                 {
                     if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
                         && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
+                    {
+                        TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
                         entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
+                    }
                     continue;
                 }
                 // InFlight or Aborted - fall through to Entries
@@ -2929,6 +2944,7 @@ internal sealed partial class BPlusLeafGrain(
             if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
                 continue;
 
+            TrackEarliestExpiry(ref earliestExpiry, lww.ExpiresAtTicks);
             entries.Add(new KeyValuePair<string, byte[]>(key, lww.Value!));
         }
 
@@ -2945,9 +2961,11 @@ internal sealed partial class BPlusLeafGrain(
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
             if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)) continue;
+            TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
             entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
         }
         entries.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));
+        PublishLeafExpiryHorizon(context.GrainId, earliestExpiry);
 
         var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         LatticeMetrics.LeafScanDuration.Record(elapsedMs,

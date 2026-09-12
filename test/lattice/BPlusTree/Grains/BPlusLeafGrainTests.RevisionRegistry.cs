@@ -51,8 +51,11 @@ public partial class BPlusLeafGrainTests
     /// a separate mocked <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain"/>. Internal so it
     /// stays inside the test assembly's own namespace surface.
     /// </summary>
-    internal static BPlusLeafGrain CreateLeafGrainForCrossFixtureUse(string replicaId)
-        => CreateGrain(replicaId: replicaId);
+    internal static BPlusLeafGrain CreateLeafGrainForCrossFixtureUse(
+        string replicaId,
+        Orleans.Lattice.BPlusTree.IBPlusLeafGrain? siblingStub = null,
+        int maxLeafKeys = 128)
+        => CreateGrain(replicaId: replicaId, siblingStub: siblingStub, maxLeafKeys: maxLeafKeys);
 
     /// <summary>
     /// Reflective accessor for the static

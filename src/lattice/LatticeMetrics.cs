@@ -3449,7 +3449,7 @@ public static class LatticeMetrics
     /// incorrect at any window length and both were removed.
     /// </para>
     /// <para>
-    /// <b>Reading a zero.</b> Both arms are primed at zero on first
+    /// <b>Reading a zero.</b> All three arms are primed at zero on first
     /// guarded use, through the same recorder the live path uses, so a zero
     /// here is a measured absence rather than an absent measurement. An
     /// unguarded walk never reports, by design - it cannot strand a read, so it
@@ -3464,7 +3464,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> ScanPageLeafReadOutcomes =
         Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.leaf_read_outcomes", unit: "{read}",
-            description: "Count of stall-guarded shard-root page-fill leaf reads by whether the read was issued or joined while still in flight.");
+            description: "Count of stall-guarded shard-root page-fill leaf reads by whether the read was issued, joined while still in flight, or served again from a settled read whose leaf revision was unchanged.");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>issued</c> (no identical read was held, so
@@ -3480,6 +3480,24 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafReadJoinedTag =
         new(TagOutcome, "joined");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>served</c> (an identical read had already
+    /// settled and the leaf still published the revision cookie it published
+    /// before that read was issued, so its rows were served again rather than
+    /// re-read).
+    /// <para>
+    /// Distinct from <c>joined</c> because the two carry different evidence.
+    /// <c>joined</c> is serialisable by construction - the read was still in
+    /// flight, so no write could have been ordered after it. <c>served</c>
+    /// rests on the cookie comparison instead, so it is the arm to read when
+    /// asking whether the invalidation basis introduced by issue #2786 is
+    /// actually firing, and the arm that would fall to zero were the cookie to
+    /// stop being published on some mutation path.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafReadServedTag =
+        new(TagOutcome, "served");
 
 
     /// <summary>

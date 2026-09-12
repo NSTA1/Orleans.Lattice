@@ -548,6 +548,29 @@ internal sealed partial class BPlusLeafGrain
                 {
                     RemoveEntry(key);
                 }
+
+                // Issue #2796. Every batch that leaves the donor is an
+                // observable change to the set of rows this leaf owns, so it
+                // has to advance the revision cookie. The cookie's contract is
+                // equality-only: equal means "nothing has advanced", and
+                // LeafCacheGrain acts on that by returning early, ahead of the
+                // TTL gate, on the strength of it. Without this bump a
+                // same-silo cache holding the pre-division cookie concludes
+                // "provably fresh" and keeps serving keys this leaf has just
+                // handed to the sibling.
+                //
+                // No other bump covers this. A division reached through
+                // TrySplitForByteOverflowAsync runs at the snapshot-capture
+                // seam with no accompanying write, so there is no write bump
+                // to mask the omission on that path.
+                //
+                // Bumped per batch rather than once when the transfer
+                // finishes, because the donor is observably changed after each
+                // batch and a reader can sample between them. The asymmetry
+                // decides it: an extra bump costs one needless refresh, a
+                // missed bump costs a stale read that nothing downstream can
+                // detect.
+                BumpLocalRevision();
             }
 
             if (batchEndExclusive is null)
