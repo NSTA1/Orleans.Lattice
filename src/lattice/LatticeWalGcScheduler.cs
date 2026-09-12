@@ -194,6 +194,37 @@ internal sealed class LatticeWalGcScheduler(
     private const int MaxReactivationAttempts = 3;
 
     /// <summary>
+    /// How long a tree's cursor floor may stay continuously blocked with the
+    /// sweep having done nothing about it before the block is reported as one
+    /// the sweep cannot act on at all.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This exists because every other give-up path is gated on an attempt
+    /// having been made, and an attempt is itself gated on the reported blocker
+    /// holding still for <see cref="ReactivationMinBlockAge"/>. A tree whose
+    /// reported blocker changes faster than that is never touched at all, so an
+    /// attempt-derived budget can never be reached on it however monotonic the
+    /// budget is made. That is the one shape of permanently-blocked tree
+    /// <see cref="MaxReactivationAttempts"/> cannot reach, and it is the shape
+    /// with the least excuse for going unreported.
+    /// </para>
+    /// <para>
+    /// The interval is derived rather than chosen: it is exactly the wall-clock
+    /// a single stable blocker needs to spend its whole budget - one
+    /// <see cref="ReactivationMinBlockAge"/> to become eligible, then one
+    /// <see cref="ReactivationRetryCooldown"/> per permitted attempt. Past it, a
+    /// stable blocker has certainly been abandoned already, so a tree still
+    /// blocked and still untouched is one the sweep has no purchase on. Being a
+    /// function of the gating constants and not of the GC cadence, it stays
+    /// correct on a host collecting at any interval and moves on its own if the
+    /// gating is ever retuned.
+    /// </para>
+    /// </remarks>
+    private static readonly TimeSpan UnreachableBlockEscalation =
+        ReactivationMinBlockAge + (MaxReactivationAttempts * ReactivationRetryCooldown);
+
+    /// <summary>
     /// Per-tree record of the consumer currently blocking its cursor floor and
     /// what the sweep has done about it. Bounded by the number of blocked trees
     /// and pruned alongside <see cref="_cadence"/>.
@@ -202,19 +233,65 @@ internal sealed class LatticeWalGcScheduler(
         new(StringComparer.Ordinal);
 
     /// <summary>
-    /// One tree's blocked-consumer observation.
+    /// One tree's blocked-floor episode: which consumer is currently reported at
+    /// the head of the queue, the rate-limiter state for that consumer, and the
+    /// attempt budgets for every consumer the episode has touched.
     /// </summary>
-    /// <param name="ConsumerId">The consumer reported as blocking the floor.</param>
-    /// <param name="FirstObserved">When this consumer was first seen blocking.</param>
-    /// <param name="LastReactivationAttempt">When the sweep last touched it, if ever.</param>
-    /// <param name="Attempts">How many reactivations the sweep has issued for it.</param>
-    /// <param name="Abandoned">Whether the attempt budget has been spent and reported.</param>
+    /// <remarks>
+    /// <para>
+    /// <b>Why the budgets are a map and not a counter.</b> The reported blocker
+    /// is not stable, and the sweep is what destabilises it: the floor skips any
+    /// consumer present in the live cursor registry before it evaluates the pin,
+    /// and a touched leaf reports a cursor as soon as it activates, so touching
+    /// the reported blocker is precisely what moves the report onto a different
+    /// one. Keyed on the reported consumer, the budget was therefore reset by
+    /// the sweep's own remedy and the give-up branch was unreachable rather than
+    /// merely slow (issue #2772). Keyed on the blocking leaf, a blocker that
+    /// rotates off the head and returns resumes its count.
+    /// </para>
+    /// <para>
+    /// A single per-tree counter would fix the same reset and break a tree that
+    /// is genuinely draining, because each newly revealed leaf would inherit its
+    /// predecessors' spent budget instead of getting its own. The map is what
+    /// separates "this leaf will not heal" from "this tree has several leaves to
+    /// work through".
+    /// </para>
+    /// <para>
+    /// <b>Bound.</b> An entry is created only for a consumer the sweep actually
+    /// touched, so it is bounded by the number of distinct leaves reported as
+    /// blocking during one episode - at worst the tree's leaf count, never
+    /// uptime - and in the steady state by the leaves blocked at once, since a
+    /// tree that stops draining stops producing new blockers and an abandoned
+    /// one issues no further attempts. The whole map is dropped when the episode
+    /// ends, and the record itself is pruned alongside <see cref="_cadence"/>
+    /// when the tree is retired.
+    /// </para>
+    /// </remarks>
+    /// <param name="ConsumerId">The consumer reported as blocking on the latest pass.</param>
+    /// <param name="FirstObserved">When <paramref name="ConsumerId"/> reached the head of the queue.</param>
+    /// <param name="LastReactivationAttempt">When the sweep last touched <paramref name="ConsumerId"/>, if ever.</param>
+    /// <param name="EpisodeStarted">When this tree's floor was first seen blocked in this episode.</param>
+    /// <param name="LastAnyAttempt">When the sweep last touched any consumer on this tree, if ever.</param>
+    /// <param name="AnyAbandoned">Whether some consumer on this tree has spent its budget and been reported.</param>
+    /// <param name="Escalated">Whether the unreachable-block escalation has already fired for this episode.</param>
+    /// <param name="Budgets">Per-consumer attempt budgets, shared across the episode and mutated in place.</param>
     private readonly record struct BlockedConsumerObservation(
         string ConsumerId,
         DateTimeOffset FirstObserved,
         DateTimeOffset? LastReactivationAttempt,
-        int Attempts,
-        bool Abandoned);
+        DateTimeOffset EpisodeStarted,
+        DateTimeOffset? LastAnyAttempt,
+        bool AnyAbandoned,
+        bool Escalated,
+        Dictionary<string, ConsumerReactivationBudget> Budgets);
+
+    /// <summary>
+    /// One blocking leaf's reactivation budget, carried across changes in which
+    /// consumer the floor happens to report.
+    /// </summary>
+    /// <param name="Attempts">How many reactivations the sweep has issued for this consumer.</param>
+    /// <param name="Abandoned">Whether the budget has been spent and reported.</param>
+    private readonly record struct ConsumerReactivationBudget(int Attempts, bool Abandoned);
 
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -528,10 +605,34 @@ internal sealed class LatticeWalGcScheduler(
             // blocking consumer is by construction one whose leaf is NOT
             // activated. There is no activation for a leaf-local trigger to run
             // in, which is why the retention path has to be the one to act.
-            if (blocked && report.BlockingConsumerId is { Length: > 0 } blockingConsumerId)
+            // End (and drive) the blocked episode on the floor state, not on the
+            // pass outcome. `blocked` above folds in `reclaimed`, and the TTL
+            // branch of the trim predicate is independent of the cursor branch -
+            // a tree whose floor is blocked still trims entries older than a
+            // configured WalRetention. One such pass made `blocked` false, which
+            // erased the attempt budget and the abandoned flag while the floor
+            // was still blocked, and credited a heal to a tree that had never
+            // unblocked (issue #2772). Reading the floor state directly says
+            // what the block is doing rather than what the pass happened to
+            // reclaim, so an incidental age-based trim neither resets the budget
+            // nor suspends the remedy.
+            //
+            // `blocked` is unchanged and still drives the pass outcome label and
+            // the cadence floor; only the episode reads the state directly.
+            var floorBlocked = report.CursorFloorState == WalGcCursorFloorState.BlockedByUnusablePin;
+
+            if (floorBlocked)
             {
-                await ObserveAndHealBlockedTreeAsync(
-                    treeId, blockingConsumerId, treeTag, tenantTag, stoppingToken).ConfigureAwait(false);
+                // Blocked but naming no consumer keeps the episode rather than
+                // ending it. The GC always names the blocker it short-circuited
+                // on, so this is unreachable from a real report; if it were
+                // reached, a report still saying the floor is blocked is not
+                // evidence that the block cleared.
+                if (report.BlockingConsumerId is { Length: > 0 } blockingConsumerId)
+                {
+                    await ObserveAndHealBlockedTreeAsync(
+                        treeId, blockingConsumerId, treeTag, tenantTag, stoppingToken).ConfigureAwait(false);
+                }
             }
             else
             {
@@ -827,35 +928,58 @@ internal sealed class LatticeWalGcScheduler(
     {
         var now = _time.GetUtcNow();
 
-        if (!_blockedConsumers.TryGetValue(treeId, out var observation)
-            || !string.Equals(observation.ConsumerId, blockingConsumerId, StringComparison.Ordinal))
+        if (!_blockedConsumers.TryGetValue(treeId, out var observation))
         {
-            // A different leaf is now at the head of the queue, so the previous
-            // one stopped blocking - credit it before replacing the record.
-            CreditHealedIfSwept(observation, treeTag, tenantTag);
-
             observation = new BlockedConsumerObservation(
-                blockingConsumerId, now, LastReactivationAttempt: null, Attempts: 0, Abandoned: false);
+                blockingConsumerId,
+                FirstObserved: now,
+                LastReactivationAttempt: null,
+                EpisodeStarted: now,
+                LastAnyAttempt: null,
+                AnyAbandoned: false,
+                Escalated: false,
+                Budgets: new Dictionary<string, ConsumerReactivationBudget>(StringComparer.Ordinal));
             _blockedConsumers[treeId] = observation;
-
-            // Warn once per episode rather than every pass: a blocked tree
-            // deliberately polls at the interval floor, so an unthrottled
-            // warning would be loudest for exactly the population it stays
-            // useless longest for.
-            logger.LogWarning(
-                "WAL GC for tree {Tree} cannot reclaim: durable materialiser pin {Consumer} carries no usable offset, so the cursor floor is blocked and the WAL is retained without bound. The consumer id embeds the owning leaf's grain id. Other leaves on this tree may also be blocked; the floor short-circuits on the first one found, so they are reported one at a time.",
-                treeId,
-                blockingConsumerId);
+            WarnFloorBlocked(treeId, blockingConsumerId);
+        }
+        else if (!string.Equals(observation.ConsumerId, blockingConsumerId, StringComparison.Ordinal))
+        {
+            // A different leaf is now at the head of the queue. The rate limiter
+            // restarts for it - a newly revealed leaf must serve its own minimum
+            // block age rather than inherit its predecessor's, or a draining
+            // tree would fire its remaining reactivations back to back - but the
+            // episode and its per-consumer budgets are carried forward.
+            //
+            // Carrying them is the fix for issue #2772. This branch used to
+            // rebuild the whole record, so the attempt count and the abandoned
+            // flag were both destroyed whenever the reported blocker changed -
+            // and the sweep's own touch is what changes it, because an activated
+            // leaf reports a cursor and the floor skips every consumer present
+            // in the live registry. The heal action destroyed the evidence that
+            // the heal was not working, so the give-up branch below was not
+            // merely slow to reach but unreachable.
+            observation = observation with
+            {
+                ConsumerId = blockingConsumerId,
+                FirstObserved = now,
+                LastReactivationAttempt = null,
+            };
+            _blockedConsumers[treeId] = observation;
+            WarnFloorBlocked(treeId, blockingConsumerId);
         }
 
-        if (observation.Attempts >= MaxReactivationAttempts)
+        var budgets = observation.Budgets;
+        budgets.TryGetValue(blockingConsumerId, out var budget);
+
+        if (budget.Attempts >= MaxReactivationAttempts)
         {
-            if (!observation.Abandoned)
+            if (!budget.Abandoned)
             {
                 // The budget is spent and the leaf is still blocking, so the
                 // block is not one activation away from clearing. Say so once,
                 // loudly, and stop paying for touches that do not work.
-                _blockedConsumers[treeId] = observation with { Abandoned = true };
+                budgets[blockingConsumerId] = budget with { Abandoned = true };
+                _blockedConsumers[treeId] = observation with { AnyAbandoned = true };
                 LatticeMetrics.WalGcBlockedLeafReactivations.Add(
                     1, treeTag, LatticeMetrics.BlockedLeafReactivationAbandoned, tenantTag);
 
@@ -863,10 +987,34 @@ internal sealed class LatticeWalGcScheduler(
                     "WAL GC gave up reactivating consumer {Consumer} on tree {Tree} after {Attempts} attempts; it is still blocking the cursor floor, so the block is not clearable by activation alone and the WAL stays retained. Investigate why the leaf's snapshot capture does not complete.",
                     blockingConsumerId,
                     treeId,
-                    observation.Attempts);
+                    budget.Attempts);
             }
 
             return;
+        }
+
+        // The escalation for a block the sweep cannot get purchase on at all.
+        // Every clause below this one is gated on an attempt having been made,
+        // and an attempt is gated on the reported blocker holding still for the
+        // minimum block age - so a tree whose blocker rotates faster than that
+        // is never touched, and no attempt-derived budget can ever report it.
+        // Unlike the per-leaf give-up this does not stop the sweep: there is no
+        // evidence here that any particular touch is futile, only that none is
+        // happening, and the sweep remains the sole remedy. Suppressed once some
+        // consumer on this tree has been abandoned, so the two alarms cannot
+        // both fire for one condition.
+        if (!observation.Escalated
+            && !observation.AnyAbandoned
+            && now - (observation.LastAnyAttempt ?? observation.EpisodeStarted) >= UnreachableBlockEscalation)
+        {
+            observation = observation with { Escalated = true };
+            _blockedConsumers[treeId] = observation;
+
+            logger.LogWarning(
+                "WAL GC has not been able to attempt a reactivation on tree {Tree} for {Elapsed}, while its cursor floor stayed blocked and its WAL stayed retained; the consumer reported as blocking keeps changing before any one of them has been blocking long enough to touch, so the per-leaf attempt budget cannot report this tree. Currently reported blocker is {Consumer}. Investigate why this tree has several leaves whose snapshot capture does not complete.",
+                treeId,
+                now - (observation.LastAnyAttempt ?? observation.EpisodeStarted),
+                blockingConsumerId);
         }
 
         if (now - observation.FirstObserved < ReactivationMinBlockAge)
@@ -884,10 +1032,11 @@ internal sealed class LatticeWalGcScheduler(
         // is cancelled must still consume the budget and the cooldown, or a
         // leaf that fails fast would be retried every pass - turning a
         // rate-limited heal into the stampede this path is bounded to avoid.
+        budgets[blockingConsumerId] = budget with { Attempts = budget.Attempts + 1 };
         _blockedConsumers[treeId] = observation with
         {
             LastReactivationAttempt = now,
-            Attempts = observation.Attempts + 1,
+            LastAnyAttempt = now,
         };
 
         LatticeMetrics.WalGcBlockedLeafReactivations.Add(
@@ -897,8 +1046,20 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
-    /// Drops a tree's blocked-consumer record, crediting a heal when the sweep
-    /// had actually touched that consumer.
+    /// Warns, once per blocker rather than once per pass, that a tree's cursor
+    /// floor is blocked. A blocked tree deliberately polls at the interval
+    /// floor, so an unthrottled warning would be loudest for exactly the
+    /// population it stays useless longest for.
+    /// </summary>
+    private void WarnFloorBlocked(string treeId, string blockingConsumerId) =>
+        logger.LogWarning(
+            "WAL GC for tree {Tree} cannot reclaim: durable materialiser pin {Consumer} carries no usable offset, so the cursor floor is blocked and the WAL is retained without bound. The consumer id embeds the owning leaf's grain id. Other leaves on this tree may also be blocked; the floor short-circuits on the first one found, so they are reported one at a time.",
+            treeId,
+            blockingConsumerId);
+
+    /// <summary>
+    /// Ends a tree's blocked episode, crediting a heal for every consumer the
+    /// sweep touched during it.
     /// </summary>
     private void ClearBlockedObservation(
         string treeId,
@@ -907,14 +1068,15 @@ internal sealed class LatticeWalGcScheduler(
     {
         if (_blockedConsumers.Remove(treeId, out var observation))
         {
-            CreditHealedIfSwept(observation, treeTag, tenantTag);
+            CreditHealedConsumers(observation, treeTag, tenantTag);
         }
     }
 
     /// <summary>
-    /// Records that a consumer this sweep had reactivated has stopped blocking.
+    /// Records that the consumers this sweep reactivated have stopped blocking.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// This is evidence that the sweep is achieving something, not proof that it
     /// caused the heal - an ordinary read or write could have touched the leaf
     /// first. Attributing precisely is not possible from here, and the useful
@@ -922,16 +1084,34 @@ internal sealed class LatticeWalGcScheduler(
     /// at all, or is the sweep running without effect? A consumer that was never
     /// swept is not credited, so the ratio against <c>attempted</c> stays
     /// meaningful.
+    /// </para>
+    /// <para>
+    /// <b>Why this waits for the episode to end.</b> It used to credit the
+    /// outgoing consumer each time the reported blocker changed, which read as
+    /// "that one stopped blocking". It does not mean that: the floor skips
+    /// consumers present in the live registry, so a leaf the sweep has just
+    /// touched drops off the head of the queue precisely because it activated,
+    /// and it returns when it deactivates still blocked. Crediting there counted
+    /// one leaf many times and counted leaves that never healed at all. Deferred
+    /// to the end of the episode the claim is sound, because the floor is no
+    /// longer blocked by anything, so every consumer swept during it has in fact
+    /// stopped blocking. The ratio this feeds is documented as the measure of
+    /// whether the sweep works, so an inflated numerator is worse than a missing
+    /// one.
+    /// </para>
     /// </remarks>
-    private static void CreditHealedIfSwept(
+    private static void CreditHealedConsumers(
         BlockedConsumerObservation observation,
         in KeyValuePair<string, object?> treeTag,
         in KeyValuePair<string, object?> tenantTag)
     {
-        if (observation.Attempts > 0 && !observation.Abandoned)
+        foreach (var budget in observation.Budgets.Values)
         {
-            LatticeMetrics.WalGcBlockedLeafReactivations.Add(
-                1, treeTag, LatticeMetrics.BlockedLeafReactivationHealed, tenantTag);
+            if (budget.Attempts > 0 && !budget.Abandoned)
+            {
+                LatticeMetrics.WalGcBlockedLeafReactivations.Add(
+                    1, treeTag, LatticeMetrics.BlockedLeafReactivationHealed, tenantTag);
+            }
         }
     }
 
