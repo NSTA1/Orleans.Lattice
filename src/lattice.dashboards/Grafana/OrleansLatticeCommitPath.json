@@ -892,6 +892,18 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_snapshot_hydration_admissions_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "hydration {{outcome}} {{tree}}/s" }
       ]
+    },
+    {
+      "id": 141,
+      "title": "Resident leaf working-set sheds (rate) by class - issue #2767 (absent = build did not land)",
+      "description": "Leaf activations deactivated by the per-silo RESIDENT leaf working set so the hydrated population stays under its derived byte budget (orleans.lattice.leaf.residency.sheds), split by whether the shed leaf was snapshot-banked or unbanked. READ THIS PANEL DIRECTLY ABOVE THE HYDRATION ADMISSIONS PANEL, BECAUSE THE TWO BOUND DIFFERENT QUANTITIES AND NEITHER SUBSTITUTES FOR THE OTHER. The admission gate (issue #2765) bounds how many hydrations run CONCURRENTLY, which caps the PEAK cost of each one. It says nothing about what survives them. LeafSnapshotHydrationSource retains the whole encoded snapshot frame for the lifetime of the activation, so a completed hydration leaves roughly one frame resident and a forced blocking compacting gen2 collection reclaims NONE of it while the activation lives. The steady state therefore grows with the number of LIVE ACTIVATIONS, not with concurrency, and was entirely unbounded - which is why the heap hard limit was still reached with the admission gate provably binding (queued 238 against 9 immediate). kind=banked is the bound working at its cheap end: the shed leaf had a snapshot, so it reloads cheaply when next touched. kind=unbanked IS THE ARM TO ACT ON. It means the working set has run out of snapshot-backed candidates and is buying headroom by evicting leaves that must pay a whole-window WAL replay to come back, so a sustained rate points at SNAPSHOT COVERAGE and not at this bound - raising the budget would not help and lowering it would make it worse. Shedding is a GRACEFUL deactivation, so a shed leaf captures a snapshot on the way out and an unbanked shed converts itself into a banked candidate for next time; that is what makes the banked-first preference drain rather than recirculate, and it is why a healthy estate trends towards banked. ABSENT IS NOT ZERO. These targets omit the or vector(0) fallback, because a literal zero would draw an estate that never needed to shed identically to a build that does not carry the bound at all. Both arms are instead PRE-MINTED at zero when a tree first registers, carrying the exact tag set a later shed carries, so a flat zero line is a MEASURED zero and a missing line means the build did not land. The budget is derived at runtime from the heap hard limit and is deliberately NOT configurable, for the same reason the admission budget is not.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 235 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, kind) (rate(orleans_lattice_leaf_residency_sheds_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "shed {{kind}} {{tree}}/s" }
+      ]
     }
   ]
 }

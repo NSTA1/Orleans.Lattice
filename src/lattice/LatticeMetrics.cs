@@ -1849,6 +1849,56 @@ public static class LatticeMetrics
         new(TagOutcome, "queued");
 
     /// <summary>
+    /// Counter of leaf activations shed by the per-silo resident leaf working
+    /// set, tagged with <see cref="TagTree"/>, <see cref="TagKind"/>
+    /// (<c>banked</c>/<c>unbanked</c>) and the tenant label (issue #2767).
+    /// <para>
+    /// Where <see cref="LeafSnapshotHydrationAdmissions"/> counts hydrations
+    /// bounded while they materialise, this counts activations deactivated
+    /// because what they retained <b>after</b> materialising exceeded the
+    /// process's resident budget. The two measure disjoint costs: a hydration
+    /// that queued and then completed is invisible here, and a leaf shed here
+    /// was admitted there without waiting.
+    /// </para>
+    /// <para>
+    /// The class tag is the one to watch. A <c>banked</c> shed returns on the
+    /// fast path by re-attaching its snapshot; an <c>unbanked</c> shed
+    /// reactivates cold and must first queue for a replay permit, so a
+    /// sustained <c>unbanked</c> rate means the working set has run out of cheap
+    /// candidates and is now paying whole-window replays to stay under budget.
+    /// That is the signal to look at snapshot coverage, not at this bound.
+    /// </para>
+    /// <para>
+    /// Both arms are primed to zero per tree when a tree first registers, for
+    /// the same reason the admission arms are: an absent series otherwise reads
+    /// identically for "never needed to shed", "not deployed in this build" and
+    /// "nothing has activated yet", which have entirely different responses.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafResidencySheds =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.residency.sheds", unit: "{activation}",
+            description: "Leaf activations deactivated by the per-silo resident leaf working set to stay under its derived byte budget, tagged by tree and by whether the shed leaf was snapshot-banked (cheap reload) or unbanked (cold whole-window replay).");
+
+    /// <summary>Canonical name of <see cref="LeafResidencySheds"/>.</summary>
+    public const string LeafResidencyShedsName = "orleans.lattice.leaf.residency.sheds";
+
+    /// <summary>
+    /// <see cref="TagKind"/> = <c>banked</c> on <see cref="LeafResidencySheds"/>:
+    /// the shed activation had rehydrated from a durable snapshot, so it
+    /// reactivates by re-attaching that snapshot and replaying only the tail.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafResidencyClassBanked =
+        new(TagKind, "banked");
+
+    /// <summary>
+    /// <see cref="TagKind"/> = <c>unbanked</c> on <see cref="LeafResidencySheds"/>:
+    /// the shed activation held no snapshot, so it reactivates cold, replaying
+    /// the whole readable WAL window behind a replay permit.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafResidencyClassUnbanked =
+        new(TagKind, "unbanked");
+
+    /// <summary>
     /// Counter of leaf-snapshot capture <b>attempts</b>, emitted by
     /// <c>BPlusLeafGrain.CaptureSnapshotCoreAsync</c> once per attempt that
     /// passes the eligibility gates, tagged with <see cref="TagTree"/>,
