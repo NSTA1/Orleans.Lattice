@@ -70,13 +70,36 @@ internal sealed class FileWalShard : IDisposable
     /// Snapshots up to <paramref name="maxEntries"/> payloads with offset
     /// strictly greater than <paramref name="fromOffsetExclusive"/>, in
     /// ascending offset order, materialising each payload into a
-    /// freshly-owned array.
+    /// freshly-owned array. The page is additionally bounded to
+    /// <paramref name="maxBytes"/> total payload bytes, so a run of large
+    /// records cannot materialise an unbounded page (issue #2689).
     /// </summary>
+    /// <param name="fromOffsetExclusive">Exclusive lower bound on offset.</param>
+    /// <param name="maxEntries">Maximum entries to return; must be at least <c>1</c>.</param>
+    /// <param name="maxBytes">
+    /// Maximum total payload bytes to materialise; must be at least
+    /// <c>1</c>. At least one entry is always returned even when it alone
+    /// exceeds this budget, so the bound can never stall a reader.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     internal async Task<(long[] Offsets, byte[][] Payloads)> SnapshotAsync(
         long fromOffsetExclusive,
         int maxEntries,
+        long maxBytes,
         CancellationToken cancellationToken)
     {
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries), maxEntries, "At least one entry must be requested per read.");
+        }
+
+        if (maxBytes < 1L)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxBytes), maxBytes, "At least one byte must be budgeted per read.");
+        }
+
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -96,7 +119,7 @@ internal sealed class FileWalShard : IDisposable
                 return (Array.Empty<long>(), Array.Empty<byte[]>());
             }
 
-            var take = Math.Min(available, maxEntries);
+            var take = Narrow(startIndex, Math.Min(available, maxEntries), maxBytes);
             var offsets = new long[take];
             var payloads = new byte[take][];
             for (var i = 0; i < take; i++)
@@ -112,6 +135,54 @@ internal sealed class FileWalShard : IDisposable
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Narrows a count-bounded take window to the longest prefix whose
+    /// payload bytes fit <paramref name="maxBytes"/>, always keeping at
+    /// least one entry.
+    /// </summary>
+    /// <remarks>
+    /// The write path bounds a batch by entries AND bytes
+    /// (<see cref="LatticeOptions.WalMaxBatchEntries"/> /
+    /// <see cref="LatticeOptions.WalMaxBatchBytes"/>); before issue #2689
+    /// the read path bounded only entries, so a page of large records was
+    /// unbounded in memory and was held twice - once materialised here into
+    /// <c>byte[][]</c>, then again as the deserializer re-allocated each
+    /// payload.
+    /// <para>
+    /// The window is computed entirely from <see cref="IndexEntry.PayloadLength"/>
+    /// in the in-memory index, so the bound costs no extra I/O: it decides
+    /// how much to read before reading any of it.
+    /// </para>
+    /// <para>
+    /// The always-take-one floor is load-bearing, not a rounding
+    /// convenience. Every reader on this path treats an empty page as
+    /// end-of-stream - <c>WalShardGrain.ReadAsync</c> reports
+    /// <c>NextSequence = fromSequence</c> and <c>WalCommitLogReader</c>
+    /// yields a break - so a page that returned nothing because its first
+    /// entry exceeded the budget would stall replay at that offset
+    /// forever, reproducing the very wedge this bound exists to end. A
+    /// short (but non-empty) page is instead an already-supported
+    /// condition: the same readers resume from the last offset actually
+    /// returned, so truncating a page is a resumption and never a skip.
+    /// </para>
+    /// </remarks>
+    private int Narrow(int startIndex, int take, long maxBytes)
+    {
+        var accumulated = 0L;
+        for (var i = 0; i < take; i++)
+        {
+            var length = _entries[startIndex + i].PayloadLength;
+            if (i > 0 && accumulated + length > maxBytes)
+            {
+                return i;
+            }
+
+            accumulated += length;
+        }
+
+        return take;
     }
 
     /// <summary>Returns the highest live offset, or <c>-1</c> when empty.</summary>

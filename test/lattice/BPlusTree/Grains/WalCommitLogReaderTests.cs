@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -71,4 +72,79 @@ public sealed class WalCommitLogReaderTests
         Assert.That(collected, Is.Empty);
         await grain.Received(1).ReadAsync(42, Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
+
+    [Test]
+    public async Task ReadAsync_resumes_across_short_pages_without_skipping_or_duplicating()
+    {
+        // Caller-side guard for the read byte bound added in issue #2689.
+        // That bound truncates a WAL read page when its payloads exceed the
+        // byte budget, so pages shorter than the requested count became
+        // routine rather than exceptional. This fixture pins the property
+        // that makes such truncation safe: the reader resumes from
+        // page.NextSequence, which the shard derives from the last entry
+        // actually RETURNED, so a short page is a resumption and never a
+        // skip.
+        //
+        // The pages below are deliberately ragged (3, then 1, then 2) - the
+        // shape a byte budget produces when record sizes vary - and the
+        // stub asserts each poll arrives at the cursor the previous page
+        // reported, so a reader that resumed from what it REQUESTED instead
+        // of what it received would fail here.
+        var (reader, grain) = CreateReader();
+        var pages = new Queue<long[]>(new[]
+        {
+            new[] { 0L, 1L, 2L },
+            new[] { 3L },
+            new[] { 4L, 5L },
+        });
+
+        var expectedFrom = 0L;
+        grain
+            .ReadAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var from = call.ArgAt<long>(0);
+                Assert.That(
+                    from,
+                    Is.EqualTo(expectedFrom),
+                    "the reader must resume from the last sequence actually returned");
+
+                if (pages.Count == 0)
+                {
+                    return new ValueTask<WalShardPage>(WalShardPage.Empty(from));
+                }
+
+                var sequences = pages.Dequeue();
+                expectedFrom = sequences[^1] + 1;
+                return new ValueTask<WalShardPage>(new WalShardPage
+                {
+                    Entries = sequences.Select(Sequenced).ToArray(),
+                    NextSequence = expectedFrom,
+                });
+            });
+
+        var collected = await ReadAllAsync(reader, fromOffsetExclusive: -1L);
+
+        Assert.That(
+            collected.Select(e => e.Offset),
+            Is.EqualTo(new[] { 0L, 1L, 2L, 3L, 4L, 5L }),
+            "a ragged, short-paged drain must be lossless, duplicate-free, and ordered");
+    }
+
+    private static WalShardSequencedEntry Sequenced(long sequence) => new()
+    {
+        Sequence = sequence,
+        Entry = WalRecordConverter.ToWalRecord(
+            new LatticeMutation
+            {
+                TreeId = TreeId,
+                Kind = MutationKind.Set,
+                Key = "k" + sequence.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                Value = new byte[] { (byte)sequence },
+                Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+                OriginClusterId = "site-a",
+            },
+            LatticeMergeMode.LwwRegister,
+            "site-a"),
+    };
 }

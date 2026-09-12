@@ -76,6 +76,19 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
                 nameof(options));
         }
 
+        // Checked here as well as in FileWalStorageOptionsValidator, because
+        // a host (or a test) may construct the provider directly from
+        // Options.Create and never run the registration-time validator. A
+        // zero or negative read budget would otherwise reach the shard and
+        // throw per-read, far from the misconfiguration.
+        if (_options.MaxReadBatchBytes < 1L)
+        {
+            throw new ArgumentException(
+                $"{nameof(FileWalStorageOptions)}.{nameof(FileWalStorageOptions.MaxReadBatchBytes)} must be at least 1; "
+                + $"was {_options.MaxReadBatchBytes}.",
+                nameof(options));
+        }
+
         _serializer = serializer;
     }
 
@@ -179,7 +192,7 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
         ThrowIfDisposed();
 
         var (offsets, payloads) = await GetShard(treeId, shardIndex)
-            .SnapshotAsync(fromOffsetExclusive, maxEntries, cancellationToken)
+            .SnapshotAsync(fromOffsetExclusive, maxEntries, _options.MaxReadBatchBytes, cancellationToken)
             .ConfigureAwait(false);
 
         for (var i = 0; i < offsets.Length; i++)
@@ -221,7 +234,7 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
         // materialisation and re-encode. Each payload is a freshly-owned
         // array read from disk, so it outlives the synchronous return.
         var (offsets, payloads) = await GetShard(treeId, shardIndex)
-            .SnapshotAsync(fromOffsetExclusive, maxEntries, cancellationToken)
+            .SnapshotAsync(fromOffsetExclusive, maxEntries, _options.MaxReadBatchBytes, cancellationToken)
             .ConfigureAwait(false);
 
         var segments = new ArraySegment<byte>[payloads.Length];
