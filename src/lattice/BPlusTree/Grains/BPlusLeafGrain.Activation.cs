@@ -669,6 +669,26 @@ internal sealed partial class BPlusLeafGrain
             replayPermit?.Release();
         }
 
+        // Step 1.35 - account this activation's resident footprint against the
+        // per-silo working set, shedding older leaves if it puts the silo over
+        // budget (issue #2767).
+        //
+        // Placed here, after the replay region and before anything that can
+        // return early, because this is the first point at which the activation
+        // is both online and done growing: the snapshot frame is attached, the
+        // replay has applied, and every remaining step is bookkeeping. Every
+        // path out of this method from here on is a success path, so a
+        // registration taken here is matched one-for-one by the release in
+        // OnDeactivateAsync.
+        //
+        // Registering BOTH classes is deliberate and is what makes the ordering
+        // rule mean anything. A cold activation holds decoded rows and no frame;
+        // a warm one holds a frame it may never read. Counting only the second
+        // would leave the first unbounded while reporting the silo as within
+        // budget, and would make the banked-before-unbanked preference vacuous
+        // by construction, since every registration would then be banked.
+        RegisterResidentFootprint(rehydratedFromSnapshot);
+
         // Step 1.4 - publish this activation's same-silo revision cookie
         // now that the in-memory projection has been rebuilt (issue #2151).
         //
@@ -855,6 +875,91 @@ internal sealed partial class BPlusLeafGrain
                     context.GrainId);
             }
         }
+    }
+
+    /// <summary>
+    /// This activation's claim on the per-silo resident leaf working set
+    /// (issue #2767). <see cref="LeafResidencyRegistration.None"/> until the
+    /// activation registers, so the release path needs no null check.
+    /// </summary>
+    private LeafResidencyRegistration _residency = LeafResidencyRegistration.None;
+
+    /// <summary>
+    /// The per-silo resident leaf working set this activation accounts against.
+    /// Resolved from activation services with the process-wide instance as the
+    /// fallback, exactly as
+    /// <c>SnapshotHydrationAdmission</c> is: production takes the shared
+    /// instance, and a test injects one with a small, deterministic budget so
+    /// the shedding policy can be driven without arranging a real heap limit.
+    /// </summary>
+    private LeafResidentWorkingSet ResidentWorkingSet
+        => context.ActivationServices?.GetService<LeafResidentWorkingSet>()
+            ?? LeafResidentWorkingSet.Shared;
+
+    /// <summary>
+    /// Accounts what this activation will keep resident against the per-silo
+    /// working set, which may shed older leaves to stay inside its derived
+    /// budget.
+    /// <para>
+    /// The footprint is read once, here, rather than tracked live. A live
+    /// figure would be more accurate and is not worth what it costs: it would
+    /// put a callback on the cache's hot mutation path to bound a quantity whose
+    /// dominant term - the retained snapshot frame - is fixed for the life of
+    /// the activation and is known exactly at this point. An activation that
+    /// later grows past its registered figure is under-counted until it
+    /// deactivates, which errs towards retaining leaves rather than shedding
+    /// them, and the periodic re-registration that would fix it would trade a
+    /// bounded under-count for an unbounded amount of sweeping.
+    /// </para>
+    /// <para>
+    /// A leaf with no tree id never registers. It has no snapshot, no replay and
+    /// no rows, so it retains nothing worth accounting and would only add an
+    /// unsheddable entry to the ledger.
+    /// </para>
+    /// </summary>
+    /// <param name="rehydratedFromSnapshot">
+    /// Whether this activation came up off a durable snapshot. Carried into the
+    /// ledger as the shed-ordering class: a banked leaf reloads by re-attaching
+    /// its snapshot, an unbanked one by replaying the whole readable WAL window
+    /// behind a replay permit.
+    /// </param>
+    private void RegisterResidentFootprint(bool rehydratedFromSnapshot)
+    {
+        if (state.State.TreeId is not { Length: > 0 } treeId)
+        {
+            return;
+        }
+
+        _residency = ResidentWorkingSet.Register(
+            treeId,
+            Cache.ResidentFootprintBytes,
+            rehydratedFromSnapshot,
+            // Graceful, so the deactivation runs this leaf's
+            // capture-on-deactivate seam. That matters more than it looks:
+            // shedding an unbanked leaf gracefully is what lets it bank a
+            // snapshot on the way out, so the very act of shedding moves it into
+            // the cheap class for next time and the expensive class drains
+            // rather than recirculating.
+            () => context.Deactivate(new DeactivationReason(
+                DeactivationReasonCode.ApplicationRequested,
+                "Leaf shed to keep the silo's resident leaf working set within budget")),
+            // A split is persisted state, so it spans turns - and a batched
+            // transfer spans many. Orleans defers a requested deactivation to
+            // the end of the current turn, which protects a turn-local
+            // operation and does nothing for a multi-turn one, so the exclusion
+            // has to be explicit.
+            () => state.State.SplitState == Primitives.SplitState.SplitInProgress);
+    }
+
+    /// <summary>
+    /// Returns this activation's bytes to the per-silo resident working set.
+    /// Idempotent, so the teardown path can call it without tracking whether the
+    /// activation ever registered.
+    /// </summary>
+    private void ReleaseResidentFootprint()
+    {
+        _residency.Dispose();
+        _residency = LeafResidencyRegistration.None;
     }
 
     /// <summary>

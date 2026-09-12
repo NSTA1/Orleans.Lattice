@@ -139,6 +139,14 @@ internal sealed partial class BPlusLeafGrain(
             // OnActivateAsync (issue #2151), so the cache is forced onto
             // the refresh path as soon as the leaf is back.
             RemoveLeafRevision(context.GrainId);
+
+            // Return this activation's bytes to the per-silo resident working
+            // set (issue #2767). In the finally, beside the other teardown
+            // bookkeeping, so a storage failure in the try above cannot leak a
+            // registration: a leaked registration is permanent, consumes budget
+            // no live leaf is using, and drives the silo to shed leaves that are
+            // actually in use.
+            ReleaseResidentFootprint();
         }
     }
 
