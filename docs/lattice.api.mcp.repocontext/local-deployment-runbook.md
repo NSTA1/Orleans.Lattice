@@ -24,6 +24,32 @@ elsewhere, and you should read those first:
 What follows is only the part neither of those covers: how *this* deployment is
 produced and operated.
 
+### Before you start the stack
+
+**Every resource knob is now derived per-deployment, and the stack will refuse to
+start until you have derived them (#2779).** This changes the startup sequence:
+
+```bash
+cd samples/RepoContextContainer
+pwsh -File ./scripts/New-TuningEnv.ps1      # writes .env - REQUIRED, and not optional
+docker compose up -d
+```
+
+Skipping the first command does not produce a degraded stack, it produces no stack:
+the tuning overlay declares each knob as `${VAR:?...}` with **no default**, so compose
+exits non-zero naming the missing variable and the reason it exists. That is
+deliberate. The previous behaviour was a set of literals transcribed from one
+developer machine - 16 logical processors and 55.7 GiB of RAM - whose two `mem_limit`
+values summed to 17 GiB, so the stack could not start at all on a 16 GiB host, and
+silently oversubscribed every smaller one. A default would have carried that defect
+forward for anyone who did not know to override it.
+
+The memory grant in particular is derived from the **indexed corpus**, not from host
+RAM: the requirement is a property of the repository being indexed, so a fixed
+fraction of host memory grants far too much on a large machine and far too little on a
+small one for the identical corpus. Re-run the script after a substantial change in
+corpus size, or when moving the deployment to a different host.
+
 ### What this runbook does not establish
 
 **Agreement between this runbook and the tracked compose files says nothing
@@ -449,9 +475,9 @@ matters more than anything below: a wrong `cpus` makes the box slow, a wrong
 | `azurite-backup-sink` | `image` | `mcr.microsoft.com/azure-storage/azurite:latest` | The backup sink, added by the memory-backup work in this bucket. Its storage is a **host bind mount**, deliberately not a compose-managed volume, so `docker compose down -v` cannot reach it. See [container.md](container.md) for what that does and does not survive. |
 | `embedder` | `EMBED_PROVIDER` | `cpu` | Base default. `cpu`, or `cuda` on an NVIDIA host started with a device reservation. See the [sample README](../../samples/RepoContextContainer/README.md). |
 | `embedder` | `DOTNET_gcServer` | `0` | Workstation GC. Server GC allocates a heap and a dedicated GC thread per core, which on a 16-core host is the main driver of resident set for a latency-insensitive background service. This service also has little managed heap worth collecting in parallel: its footprint is dominated by the resident ONNX model, which is native. |
-| `embedder` | `EMBED_INTRA_THREADS` | `4` | Pins the ONNX intra-op thread pool to the `cpus` grant below. ONNX Runtime sizes that pool from host cores and does not consult the cgroup quota, so under a 4.0-CPU grant on a 16-core host it ran 4x oversubscribed and the kernel throttled it in 296 of 298 consecutive scheduling periods during vectorising. #2610 derives this from the cgroup automatically, but the deployed image predates that change, so the value is pinned by hand. See [The pool-sizing class](#the-pool-sizing-class). |
-| `embedder` | `cpus` | `4.0` | Reduced from an unlimited grant that measured 1014% CPU (about 10 of 16 cores) and made the host unusable for interactive work. Leaves 12 cores free. The ONNX intra-op pool is sized against this grant, so changing it means revisiting `EMBED_INTRA_THREADS` above. |
-| `embedder` | `mem_limit` | `5g` | Measured at 4.08 GiB with no limit, and pinned at 2.486 GiB of a 2560m cap (99.4%) while essentially idle at 0.01% CPU, holding the resident ONNX model at its ceiling with no room to work. 5g clears the measured requirement. |
+| `embedder` | `EMBED_INTRA_THREADS` | `derived` | Pins the ONNX intra-op thread pool to the `cpus` grant below. ONNX Runtime sizes that pool from host cores and does not consult the cgroup quota, so under a 4.0-CPU grant on a 16-core host it ran 4x oversubscribed and the kernel throttled it in 296 of 298 consecutive scheduling periods during vectorising. #2610 derives this from the cgroup automatically, but the deployed image predates that change, so the value is still set explicitly. Derived from `EMBEDDER_CPUS` by [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779), so the explicit value cannot drift from the grant it restates. See [The pool-sizing class](#the-pool-sizing-class). |
+| `embedder` | `cpus` | `derived` | Reduced from an unlimited grant that measured 1014% CPU (about 10 of 16 cores) and made the host unusable for interactive work. The ONNX intra-op pool is sized against this grant, so `EMBED_INTRA_THREADS` above is derived from the same number rather than restated by hand. Set `EMBEDDER_CPUS` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779). |
+| `embedder` | `mem_limit` | `derived` | Measured at 4.08 GiB with no limit, and pinned at 2.486 GiB of a 2560m cap (99.4%) while essentially idle at 0.01% CPU, holding the resident ONNX model at its ceiling with no room to work. This grant is **workload**-derived rather than corpus-derived: it is dominated by the model resident in the image, so it does not grow with the repository. Set `EMBEDDER_MEM_LIMIT` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779). |
 | `repocontext` | `image` | `repocontext-mcp:local` | The base file declares `build:` and no `image:`, so `up -d --no-build` cannot resolve an image without this pin. The tag is moved between builds; see [Pin and roll back](#pin-and-roll-back). |
 | `repocontext` | `LATTICE_DURABILITY` | `local` | Base default: SQLite grain storage and reminders plus the file WAL, no external services. See [container.md](container.md). |
 | `repocontext` | `LATTICE_DATA_ROOT` | `/data` | Base default. All durable local state on one named volume, so it survives restart, recreation, and image upgrade. See [container.md](container.md). |
@@ -473,10 +499,10 @@ matters more than anything below: a wrong `cpus` makes the box slow, a wrong
 | `repocontext` | `LATTICE_FULL_WALK_INTERVAL_SECONDS` | `3600` | Tuned from `120`. The full re-stat of every file, and the single heaviest operation. Counted in passes, not wall clock, so it moves with the reconcile interval and jitter above. |
 | `repocontext` | `LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS` | `3600` | Tuned from `300`. Two membership reads per indexed source, so on a converged repository it dominates a pass. Costs no healing latency: an actual gap forces an immediate in-pass scan regardless. |
 | `repocontext` | `DOTNET_gcServer` | `1` | Server GC, restored in #2596. It was `0`, to hold down resident set. That trade went unmeasured until gate run 2, which put it at 283 whole-process silence gaps of 5s or more, longest 29.3s, totalling 20.9% of wall-clock against a 30s Orleans request timeout; all 127 timed-out calls began executing within 0.5s of enqueue and then froze, so it was stop-the-world pausing rather than queueing. The footprint concern is now addressed by the explicit heap count below instead of by giving up parallel collection. |
-| `repocontext` | `DOTNET_GCHeapCount` | `6` | Decouples the collector from `DOTNET_PROCESSOR_COUNT` below, which is pinned to 16 for a completely unrelated reason. Server GC would otherwise take its heap count from that pin and allocate 16 heaps. `6` matches the `cpus` cap, not the processor count. See [The pool-sizing class](#the-pool-sizing-class). |
-| `repocontext` | `DOTNET_PROCESSOR_COUNT` | `16` | Pins the reported processor count to the host core count so the WAL replay concurrency gate stays at the value every prior field measurement was taken against. See [The pool-sizing class](#the-pool-sizing-class). |
-| `repocontext` | `cpus` | `6.0` | Bounds a runaway without starving normal operation. This service measured about 92% of one core in steady state before any limit, so 6 is headroom rather than a working limit. |
-| `repocontext` | `mem_limit` | `12g` | Sized above the measured 10.2 to 10.4 GiB steady-state plateau, on a 55.7 GiB host. A 4g cap set earlier was about 40% of the known requirement; see [How an undersized memory cap presents](#how-an-undersized-memory-cap-presents). |
+| `repocontext` | `DOTNET_GCHeapCount` | `derived` | Decouples the collector from the reported processor count, so Server GC does not allocate one heap per host core under a fractional CPU grant. It matches the `cpus` cap, and under #2779 it does so by construction: both read the same derived number, so two independently-edited literals can no longer drift apart. Set `REPOCONTEXT_GC_HEAP_COUNT` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1). See [The pool-sizing class](#the-pool-sizing-class). |
+| `repocontext` | `LATTICE_WAL_MAX_CONCURRENT_REPLAYS` | `derived` | Sizes the WAL replay concurrency gate explicitly (#2279), replacing a `DOTNET_PROCESSOR_COUNT: 16` pin removed in #2779. That pin overrode a cgroup-aware default and held the gate at 16 permits against a 6.0-CPU quota - a 2.67x oversubscription measured on the live deployment, and the deployment half of the root cause in #2692. This knob has one job, where the pin also resized the GC, the thread pool, and every other processor-count consumer in the process. Set `REPOCONTEXT_MAX_CONCURRENT_REPLAYS` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1). See [The pool-sizing class](#the-pool-sizing-class). |
+| `repocontext` | `cpus` | `derived` | Bounds a runaway without starving normal operation. This service measured about 92% of one core in steady state before any limit, so the grant is headroom rather than a working limit. It is also the source the heap count and the replay gate above are derived from. Set `REPOCONTEXT_CPUS` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779). |
+| `repocontext` | `mem_limit` | `derived` | Sized above the measured steady-state plateau, not below it. A 4g cap set earlier was about 40% of the known requirement; see [How an undersized memory cap presents](#how-an-undersized-memory-cap-presents). This is **corpus**-derived, not host-derived: the requirement is a property of the indexed corpus, so a fixed fraction of host RAM would grant far too much on a large machine and far too little on a small one for the identical repository. [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) sizes it from the corpus and clamps it to what the host can offer, refusing rather than silently granting less when the clamp binds (#2779). |
 
 <!-- compose-settings:end -->
 
@@ -496,13 +522,12 @@ Three instances in this one deployment:
    once, as a structural constant. `Environment.ProcessorCount` *is* cgroup-aware, so
    adding `cpus: 2.0` silently shrank that gate from 16 permits to 2 - an 8x cut to
    leaf-activation concurrency, invisible in configuration and unattributable from the
-   logs. `DOTNET_PROCESSOR_COUNT: "16"` decouples the two.
+   logs. That decoupling is a real requirement. `DOTNET_PROCESSOR_COUNT: "16"` used to supply it and was removed in #2779: it bought the decoupling by overriding a cgroup-aware default, holding the gate at 16 permits against a 6.0-CPU quota - a 2.67x oversubscription, and the deployment half of the root cause in #2692. `LATTICE_WAL_MAX_CONCURRENT_REPLAYS` (#2279) supplies the same decoupling with one job instead of three.
 2. **The GC heap count.** Server GC allocates a heap and a GC thread per core, and
    takes that count from `DOTNET_PROCESSOR_COUNT` when it is set. On `repocontext`
-   that variable is pinned to 16 for instance 1's reasons, so server GC would
-   allocate 16 heaps against a 6.0-CPU grant. This was originally avoided by turning
-   server GC off entirely, at the cost measured in gate run 2; #2596 instead pins
-   `DOTNET_GCHeapCount: "6"` to the grant, which addresses the footprint directly.
+   that variable used to be pinned to 16 for instance 1's reasons, so server GC
+   would have allocated 16 heaps against a 6.0-CPU grant. This was originally avoided by turning
+   server GC off entirely, at the cost measured in gate run 2; #2596 instead derives`r`n   `DOTNET_GCHeapCount` from the grant, which addresses the footprint directly.
    The embedder keeps `DOTNET_gcServer: "0"`, having no large managed heap.
 3. **The ONNX intra-op thread pool.** ONNX Runtime sizes its pool from the host core
    count and does **not** consult the cgroup quota. Under the 4.0-CPU grant on this
@@ -531,8 +556,9 @@ was built to replace.
 Note the interaction
 with instance 1: `DOTNET_PROCESSOR_COUNT` overrides `Environment.ProcessorCount` and
 wins over the quota, so an embedder that copied the `repocontext` environment block
-would silently restore the 4x oversubscription. That is why the fix reads the quota
-directly.
+would have silently restored the 4x oversubscription. That is why the fix reads
+the quota directly, and it is why the variable is no longer set on either service
+(#2779).
 
 **The point of naming the class is the fourth instance, which has not been found yet.**
 When adding a container limit, or a setting that sizes anything per core, check which
@@ -650,13 +676,27 @@ inference rather than a measurement.
 
 ### What is deliberately not changed
 
-`DOTNET_PROCESSOR_COUNT: "16"` on the `repocontext` service is a number above the
-effective grant and belongs to the same family, but it is **not** touched by this knob
-and is not a thread pool: it holds the WAL replay concurrency gate at the value every
-prior field measurement on this box was taken against, which is instance 1 of
-[the pool-sizing class](#the-pool-sizing-class). Aligning it is a separate change with
-a separate blast radius, and it must be measured on its own rather than ridden in on
-this one.
+`DOTNET_PROCESSOR_COUNT: "16"` on the `repocontext` service was a number above the
+effective grant and belonged to the same family, but it was **not** touched by this
+knob and is not a thread pool: it held the WAL replay concurrency gate at the value
+every prior field measurement on this box was taken against, which is instance 1 of
+[the pool-sizing class](#the-pool-sizing-class). This paragraph used to add that
+aligning it was "a separate change with a separate blast radius, and it must be
+measured on its own rather than ridden in on this one."
+
+That was correct, and #2779 is that separate change. The pin is gone; the gate is
+sized by `LATTICE_WAL_MAX_CONCURRENT_REPLAYS` (#2279) instead. Two things are worth
+keeping from how it read before, because both generalise past this one variable.
+
+First, the pin was **defensible**, not careless: it was protecting comparability with
+prior field runs. That goal is real. What made it cost more than it bought is that
+the condition it held constant was itself the defect - so every measurement it
+preserved was taken in the 2.67x-oversubscribed state, and they are comparable to
+each other and to nothing that should be run again.
+
+Second, its comment was meticulous about that continuity argument and silent about
+cost. A thorough comment is harder to doubt than a missing one, which is exactly why
+the axis it does **not** discuss is the one to check.
 
 ## How an undersized memory cap presents
 
