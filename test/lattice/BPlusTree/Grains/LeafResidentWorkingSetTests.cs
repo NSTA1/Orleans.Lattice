@@ -47,7 +47,7 @@ public sealed class LeafResidentWorkingSetTests
     {
         const long heapLimit = 9L * 1024 * 1024 * 1024;
 
-        var budget = LeafResidentWorkingSet.ResolveBudgetBytes(heapLimit);
+        var budget = LeafResidentWorkingSet.ResolveBudgetBytes(heapLimit, 0L);
 
         Assert.That(budget, Is.EqualTo(heapLimit / LeafResidentWorkingSet.HeapBudgetDivisor));
         Assert.That(
@@ -61,7 +61,7 @@ public sealed class LeafResidentWorkingSetTests
     {
         // A heap so small that the derived share would shed every leaf the
         // moment it activated, converting an exhaustion into a livelock.
-        var budget = LeafResidentWorkingSet.ResolveBudgetBytes(1024L);
+        var budget = LeafResidentWorkingSet.ResolveBudgetBytes(1024L, 0L);
 
         Assert.That(budget, Is.EqualTo(LeafResidentWorkingSet.MinimumBudgetBytes));
     }
@@ -86,14 +86,163 @@ public sealed class LeafResidentWorkingSetTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                LeafResidentWorkingSet.ResolveBudgetBytes(0L),
+                LeafResidentWorkingSet.ResolveBudgetBytes(0L, 0L),
                 Is.GreaterThan(0L).And.LessThan(unboundedFloor),
                 "an unknown ceiling is not licence to be unbounded");
             Assert.That(
-                LeafResidentWorkingSet.ResolveBudgetBytes(-1L),
+                LeafResidentWorkingSet.ResolveBudgetBytes(-1L, -1L),
                 Is.GreaterThan(0L).And.LessThan(unboundedFloor),
                 "a negative reported limit is also an unknown ceiling, not an unbounded one");
         });
+    }
+
+    // ---------------------------------------------------------------
+    // Container grant. Issue #2788: the heap hard limit alone is not a
+    // safe ceiling, because TotalAvailableMemoryBytes reports HOST
+    // PHYSICAL MEMORY rather than zero when no heap hard limit is set.
+    // ---------------------------------------------------------------
+
+    [Test]
+    public void ResolveBudgetBytes_prefers_the_container_grant_when_the_heap_limit_exceeds_it()
+    {
+        // The defect, in its measured shape. A 56 GiB host reports 56 GiB as the
+        // heap "limit" when none is configured; the container grant is 12 GiB.
+        // Deriving from the heap figure alone gives a 14.25 GiB budget inside a
+        // 12 GiB grant, so the process dies before the bound's own threshold can
+        // be reached and reports a zero shed count on the way out.
+        const long hostPhysical = 57L * 1024 * 1024 * 1024;
+        const long containerGrant = 12L * 1024 * 1024 * 1024;
+
+        var budget = LeafResidentWorkingSet.ResolveBudgetBytes(hostPhysical, containerGrant);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                budget,
+                Is.EqualTo(containerGrant / LeafResidentWorkingSet.HeapBudgetDivisor));
+
+            // The load-bearing property, asserted independently of the divisor:
+            // whatever the arithmetic, a budget the process cannot reach inside
+            // its own grant is a bound that never engages.
+            Assert.That(
+                budget,
+                Is.LessThan(containerGrant),
+                "a budget at or above the container grant can never be reached, so the bound never engages");
+        });
+    }
+
+    [Test]
+    public void ResolveBudgetBytes_prefers_the_heap_limit_when_it_is_the_smaller_ceiling()
+    {
+        // The inverse case, and the reason the rule is "smaller of the two"
+        // rather than "prefer the container". An operator who sets a heap hard
+        // limit deliberately below the container grant has named the real
+        // ceiling; deriving from the grant would overshoot it.
+        const long heapLimit = 4L * 1024 * 1024 * 1024;
+        const long containerGrant = 12L * 1024 * 1024 * 1024;
+
+        Assert.That(
+            LeafResidentWorkingSet.ResolveBudgetBytes(heapLimit, containerGrant),
+            Is.EqualTo(heapLimit / LeafResidentWorkingSet.HeapBudgetDivisor));
+    }
+
+    [Test]
+    public void ResolveBudgetBytes_falls_back_to_the_known_ceiling_when_one_side_is_unknown()
+    {
+        const long known = 8L * 1024 * 1024 * 1024;
+        var expected = known / LeafResidentWorkingSet.HeapBudgetDivisor;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                LeafResidentWorkingSet.ResolveBudgetBytes(known, 0L),
+                Is.EqualTo(expected),
+                "an undetectable cgroup limit must degrade to the heap limit, not to zero");
+            Assert.That(
+                LeafResidentWorkingSet.ResolveBudgetBytes(0L, known),
+                Is.EqualTo(expected),
+                "a runtime reporting no heap limit must still honour the container grant");
+        });
+    }
+
+    [Test]
+    public void ParseCgroupMemoryLimit_reads_a_real_limit()
+    {
+        Assert.That(
+            LeafResidentWorkingSet.ParseCgroupMemoryLimit("12884901888\n"),
+            Is.EqualTo(12884901888L));
+    }
+
+    [Test]
+    public void ParseCgroupMemoryLimit_treats_the_v2_unlimited_spelling_as_unknown()
+    {
+        Assert.That(LeafResidentWorkingSet.ParseCgroupMemoryLimit("max\n"), Is.Zero);
+    }
+
+    [Test]
+    public void ParseCgroupMemoryLimit_treats_the_v1_saturation_sentinel_as_unknown()
+    {
+        // The arm that matters most. cgroup v1 spells unlimited as a page-aligned
+        // saturation of the page counter, which is a perfectly well-formed
+        // positive long. Believing it yields a budget of roughly two exabytes -
+        // a bound that is present, plausible-looking, and unreachable, which is
+        // the same silent non-engagement this whole issue is about. Unlike "max"
+        // it cannot be caught by a parse failure, so it needs its own rule.
+        //
+        // Both spellings are checked, and both assert EXACTLY zero rather than
+        // "non-positive". That is not fussiness: any implementation that casts
+        // an unsigned value above long.MaxValue wraps it to a negative, so a
+        // non-positive assertion on the unsigned form holds for every possible
+        // implementation and is therefore unfalsifiable - a vacuous assertion
+        // that would read as coverage. Asserting zero makes the sentinel clause
+        // load-bearing for both spellings.
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                LeafResidentWorkingSet.ParseCgroupMemoryLimit("9223372036854771712"),
+                Is.Zero,
+                "the cgroup v1 page-counter saturation is unlimited, not a ceiling");
+            Assert.That(
+                LeafResidentWorkingSet.ParseCgroupMemoryLimit("18446744073709551615"),
+                Is.Zero,
+                "an unsigned saturation that overflows long is unlimited, not a negative to be passed on");
+        });
+    }
+
+    [Test]
+    public void ParseCgroupMemoryLimit_treats_unreadable_content_as_unknown()
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var body in new[] { null, string.Empty, "   ", "not-a-number", "-1", "0" })
+            {
+                Assert.That(
+                    LeafResidentWorkingSet.ParseCgroupMemoryLimit(body),
+                    Is.Zero,
+                    $"'{body ?? "<null>"}' is not a ceiling and must degrade to unknown");
+            }
+        });
+    }
+
+    [Test]
+    public void ReadContainerMemoryLimitBytes_reports_unknown_off_linux()
+    {
+        // Guards the degradation direction rather than a platform. On a
+        // non-Linux host there is no cgroup to read, and the only safe answer is
+        // "unknown" - which ResolveBudgetBytes maps back to the heap limit
+        // alone, exactly the behaviour before detection existed. A probe that
+        // threw, or that invented a ceiling here, would make detection failing
+        // worse than not detecting.
+        if (OperatingSystem.IsLinux())
+        {
+            Assert.That(
+                LeafResidentWorkingSet.ReadContainerMemoryLimitBytes(),
+                Is.GreaterThanOrEqualTo(0L),
+                "detection must never report a negative ceiling");
+            return;
+        }
+
+        Assert.That(LeafResidentWorkingSet.ReadContainerMemoryLimitBytes(), Is.Zero);
     }
 
     // ---------------------------------------------------------------
