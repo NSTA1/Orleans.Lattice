@@ -244,6 +244,48 @@ public static class LatticeMetrics
     public static readonly KeyValuePair<string, object?> ActivationFailureCanceledAwaitingPermit =
         new(TagReason, "canceled_awaiting_permit");
 
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>canceled_resolving_options</c> on
+    /// <see cref="LeafActivationFailures"/>: the activation was cancelled while
+    /// resolving the tree's options, which happens BEFORE the replay permit is
+    /// requested. It never reached the permit queue and the gate was never
+    /// contended on its behalf.
+    /// <para>
+    /// Split out of <see cref="ActivationFailureCanceledAwaitingPermit"/> for
+    /// issue #2770, because that value was reported for this arm too and made
+    /// the series unreadable in the one situation it exists for. Options
+    /// resolution calls <c>ILatticeRegistry.GetEntryAsync</c>, a non-reentrant
+    /// cluster singleton every cold activation queues behind, so under a cold
+    /// start this arm can be the whole population while the replay gate sits
+    /// completely idle - and the folded series reported that as
+    /// "queued for a replay permit", indicting the gate.
+    /// </para>
+    /// <para>
+    /// The reading to take from the split: this value rising means activations
+    /// are serialised behind a shared dependency, whereas
+    /// <see cref="ActivationFailureCanceledAwaitingPermit"/> rising means the
+    /// replay gate itself is genuinely saturated. Those call for opposite
+    /// remedies, which is why one value could not carry both.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ActivationFailureCanceledResolvingOptions =
+        new(TagReason, "canceled_resolving_options");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>canceled_rehydrating_snapshot</c> on
+    /// <see cref="LeafActivationFailures"/>: the activation was cancelled in
+    /// the snapshot rehydrate, which runs before replay admission is entered.
+    /// <para>
+    /// Added by issue #2770. This arm was previously not counted AT ALL: the
+    /// rehydrate ran outside the observed region, so a cancellation there
+    /// escaped without incrementing <see cref="LeafActivationFailures"/> under
+    /// any value. An arm that is invisible is worse than one that is
+    /// mislabelled, because a mislabelled arm at least shows up in the total.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ActivationFailureCanceledRehydratingSnapshot =
+        new(TagReason, "canceled_rehydrating_snapshot");
+
     /// <summary><see cref="TagReason"/> = <c>faulted</c> on <see cref="LeafActivationFailures"/>.</summary>
     public static readonly KeyValuePair<string, object?> ActivationFailureFaulted = new(TagReason, "faulted");
 

@@ -301,11 +301,68 @@ internal sealed partial class BPlusLeafGrain
         if (string.IsNullOrEmpty(state.State.TreeId))
             return null;
 
+        // Phase tracking for issue #2770. This method has TWO awaits and only
+        // the second is the permit queue; the classifier downstream used to
+        // infer the phase from `replayPermit is null`, which is true for both
+        // and so reported a cancellation in the options resolve as one queued
+        // for a permit. Recording the phase as it is entered is what makes the
+        // two distinguishable, and it has to be recorded here because this is
+        // the only frame that knows which await it is sitting in.
+        _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
         var options = await GetOptionsAsync();
         var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
+
+        _replayAdmissionPhase = ReplayAdmissionPhase.QueuedForPermit;
         await gate.WaitAsync(cancellationToken);
+
+        _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
         return gate;
     }
+
+    /// <summary>
+    /// How far this activation got through replay admission, so a cancellation
+    /// can be attributed to the phase it actually landed in (issue #2770).
+    /// </summary>
+    internal enum ReplayAdmissionPhase
+    {
+        /// <summary>Admission has not been entered yet.</summary>
+        NotStarted,
+
+        /// <summary>
+        /// Inside <c>GetOptionsAsync</c>, which on a miss is an
+        /// <c>ILatticeRegistry</c> grain call. The replay permit has not been
+        /// requested, so the gate is not contended on this activation's behalf.
+        /// </summary>
+        ResolvingOptions,
+
+        /// <summary>Queued on the replay concurrency gate itself.</summary>
+        QueuedForPermit,
+
+        /// <summary>Holds a permit; any cancellation from here is mid-replay.</summary>
+        HoldsPermit,
+
+        /// <summary>
+        /// Inside Step 0, the snapshot rehydrate, which runs before replay
+        /// admission is entered at all (issue #2770).
+        /// <para>
+        /// Deliberately NOT folded into <see cref="ResolvingOptions"/> even
+        /// though Step 0 resolves options itself on the
+        /// <c>SnapshotLoadHintBytes &lt;= 0</c> arm. This value covers the
+        /// whole of Step 0 - the lease's own options resolve and the snapshot
+        /// read alike - and does not separate them; saying so is the point,
+        /// because folding an arm into a neighbour on the grounds that it
+        /// sometimes does the same work is precisely the error #2770 exists to
+        /// correct.
+        /// </para>
+        /// </summary>
+        RehydratingSnapshot,
+    }
+
+    /// <summary>
+    /// This activation's replay-admission phase. Per-activation state on a
+    /// single-threaded grain, so it needs no synchronisation.
+    /// </summary>
+    private ReplayAdmissionPhase _replayAdmissionPhase = ReplayAdmissionPhase.NotStarted;
 
     /// <summary>
     /// Activation hook. Runs the WAL materialiser to bring the
@@ -326,7 +383,9 @@ internal sealed partial class BPlusLeafGrain
         // (snapshot, head] suffix. When no snapshot is present (or it
         // is older than the persisted checkpoint), this step is a
         // no-op and the existing WAL-tail-replay path runs unchanged.
-        var rehydratedFromSnapshot = await TryRehydrateFromSnapshotAsync(cancellationToken);
+        //
+        // Executed inside the try below; see the declaration of
+        // replayCheckpointOverride for why it moved (issue #2770).
 
         // Step 0.5 - cache/checkpoint coherence reset. The entry
         // cache is per-activation only; it is rebuilt
@@ -352,8 +411,8 @@ internal sealed partial class BPlusLeafGrain
         // attach, or a test seeding the cache for unit-test purposes)
         // has already populated the cache, the checkpoint is by
         // definition coherent with it and must not be overridden.
-        long? replayCheckpointOverride =
-            (!rehydratedFromSnapshot && Cache.Count == 0) ? -1L : null;
+        //
+        // Also executed inside the try below (issue #2770).
 
         // Step 1 - drive the dormant ILeafProjection.Apply seam over
         // the WAL slice between the persisted checkpoint and the
@@ -370,6 +429,20 @@ internal sealed partial class BPlusLeafGrain
         // permit caps how many leaf replays run concurrently so a
         // reactivation storm degrades into a bounded queue. A no-op
         // activation (no tree id) takes no permit.
+        // Step 0 and Step 0.5 are declared here and executed INSIDE the try
+        // below (issue #2770). They used to run ahead of it, so a cancellation
+        // delivered during the snapshot rehydrate escaped the observation block
+        // entirely and incremented no counter under any reason. That is the
+        // same blindness the #2280 comment further down describes for the
+        // permit queue, and it is worse: an arm that is missing from the total
+        // cannot even be found by noticing the total is too large.
+        //
+        // The cold/warm discriminator starts at the COLD sentinel rather than
+        // null. A cancellation before Step 0.5 has established an anchor is by
+        // definition an activation with no anchor, so reporting it as warm -
+        // which a null default would - would be false.
+        long? replayCheckpointOverride = -1L;
+
         bool advanced;
         SemaphoreSlim? replayPermit = null;
 
@@ -400,6 +473,14 @@ internal sealed partial class BPlusLeafGrain
         // reproduce in the instrument the same blindness it was built to end.
         try
         {
+            // Step 0 (see above).
+            _replayAdmissionPhase = ReplayAdmissionPhase.RehydratingSnapshot;
+            var rehydratedFromSnapshot = await TryRehydrateFromSnapshotAsync(cancellationToken);
+
+            // Step 0.5 (see above).
+            replayCheckpointOverride =
+                (!rehydratedFromSnapshot && Cache.Count == 0) ? -1L : null;
+
             replayPermit = await AcquireReplayPermitAsync(cancellationToken);
 
             if (replayPermit is not null)
@@ -517,9 +598,22 @@ internal sealed partial class BPlusLeafGrain
                 // above.
                 var reason = ex is not OperationCanceledException
                     ? LatticeMetrics.ActivationFailureFaulted
-                    : replayPermit is null
-                        ? LatticeMetrics.ActivationFailureCanceledAwaitingPermit
-                        : LatticeMetrics.ActivationFailureCanceled;
+                    : _replayAdmissionPhase switch
+                    {
+                        // Issue #2770. The phase is recorded as each await is
+                        // entered, so these are the arm the cancellation
+                        // actually landed in rather than an inference from
+                        // `replayPermit is null` - which was true for the
+                        // options resolve and the permit queue alike, and so
+                        // reported a registry stall as replay-gate saturation.
+                        ReplayAdmissionPhase.ResolvingOptions =>
+                            LatticeMetrics.ActivationFailureCanceledResolvingOptions,
+                        ReplayAdmissionPhase.RehydratingSnapshot =>
+                            LatticeMetrics.ActivationFailureCanceledRehydratingSnapshot,
+                        ReplayAdmissionPhase.QueuedForPermit =>
+                            LatticeMetrics.ActivationFailureCanceledAwaitingPermit,
+                        _ => LatticeMetrics.ActivationFailureCanceled,
+                    };
 
                 LatticeMetrics.LeafActivationFailures.Add(
                     1,
@@ -556,7 +650,7 @@ internal sealed partial class BPlusLeafGrain
                         EscalateColdReplayCancellation(
                             failedTreeId,
                             this.GetGrainId(),
-                            awaitingPermit: replayPermit is null,
+                            phase: _replayAdmissionPhase,
                             Stopwatch.GetTimestamp());
                     }
                     catch
@@ -2527,10 +2621,18 @@ internal sealed partial class BPlusLeafGrain
     /// a leaf cut off mid-replay is a bounding problem - and a single total would
     /// let one masquerade as the other.
     /// </param>
+    /// <param name="ResolvingOptions">
+    /// How many of them were cancelled before the permit was even requested,
+    /// while resolving the tree's options (issue #2770). These used to be
+    /// counted under <paramref name="AwaitingPermit"/>, which made a stall on
+    /// the shared registry singleton read as replay-gate saturation - a third
+    /// remedy again, and the one the field measurement turned out to need.
+    /// </param>
     internal readonly record struct ColdReplayLoopSample(
         int ConsecutiveCancellations,
         int DuringReplay,
-        int AwaitingPermit);
+        int AwaitingPermit,
+        int ResolvingOptions);
 
     /// <summary>
     /// One leaf's mutable streak. Updated under its own lock: the three fields
@@ -2542,22 +2644,29 @@ internal sealed partial class BPlusLeafGrain
         private int _consecutive;
         private int _duringReplay;
         private int _awaitingPermit;
+        private int _resolvingOptions;
 
-        public ColdReplayLoopSample Record(bool awaitingPermit)
+        public ColdReplayLoopSample Record(ReplayAdmissionPhase phase)
         {
             lock (this)
             {
                 _consecutive++;
-                if (awaitingPermit)
+                switch (phase)
                 {
-                    _awaitingPermit++;
-                }
-                else
-                {
-                    _duringReplay++;
+                    case ReplayAdmissionPhase.ResolvingOptions:
+                    case ReplayAdmissionPhase.RehydratingSnapshot:
+                        _resolvingOptions++;
+                        break;
+                    case ReplayAdmissionPhase.QueuedForPermit:
+                        _awaitingPermit++;
+                        break;
+                    default:
+                        _duringReplay++;
+                        break;
                 }
 
-                return new ColdReplayLoopSample(_consecutive, _duringReplay, _awaitingPermit);
+                return new ColdReplayLoopSample(
+                    _consecutive, _duringReplay, _awaitingPermit, _resolvingOptions);
             }
         }
     }
@@ -2570,12 +2679,13 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="ColdReplayLoopStreakCapacity"/>).
     /// </summary>
     /// <param name="leafId">The leaf whose activation was cancelled.</param>
-    /// <param name="awaitingPermit">
-    /// Whether the cancellation arrived while the activation was still queued
-    /// for the replay permit rather than replaying.
+    /// <param name="phase">
+    /// The replay-admission phase the cancellation landed in, which decides
+    /// which of the sample's three buckets it is recorded under.
     /// </param>
     /// <returns>The streak after recording, or <see langword="null"/>.</returns>
-    internal static ColdReplayLoopSample? ObserveColdReplayCancellation(GrainId leafId, bool awaitingPermit)
+    internal static ColdReplayLoopSample? ObserveColdReplayCancellation(
+        GrainId leafId, ReplayAdmissionPhase phase)
     {
         if (!ColdReplayCancellationStreaks.TryGetValue(leafId, out var streak))
         {
@@ -2588,7 +2698,7 @@ internal sealed partial class BPlusLeafGrain
                 leafId, static _ => new ColdReplayCancellationStreak());
         }
 
-        return streak.Record(awaitingPermit);
+        return streak.Record(phase);
     }
 
     /// <summary>
@@ -2672,9 +2782,11 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     /// <param name="treeId">The tree the cancelled leaf belongs to.</param>
     /// <param name="leafId">The cancelled leaf.</param>
-    /// <param name="awaitingPermit">
-    /// Whether the cancellation arrived while still queued for the replay
-    /// permit rather than mid-replay.
+    /// <param name="phase">
+    /// The replay-admission phase the cancellation landed in. Replaces the old
+    /// `awaitingPermit` flag, which was derived from `replayPermit is null` and
+    /// so collapsed the options-resolve and permit-queue arms into one (issue
+    /// #2770).
     /// </param>
     /// <param name="now">
     /// The <see cref="Stopwatch.GetTimestamp"/> reading to evaluate the warning
@@ -2682,9 +2794,9 @@ internal sealed partial class BPlusLeafGrain
     /// deterministically instead of waiting out the interval.
     /// </param>
     private void EscalateColdReplayCancellation(
-        string treeId, GrainId leafId, bool awaitingPermit, long now)
+        string treeId, GrainId leafId, ReplayAdmissionPhase phase, long now)
     {
-        var streak = ObserveColdReplayCancellation(leafId, awaitingPermit);
+        var streak = ObserveColdReplayCancellation(leafId, phase);
         if (streak is not { } sample || sample.ConsecutiveCancellations < ColdReplayLoopThreshold)
         {
             return;
@@ -2715,8 +2827,9 @@ internal sealed partial class BPlusLeafGrain
             "SELF-REINFORCING COLD REPLAY LOOP: leaf '{LeafId}' of tree '{TreeId}' has now had "
             + "{ConsecutiveCancellations} cold activations cancelled in a row with no successful "
             + "activation in between ({DuringReplay} cancelled mid-replay, {AwaitingPermit} cancelled "
-            + "while still queued for a replay permit), which is at or past the escalation threshold of "
-            + "{Threshold}. A cold activation replays the whole readable WAL window; when it is "
+            + "while queued for a replay permit, {ResolvingOptions} cancelled while resolving tree "
+            + "options, before the permit was requested), which is at or past the escalation threshold "
+            + "of {Threshold}. A cold activation replays the whole readable WAL window; when it is "
             + "cancelled it latches neither signal the snapshot capture gate requires, so no snapshot is "
             + "banked, the next activation finds no anchor and replays the whole window again. The "
             + "condition that causes the cancellation is therefore REPRODUCED BY the cancellation, and "
@@ -2724,9 +2837,14 @@ internal sealed partial class BPlusLeafGrain
             + "any successful activation, so it measures this leaf's health and not how long this "
             + "process has been up. The threshold is set one above the highest value seen in the field "
             + "measurement behind issue #2280, so this line is not expected to appear in normal "
-            + "operation. Remedies are tracked as issues #2411 (bounding a cold replay), #2279 (replay "
-            + "concurrency oversubscription) and #2256 (replay permit leak); a high "
-            + "queued-for-permit share points at the latter two, a high mid-replay share at the first. "
+            + "operation. READ THE SPLIT BY ARM, and note that the third arm was added by issue #2770 "
+            + "after the first two were folded together and a cold-start stall on the shared registry "
+            + "singleton was misreported for six deployments as replay-gate saturation: a high "
+            + "options-resolving share means activations are serialised behind a shared dependency and "
+            + "the replay gate may be entirely idle (issue #2768); a high queued-for-permit share means "
+            + "the gate itself is saturated (issues #2279, #2256); a high mid-replay share means a "
+            + "single replay is too long to finish inside the deadline (issue #2411). Do NOT infer gate "
+            + "saturation from a cancellation that never reached the gate. "
             + "This is a DIAGNOSTIC: nothing here changes the leaf's behaviour, and the activation "
             + "still fails as it did before.",
             leafId,
@@ -2734,6 +2852,7 @@ internal sealed partial class BPlusLeafGrain
             sample.ConsecutiveCancellations,
             sample.DuringReplay,
             sample.AwaitingPermit,
+            sample.ResolvingOptions,
             ColdReplayLoopThreshold);
     }
 
