@@ -911,6 +911,38 @@
       ]
     },
     {
+      "id": 148,
+      "title": "WAL replay permit queue wait (mean ms) by outcome - issue #2873 (absent = build did not land)",
+      "description": "Mean time an activation spent QUEUED on the per-silo WAL replay concurrency gate (orleans.lattice.wal.replay.permit_queue_wait), split by whether the wait ended in a permit (ACQUIRED) or in cancellation while still queued (CANCELED). THIS PANEL EXISTS TO DISCRIMINATE A READING THE COUNTER BESIDE IT CANNOT MAKE. leaf.activation.failures{reason=\"canceled_awaiting_permit\"} is honest about WHERE an activation was cancelled and silent about WHY: the Orleans request deadline spans the whole grain call, so an activation that burned its budget upstream arrives here already doomed and is cancelled within seconds, and the COUNT IS IDENTICAL whether the gate was saturated or completely idle. Only the duration separates them, and it separates them by ORDERS OF MAGNITUDE. GENUINE PERMIT STARVATION: the canceled arm climbs toward the request budget, because activations really are waiting behind a saturated gate. UPSTREAM BUDGET EXHAUSTION: the canceled arm sits at or near zero, because the activation was already out of time when it arrived and the gate never made it wait. Read the two arms TOGETHER - a large acquired wait alongside a large canceled wait is a saturated gate serving a real queue, whereas a near-zero canceled wait says the gate is not the constraint no matter how high that counter climbs. READ THE MEAN, NOT A QUANTILE, AND THAT IS A STRUCTURAL PROPERTY OF THIS CONTAINER RATHER THAN A SHORTCUT. The exposition renders a .NET Histogram as a Prometheus summary carrying _sum and _count and NO _bucket, so histogram_quantile over this series returns nothing, and the usual 'or vector(0)' repair would substitute a literal zero that reads exactly like the genuine near-zero canceled wait - one of the two conclusions this panel exists to distinguish. The mean is sufficient precisely because the two regimes differ by orders of magnitude rather than by percentile shape. TAGGED BY TREE, unlike the permit_adaptations panels above, and that is deliberate rather than inconsistent: those measure a process-wide CEILING, which has no per-tree value, whereas a WAIT is one caller's own experience and is attributable to the tree that waited. ABSENT IS NOT ZERO, AND HERE IT IS NOT INNOCENT EITHER. Unlike permit_adaptations this instrument is DELIBERATELY NOT PRIMED, because priming a histogram means fabricating a 0 ms sample, which is not a neutral 'measured, never engaged' marker but a datum reading as 'the gate was instant' - it would bias the instrument toward one of the two answers it exists to choose between. A missing line is therefore UNINTERPRETABLE and must be diagnosed: corroborate against the primed permit_adaptations arms and the activation counters to tell 'the build did not land' from 'nothing ever waited'.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 286
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(orleans_lattice_wal_replay_permit_queue_wait_milliseconds_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (outcome) (rate(orleans_lattice_wal_replay_permit_queue_wait_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "mean permit queue wait {{outcome}}"
+        }
+      ]
+    },
+    {
       "id": 143,
       "title": "WAL replay gate memory backpressure (rate) by outcome - issue #2781 (absent = build did not land)",
       "description": "Rate of adaptations to the per-silo WAL replay concurrency gate (orleans.lattice.wal.replay.permit_adaptations), split by whether a permit was WITHHELD from circulation or RESTORED to it. THE OUTCOME SPLIT IS THE WHOLE READING. TWO TRIGGERS WITHHOLD (issue #2862). PROACTIVE: a replay that finishes while managed heap occupancy is at or above 75 percent of the GC hard limit withholds its permit whether or not it faulted. REACTIVE: a replay that fails for memory pressure withholds its permit whatever the occupancy. A permit is RESTORED only when a replay completes cleanly AND occupancy has receded below 60 percent, so the two figures form a hysteresis band the gate settles inside rather than a single edge it chatters across. The reactive arm alone was never enough: the slice-budget narrowing loop (issue #2742) catches the very OutOfMemoryException the gate watched for and retries at a quarter width, so a replay that thrashed the heap and then succeeded looked CLEAN and RESTORED a permit into an already-full heap. The gate admits WalMaterialiserMaxConcurrentReplays - defaulting to the lesser of Environment.ProcessorCount and the enforced container CPU grant (issue #2816) - cold WAL replays at once, with no memory dimension at all before issue #2781. On a tree whose WAL entries are large, every such replay holds large buffers, so the admitted set can exhaust the heap; the replays then fail SLOWLY WHILE HOLDING PERMITS, other leaves time out queued for a permit and never replay at all, a cancelled activation banks no snapshot, the durable materialiser pin never advances, WAL garbage collection reclaims nothing, and the next replay window is larger still. That loop is closed and nothing inside it reduces concurrency. This is the instrument for the mechanism that opens it. A withheld rate with no restored rate is a silo still descending; the two rising together is the gate oscillating around the concurrency the heap can currently afford, which is the mechanism working rather than a fault. Read the LEVEL on the companion panel, not the rate, to judge how far concurrency has actually been reduced. NO TREE TAG BY DESIGN: the gate is process-wide, so a per-tree split would imply a per-tree ceiling that does not exist. THE DENOMINATOR IS THE GC HARD LIMIT, NOT THE CONTAINER GRANT. Under a container memory limit .NET applies its default GCHeapHardLimitPercent to the grant, so a 12 GiB grant yields a 9 GiB managed ceiling reported by GC.TotalAvailableMemoryBytes; a threshold written against the grant would sit 33 percent above the limit that actually throws and could never be crossed. ABSENT IS NOT ZERO - both arms are primed at zero when the gate is sized, so a flat zero line is a MEASURED zero and a missing line means the build did not land.",
