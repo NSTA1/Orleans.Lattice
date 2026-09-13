@@ -91,6 +91,7 @@ public sealed class MetricDocArmArityTests
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["outcome arms"] = "outcome",
+            ["fault arms"] = "fault",
             ["outcomes"] = "outcome",
             ["phases"] = "phase",
             ["states"] = "state",
@@ -136,7 +137,7 @@ public sealed class MetricDocArmArityTests
     private static readonly Regex ArityClaimRegex = new(
         @"\b(?:all|every one of the|each of the)\s+"
         + @"(?<count>two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})\s+"
-        + @"(?<noun>outcome arms|outcomes|arms|phases|states|stages|statuses|reasons|kinds|decisions|values)\b",
+        + @"(?<noun>outcome arms|fault arms|outcomes|arms|phases|states|stages|statuses|reasons|kinds|decisions|values)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>One arity claim found on one documentation row.</summary>
@@ -280,6 +281,164 @@ public sealed class MetricDocArmArityTests
             + "stale exemption silently excuses whatever row later takes that key.\n  "
             + string.Join("\n  ", stale));
     }
+
+    // ------------------------------------- generic-noun ambiguity (issue #2956)
+
+    /// <summary>
+    /// No arity claim states a completeness count with a generic noun on an
+    /// instrument that arms more than one tag, where the claim could be satisfied
+    /// by a tag other than the one the row means.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A claim phrased "all three arms" names a count but not a <i>tag</i>. When
+    /// the noun maps to a tag key, <see cref="Evaluate"/> pins the comparison to
+    /// that tag. When it does not, the evaluator falls through to a search across
+    /// every candidate tag and accepts the claim as soon as <b>any</b> of them arms
+    /// that many values - see the <c>matched = true</c> branch. On an instrument
+    /// with a single tag domain that is harmless, because the only tag it could
+    /// match is the one meant. On an instrument with several, the claim is
+    /// certified by a coincidence of cardinality: the row says "three" about
+    /// <c>outcome</c>, some unrelated tag happens to arm three values, and the gate
+    /// reports green over a claim it never checked.
+    /// </para>
+    /// <para>
+    /// That is the epic's defect in miniature. The verdict reads "claim verified";
+    /// the denominator is a tag nobody was talking about. This guard removes the
+    /// ambiguity at the source - the wording - rather than trying to guess the
+    /// intended tag, because a guess would be one more hand-maintained mapping of
+    /// exactly the kind that goes stale.
+    /// </para>
+    /// <para>
+    /// The rule is deliberately about <b>ambiguity, not correctness</b>: a generic
+    /// claim is reported whenever more than one tag domain is derivable, even if
+    /// only one currently has the claimed cardinality. A claim that is right today
+    /// only because no sibling tag happens to share its size is still unpinned, and
+    /// it starts certifying the wrong tag the moment one does - silently, with no
+    /// edit to the row to attribute it to.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void NoArityClaimUsesAGenericNounWhereTheTagIsAmbiguous()
+    {
+        var ambiguous = AmbiguousGenericClaims(ScanClaims());
+
+        Assert.That(ambiguous, Is.Empty,
+            "A documentation row states a completeness count with a generic noun on an instrument "
+            + "that arms more than one tag. The count can be satisfied by a tag the row does not "
+            + "mean, so the arity gate can certify it without checking the intended tag. Name the "
+            + "tag in the row - \"all three outcome arms\" rather than \"all three arms\" - which "
+            + "pins the comparison to that tag.\n  "
+            + string.Join("\n  ", ambiguous));
+    }
+
+    /// <summary>
+    /// The ambiguity rule has a population it could apply to: at least one
+    /// documented instrument arms more than one tag domain.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="NoArityClaimUsesAGenericNounWhereTheTagIsAmbiguous"/> passes today
+    /// because every such row was reworded, so its claim list is empty - and an
+    /// empty list is exactly what a broken scan produces too. This asserts the
+    /// condition the rule needs in order to be capable of firing, so the guard
+    /// cannot quietly become a test of nothing if the tag resolver stops deriving
+    /// domains.
+    /// </remarks>
+    [Test]
+    public void TheAmbiguityRuleHasAPopulationItCouldApplyTo()
+    {
+        var multiTagged = DocumentedInstruments()
+            .Count(name => DerivableTagCount(name) > 1);
+
+        Assert.That(multiTagged, Is.GreaterThan(0),
+            "No documented instrument arms more than one derivable tag domain, so no generic "
+            + "claim could ever be ambiguous and this rule is incapable of firing. The tag "
+            + "resolver has most likely stopped deriving domains; fix it rather than deleting "
+            + "this test.");
+    }
+
+    /// <summary>
+    /// A generic claim on a multi-tag instrument is reported - the positive control
+    /// for the ambiguity rule.
+    /// </summary>
+    /// <remarks>
+    /// Built against a real instrument resolved at run time, and driven through the
+    /// same helper the gate calls, so it proves the shipping rule rather than a
+    /// parallel reimplementation of it.
+    /// </remarks>
+    [Test]
+    public void AGenericClaimOnAMultiTagInstrumentIsReported()
+    {
+        var instrument = DocumentedInstruments().FirstOrDefault(name => DerivableTagCount(name) > 1);
+
+        Assert.That(instrument, Is.Not.Null,
+            "No documented instrument arms more than one derivable tag domain, so the control "
+            + "cannot be constructed.");
+
+        var reported = AmbiguousGenericClaims([
+            new ArityClaim("docs/synthetic.md", 1, instrument!, 3, "arms", "all three arms")]);
+
+        Assert.That(reported, Is.Not.Empty,
+            $"A generic claim on {instrument}, which arms more than one tag, was not reported. "
+            + "The ambiguity rule is not applying and the real scan above proves nothing.");
+    }
+
+    /// <summary>
+    /// The same claim on the same instrument is <b>not</b> reported once its noun
+    /// names a tag - the negative control.
+    /// </summary>
+    /// <remarks>
+    /// Without this, the positive control would be satisfied by a rule that
+    /// reported every claim on a multi-tag instrument regardless of its wording,
+    /// which would make the reword pointless and the guard unsatisfiable. Holding
+    /// the instrument fixed and varying only the noun isolates genericness as the
+    /// thing being detected.
+    /// </remarks>
+    [Test]
+    public void AMappedNounOnTheSameInstrumentIsNotReported()
+    {
+        var instrument = DocumentedInstruments().FirstOrDefault(name => DerivableTagCount(name) > 1);
+
+        Assert.That(instrument, Is.Not.Null,
+            "No documented instrument arms more than one derivable tag domain, so the control "
+            + "cannot be constructed.");
+
+        var reported = AmbiguousGenericClaims([
+            new ArityClaim("docs/synthetic.md", 1, instrument!, 3, "outcome arms",
+                "all three outcome arms")]);
+
+        Assert.That(reported, Is.Empty,
+            $"A claim naming the outcome tag on {instrument} was reported as ambiguous. The rule "
+            + "is firing on the instrument rather than on the wording, so rewording a row could "
+            + "never satisfy it.\n  " + string.Join("\n  ", reported));
+    }
+
+    /// <summary>
+    /// Reports the claims whose noun does not name a tag and whose instrument arms
+    /// more than one tag domain.
+    /// </summary>
+    /// <remarks>
+    /// Takes its claims as a parameter so the controls drive the same code the gate
+    /// runs, rather than a copy that could agree with itself while both are wrong.
+    /// </remarks>
+    internal static IReadOnlyList<string> AmbiguousGenericClaims(IEnumerable<ArityClaim> claims) =>
+        claims
+            .Where(static c => !NounTagKeys.ContainsKey(c.Noun))
+            .Where(c => DerivableTagCount(c.Instrument) > 1)
+            .Select(c =>
+                $"{c.File}:{c.Line}  \"{c.Phrase}\" on {c.Instrument}, which arms "
+                + $"{DerivableTagCount(c.Instrument)} tag domains ("
+                + $"{string.Join(", ", DerivableTags(c.Instrument))}), so the count does not say "
+                + "which tag is meant")
+            .ToList();
+
+    /// <summary>The tag keys an instrument actually arms, derived from source.</summary>
+    private static IReadOnlyList<string> DerivableTags(string instrument) =>
+        CandidateTagKeys()
+            .Where(k => DashboardPanelTagDomainTests.ArmedValues(instrument, k) is { Count: > 0 })
+            .ToList();
+
+    private static int DerivableTagCount(string instrument) => DerivableTags(instrument).Count;
 
     // ------------------------------------------------------ positive controls
 
