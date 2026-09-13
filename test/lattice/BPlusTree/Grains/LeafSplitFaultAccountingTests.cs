@@ -298,7 +298,16 @@ public sealed class LeafSplitFaultAccountingTests
     [Test]
     public async Task A_division_that_cannot_be_paid_for_in_memory_is_classified_unaffordable()
     {
-        var fault = new LeafSnapshotUnaffordableException("tree-split-faults", 1024L, 512L, null);
+        // The contiguous figure is immaterial to the classification asserted
+        // here, but it must be coherent with the reservation rather than zero,
+        // because the exception message quotes it (issue #2844). 1024 reserved
+        // is a stored frame of about 204 bytes at the gate's 5x heap
+        // amplification, whose worst-case contiguous requirement is 8/3 of that.
+        // Sole occupancy is false for the same reason and is the conservative
+        // value: it selects the message arm that draws no contiguity verdict,
+        // so this fixture cannot come to depend on wording it does not assert.
+        var fault = new LeafSnapshotUnaffordableException(
+            "tree-split-faults", 1024L, 512L, 544L, soleOccupant: false, innerException: null);
         var grain = await RehydratedLeafAsync(3, maxLeafKeys: 3, siblingFault: fault);
 
         var measurements = new List<Measurement>();

@@ -2237,6 +2237,46 @@ public static class LatticeMetrics
         new(TagOutcome, "queued");
 
     /// <summary>
+    /// <see cref="TagOutcome"/> = <c>sole_occupancy</c> on
+    /// <see cref="LeafSnapshotHydrationAdmissions"/>: the hydration's largest
+    /// single <b>contiguous</b> allocation exceeded what the gate will attempt
+    /// alongside other hydrations, so it was serialised and ran with the gate
+    /// otherwise empty (issue #2844).
+    /// <para>
+    /// Reported as a third outcome rather than folded into <c>queued</c>
+    /// because the two say different things about what to do. A <c>queued</c>
+    /// hydration waited on <b>aggregate</b> bytes and drains as the storm
+    /// clears; a <c>sole_occupancy</c> hydration was serialised on a predicate
+    /// that does not improve with the memory grant at all, so a sustained rate
+    /// is a signal to divide leaves or lower <c>MaxLeafBytes</c>, and
+    /// specifically NOT to provision more memory - which would raise every
+    /// grant-derived limit and admit more of exactly these claims.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotHydrationSoleOccupancy =
+        new(TagOutcome, "sole_occupancy");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>contiguity_exhausted</c> on
+    /// <see cref="LeafSnapshotLoadFailures"/>: the load ran out of memory while
+    /// its hydration claim was comfortably <b>inside</b> the admission gate's
+    /// budget, so what ran out was one unbroken run of memory rather than the
+    /// process's total (issue #2844).
+    /// <para>
+    /// Separated from <c>resource_exhausted</c> because that arm's documented
+    /// remedy - the host is provisioned below this deployment's working set -
+    /// is actively harmful here. Every byte-denominated limit in this process is
+    /// derived from the memory grant and admits more concurrent work as the
+    /// grant grows, while contiguous feasibility does not improve with it, so
+    /// treating this arm as a provisioning shortfall makes it more frequent. It
+    /// is the arm that says the gate admitted by byte accounting and the
+    /// allocation failed regardless.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotLoadFailureContiguityExhausted =
+        new(TagReason, "contiguity_exhausted");
+
+    /// <summary>
     /// Counter of leaf activations shed by the per-silo resident leaf working
     /// set, tagged with <see cref="TagTree"/>, <see cref="TagKind"/>
     /// (<c>banked</c>/<c>unbanked</c>) and the tenant label (issue #2767).

@@ -148,6 +148,66 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public void Snapshot_load_that_runs_out_of_memory_while_sole_occupant_is_counted_as_contiguity_exhausted()
+    {
+        // The paired positive side of the test above, and the coverage whose
+        // absence let a bad predicate ship (issue #2844).
+        //
+        // The contiguity arm was first written as "the claim fitted the budget",
+        // which is true of very nearly every claim, so it captured the ordinary
+        // out-of-memory population tested above and left resource_exhausted
+        // reachable only through the over-budget escape. Sole occupancy is the
+        // honest predicate: the gate serialised this hydration because its
+        // contiguous requirement exceeded the concurrency ceiling, so concurrent
+        // aggregate demand was zero by construction and cannot be the cause.
+        //
+        // The precondition is established by the durable load hint, NOT by the
+        // admission gate under test: a hint above the ceiling is what makes the
+        // lease exclusive, and the test above differs from this one in that one
+        // field alone. Without it the fallback estimate is MaxLeafBytes, whose
+        // contiguous requirement lands exactly ON the ceiling and so is admitted
+        // concurrently - which is why these two tests bracket the boundary
+        // rather than merely sitting on either side of it.
+        var treeId = UniqueSnapshotLoadFailureTree();
+        var (grain, state) = CreateGrainWithFailingSnapshotLoad(
+            treeId,
+            new InvalidOperationException(
+                "activation failed",
+                new OutOfMemoryException("Exception of type 'System.OutOfMemoryException' was thrown.")));
+
+        state.State.SnapshotLoadHintBytes = 134_217_728L;
+
+        var records = CaptureSnapshotLoadFailures(treeId, out var listener);
+        LeafSnapshotUnaffordableException? thrown;
+        using (listener)
+        {
+            thrown = Assert.ThrowsAsync<LeafSnapshotUnaffordableException>(
+                async () => await grain.TryRehydrateFromSnapshotAsync(CancellationToken.None));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                LeafSnapshotHydrationAdmission.RequiresSoleOccupancy(134_217_728L),
+                Is.True,
+                "the precondition is asserted directly rather than assumed - if the ceiling ever moves "
+                + "past this hint, this test must fail as a stale precondition and not quietly become a "
+                + "second copy of the concurrent case");
+            Assert.That(thrown!.SoleOccupant, Is.True,
+                "and the exception carries the same admission fact the counter is tagged from, so the "
+                + "log and the metric cannot disagree about what happened");
+            Assert.That(records, Has.Count.EqualTo(1));
+        });
+
+        Assert.That(
+            records.Single().Tags.Single(t => t.Key == LatticeMetrics.TagReason).Value,
+            Is.EqualTo(LatticeMetrics.SnapshotLoadFailureContiguityExhausted.Value),
+            "An out-of-memory failure with the gate empty by construction is not a shortage of total "
+            + "memory, and the two arms call for opposite operator responses: raise the limit, versus "
+            + "divide the leaf because raising the limit will make this MORE frequent.");
+    }
+
+    [Test]
     public async Task Snapshot_load_that_fails_for_any_other_reason_is_counted_as_faulted()
     {
         var treeId = UniqueSnapshotLoadFailureTree();

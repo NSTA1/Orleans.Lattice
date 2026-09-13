@@ -23,9 +23,28 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// option, environment variable or flag: a bound that only works once an
 /// operator sets it does not fix a process that is already restart-looping, and
 /// raising the container's memory limit was explicitly ruled out as a remedy.
-/// The ceiling comes from <see cref="GCMemoryInfo.TotalAvailableMemoryBytes"/>,
-/// which is the same cgroup-derived figure the heap hard limit itself is sized
-/// from, so the gate tracks the container it is actually running in.
+/// The ceiling comes from <see cref="GCMemoryInfo.TotalAvailableMemoryBytes"/>.
+/// </para>
+/// <para>
+/// <b>That figure is not always the container's, and this gate has not yet been
+/// corrected for it (issue #2853).</b> An earlier revision of this paragraph
+/// claimed the property is "the same cgroup-derived figure the heap hard limit
+/// itself is sized from, so the gate tracks the container it is actually running
+/// in". It is not: when no heap hard limit is configured the property reports
+/// <b>host physical memory</b>, so the budget can exceed the whole container
+/// grant and the aggregate predicate below may never bind at all.
+/// <see cref="LeafResidentWorkingSet.ResolveBudgetBytes"/> was fixed for this
+/// under issue #2788, by taking the smaller of the heap hard limit and a cgroup
+/// probe; <see cref="ResolveBudgetBytes"/> has not had that fix applied. The
+/// claim is corrected here rather than quietly deleted because a comment
+/// asserting a property the neighbouring file explicitly refutes is how the
+/// error propagated in the first place.
+/// </para>
+/// <para>
+/// Note this does not weaken
+/// <see cref="ConcurrentContiguousCeilingBytes"/>, which is absolute and takes
+/// no input from the grant. Where the aggregate budget does not bind, the
+/// contiguity predicate is the only live one.
 /// </para>
 /// <para>
 /// <b>Forward progress is guaranteed by the sole-occupant rule, not by the
@@ -41,6 +60,33 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// allowed to barge past a queued larger one, because barging is precisely what
 /// would starve the oversized leaves whose division is the only thing that ever
 /// brings the corpus back under bound.
+/// </para>
+/// <para>
+/// <b>What this gate models, and what it does not (issue #2844).</b> It models
+/// two predicates, and they are different quantities that fail for different
+/// reasons. The first is <i>aggregate</i>: how many bytes all concurrent
+/// hydrations may hold at once, bounded by <see cref="BudgetBytes"/>. The
+/// second is <i>contiguity</i>: how large a single unbroken allocation a
+/// hydration may attempt while other hydrations are also churning the large
+/// object heap, bounded by
+/// <see cref="ConcurrentContiguousCeilingBytes"/> - a claim above it runs as
+/// sole occupant. Aggregate headroom does not predict contiguous feasibility,
+/// which is why a claim using a third of the budget could be admitted with
+/// three quarters of it free and still throw
+/// <see cref="OutOfMemoryException"/> materialising one buffer.
+/// </para>
+/// <para>
+/// It does <b>not</b> model whether a given contiguous allocation will in fact
+/// succeed, and it cannot: the runtime exposes no largest-free-region figure,
+/// so there is nothing to test a request against.
+/// <see cref="GCMemoryInfo"/> reports totals and fragmentation, neither of
+/// which answers the question. Sole occupancy therefore improves the odds - it
+/// removes the concurrent large-object churn that is the one contributor this
+/// process controls - and guarantees nothing. A hydration that fails anyway is
+/// reported as such rather than being silently reattributed to a budget that
+/// was never exhausted; see <c>LeafSnapshotUnaffordableException</c>, whose
+/// message distinguishes a claim that exceeded the budget from one that fitted
+/// inside it and failed regardless.
 /// </para>
 /// </summary>
 internal sealed class LeafSnapshotHydrationAdmission
@@ -118,6 +164,121 @@ internal sealed class LeafSnapshotHydrationAdmission
     /// </summary>
     internal const int HydrationHeapAmplification = 5;
 
+    /// <summary>
+    /// Numerator of the ratio converting a snapshot's <b>stored</b> size - the
+    /// encoded frame length, per <c>BPlusLeafGrain.MeasureSnapshotLoadBytes</c> -
+    /// into the <b>largest single contiguous</b> allocation one hydration of it
+    /// requires. A different quantity from
+    /// <see cref="HydrationHeapAmplification"/>, and the one that actually
+    /// failed in issue #2844.
+    /// <para>
+    /// <b>The ratio is 8/3, and it is the legacy JSON read path, not the
+    /// current binary one.</b> Two paths reach this gate, because reads route on
+    /// the stored payload rather than on the type
+    /// (<see cref="LatticeGrainStorageSerializer"/> sniffs its <c>LGB1</c>
+    /// magic), and the gate cannot know which it will get: it sizes the claim
+    /// before the row is read. So the conversion must take the worse of the two.
+    /// </para>
+    /// <list type="bullet">
+    /// <item><b>Legacy JSON</b> (a blob written before issue #2516 marked
+    /// <c>LeafSnapshotBlob</c> binary): the provider returns the whole document
+    /// as one contiguous UTF-16 <see cref="string"/>. Base64 inflates the frame
+    /// by 4/3, and each character costs 2 bytes, so that single object is
+    /// <b>8/3 the stored frame</b> - the "roughly 2.7x" figure recorded on
+    /// <c>LeafSnapshotBlob</c> and on the serializer itself.</item>
+    /// <item><b>Binary</b> (issues #2516 and #2833): the provider returns the
+    /// payload as one <c>byte[]</c> of about the frame length, and the
+    /// deserialized <c>EncodedRows</c> is a second array of the same order.
+    /// Each is roughly <b>1x</b>, so the largest single object is smaller than
+    /// on the JSON path by a factor of about 2.7.</item>
+    /// </list>
+    /// <para>
+    /// <b>This constant does not affect which claims are serialised.</b>
+    /// <see cref="ConcurrentContiguousCeilingBytes"/> is this same conversion
+    /// applied to a bound-sized leaf, so the ratio cancels from both sides of
+    /// <see cref="RequiresSoleOccupancy"/> and the predicate reduces exactly to
+    /// "stored frame exceeds <see cref="LatticeOptions.DefaultMaxLeafBytes"/>",
+    /// whatever this value is. It governs only the contiguous figure reported
+    /// in <see cref="LeafSnapshotUnaffordableException"/> and in logs. That
+    /// invariance is pinned by a test, and it is the reason correcting this
+    /// ratio from an earlier 2x changed no behaviour: the 2x was derived from
+    /// the UTF-16 string and the <c>char[]</c> beside it, which described a
+    /// serializer this type no longer uses and understated the live JSON path
+    /// by a third.
+    /// </para>
+    /// </summary>
+    internal const int ContiguousAllocationNumerator = 8;
+
+    /// <summary>
+    /// Denominator of the contiguous ratio. See
+    /// <see cref="ContiguousAllocationNumerator"/>: 8/3 is 4/3 for base64
+    /// inflation times 2 bytes per UTF-16 character.
+    /// </summary>
+    internal const int ContiguousAllocationDenominator = 3;
+
+    /// <summary>
+    /// The largest contiguous allocation this gate will let a hydration attempt
+    /// <b>alongside</b> other hydrations. A claim above it is admitted only as
+    /// sole occupant, and excludes every other claim for as long as it is held.
+    /// <para>
+    /// <b>This is deliberately an absolute figure, and deliberately NOT derived
+    /// from the memory grant.</b> Every other limit in this system - the
+    /// hydration budget above (heap limit / <see cref="HeapBudgetDivisor"/>),
+    /// the resident working-set budget, the write-ahead-log replay gate - scales
+    /// with the grant and therefore admits <i>more</i> concurrent work as the
+    /// grant grows. That is correct for a quantity measured in total bytes and
+    /// wrong for this one: whether one unbroken multi-hundred-megabyte run can
+    /// be found does not improve because the container was given more memory, so
+    /// a ceiling that rose with the grant would relax exactly as the population
+    /// it governs got larger. Issue #2844 is that failure observed in
+    /// production: a claim reserving 32.6% of a 1.125 GiB budget was admitted
+    /// with 776 MiB of headroom and threw
+    /// <see cref="OutOfMemoryException"/> inside the provider's blob read
+    /// anyway.
+    /// </para>
+    /// <para>
+    /// The value is <see cref="ContiguousAllocationNumerator"/>/<see
+    /// cref="ContiguousAllocationDenominator"/> of
+    /// <see cref="LatticeOptions.DefaultMaxLeafBytes"/> - that is, the
+    /// contiguous conversion applied to a leaf of exactly the size a leaf is
+    /// configured to be. That is the whole
+    /// justification, and it is a statement about leaves rather than about
+    /// memory: a leaf within its own size bound is by definition healthy and
+    /// must hydrate concurrently with its peers, and a leaf whose contiguous
+    /// requirement exceeds what a bound-sized leaf needs is by definition
+    /// oversized - the population this gate exists to bind on, and the
+    /// population issue #2844 was measured against, where the corpus carried
+    /// blobs at 3.5x the bound. A tree configured with a larger
+    /// <see cref="LatticeOptions.MaxLeafBytes"/> than the default is therefore
+    /// judged against the default rather than against its own setting, which is
+    /// intentional: the constraint is physical, so it cannot be relaxed by
+    /// configuring the thing that provokes it.
+    /// </para>
+    /// <para>
+    /// Because the ceiling and the claim take the <b>same</b> conversion, the
+    /// ratio cancels and the effective rule is "a stored frame larger than the
+    /// default leaf size bound hydrates alone". Stating the ceiling in
+    /// contiguous bytes rather than as that comparison is deliberate: it is the
+    /// quantity the failure is actually about, so the constant a reader finds
+    /// here is the one they can check against an
+    /// <see cref="OutOfMemoryException"/> they are holding.
+    /// </para>
+    /// <para>
+    /// Getting this number somewhat wrong is cheap <b>in one direction only</b>,
+    /// which is why it is safe to state it at all. Too low, and healthy
+    /// hydrations serialise that need not have: a cold start is slower, and a
+    /// cold start is already the slow path. Too high, and the gate fails to
+    /// prevent a failure it was never able to prevent reliably in the first
+    /// place, leaving the behaviour exactly as it is today. Neither arm refuses
+    /// a claim, so neither arm can convert this into a leaf that never comes
+    /// online - the outcome the sole-occupant rule exists to rule out, and the
+    /// reason a hard cap on claim size was rejected as the remedy.
+    /// </para>
+    /// </summary>
+    internal const long ConcurrentContiguousCeilingBytes =
+        ContiguousAllocationNumerator * LatticeOptions.DefaultMaxLeafBytes
+            / ContiguousAllocationDenominator;
+
     private static readonly Lazy<LeafSnapshotHydrationAdmission> SharedInstance =
         new(
             () => new LeafSnapshotHydrationAdmission(
@@ -129,6 +290,7 @@ internal sealed class LeafSnapshotHydrationAdmission
     private readonly long _budgetBytes;
     private long _inFlightBytes;
     private int _admittedCount;
+    private int _exclusiveCount;
 
     /// <summary>
     /// Creates a gate with an explicit budget. Public to the assembly so tests
@@ -163,14 +325,38 @@ internal sealed class LeafSnapshotHydrationAdmission
     }
 
     /// <summary>
+    /// Claims admitted as sole occupant because their contiguous requirement
+    /// exceeded <see cref="ConcurrentContiguousCeilingBytes"/>, and not yet
+    /// released. Never more than one, and reported rather than inferred for the
+    /// same reason <see cref="LeafSnapshotHydrationLease.Queued"/> is: "the
+    /// contiguity rule is deployed and nothing ever tripped it" and "the
+    /// contiguity rule is not deployed" are otherwise identical readings.
+    /// </summary>
+    internal int ExclusiveCount
+    {
+        get { lock (_gate) { return _exclusiveCount; } }
+    }
+
+    /// <summary>
     /// Sizes the gate from the runtime's heap hard limit. Separated from
     /// <see cref="Shared"/> so the sizing rule is testable without a container:
     /// the value it consumes is environmental, and a rule that can only be
     /// exercised by arranging the environment is a rule that is never exercised.
+    /// <para>
+    /// <b>Single-input, and known to be insufficient (issue #2853).</b>
+    /// <see cref="LeafResidentWorkingSet.ResolveBudgetBytes"/> takes the smaller
+    /// of this figure and a cgroup probe, because this one reports host physical
+    /// memory when no heap hard limit is set. This method has not had that fix,
+    /// so on such a host the budget can exceed the container grant and the
+    /// aggregate predicate never binds. Left unchanged here deliberately: it is
+    /// a distinct defect with its own environmental surface, and folding it into
+    /// the contiguity change would couple two independent fixes.
+    /// </para>
     /// </summary>
     /// <param name="heapHardLimitBytes">
-    /// <see cref="GCMemoryInfo.TotalAvailableMemoryBytes"/>, or a non-positive
-    /// value when the runtime reports no limit.
+    /// <see cref="GCMemoryInfo.TotalAvailableMemoryBytes"/>. Note the
+    /// non-positive case is near-dead in practice - the property reports host
+    /// physical memory, not zero, when no limit is configured (issue #2853).
     /// </param>
     internal static long ResolveBudgetBytes(long heapHardLimitBytes)
         => heapHardLimitBytes <= 0
@@ -214,6 +400,48 @@ internal sealed class LeafSnapshotHydrationAdmission
     internal long MaxClaimableStoredBytes => _budgetBytes / HydrationHeapAmplification;
 
     /// <summary>
+    /// The largest single contiguous allocation a hydration of
+    /// <paramref name="storedBytes"/> requires, by
+    /// <see cref="ContiguousAllocationNumerator"/> over
+    /// <see cref="ContiguousAllocationDenominator"/>.
+    /// <para>
+    /// Kept here beside <see cref="ToHeapCostBytes(long)"/> and for the same
+    /// reason: two different multiples of the same stored figure, both
+    /// denominated in bytes, are trivially swapped at a call site and the
+    /// mistake compiles and reads correctly. Neither conversion is performed
+    /// anywhere else.
+    /// </para>
+    /// <para>
+    /// Multiplies before dividing, so the ratio is applied to the byte figure
+    /// rather than to a truncated third of it, and saturates rather than
+    /// wrapping: a claim near <see cref="long.MaxValue"/> is not
+    /// representable, and wrapping it would produce a small positive
+    /// contiguous figure and admit the largest possible claim concurrently.
+    /// </para>
+    /// </summary>
+    internal static long ToContiguousBytes(long storedBytes)
+        => storedBytes <= 0
+            ? 0L
+            : storedBytes > long.MaxValue / ContiguousAllocationNumerator
+                ? long.MaxValue
+                : storedBytes * ContiguousAllocationNumerator / ContiguousAllocationDenominator;
+
+    /// <summary>
+    /// Whether a hydration of <paramref name="storedBytes"/> must run as sole
+    /// occupant because its largest contiguous allocation exceeds
+    /// <see cref="ConcurrentContiguousCeilingBytes"/>.
+    /// <para>
+    /// The test is on the <b>contiguous</b> requirement, never on the heap cost
+    /// or the stored size. Those are the quantities the aggregate budget is
+    /// denominated in, and testing either of them here would reproduce the
+    /// defect: the whole point is that a claim can be comfortable in aggregate
+    /// terms and impossible in contiguous ones.
+    /// </para>
+    /// </summary>
+    internal static bool RequiresSoleOccupancy(long storedBytes)
+        => ToContiguousBytes(storedBytes) > ConcurrentContiguousCeilingBytes;
+
+    /// <summary>
     /// Reserves <paramref name="estimatedBytes"/> of hydration budget, waiting in
     /// first-in-first-out order until the reservation fits or the caller is the
     /// only claimant. Dispose the returned lease to release the reservation.
@@ -235,6 +463,7 @@ internal sealed class LeafSnapshotHydrationAdmission
         }
 
         var want = Normalise(estimatedBytes);
+        var exclusive = RequiresSoleOccupancy(estimatedBytes);
         Waiter waiter;
         lock (_gate)
         {
@@ -243,13 +472,14 @@ internal sealed class LeafSnapshotHydrationAdmission
             // be admitted ahead of it, indefinitely, and the oversized leaves -
             // the only ones whose division ever shrinks the corpus - would be the
             // ones that never ran.
-            if (_waiters.Count == 0 && CanAdmitLocked(want))
+            if (_waiters.Count == 0 && CanAdmitLocked(want, exclusive))
             {
-                AdmitLocked(want);
-                return Task.FromResult(new LeafSnapshotHydrationLease(this, want, queued: false));
+                AdmitLocked(want, exclusive);
+                return Task.FromResult(
+                    new LeafSnapshotHydrationLease(this, estimatedBytes, want, exclusive, queued: false));
             }
 
-            waiter = new Waiter(want);
+            waiter = new Waiter(estimatedBytes, want, exclusive);
             waiter.Node = _waiters.AddLast(waiter);
         }
 
@@ -261,22 +491,50 @@ internal sealed class LeafSnapshotHydrationAdmission
     // larger than the whole budget still has to load, because the alternative is
     // a leaf that can never come online and therefore can never be divided back
     // under bound.
-    private bool CanAdmitLocked(long bytes)
-        => _admittedCount == 0 || _inFlightBytes + bytes <= _budgetBytes;
+    //
+    // The contiguity rule (issue #2844) is layered on top as a MUTUAL exclusion,
+    // and it has to be mutual to be worth anything. Admitting a large-contiguity
+    // claim only when the gate is empty, while still letting later claims join it
+    // once admitted, would leave its allocation racing exactly the concurrent
+    // large-object churn the rule exists to remove - and would do so by
+    // construction, because that claim reserves only a fraction of the budget and
+    // so leaves plenty of room for others to be admitted alongside it. Hence both
+    // directions: an exclusive claim waits for an empty gate, and an empty gate is
+    // what every other claim then waits for.
+    private bool CanAdmitLocked(long bytes, bool exclusive)
+    {
+        if (_exclusiveCount > 0)
+        {
+            return false;
+        }
 
-    private void AdmitLocked(long bytes)
+        return exclusive
+            ? _admittedCount == 0
+            : _admittedCount == 0 || _inFlightBytes + bytes <= _budgetBytes;
+    }
+
+    private void AdmitLocked(long bytes, bool exclusive)
     {
         _inFlightBytes += bytes;
         _admittedCount++;
+        if (exclusive)
+        {
+            _exclusiveCount++;
+        }
     }
 
-    internal void Release(long heldBytes)
+    internal void Release(long heldBytes, bool exclusive)
     {
         List<Waiter>? ready;
         lock (_gate)
         {
             _inFlightBytes -= heldBytes;
             _admittedCount--;
+            if (exclusive)
+            {
+                _exclusiveCount--;
+            }
+
             ready = DrainLocked();
         }
 
@@ -287,6 +545,15 @@ internal sealed class LeafSnapshotHydrationAdmission
     /// Replaces a lease's estimate with the measured size, returning the bytes
     /// now held. Shrinking a reservation can admit queued claims, so the queue is
     /// drained here as well as on release.
+    /// <para>
+    /// Exclusivity is fixed at admission and is deliberately never revisited
+    /// here. A measurement arrives only after the blob has been read, so the
+    /// contiguous allocation this rule governs has already either succeeded or
+    /// thrown; promoting a lease to exclusive at that point would exclude other
+    /// claims to protect an allocation that is over, and demoting one would
+    /// release a guarantee that was already spent. Only the aggregate figure is
+    /// still live at this point, so only the aggregate figure is corrected.
+    /// </para>
     /// </summary>
     internal long Reconcile(long heldBytes, long actualBytes)
     {
@@ -328,14 +595,14 @@ internal sealed class LeafSnapshotHydrationAdmission
         while (_waiters.First is { } node)
         {
             var waiter = node.Value;
-            if (!CanAdmitLocked(waiter.Bytes))
+            if (!CanAdmitLocked(waiter.Bytes, waiter.Exclusive))
             {
                 break;
             }
 
             _waiters.Remove(node);
             waiter.Node = null;
-            AdmitLocked(waiter.Bytes);
+            AdmitLocked(waiter.Bytes, waiter.Exclusive);
             (ready ??= []).Add(waiter);
         }
 
@@ -354,21 +621,29 @@ internal sealed class LeafSnapshotHydrationAdmission
             // A waiter that lost the race to its own cancellation has already
             // been removed from the queue and completed, so the reservation it
             // was just granted would leak. Hand it straight back.
-            if (!waiter.TryAdmit(new LeafSnapshotHydrationLease(this, waiter.Bytes, queued: true)))
+            var lease = new LeafSnapshotHydrationLease(
+                this, waiter.StoredBytes, waiter.Bytes, waiter.Exclusive, queued: true);
+            if (!waiter.TryAdmit(lease))
             {
-                Release(waiter.Bytes);
+                Release(waiter.Bytes, waiter.Exclusive);
             }
         }
     }
 
     private static long Normalise(long storedBytes) => ToHeapCostBytes(storedBytes);
 
-    internal sealed class Waiter(long bytes)
+    internal sealed class Waiter(long storedBytes, long bytes, bool exclusive)
     {
         private readonly TaskCompletionSource<LeafSnapshotHydrationLease> _completion =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        /// <summary>Stored bytes this claim was sized from.</summary>
+        internal long StoredBytes { get; } = storedBytes;
+
         internal long Bytes { get; } = bytes;
+
+        /// <summary>Whether this claim must be admitted as sole occupant.</summary>
+        internal bool Exclusive { get; } = exclusive;
 
         internal LinkedListNode<Waiter>? Node { get; set; }
 
@@ -412,16 +687,21 @@ internal sealed class LeafSnapshotHydrationAdmission
 internal sealed class LeafSnapshotHydrationLease : IDisposable
 {
     private readonly LeafSnapshotHydrationAdmission? _owner;
+    private long _storedBytes;
     private long _heldBytes;
     private int _disposed;
 
     internal LeafSnapshotHydrationLease(
         LeafSnapshotHydrationAdmission? owner,
+        long storedBytes,
         long heldBytes,
+        bool exclusive,
         bool queued)
     {
         _owner = owner;
+        _storedBytes = storedBytes;
         _heldBytes = heldBytes;
+        Exclusive = exclusive;
         Queued = queued;
     }
 
@@ -432,15 +712,37 @@ internal sealed class LeafSnapshotHydrationLease : IDisposable
     /// </summary>
     internal bool Queued { get; }
 
+    /// <summary>
+    /// <see langword="true"/> when this claim was admitted as <b>sole
+    /// occupant</b> because its contiguous requirement exceeded
+    /// <see cref="LeafSnapshotHydrationAdmission.ConcurrentContiguousCeilingBytes"/>
+    /// (issue #2844), rather than merely because it fitted the remaining
+    /// aggregate budget.
+    /// </summary>
+    internal bool Exclusive { get; }
+
     /// <summary>Bytes this lease currently reserves.</summary>
     internal long HeldBytes => Volatile.Read(ref _heldBytes);
+
+    /// <summary>
+    /// The largest single contiguous allocation the hydration under this lease
+    /// requires. Distinct from <see cref="HeldBytes"/>, which is an aggregate
+    /// figure: this is the one that has to be satisfied by an unbroken run of
+    /// memory, and therefore the one that can fail while the aggregate budget is
+    /// still comfortable. Reported on the failure path so that an
+    /// <see cref="OutOfMemoryException"/> raised inside the storage provider is
+    /// attributable to the quantity that actually ran out.
+    /// </summary>
+    internal long ContiguousBytes
+        => LeafSnapshotHydrationAdmission.ToContiguousBytes(Volatile.Read(ref _storedBytes));
 
     /// <summary>
     /// A lease over no gate at all, for the paths that never reserve (a leaf with
     /// no tree id, or one that cannot address a snapshot grain). Disposing it is
     /// a no-op, so callers need no null checks.
     /// </summary>
-    internal static LeafSnapshotHydrationLease None { get; } = new(null, 0L, queued: false);
+    internal static LeafSnapshotHydrationLease None { get; } =
+        new(null, 0L, 0L, exclusive: false, queued: false);
 
     /// <summary>
     /// Corrects the reservation to the size actually loaded. An underestimate
@@ -455,6 +757,7 @@ internal sealed class LeafSnapshotHydrationLease : IDisposable
             return;
         }
 
+        Volatile.Write(ref _storedBytes, actualBytes);
         Volatile.Write(ref _heldBytes, _owner.Reconcile(Volatile.Read(ref _heldBytes), actualBytes));
     }
 
@@ -466,6 +769,6 @@ internal sealed class LeafSnapshotHydrationLease : IDisposable
             return;
         }
 
-        _owner?.Release(Volatile.Read(ref _heldBytes));
+        _owner?.Release(Volatile.Read(ref _heldBytes), Exclusive);
     }
 }

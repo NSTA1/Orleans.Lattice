@@ -735,12 +735,82 @@ public class BPlusLeafGrainColdActivationAdmissionTests
                 {
                     LatticeMetrics.SnapshotHydrationAdmittedImmediately.Value as string,
                     LatticeMetrics.SnapshotHydrationQueued.Value as string,
+                    LatticeMetrics.SnapshotHydrationSoleOccupancy.Value as string,
                 }),
-                "BOTH arms are primed, or the ratio is unreadable until each has happened at least once");
+                "EVERY arm is primed, or the ratio is unreadable until each has happened at least once");
             Assert.That(
                 observed.Where(r => r.Value == 1).Select(r => r.Outcome),
                 Is.EquivalentTo(new[] { LatticeMetrics.SnapshotHydrationAdmittedImmediately.Value as string }),
                 "and the hydration that actually happened is counted on the immediate arm");
+        });
+    }
+
+    [Test]
+    public async Task A_hydration_serialised_for_contiguity_is_counted_on_its_own_outcome_arm()
+    {
+        // Issue #2844. A hydration serialised because its contiguous
+        // requirement was too large is reported as sole_occupancy rather than
+        // folded into queued, because the two call for opposite responses: a
+        // queued hydration waited on aggregate bytes and drains as the storm
+        // clears, whereas this one was serialised on a predicate that a larger
+        // memory grant does not relax at all. Folding them together would leave
+        // an operator reading a rising queue rate and provisioning more memory,
+        // which admits more of exactly these claims.
+        var treeId = UniqueAdmissionTree();
+        var records = new List<(string Outcome, long Value)>();
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.LeafSnapshotHydrationAdmissions,
+            l => l.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+            {
+                var copied = tags.ToArray();
+                if (!copied.Any(t => t.Key == LatticeMetrics.TagTree && (t.Value as string) == treeId))
+                {
+                    return;
+                }
+
+                var outcome = copied.Single(t => t.Key == LatticeMetrics.TagOutcome).Value as string;
+                lock (records)
+                {
+                    records.Add((outcome ?? string.Empty, value));
+                }
+            }));
+
+        // Oversized by contiguity, and comfortable in aggregate: the budget is
+        // four times what this claim reserves, so nothing about the byte
+        // accounting holds it back.
+        const long OversizedStoredBytes = 200L * 1024 * 1024;
+        var admission = new LeafSnapshotHydrationAdmission(
+            LeafSnapshotHydrationAdmission.ToHeapCostBytes(OversizedStoredBytes) * 4);
+
+        var (grain, state, _, _) = CreateGatedGrain(
+            admission,
+            treeId,
+            () => Task.FromResult<LeafSnapshotBlob?>(
+                NewSizedBlob(offset: 10L, snapshotBytes: OversizedStoredBytes)));
+        state.State.SnapshotLoadHintBytes = OversizedStoredBytes;
+
+        Assert.That(
+            await grain.TryRehydrateFromSnapshotAsync(ClaimDeadline().Token),
+            Is.True,
+            "the hydration still happens - the rule serialises, it never refuses");
+
+        List<(string Outcome, long Value)> observed;
+        lock (records)
+        {
+            observed = [.. records];
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                observed.Where(r => r.Value == 1).Select(r => r.Outcome),
+                Is.EquivalentTo(new[] { LatticeMetrics.SnapshotHydrationSoleOccupancy.Value as string }),
+                "counted on the sole-occupancy arm");
+            Assert.That(
+                observed.Where(r => r.Value == 1).Select(r => r.Outcome),
+                Has.None.EqualTo(LatticeMetrics.SnapshotHydrationAdmittedImmediately.Value as string),
+                "and NOT also on the immediate arm - the three outcomes partition the admitted "
+                + "population, so double-counting would make them unsummable");
         });
     }
 }
