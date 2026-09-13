@@ -146,6 +146,36 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     Task SetShardMapAsync(string treeId, ShardMap map);
 
     /// <summary>
+    /// Atomically reassigns every virtual slot in <paramref name="slots"/> to
+    /// <paramref name="targetShardIndex"/>, applying that diff onto whichever
+    /// map is currently persisted, and returns the resulting map.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This exists because the read-modify-write it performs cannot be safely
+    /// composed at the caller from <see cref="GetShardMapAsync"/> followed by
+    /// <see cref="SetShardMapAsync"/>. Non-reentrancy makes each individual
+    /// grain call atomic; it does not make a sequence of two calls atomic,
+    /// because the grain is free to serve another caller in the gap between
+    /// them. Two topology coordinators that both read the map before either
+    /// persists each derive a copy from the same pre-state, and whichever
+    /// persists second silently erases the other's reassignment.
+    /// </para>
+    /// <para>
+    /// A slot erased that way still routes to the shard the other coordinator
+    /// has already migrated its rows away from, so every key in that slot
+    /// becomes unreachable and any acknowledged write on it is lost.
+    /// </para>
+    /// </remarks>
+    /// <param name="treeId">The tree whose shard map is being updated.</param>
+    /// <param name="slots">Virtual-slot indices to reassign; may be empty.</param>
+    /// <param name="targetShardIndex">Physical shard index to point them at.</param>
+    /// <param name="fallbackMap">
+    /// Map to apply the diff onto when the tree has no persisted map yet.
+    /// </param>
+    Task<ShardMap> ReassignSlotsAsync(string treeId, int[] slots, int targetShardIndex, ShardMap fallbackMap);
+
+    /// <summary>
     /// Atomically allocates a fresh physical shard index for an adaptive split
     ///. Returns <c>max(currentMaxFromMap, persisted) + 1</c> and
     /// persists the new high-water mark so concurrent split coordinators each

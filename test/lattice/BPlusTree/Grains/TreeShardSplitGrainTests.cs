@@ -174,9 +174,21 @@ public partial class TreeShardSplitGrainTests
 
         await grain.SwapAsync();
 
-        await registry.Received(1).SetShardMapAsync(TreeId, Arg.Is<ShardMap>(m =>
-            m.Slots[2] == 2 && m.Slots[4] == 2 && m.Slots[6] == 2 &&
-            m.Slots[0] == 0 && m.Slots[1] == 1));
+        // The call site's job is to request the correct diff: every moved slot,
+        // pointed at the new target shard. The resulting map's content is the
+        // registry's responsibility and is covered by
+        // LatticeRegistryGrainShardMapConcurrencyTests, which is what keeps
+        // that semantic under test now it no longer lives here.
+        await registry.Received(1).ReassignSlotsAsync(
+            TreeId,
+            Arg.Is<int[]>(s => s.Length == 3 && s[0] == 2 && s[1] == 4 && s[2] == 6),
+            2,
+            Arg.Any<ShardMap>());
+        // A get-modify-set composed at the call site is exactly the defect this
+        // seam replaced: non-reentrancy serialises each individual grain call,
+        // not a sequence of two, so a concurrent fold could be clobbered.
+        await registry.DidNotReceive().GetShardMapAsync(TreeId);
+        await registry.DidNotReceive().SetShardMapAsync(TreeId, Arg.Any<ShardMap>());
         Assert.That(state.State.Phase, Is.EqualTo(ShardSplitPhase.Reject));
     }
 
@@ -242,6 +254,8 @@ public partial class TreeShardSplitGrainTests
         var (grain, state, _, registry, source, _) = CreateGrain();
         await grain.RunSplitPassAsync();
         await registry.DidNotReceive().SetShardMapAsync(Arg.Any<string>(), Arg.Any<ShardMap>());
+        await registry.DidNotReceive()
+            .ReassignSlotsAsync(Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
         await source.DidNotReceive().EnterRejectPhaseAsync();
     }
 
@@ -258,7 +272,8 @@ public partial class TreeShardSplitGrainTests
 
         await grain.RunSplitPassAsync();
 
-        await registry.Received(1).SetShardMapAsync(TreeId, Arg.Any<ShardMap>());
+        await registry.Received(1).ReassignSlotsAsync(
+            TreeId, Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
         // EnterRejectPhaseAsync is called twice in a full pass:
         //   1. Inside SwapAsync, BEFORE the registry's shard-map flip, to
         //      close the stale-routing window (see SwapAsync's ordering
