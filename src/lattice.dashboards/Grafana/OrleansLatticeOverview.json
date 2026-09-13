@@ -1603,6 +1603,22 @@
           "legendFormat": "{{tree}} {{reason}} via {{detach_seam}}"
         }
       ]
+    },
+    {
+      "id": 70,
+      "title": "Leaf divisions sought (rate)",
+      "description": "Rate of divisions SOUGHT on an over-capacity leaf (orleans_lattice_leaf_split_attempts_total), split by outcome: divided (the division ran to completion), gate_contended (another turn held the split gate, so this turn returned without evaluating the leaf), already_under_capacity (the in-gate re-check found the leaf back under threshold because a concurrent turn had divided it). Read this BESIDE the bisect-refusal panel, which is uninterpretable alone. A zero refusal rate has two opposite meanings - no division ever forfeited its fast path, or no division was ever attempted - and only the attempt count separates them. That distinction is the whole question on an oversized leaf: a leaf sitting far above MaxLeafBytes with zero refusals AND zero attempts is not a leaf whose splits are succeeding, it is a leaf nothing is trying to split, which is a different defect with a different fix. All three outcomes are pre-minted at zero whenever a leaf reaches the byte-bound check on the snapshot-capture path, carrying the tag set a real emission carries, so this panel deliberately OMITS the 'or vector(0)' fallback its neighbours use: a flat zero here is a MEASURED zero and 'No data' means the capture seam was never reached, which is itself the finding. Sustained gate_contended with no divided is the pathological shape - divisions are being sought and none is completing.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1014 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_split_attempts_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{tree}} {{outcome}}"
+        }
+      ]
     }
   ]
 }

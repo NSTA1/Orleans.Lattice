@@ -52,7 +52,10 @@ internal sealed partial class BPlusLeafGrain
         // null here is the same observable outcome the blocking re-check
         // would have produced - minus the convoy wait.
         if (!_splitGate.Wait(0))
+        {
+            RecordSplitAttempt(LatticeMetrics.LeafSplitGateContended);
             return null;
+        }
         try
         {
             // Re-check inside the gate. A concurrent turn may have
@@ -60,8 +63,14 @@ internal sealed partial class BPlusLeafGrain
             // entries to the sibling, leaving Cache.Count back under
             // the threshold; in that case we have nothing to do.
             if (!IsLeafOverCapacity(maxLeafKeys, maxLeafBytes))
+            {
+                RecordSplitAttempt(LatticeMetrics.LeafSplitAlreadyUnderCapacity);
                 return null;
-            return await SplitAsync();
+            }
+
+            var result = await SplitAsync();
+            RecordSplitAttempt(LatticeMetrics.LeafSplitDivided);
+            return result;
         }
         finally
         {
@@ -165,6 +174,28 @@ internal sealed partial class BPlusLeafGrain
         // absence, because it reads as a measured zero.
         RecordLeafByteOverflow(LatticeMetrics.LeafByteOverflowSplit, 0);
         RecordLeafByteOverflow(LatticeMetrics.LeafByteOverflowIrreducible, 0);
+
+        // Prime the split-attempt outcomes here too, for the identical reason
+        // and at the identical seam. Without this, "this leaf is over threshold
+        // and no division was ever sought" is an ABSENCE, indistinguishable
+        // from "the instrument was never reached" - which reproduces exactly
+        // the ambiguity the counter exists to remove, one level up. A reader
+        // asking why an oversized leaf never divided needs "sought zero
+        // divisions" to be a positive statement, not silence.
+        //
+        // This matters more than the byte-overflow prime does, because the
+        // question it answers is asymmetric. A NON-zero refusal count settles
+        // the forfeiture immediately; a zero refusal count settles nothing
+        // unless the attempt count is readable beside it. So the series that
+        // must never be absent is this one.
+        //
+        // Primed through RecordSplitAttempt for the same tag-shape reason: a
+        // prime on a divergent tag set mints a second series that never
+        // converges with the one actually counting, which reads as a measured
+        // zero rather than as absence and is therefore worse than nothing.
+        RecordSplitAttempt(LatticeMetrics.LeafSplitDivided, 0);
+        RecordSplitAttempt(LatticeMetrics.LeafSplitGateContended, 0);
+        RecordSplitAttempt(LatticeMetrics.LeafSplitAlreadyUnderCapacity, 0);
 
         if (maxLeafBytes <= 0 || Cache.StateBytes <= maxLeafBytes)
         {
@@ -307,6 +338,26 @@ internal sealed partial class BPlusLeafGrain
         {
             _splitGate.Release();
         }
+    }
+
+    /// <summary>
+    /// Records that a division was sought on an over-capacity leaf, tagged with
+    /// how it ended.
+    /// <para>
+    /// This is what makes <see cref="LatticeMetrics.LeafBisectRefusals"/>
+    /// readable at zero. A refusal count of zero on an undivided over-threshold
+    /// leaf means either that a division succeeded or that none was ever
+    /// sought, and those have opposite bearing on whether the forfeiture is the
+    /// cause. Counting the attempt separates them.
+    /// </para>
+    /// </summary>
+    private void RecordSplitAttempt(KeyValuePair<string, object?> outcome, long value = 1)
+    {
+        var treeId = state.State.TreeId ?? string.Empty;
+        LatticeMetrics.LeafSplitAttempts.Add(value,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            outcome,
+            LatticeTenantLabel.ForTree(treeId));
     }
 
     /// <summary>
