@@ -126,7 +126,8 @@ public sealed class RepoContextSiloHealthEndpointTests
             Assert.That(status, Is.EqualTo(HttpStatusCode.ServiceUnavailable));
             Assert.That(body, Does.StartWith("Degraded:"),
                 "A starting silo must be distinguishable in the body from a faulted one, or the self-probe "
-                + "cannot tell STARTING from UNHEALTHY - which is what would crash-loop a normal boot.");
+                + "cannot tell STARTING from UNHEALTHY - which since #2905 would misreport a normal boot onto "
+                + "the metrics scrape and alert on every start (it restarts nothing: #2906).");
         });
     }
 }

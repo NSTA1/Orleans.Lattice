@@ -26,10 +26,17 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// <item><description>
 /// <b>Degraded (starting)</b> - the grain call has not yet succeeded and the host
 /// has never reached readiness, so the silo is still joining. This is <i>not</i> a
-/// fault: conflating it with unhealthy during normal boot, under the compose
-/// service's <c>restart: unless-stopped</c>, is exactly what produces a startup
-/// crash loop. The Docker healthcheck's <c>start_period</c> holds a Degraded result
-/// in "starting" rather than "unhealthy".
+/// fault, and the distinction is worth keeping for a reason that is often stated
+/// wrongly. It does <b>not</b> prevent a startup crash loop: a Docker restart
+/// policy such as the compose service's <c>restart: unless-stopped</c> acts on
+/// process <b>exit</b> and never reads health, so an unhealthy-but-running
+/// container is not restarted by it at all (issue #2906). What the distinction
+/// buys is a <b>truthful signal</b>: since issue #2905 this verdict is published
+/// onto the metrics scrape, so grading a normal boot Unhealthy would fire an alert
+/// on every start, and an alert that cries wolf on every start is how the real
+/// wedge in issue #2868 came to sit unnoticed for 43 minutes. The Docker
+/// healthcheck's <c>start_period</c> holds a Degraded result in "starting" rather
+/// than "unhealthy".
 /// </description></item>
 /// <item><description>
 /// <b>Unhealthy</b> - the grain call failed or timed out <i>after</i> the host had

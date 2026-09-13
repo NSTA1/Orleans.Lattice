@@ -34,7 +34,11 @@ public sealed class RepoContextComposeHealthcheckTests
     private static string ComposePath => Path.Combine(
         RepoRoot, "samples", "RepoContextContainer", "docker-compose.yml");
 
-    /// <summary>The floor below which a silo still joining would crash-loop under restart: unless-stopped.</summary>
+    /// <summary>
+    /// The floor below which a normal boot would be misreported as unhealthy. It is NOT a
+    /// crash-loop floor: a Docker restart policy acts on process exit and never reads health,
+    /// so restart: unless-stopped does not restart an unhealthy-but-running container (#2906).
+    /// </summary>
     private static readonly TimeSpan StartPeriodFloor = TimeSpan.FromSeconds(120);
 
     /// <summary>
@@ -152,7 +156,8 @@ public sealed class RepoContextComposeHealthcheckTests
             Is.True,
             "the healthcheck must set start_period; Docker's health model is two-valued, so 'starting' is "
             + "realised only by a start_period that holds early failing probes out of the retry tally. Without "
-            + "one, a silo still joining is reported unhealthy and crash-loops under restart: unless-stopped");
+            + "one, a silo still joining is misreported as unhealthy, which since #2905 reaches the metrics "
+            + "scrape and fires an alert on every start (it does not restart anything: #2906)");
 
         var raw = keys["start_period"];
         Assert.That(raw.EndsWith('s'), Is.True, $"expected a seconds-suffixed duration, found '{raw}'");
@@ -163,6 +168,7 @@ public sealed class RepoContextComposeHealthcheckTests
             Is.GreaterThanOrEqualTo(StartPeriodFloor),
             $"start_period ({startPeriod.TotalSeconds}s) must cover real silo startup - cluster join plus WAL "
             + $"replay warmup - which is far longer than a stateless service's; below {StartPeriodFloor.TotalSeconds}s "
-            + "a normal boot risks being reported unhealthy and restarted mid-join");
+            + "a normal boot risks being misreported as unhealthy for the rest of its join (#2906: nothing "
+            + "restarts it, but since #2905 the false verdict reaches the scrape)");
     }
 }
