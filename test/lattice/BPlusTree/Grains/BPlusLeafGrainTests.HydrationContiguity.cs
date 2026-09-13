@@ -105,24 +105,39 @@ public class BPlusLeafGrainHydrationContiguityTests
     // ---------------------------------------------------------------------
 
     [Test]
-    public void ToContiguousBytes_is_twice_the_stored_size_not_the_heap_amplification()
+    public void ToContiguousBytes_is_the_legacy_json_ratio_not_the_heap_amplification()
     {
         // Two multiples of the same stored figure, both denominated in bytes,
-        // are trivially swapped at a call site and the mistake compiles. The
-        // contiguous requirement is the UTF-16 string of the whole document (2x)
-        // and the char[] it is copied from (2x) - each ONE object. The remaining
-        // amplification is the parsed graph, which is many small objects and
-        // imposes no contiguity requirement at all, so using the heap figure
-        // here would overstate the constraint by 2.5x.
+        // are trivially swapped at a call site and the mistake compiles.
+        //
+        // The ratio is 8/3 and it describes the LEGACY JSON read path, which is
+        // the worse of the two the gate may get and the one it must therefore
+        // size against: the provider hands back the whole document as a single
+        // contiguous UTF-16 string, base64 inflating the frame by 4/3 and each
+        // character costing 2 bytes. The binary path added by issues #2516 and
+        // #2833 returns a byte[] of about the frame length instead, roughly 1x.
+        // Reads route on the stored payload's LGB1 magic, not on the type, so a
+        // blob written by an older build still takes the JSON path today and
+        // the gate cannot know which it will get before it sizes the claim.
+        //
+        // The remaining heap amplification is the parsed graph, which is many
+        // small objects and imposes no contiguity requirement at all.
         Assert.Multiple(() =>
         {
             Assert.That(
-                LeafSnapshotHydrationAdmission.ToContiguousBytes(1_000L),
-                Is.EqualTo(2_000L));
+                LeafSnapshotHydrationAdmission.ToContiguousBytes(3_000L),
+                Is.EqualTo(8_000L),
+                "4/3 for base64 inflation, times 2 bytes per UTF-16 character");
             Assert.That(
-                LeafSnapshotHydrationAdmission.ToContiguousBytes(1_000L),
-                Is.Not.EqualTo(LeafSnapshotHydrationAdmission.ToHeapCostBytes(1_000L)),
+                LeafSnapshotHydrationAdmission.ToContiguousBytes(3_000L),
+                Is.Not.EqualTo(LeafSnapshotHydrationAdmission.ToHeapCostBytes(3_000L)),
                 "the contiguous requirement and the heap cost are different quantities");
+            Assert.That(
+                LeafSnapshotHydrationAdmission.ToContiguousBytes(3_000L),
+                Is.GreaterThan(3_000L * 2),
+                "REGRESSION GUARD: an earlier revision used 2x, derived from a JSON serializer "
+                + "shape that no longer describes this path, and understated the live legacy "
+                + "requirement by a third");
             Assert.That(
                 LeafSnapshotHydrationAdmission.ToContiguousBytes(0L),
                 Is.Zero,
@@ -136,14 +151,24 @@ public class BPlusLeafGrainHydrationContiguityTests
     }
 
     [Test]
-    public void RequiresSoleOccupancy_is_false_at_the_leaf_size_bound_and_true_one_byte_past_it()
+    public void The_contiguous_ratio_cancels_out_of_the_sole_occupancy_predicate()
     {
-        // The ceiling is the contiguous requirement of a leaf at exactly its
-        // configured bound, so the boundary is the whole justification for the
-        // number and is pinned on both sides. Were it off by one in the
+        // The ceiling is the SAME conversion applied to a bound-sized leaf, so
+        // the ratio appears on both sides of RequiresSoleOccupancy and cancels:
+        // the effective rule is "stored frame larger than the default leaf size
+        // bound". That is the whole justification for the number, so the
+        // boundary is pinned on both sides. Were it off by one in the
         // permissive direction the population it governs would be unchanged;
         // off by one the other way, every healthy leaf in a default-configured
         // tree would serialise and cold start would become sequential.
+        //
+        // The cancellation is also what makes the ratio safe to correct:
+        // choosing 2x, 8/3 or 3x moves only the figure reported in the
+        // exception and in logs, never which claims are serialised. Pinned
+        // because without it a future correction of the ratio would look like a
+        // behaviour change and invite someone to "compensate" by moving the
+        // ceiling as well, which WOULD be a behaviour change, disguised as
+        // bookkeeping.
         Assert.Multiple(() =>
         {
             Assert.That(
@@ -158,8 +183,10 @@ public class BPlusLeafGrainHydrationContiguityTests
                 LeafSnapshotHydrationAdmission.ConcurrentContiguousCeilingBytes,
                 Is.EqualTo(
                     LeafSnapshotHydrationAdmission.ToContiguousBytes(LatticeOptions.DefaultMaxLeafBytes)),
-                "the ceiling is derived from the leaf size bound and NOT from the memory grant - a "
-                + "ceiling that rose with the grant would relax exactly as the population it governs grew");
+                "the ceiling is the conversion of a bound-sized leaf, which is both what makes the "
+                + "ratio cancel and what keeps the ceiling derived from the leaf size bound rather "
+                + "than from the memory grant - a ceiling that rose with the grant would relax "
+                + "exactly as the population it governs grew");
         });
     }
 
