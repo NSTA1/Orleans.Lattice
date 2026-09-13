@@ -52,7 +52,65 @@ public sealed class IntraOpThreadResolutionTests
         {
             Assert.That(resolved.Threads, Is.EqualTo(4));
             Assert.That(resolved.Source, Is.EqualTo(IntraOpThreadSource.ContainerCpuGrant));
+            Assert.That(
+                resolved.DeclaredAuto,
+                Is.False,
+                "a value that merely failed to parse must not be reported as a deliberate "
+                + "choice of the derivation. That conflation is the whole of issue #2863, and "
+                + "it would be reintroduced here if the fallthrough set this flag.");
         });
+    }
+
+    [TestCase("auto")]
+    [TestCase("AUTO")]
+    [TestCase("  Auto  ")]
+    public void The_auto_token_reaches_the_same_number_but_says_who_chose_it(string declared)
+    {
+        var resolved = EmbedServerOptions.ResolveIntraOpThreads(declared, 4, 16);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                resolved.Threads,
+                Is.EqualTo(4),
+                "`auto` must reach the grant-derived count, not a second implementation of it.");
+            Assert.That(resolved.Source, Is.EqualTo(IntraOpThreadSource.ContainerCpuGrant));
+            Assert.That(
+                resolved.DeclaredAuto,
+                Is.True,
+                "and it must be distinguishable from an omission. Without this the startup line "
+                + "reads identically for a deliberate `auto`, an unset variable, and a typo, so "
+                + "the deployment that migrated off the `0` sentinel is indistinguishable from "
+                + "the one that never did.");
+            Assert.That(
+                resolved.DescribeProvenance(),
+                Does.Contain("DECLARED"),
+                "the operator-facing provenance must credit the declaration, or the observable "
+                + "the runbook tells an operator to read after migrating says nothing.");
+        });
+    }
+
+    [Test]
+    public void The_auto_token_is_the_spelling_the_deployment_is_told_to_use()
+        => Assert.That(
+            EmbedServerOptions.AutoToken,
+            Is.EqualTo("auto"),
+            "the sample deployment's preflight and .env.example both name this literal. Renaming "
+            + "it here without renaming it there is the dangerous direction for THIS knob: an "
+            + "unrecognised value derives silently rather than throwing, so the mismatch would "
+            + "present as a successful boot.");
+
+    [Test]
+    public void A_near_miss_of_the_token_is_not_treated_as_the_token()
+    {
+        var resolved = EmbedServerOptions.ResolveIntraOpThreads("atuo", 4, 16);
+
+        Assert.That(
+            resolved.DeclaredAuto,
+            Is.False,
+            "matching must be exact. A prefix or fuzzy match would let a typo claim a deliberate "
+            + "choice, which is the reassurance-in-the-broken-case failure this fixture's "
+            + "provenance assertions exist to prevent.");
     }
 
     [Test]

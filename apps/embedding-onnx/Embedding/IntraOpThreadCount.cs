@@ -18,7 +18,14 @@ namespace Orleans.Lattice.Embedding.Onnx;
 /// runtime chooses for itself, which is only safe when no CPU quota is
 /// enforced.</param>
 /// <param name="Source">Where <paramref name="Threads"/> came from.</param>
-internal readonly record struct IntraOpThreadCount(int Threads, IntraOpThreadSource Source)
+/// <param name="DeclaredAuto">Whether the deployment asked for the derivation by
+/// name rather than by omission. Carried separately from <paramref name="Source"/>
+/// because the two answer different questions - <i>who chose</i> against <i>what
+/// the number was computed from</i> - and folding them together would lose one.
+/// It defaults to <see langword="false"/> so every existing construction site
+/// keeps its current meaning.</param>
+internal readonly record struct IntraOpThreadCount(
+    int Threads, IntraOpThreadSource Source, bool DeclaredAuto = false)
 {
     /// <summary>
     /// Renders the provenance for an operator-facing log line, in the same
@@ -30,8 +37,12 @@ internal readonly record struct IntraOpThreadCount(int Threads, IntraOpThreadSou
     {
         IntraOpThreadSource.Declared =>
             $"DECLARED via {EmbedServerOptions.IntraOpThreadsKey}",
+        IntraOpThreadSource.ContainerCpuGrant when DeclaredAuto =>
+            $"DECLARED '{EmbedServerOptions.AutoToken}' via {EmbedServerOptions.IntraOpThreadsKey}, then DERIVED from the enforced container CPU grant",
         IntraOpThreadSource.ContainerCpuGrant =>
             $"DERIVED from the enforced container CPU grant, not declared; set {EmbedServerOptions.IntraOpThreadsKey} to override",
+        _ when DeclaredAuto =>
+            $"DECLARED '{EmbedServerOptions.AutoToken}' via {EmbedServerOptions.IntraOpThreadsKey}, then DERIVED from Environment.ProcessorCount because no CPU quota was readable",
         _ =>
             $"DERIVED from Environment.ProcessorCount because no CPU quota was readable, not declared; set {EmbedServerOptions.IntraOpThreadsKey} to override",
     };

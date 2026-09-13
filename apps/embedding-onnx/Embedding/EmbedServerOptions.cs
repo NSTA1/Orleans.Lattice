@@ -42,6 +42,32 @@ internal sealed record EmbedServerOptions
     /// </summary>
     public const int LetRuntimeChoose = 0;
 
+    /// <summary>
+    /// The value of <see cref="IntraOpThreadsKey"/> that selects the derivation
+    /// from the container CPU grant deliberately, rather than by omission.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this exists when omitting the variable already derives (issue
+    /// #2863).</b> The sample deployment's tuning overlay declares this variable
+    /// with a compose presence check, which errors when it is unset or empty but
+    /// <b>cannot inspect the value</b>. So <c>0</c> satisfies that check while
+    /// selecting <see cref="LetRuntimeChoose"/> - the one setting the overlay
+    /// exists to prevent, because ONNX Runtime then sizes its pool from the host
+    /// core count and ignores the CPU quota - and an operator who forgot to
+    /// export the variable looks exactly like one who chose that on purpose.
+    /// </para>
+    /// <para>
+    /// No guard can recover information the encoding destroyed, so the fix is at
+    /// the encoding: the deployment's preflight refuses <c>0</c>, and the
+    /// deliberate case gets its own spelling. The token is honoured <b>here</b>
+    /// because this is the code that reads the variable; a token may only be
+    /// introduced where we own the parser, which is why the overlay's Docker and
+    /// CLR knobs accept none.
+    /// </para>
+    /// </remarks>
+    public const string AutoToken = "auto";
+
     /// <summary>Absolute path to the ONNX model file.</summary>
     public required string ModelPath { get; init; }
 
@@ -173,16 +199,27 @@ internal sealed record EmbedServerOptions
     public static IntraOpThreadCount ResolveIntraOpThreads(
         string? declared, int? containerCpuGrant, int processorCount)
     {
-        if (int.TryParse((declared ?? string.Empty).Trim(), out var parsed) && parsed >= 0)
+        var trimmed = (declared ?? string.Empty).Trim();
+
+        if (int.TryParse(trimmed, out var parsed) && parsed >= 0)
         {
             return new IntraOpThreadCount(parsed, IntraOpThreadSource.Declared);
         }
 
+        // Recognised EXPLICITLY rather than left to the fallthrough below, even
+        // though the fallthrough already produces the right number. An
+        // unparseable value derives silently here, so without this branch `auto`
+        // would be indistinguishable from a typo: the same count, the same
+        // provenance, and no way for an operator to tell a deliberate choice from
+        // a mistake that happened to land somewhere reasonable. Naming it keeps
+        // the startup line honest about who chose (issue #2863).
+        var declaredAuto = string.Equals(trimmed, AutoToken, StringComparison.OrdinalIgnoreCase);
+
         return containerCpuGrant is int grant
             ? new IntraOpThreadCount(
-                Math.Max(1, grant), IntraOpThreadSource.ContainerCpuGrant)
+                Math.Max(1, grant), IntraOpThreadSource.ContainerCpuGrant, declaredAuto)
             : new IntraOpThreadCount(
-                Math.Max(1, processorCount), IntraOpThreadSource.ProcessorCount);
+                Math.Max(1, processorCount), IntraOpThreadSource.ProcessorCount, declaredAuto);
     }
 
     /// <summary>

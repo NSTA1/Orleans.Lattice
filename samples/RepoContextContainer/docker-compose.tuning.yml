@@ -50,6 +50,34 @@
 # written on. The warning had been sitting directly above the literals it
 # warned about for the whole of epic #2368, and was not enough on its own.
 #
+# WHAT THAT ENFORCEMENT DOES NOT REACH, stated because the paragraph above read
+# for a while as though it did (issue #2863). `${VAR:?...}` errors when VAR is
+# unset or empty. It does not, and cannot, inspect the value: compose
+# interpolation has no value predicate, only presence ones. So it establishes
+# that SOMETHING was supplied, never that what was supplied means what the
+# supplier intended.
+#
+# That gap is not academic here, because every knob below has a falsy value in
+# its valid syntax that means "ignore me" to its final consumer. `0` is
+# non-empty, so it satisfies every guard on this page while selecting: no CPU
+# limit and no memory limit at all from Docker; the host core count from ONNX
+# Runtime and from the CLR's GC; and the runtime-derived WAL replay ceiling this
+# overlay exists to pin. An operator who forgot to export a variable and one who
+# pinned it to `0` on purpose produce byte-identical deployments, and the guard
+# reports both as satisfied.
+#
+# No check can recover a distinction the encoding destroyed, so `0` is retired
+# as a spelling. It is refused by the preflight below, and the deliberate
+# "derive it" case is spelled `auto` on the two knobs whose parser we own
+# (REPOCONTEXT_MAX_CONCURRENT_REPLAYS, EMBEDDER_INTRA_THREADS). The other five
+# are read finally by Docker or the CLR, whose vocabulary is not ours to extend,
+# so they take a positive value or nothing:
+#
+#   pwsh -File ./scripts/Assert-TuningEnv.ps1
+#
+# New-TuningEnv.ps1 runs it over the .env it has just written, so the ordinary
+# path is already covered and this is for a file edited by hand afterwards.
+#
 # WHAT THE LITERALS COST, so the next person does not restore one. The two
 # mem_limit values summed to 17 GiB, so on a 16 GiB host this stack could not
 # start at all, and nothing said why. Worse, DOTNET_PROCESSOR_COUNT: "16"
