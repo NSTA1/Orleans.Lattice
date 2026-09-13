@@ -524,9 +524,23 @@ services:
     # start_period is sized for REAL silo startup (cluster join + WAL replay
     # warmup), which is far longer than a stateless service's. Docker's health
     # model is two-valued (exit 0/1); "starting" is realised by this window
-    # holding early non-zero exits out of the retry tally. Getting it too short
-    # matters here because restart: unless-stopped is set below, so a silo still
-    # joining that were reported unhealthy would crash-loop during normal boot.
+    # holding early non-zero exits out of the retry tally.
+    #
+    # What getting it too short actually costs is ACCURATE REPORTING, not
+    # stability (issue #2906). A Docker restart policy acts on process EXIT and
+    # never reads health, so the restart: unless-stopped set below does NOT
+    # restart an unhealthy-but-running container, and a silo still joining
+    # cannot crash-loop because of its health verdict. Health-triggered restart
+    # is a Swarm feature (an unhealthy task is rescheduled) and a Kubernetes one
+    # (a failing livenessProbe restarts the container); in neither case is it
+    # restart:. Do not re-derive the crash-loop model from this window's size.
+    #
+    # The real cost of too short a window is that a NORMAL BOOT gets reported
+    # unhealthy: docker ps shows it, the health log records it, and since issue
+    # #2905 the verdict is published onto the /metrics scrape, so it would fire
+    # a real alert on every start. An alert that cries wolf on every start is
+    # how a true wedge comes to be ignored, which is precisely the failure that
+    # issue #2868 documents. The window buys a truthful signal, not stability.
     # The endpoint still REPORTS the three-way verdict (healthy/starting/unhealthy)
     # in its body for observability; the self-probe echoes it to the health log.
     healthcheck:

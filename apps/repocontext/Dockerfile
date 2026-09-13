@@ -133,9 +133,15 @@ LABEL org.opencontainers.image.revision="$GIT_COMMIT"
 # /health/silo endpoint and exiting 0 (healthy) or 1 (starting/unhealthy). The
 # start period is sized for real silo startup - cluster join plus WAL replay
 # warmup - which is far longer than a stateless service's, so a silo still
-# joining reads as "starting" rather than a failure and does not crash-loop the
-# container under compose's restart: unless-stopped. The compose file restates
-# this healthcheck (see samples/RepoContextContainer/docker-compose.yml) so the
+# joining reads as "starting" rather than a failure.
+#
+# That window buys accurate REPORTING, not stability (issue #2906). A Docker
+# restart policy acts on process exit and never reads health, so compose's
+# restart: unless-stopped does not restart an unhealthy-but-running container
+# and a joining silo cannot crash-loop because of its health verdict. Since
+# issue #2905 the verdict is published onto the /metrics scrape, so too short a
+# window would fire a real alert on every start. The compose file restates this
+# healthcheck (see samples/RepoContextContainer/docker-compose.yml) so the
 # behaviour holds whether the image is run directly or via compose.
 HEALTHCHECK --interval=15s --timeout=10s --start-period=180s --retries=5 \
     CMD ["dotnet", "Orleans.Lattice.Api.Mcp.RepoContext.Host.dll", "--healthcheck"]

@@ -129,8 +129,10 @@ public sealed class RepoContextSiloHealthCheckTests
     }
 
     // State 3: silo still starting -> STARTING (Degraded), NOT unhealthy. Conflating
-    // this with unhealthy under restart: unless-stopped is what crash-loops normal
-    // boot, so it is a distinct, load-bearing state.
+    // this with unhealthy does not crash-loop anything - a Docker restart policy acts
+    // on process exit and never reads health (#2906) - but since #2905 the verdict is
+    // published onto the metrics scrape, so it would fire an alert on every normal
+    // boot. It is a distinct, load-bearing state because the signal must be truthful.
     [Test]
     public async Task Degraded_when_the_probe_fails_but_the_host_has_not_reached_readiness()
     {
