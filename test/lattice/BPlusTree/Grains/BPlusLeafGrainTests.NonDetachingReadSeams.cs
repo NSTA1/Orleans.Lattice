@@ -14,25 +14,54 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// an oversized leaf can then never divide without becoming wholly resident.
 /// </para>
 /// <para>
-/// Every assertion here is on <c>HasPendingHydration</c> at the moment after the
-/// operation, deliberately rather than on an outcome that detachment would
-/// merely make slower. Nothing in this fixture touches
+/// Every assertion here is on the cache's own hydration state at the moment
+/// after the operation, deliberately rather than on an outcome that detachment
+/// would merely make slower. Nothing in this fixture touches
 /// <c>EntriesForTest</c>: that property returns the live backing dictionary
 /// through <c>UnderlyingRows</c>, so it detaches the frame BEFORE any assertion
 /// could run, and a test written this way would exercise the detached fallback
 /// while appearing to exercise the attached path - passing identically with and
 /// without the fix.
 /// </para>
+/// <para>
+/// The assertions use <c>LastDetachSeam</c> rather than a bare
+/// <c>HasPendingHydration</c> boolean, because "the frame is gone" is not by
+/// itself a defect. <see cref="LeafSnapshotDetachSeam.RangeHydrationCompleted"/>
+/// records a release that a bounded walk paid for one window at a time, which is
+/// benign; the four whole-cache accessors record a release that consumed the
+/// frame in one go, which is the defect. Collapsing that distinction back to a
+/// boolean would make each arm's verdict depend on the budget-to-leaf ratio
+/// instead of on whether the seam is correct.
+/// </para>
 /// </summary>
 public partial class BPlusLeafGrainTests
 {
     // Small enough that the corpus spans several hydration windows, so
     // TrimToBudget can actually evict behind the walk. Mirrors the budget the
-    // sibling eviction tests use (32 bytes per row over 256 rows).
+    // sibling eviction tests use (32 bytes per row over 256 rows). The ratio
+    // matters: these arms are deliberately OVER budget, which is what lets them
+    // take the strict None assertion below.
     private const long NonDetachingBudgetBytes = 32L * 256L;
 
     private static async Task<BPlusLeafGrain> WindowedLeafAsync()
         => await RehydratedLeafAsync(HydrationRows(), residentBudgetBytes: NonDetachingBudgetBytes);
+
+    /// <summary>
+    /// Asserts that the frame survived the operation and that nothing released
+    /// it. Valid only on an arm whose leaf is larger than the resident budget,
+    /// where eviction is guaranteed; on an arm that does not pin that ratio the
+    /// honest assertion is that no whole-cache ACCESSOR detached, since
+    /// <see cref="LeafSnapshotDetachSeam.RangeHydrationCompleted"/> is also a
+    /// pass and which of the two occurs is decided by the ratio.
+    /// </summary>
+    private static void AssertFrameSurvived(BPlusLeafGrain grain, string because)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.CacheForTest.LastDetachSeam, Is.EqualTo(LeafSnapshotDetachSeam.None), because);
+            Assert.That(grain.CacheForTest.HasPendingHydration, Is.True, because);
+        });
+    }
 
     [Test]
     public async Task An_unbounded_count_does_not_detach_the_hydration_frame()
@@ -47,7 +76,7 @@ public partial class BPlusLeafGrainTests
 
         var count = await grain.CountAsync();
 
-        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True,
+        AssertFrameSurvived(grain,
             "an unbounded count must not forfeit the cheap frame-only division");
         Assert.That(count, Is.GreaterThan(0));
     }
@@ -62,7 +91,7 @@ public partial class BPlusLeafGrainTests
 
         var keys = await grain.GetKeysAsync();
 
-        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True,
+        AssertFrameSurvived(grain,
             "an already-ranged seam called without bounds is still a detaching seam");
         Assert.That(keys, Is.Not.Empty);
     }
@@ -74,7 +103,7 @@ public partial class BPlusLeafGrainTests
 
         var entries = await grain.GetEntriesAsync();
 
-        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True);
+        AssertFrameSurvived(grain, "listing every entry must not consume the frame");
         Assert.That(entries, Is.Not.Empty);
     }
 
@@ -85,7 +114,7 @@ public partial class BPlusLeafGrainTests
 
         _ = await grain.GetStatsAsync();
 
-        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True);
+        AssertFrameSurvived(grain, "a diagnostics read must not cost the division fast path");
     }
 
     [Test]
@@ -99,7 +128,7 @@ public partial class BPlusLeafGrainTests
 
         var live = await grain.GetLiveEntriesAsync();
 
-        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True);
+        AssertFrameSurvived(grain, "the copy belongs to the caller, not to the cache");
         Assert.That(live, Is.Not.Empty);
     }
 
@@ -110,12 +139,12 @@ public partial class BPlusLeafGrainTests
 
         var all = await grain.GetAllRawEntriesAsync();
 
-        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True);
+        AssertFrameSurvived(grain, "raw rows are copied out, so nothing stays resident");
         Assert.That(all, Is.Not.Empty);
     }
 
     [Test]
-    public async Task A_leaf_smaller_than_the_hydration_budget_still_detaches_on_a_total_walk()
+    public async Task A_leaf_smaller_than_the_hydration_budget_releases_the_frame_to_the_bounded_path()
     {
         // The adversarial case, asserted deliberately rather than avoided.
         //
@@ -127,14 +156,21 @@ public partial class BPlusLeafGrainTests
         // read", so a fold whose coverage is total still never completes the
         // source while the budget is smaller than the leaf.
         //
-        // Where the budget EXCEEDS the leaf nothing is evictable,
-        // GetFullScanWindowsWithoutHydrating collapses to a single unbounded
-        // window, every block lands resident together and HydrateBlock
-        // detaches. That is the honest boundary of this fix, and it is benign:
-        // a leaf that fits inside the 1 MiB default budget is about two orders
-        // of magnitude below the 64 MiB division threshold, so it has no cheap
-        // division to forfeit. The defect is structurally confined to leaves
-        // that cannot suffer from it.
+        // Where the budget EXCEEDS the leaf nothing is evictable, so the fold
+        // materialises the final outstanding block and the frame is released.
+        // The assertion is that the release is attributed to
+        // RangeHydrationCompleted and NOT to a whole-cache accessor. That
+        // distinction is the whole point: this arm is a pass because the rows
+        // were paid for one bounded window at a time, which is exactly what a
+        // bare "nothing detached" boolean could not express - it would fail
+        // here by construction, and the cheapest way to satisfy it would be to
+        // delete this arm.
+        //
+        // The boundary is also benign, and structurally so: a leaf that fits
+        // inside the 1 MiB default budget is about two orders of magnitude
+        // below the 64 MiB division threshold, so it has no cheap division to
+        // forfeit. The condition under which windowing stops helping is
+        // co-extensive with the condition under which the defect cannot bite.
         var rows = HydrationRows(16);
         var grain = await RehydratedLeafAsync(rows, residentBudgetBytes: 8L * 1024 * 1024);
 
@@ -143,10 +179,11 @@ public partial class BPlusLeafGrainTests
 
         _ = await grain.CountAsync();
 
-        Assert.That(grain.CacheForTest.HasPendingHydration, Is.False,
-            "a budget larger than the leaf leaves nothing to evict, so a total "
-            + "walk completes the source and detaches - windowing bounds peak "
-            + "footprint, it does not preserve a frame it cannot evict behind");
+        Assert.That(grain.CacheForTest.LastDetachSeam,
+            Is.EqualTo(LeafSnapshotDetachSeam.RangeHydrationCompleted),
+            "a within-budget leaf has nothing to evict, so the bounded walk "
+            + "completes the source - but the release must still be attributed "
+            + "to the bounded path rather than to a whole-cache accessor");
     }
 
     [Test]
@@ -188,6 +225,6 @@ public partial class BPlusLeafGrainTests
         Assert.That(counted, Is.EqualTo(listed.Count));
         Assert.That(listed, Is.All.Matches<string>(k =>
             string.CompareOrdinal(k, start) >= 0 && string.CompareOrdinal(k, end) < 0));
-        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True);
+        AssertFrameSurvived(grain, "a genuinely ranged read must stay frame-only");
     }
 }
