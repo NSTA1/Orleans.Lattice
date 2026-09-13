@@ -102,15 +102,6 @@ internal sealed partial class BPlusLeafGrain
     private long _replayEntriesAppliedThisActivation;
 
     /// <summary>
-    /// Maximum number of WAL entries the activation-time replay reads
-    /// per <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync"/>
-    /// invocation. Bounds the worst-case replay memory footprint for a
-    /// long-tailed WAL and lets the activation hook interleave RPC
-    /// progress across multiple slice fetches.
-    /// </summary>
-    private const int ReplaySliceBudget = 256;
-
-    /// <summary>
     /// V1 WAL partition the activation-time replay reads from. Retained
     /// as a name for the legacy single-partition shape (default
     /// <see cref="LatticeOptions.WalPartitions"/> = 1); under multi-
@@ -4072,17 +4063,12 @@ internal sealed partial class BPlusLeafGrain
             new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
             LatticeTenantLabel.ForTree(treeId));
 
-        // Issue #2867. Same priming argument, for the slice-narrowing counter
-        // the loop below increments. The healthy steady state for a partition is
-        // never to narrow at all, so an unprimed counter would leave the COMMON
-        // case indistinguishable from a build that cannot narrow - and the whole
-        // value of the instrument is telling those two apart after an
-        // out-of-memory activation failure.
-        LatticeMetrics.WalReplaySliceNarrowings.Add(
-            0,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
-            LatticeTenantLabel.ForTree(treeId));
+        // Owns this partition's slice width, its narrow-and-retry on memory
+        // pressure, and the zero-priming of the narrowing counter (issues
+        // #2742, #2867, #2899). Constructed here rather than beside the loop so
+        // the prime still happens on a replay that returns before reading
+        // anything, which is what makes a later zero a measurement.
+        var sliceReader = new ReplaySliceReader(coordinator, treeId, partition);
 
         // Reuse the head the sweep-order pre-pass already probed when it has
         // one, so ordering the sweep costs no extra grain call. A head probed
@@ -4352,15 +4338,15 @@ internal sealed partial class BPlusLeafGrain
         // deletes or atomic multi-key writes. With the ledger the ceiling
         // recovers the moment a deferred offset drains, here or in pass 2.
 
-        // Slice width is a LOCAL, not the constant (issue #2742). The read
-        // that fills a slice is the allocation this deployment could no
-        // longer afford, and the previous loop had exactly one response to
-        // that: unwind the whole partition replay. The next activation then
-        // re-read the identical window, failed identically, and banked
-        // nothing - 3,080 stalled replays on one tree, with the checkpoint
-        // frozen for the entire census. Width is now something the loop can
-        // spend to keep going.
-        var sliceBudget = ReplaySliceBudget;
+        // Slice width is owned by the reader, not by this loop and not by a
+        // constant (issues #2742, #2899). The read that fills a slice was the
+        // allocation this deployment could no longer afford, and the previous
+        // loop had exactly one response to that: unwind the whole partition
+        // replay. The next activation then re-read the identical window, failed
+        // identically, and banked nothing - 3,080 stalled replays on one tree,
+        // with the checkpoint frozen for the entire census. Width is now
+        // something the replay can spend to keep going, at every site that
+        // replays rather than only at this one.
 
         while (fromExclusive < head)
         {
@@ -4369,48 +4355,21 @@ internal sealed partial class BPlusLeafGrain
             IReadOnlyList<CommitLogSliceEntry> slice;
             try
             {
-                slice = await coordinator.ReadSliceAsync(
+                slice = await sliceReader.ReadSliceAsync(
                     fromExclusive,
                     head,
-                    sliceBudget,
+                    (ex, narrowedTo) => ReplayLogger(context)?.LogWarning(
+                        ex,
+                        "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford a commit-log "
+                        + "read from offset {FromExclusive}; narrowing the slice budget to {SliceBudget} entries and "
+                        + "retrying. Progress up to offset {MaxApplied} is already banked.",
+                        context.GrainId,
+                        treeId,
+                        partition,
+                        fromExclusive,
+                        narrowedTo,
+                        maxApplied),
                     cancellationToken);
-            }
-            catch (Exception ex) when (sliceBudget > 1 && IsReadMemoryPressure(ex))
-            {
-                // The read was unaffordable, not wrong. Narrow and retry the
-                // SAME range: a quarter of the width is a quarter of the
-                // bytes the storage provider must find, and the narrower
-                // range is also a different key on the coordinator's slice
-                // cache, so the retry cannot be served the failed attempt.
-                // Everything applied so far is already durable - the
-                // incremental flush at the foot of this loop banked it - so
-                // the retry resumes rather than repeats.
-                var narrowed = sliceBudget / 4;
-                sliceBudget = narrowed < 1 ? 1 : narrowed;
-
-                // Issue #2867. The narrowing is the only thing in the process
-                // that ever moves the per-replay buffering factor, so counting
-                // it is what makes that factor observable at all. Recorded
-                // before the log, because the log is throttled by the sink's
-                // own configuration and this must be the exact census.
-                LatticeMetrics.WalReplaySliceNarrowings.Add(
-                    1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
-                    LatticeTenantLabel.ForTree(treeId));
-
-                ReplayLogger(context)?.LogWarning(
-                    ex,
-                    "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford a commit-log "
-                    + "read from offset {FromExclusive}; narrowing the slice budget to {SliceBudget} entries and "
-                    + "retrying. Progress up to offset {MaxApplied} is already banked.",
-                    context.GrainId,
-                    treeId,
-                    partition,
-                    fromExclusive,
-                    sliceBudget,
-                    maxApplied);
-                continue;
             }
             catch (Exception ex) when (IsReadMemoryPressure(ex))
             {
@@ -4468,18 +4427,6 @@ internal sealed partial class BPlusLeafGrain
 
             if (slice.Count == 0)
                 break;
-
-            // Widen back on success. Without this a single pressure blip
-            // would pin the partition at one entry per slice for the rest of
-            // a multi-million-entry gap, which converges so slowly it is
-            // indistinguishable from the stall being fixed. Doubling recovers
-            // full width in a handful of slices while still backing off
-            // immediately if pressure returns.
-            if (sliceBudget < ReplaySliceBudget)
-            {
-                var widened = sliceBudget * 2;
-                sliceBudget = widened > ReplaySliceBudget ? ReplaySliceBudget : widened;
-            }
 
             foreach (var entry in slice)
             {

@@ -26,33 +26,6 @@ internal sealed class SnapshotLeafGrain(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILogger<SnapshotLeafGrain> logger) : Grain, ISnapshotLeafGrain
 {
-    /// <summary>
-    /// Per-slice WAL read budget, so a snapshot rebuild imposes the same
-    /// coordinator-RPC granularity as a live leaf's fall-off-log recovery.
-    /// <para>
-    /// <b>This no longer mirrors the activation-time materialiser's constant of
-    /// the same name, despite being the same number</b> (issue #2867). Both
-    /// started at 256 and the comment here used to claim they mirrored each
-    /// other. Issue #2742 then made the activation-time replay's width a
-    /// <em>local</em> that narrows to a quarter and retries whenever a read
-    /// fails for memory pressure, because the read that fills a slice was the
-    /// allocation a constrained deployment could no longer afford. This site
-    /// took no such change: it passes the constant straight to
-    /// <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync"/>, so a snapshot
-    /// rebuild that cannot afford its slice has no narrower attempt to make and
-    /// the failure propagates.
-    /// </para>
-    /// <para>
-    /// That asymmetry is recorded rather than repaired here because it is a
-    /// behaviour change on the recovery path and issue #2867 is scoped to the
-    /// operator-facing surface. It is worth stating plainly because the
-    /// direction is unfortunate: the snapshot path is the one a leaf falls back
-    /// to when it <em>cannot</em> replay, so the recovery route is currently the
-    /// one without the resilience.
-    /// </para>
-    /// </summary>
-    private const int ReplaySliceBudget = 256;
-
     /// <summary>Tree this snapshot leaf belongs to (set on first <see cref="OpenAsync"/>).</summary>
     private string _treeId = string.Empty;
 
@@ -668,8 +641,8 @@ internal sealed class SnapshotLeafGrain(
     /// <summary>
     /// Drives the per-partition WAL replay loop for the snapshot leaf.
     /// Iterates every partition's <c>(empty, capturedOffsets[p]]</c>
-    /// slice through <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync"/>
-    /// in <see cref="ReplaySliceBudget"/>-sized chunks. Saga terminals
+    /// slice through <see cref="ReplaySliceReader"/>, which owns the
+    /// read width and narrows it on memory pressure. Saga terminals
     /// and <see cref="MutationKind.DeleteRange"/> mutations are
     /// deferred to a pass-2 drain after every partition's pass-1 has
     /// completed so the same atomicity and ordering invariants the
@@ -701,14 +674,32 @@ internal sealed class SnapshotLeafGrain(
             long fromExclusive = -1;
             long toInclusive = capturedOffset - 1;
 
+            // Issue #2899. Narrow-and-retry on memory pressure, which this site
+            // lacked from #2742 until now. It matters more here than anywhere
+            // else that replays: the loop below starts at the -1 sentinel, so a
+            // snapshot rebuild reads the WHOLE pinned WAL prefix rather than the
+            // gap above a checkpoint, and it takes no replay permit - so before
+            // this change it had neither of the two factors that bound peak
+            // replay memory working for it.
+            var sliceReader = new ReplaySliceReader(coordinator, _treeId, partition);
+
             while (fromExclusive < toInclusive)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var slice = await coordinator.ReadSliceAsync(
+                var slice = await sliceReader.ReadSliceAsync(
                     fromExclusive,
                     toInclusive,
-                    ReplaySliceBudget,
+                    (ex, narrowedTo) => logger.LogWarning(
+                        ex,
+                        "Snapshot leaf {GrainId} rebuild of tree {TreeId} partition {Partition} could not afford "
+                        + "a commit-log read from offset {FromExclusive}; narrowing the slice budget to "
+                        + "{SliceBudget} entries and retrying the same range.",
+                        context.GrainId,
+                        _treeId,
+                        partition,
+                        fromExclusive,
+                        narrowedTo),
                     cancellationToken);
 
                 if (slice.Count == 0)

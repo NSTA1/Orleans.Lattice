@@ -351,6 +351,55 @@ public class LeafReplayCoordinatorGrainTests
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// Issue #2899. The cache is keyed on the range alone, so a narrowed retry
+    /// - which presents the SAME range with a smaller budget, because narrowing
+    /// spends width and not span - matches it and is served the wider cached
+    /// slice with its budget ignored.
+    /// <para>
+    /// Two green tests already stood either side of this and neither could see
+    /// it: <c>The_budget_caps_the_slice_and_stops_the_walk</c> pins the budget
+    /// on a <i>fresh</i> read, and
+    /// <c>An_identical_range_is_served_from_the_slice_cache</c> pins the cache
+    /// on an <i>equal</i> budget. The defect lives only in their intersection,
+    /// which is the uncovered site between them.
+    /// </para>
+    /// <para>
+    /// It matters because the slice cache exists precisely so that several
+    /// leaves replaying one shard share a read, and the frozen-baseline tail
+    /// fold drives every leaf of a shard through one coordinator concurrently.
+    /// So a leaf that has narrowed under memory pressure can be handed a
+    /// sibling's full-width slice, which is the one allocation it had just
+    /// established it could not afford - the narrowing is counted, and no
+    /// narrower read ever reaches storage.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_cache_hit_is_truncated_to_the_smaller_budget_of_a_narrowed_retry()
+    {
+        var pulled = new List<long>();
+        var (grain, reader) = CreateGrain();
+        StubRead(reader, pulled, 0, 1, 2, 3, 4, 5, 6, 7);
+
+        var wide = await grain.ReadSliceAsync(-1, 10, budget: 8);
+        var narrowed = await grain.ReadSliceAsync(-1, 10, budget: 2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wide, Has.Count.EqualTo(8), "The first read establishes a full-width cache entry.");
+            Assert.That(
+                narrowed,
+                Has.Count.EqualTo(2),
+                "A cache hit must honour the caller's budget. Serving the wider cached slice hands a "
+                + "narrowed replay the exact allocation it narrowed to avoid.");
+            Assert.That(
+                narrowed.Select(e => e.Offset),
+                Is.EqualTo(new[] { 0L, 1L }),
+                "The truncation must keep the ascending prefix, since the replay loops advance by the "
+                + "last offset they see.");
+        });
+    }
+
     [TestCase(0, 10, TestName = "A_different_from_offset_bypasses_the_slice_cache")]
     [TestCase(-1, 11, TestName = "A_different_to_offset_bypasses_the_slice_cache")]
     public async Task A_deviating_range_bypasses_the_slice_cache(long from, long to)

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -205,14 +206,31 @@ internal sealed partial class BPlusLeafGrain
             var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
                 $"{treeId}/{partition}");
 
+            // Issue #2899. This site is one of the two that kept the constant
+            // while the activation-time replay learned to narrow, and it is
+            // fanned out across every frozen leaf of the shard with no replay
+            // permit held, so both terms of the peak-memory product were
+            // unbounded here. The reader supplies the narrowing, the widening
+            // and the counter's priming together.
+            var sliceReader = new ReplaySliceReader(coordinator, treeId, partition);
+
             while (fromExclusive < toInclusive)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var slice = await coordinator.ReadSliceAsync(
+                var slice = await sliceReader.ReadSliceAsync(
                     fromExclusive,
                     toInclusive,
-                    ReplaySliceBudget,
+                    (ex, narrowedTo) => ReplayLogger(context)?.LogWarning(
+                        ex,
+                        "Leaf {GrainId} baseline tail fold of tree {TreeId} partition {Partition} could not "
+                        + "afford a commit-log read from offset {FromExclusive}; narrowing the slice budget to "
+                        + "{SliceBudget} entries and retrying the same range.",
+                        context.GrainId,
+                        treeId,
+                        partition,
+                        fromExclusive,
+                        narrowedTo),
                     cancellationToken);
 
                 if (slice.Count == 0)
