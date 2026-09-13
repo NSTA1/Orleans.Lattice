@@ -72,6 +72,23 @@ internal sealed partial class BPlusLeafGrain
             RecordSplitAttempt(LatticeMetrics.LeafSplitDivided);
             return result;
         }
+        catch (Exception ex)
+        {
+            // A division that begins and throws must land on an outcome arm,
+            // or it lands on none (issue #2845). The three arms above all
+            // describe a division that declined to START, so without this the
+            // only trace a started-and-failed division leaves on this counter
+            // is the absence of a `divided` - which is indistinguishable from
+            // a leaf nothing ever tried to divide, and is precisely the
+            // collapse LeafSplitAttempts was introduced to prevent.
+            //
+            // The rethrow is unconditional and unchanged, so this seam is
+            // observation only: every caller still sees the exception it would
+            // have seen. `throw;` rather than `throw ex;` keeps the original
+            // stack trace intact.
+            RecordSplitFault(ClassifySplitFault(ex));
+            throw;
+        }
         finally
         {
             _splitGate.Release();
@@ -196,6 +213,16 @@ internal sealed partial class BPlusLeafGrain
         RecordSplitAttempt(LatticeMetrics.LeafSplitDivided, 0);
         RecordSplitAttempt(LatticeMetrics.LeafSplitGateContended, 0);
         RecordSplitAttempt(LatticeMetrics.LeafSplitAlreadyUnderCapacity, 0);
+
+        // The fault arm is primed per failure class, because the class tag is
+        // part of its series identity: priming `faulted` on one class would
+        // leave the other two absent, so a reader could not tell "no division
+        // timed out" from "the timeout class is never recorded". Every arm a
+        // reader may find at zero has to be mintable at zero, or the arm that
+        // is missing is the one they cannot interpret.
+        RecordSplitFault(LatticeMetrics.LeafSplitFaultUnaffordable, 0);
+        RecordSplitFault(LatticeMetrics.LeafSplitFaultTimeout, 0);
+        RecordSplitFault(LatticeMetrics.LeafSplitFaultOther, 0);
 
         if (maxLeafBytes <= 0 || Cache.StateBytes <= maxLeafBytes)
         {
@@ -334,6 +361,23 @@ internal sealed partial class BPlusLeafGrain
             await PersistAsync();
             return recovered;
         }
+        catch (Exception ex)
+        {
+            // The recovery path re-enters a division that is already durable,
+            // so a throw here is the same wedge as one on the forward path and
+            // must be as visible (issue #2845). Without it, a leaf whose
+            // recovery fails on every write reports nothing at all on this
+            // counter while re-entering, re-failing, and staying wedged.
+            //
+            // Only the fault is recorded here, not a matching `divided` on the
+            // success path. A recovery is the continuation of a division this
+            // counter already counted when it was first sought, so counting
+            // its completion again would double-count one division; a fault,
+            // by contrast, is a fresh event each time recovery is re-entered
+            // and re-fails, which is exactly the rate worth watching.
+            RecordSplitFault(ClassifySplitFault(ex));
+            throw;
+        }
         finally
         {
             _splitGate.Release();
@@ -359,6 +403,68 @@ internal sealed partial class BPlusLeafGrain
             outcome,
             LatticeTenantLabel.ForTree(treeId));
     }
+
+    /// <summary>
+    /// Records that a division began and threw, tagged with the failure class,
+    /// or mints one such series without moving it when <paramref name="value"/>
+    /// is zero.
+    /// <para>
+    /// Separate from <see cref="RecordSplitAttempt"/> because the fault arm
+    /// carries the extra <see cref="LatticeMetrics.TagFailureClass"/> dimension
+    /// that the declining outcomes have no use for. Routing both the real
+    /// emission and the zero-prime through this one method is what keeps the
+    /// primed tag shape identical to a real one BY CONSTRUCTION: a prime on a
+    /// divergent tag set would mint a second series that never converges with
+    /// the one actually counting, leaving a permanently-zero line beside a live
+    /// counter, which reads as a measured zero and is therefore worse than
+    /// absence.
+    /// </para>
+    /// </summary>
+    private void RecordSplitFault(KeyValuePair<string, object?> failureClass, long value = 1)
+    {
+        var treeId = state.State.TreeId ?? string.Empty;
+        LatticeMetrics.LeafSplitAttempts.Add(value,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            LatticeMetrics.LeafSplitFaulted,
+            failureClass,
+            LatticeTenantLabel.ForTree(treeId));
+    }
+
+    /// <summary>
+    /// Sorts a division's failure into the small closed vocabulary on
+    /// <see cref="LatticeMetrics.TagFailureClass"/>. The two named classes are
+    /// the ones that actually occur on an oversized leaf and they have opposite
+    /// remedies, which is the whole reason the dimension exists: a division
+    /// that could not be paid for in memory needs a smaller leaf or a bigger
+    /// budget, while one that ran out of time was affordable and needs the path
+    /// under it examined.
+    /// <para>
+    /// The timeout arm is matched on <see cref="TimeoutException"/> rather than
+    /// on the individual typed deadlines, which is load-bearing: this library's
+    /// own deadline types (<c>ShardActivationTimeoutException</c>,
+    /// <c>ScanPageStalledException</c>) derive from it deliberately so that
+    /// handlers matching the base type keep working, and Orleans surfaces a
+    /// plain response deadline as the base type itself. Enumerating the
+    /// subclasses instead would silently reclassify any future one as
+    /// <c>other</c>.
+    /// </para>
+    /// <para>
+    /// Anything unrecognised is classified rather than dropped. An
+    /// unclassifiable fault is still a fault, and the arm that matters -
+    /// <c>outcome=faulted</c> - must never be conditional on recognising the
+    /// exception.
+    /// </para>
+    /// </summary>
+    private static KeyValuePair<string, object?> ClassifySplitFault(Exception exception) => exception switch
+    {
+        // Both mean the same thing to an operator: the division could not be
+        // paid for in memory. The typed exception is the admission gate
+        // declining in advance; the raw one is the allocation failing anyway.
+        LeafSnapshotUnaffordableException or OutOfMemoryException
+            => LatticeMetrics.LeafSplitFaultUnaffordable,
+        TimeoutException => LatticeMetrics.LeafSplitFaultTimeout,
+        _ => LatticeMetrics.LeafSplitFaultOther,
+    };
 
     /// <summary>
     /// Records that a division could not pivot from the snapshot frame and is
