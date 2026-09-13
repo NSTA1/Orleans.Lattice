@@ -164,6 +164,13 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
             sp.GetRequiredService<ILogger<RepoContextVectorPlaneReDeriver>>(),
             sp.GetRequiredService<TimeProvider>()));
         services.TryAddSingleton<RepoContextCoverageDigestStore>();
+
+        // Registered explicitly, and it must be: the writer takes this as an OPTIONAL
+        // constructor parameter, and the container supplies the default for a
+        // parameter it cannot resolve rather than failing. So an unregistered
+        // reporter is not a startup error - it is a null, and the instrument then
+        // never exists on any host while every test that passes one keeps passing.
+        services.TryAddSingleton<RepoContextMemoryMarkerScanReporter>();
         services.TryAddSingleton<RepoContextVectorWriter>();
         services.TryAddSingleton<RepoContextEmbeddingGapScanner>();
 

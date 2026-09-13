@@ -330,6 +330,18 @@ public sealed class TenantMetricDimensionHygieneTests
         // arms are pre-minted so a zero on the resumed arm is a measured absence
         // rather than a missing series.
         "_loads",
+        // repocontext.bootstrap.memory_marker_scan - walks of the embedded-memory-key
+        // marker range, partitioned by whether the walk exhausted the range in one pass,
+        // exhausted it after consuming progress banked by an earlier faulted pass, or
+        // banked a page fault to resume from next pass, issue #2071. Sentinel for the
+        // same reason as _loads, which it sits beside: the marker range lives in the one
+        // shared vector-index tree, so LatticeTenantLabel.ForTree would resolve to the
+        // same constant for every repository on the host, yielding a single
+        // undiscriminating series that nevertheless reads as a tenant attribution. The
+        // outcome tag carries the whole signal, and all three arms are pre-minted so the
+        // all-zero reading means the scan was never reached rather than that nothing was
+        // registered - a distinction this instrument exists to make.
+        "_markerScans",
         // lattice.repocontext.memory.restore - memory-archive restore attempts
         // partitioned by outcome (restored / partial / nothing_to_restore /
         // not_attempted / failed), issue #2641. The restore runs once per HOST PROCESS
