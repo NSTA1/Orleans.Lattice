@@ -96,23 +96,51 @@ public sealed class DashboardJsonTests
         // preserves any underscores already present in the .NET name.
         var underscored = instrumentName.Replace('.', '_');
 
+        // Only a Histogram<T> ever exports bucket series; every other instrument
+        // kind exports a single sample per series under every exporter. Registering
+        // a "_bucket" form for a counter would assert that a form exists without
+        // establishing that anything can produce it, which is exactly how a panel
+        // reading buckets off a counter used to pass this name check silently.
+        // DashboardHistogramQuantileTests states that invariant directly and is
+        // where such a panel is now reported; narrowing here stops this map from
+        // vouching for a series no exporter emits.
+        //
+        // An instrument absent from the source registry stays permissive: the
+        // histogram gate reports an unresolvable bucket token itself, with a
+        // message naming the real cause, and duplicating it here would only
+        // obscure that.
+        var bucketed = !DeclaredInstruments.ByDottedName.TryGetValue(instrumentName, out var declaredKind)
+            || declaredKind == DeclaredInstrumentKind.Histogram;
+
         // Counter: name + "_total"
         map[underscored + "_total"] = meterName;
 
         // Histogram (ms unit): name + "_milliseconds_{bucket|count|sum}"
-        map[underscored + "_milliseconds_bucket"] = meterName;
+        if (bucketed)
+        {
+            map[underscored + "_milliseconds_bucket"] = meterName;
+        }
+
         map[underscored + "_milliseconds_count"] = meterName;
         map[underscored + "_milliseconds_sum"] = meterName;
 
         // Histogram (s unit): name + "_seconds_{bucket|count|sum}"
-        map[underscored + "_seconds_bucket"] = meterName;
+        if (bucketed)
+        {
+            map[underscored + "_seconds_bucket"] = meterName;
+        }
+
         map[underscored + "_seconds_count"] = meterName;
         map[underscored + "_seconds_sum"] = meterName;
 
         // Histogram with no explicit unit (the .NET name itself encodes the unit,
         // e.g. ".apply.dependency_wait_ms"): the exporter appends the suffix
         // directly to the underscored name without inserting a unit segment.
-        map[underscored + "_bucket"] = meterName;
+        if (bucketed)
+        {
+            map[underscored + "_bucket"] = meterName;
+        }
+
         map[underscored + "_count"] = meterName;
         map[underscored + "_sum"] = meterName;
 
