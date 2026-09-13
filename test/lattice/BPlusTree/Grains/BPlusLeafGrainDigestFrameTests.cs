@@ -206,22 +206,21 @@ public sealed class BPlusLeafGrainDigestFrameTests
     /// Asserts that no whole-cache accessor released the frame.
     /// </summary>
     /// <remarks>
-    /// Deliberately an exclusion of the four accessor seams rather than an
+    /// Deliberately an exclusion of the three accessor seams rather than an
     /// equality against <see cref="LeafSnapshotDetachSeam.None"/>.
     /// <see cref="LeafSnapshotDetachSeam.RangeHydrationCompleted"/> is a
     /// legitimate outcome for a bounded walk whose windows happened to cover
     /// every block inside the resident budget, so pinning to <c>None</c> would
     /// make the verdict depend on a budget-versus-leaf ratio the caller does
     /// not control, and would fail by construction on the small-leaf arms. The
-    /// four accessor seams are the defect; the other members are not.
+    /// three accessor seams are the defect; the other members are not.
     /// </remarks>
     private static void AssertNoWholeCacheSeam(BPlusLeafGrain grain) =>
         Assert.That(
             grain.CacheForTest.LastDetachSeam,
             Is.Not.EqualTo(LeafSnapshotDetachSeam.KeysAccessor)
                 .And.Not.EqualTo(LeafSnapshotDetachSeam.EnumerateRowsAccessor)
-                .And.Not.EqualTo(LeafSnapshotDetachSeam.UnderlyingRowsAccessor)
-                .And.Not.EqualTo(LeafSnapshotDetachSeam.StateBytesBackfill),
+                .And.Not.EqualTo(LeafSnapshotDetachSeam.UnderlyingRowsAccessor),
             "a whole-cache accessor consumed the frame - the forfeiture this conversion "
             + "exists to prevent, and the one thing row-level assertions cannot see");
 

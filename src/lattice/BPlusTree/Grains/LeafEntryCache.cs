@@ -158,26 +158,6 @@ internal sealed partial class LeafEntryCache
     internal long LiveCount => _liveCount + _residualLiveCount;
 
     /// <summary>
-    /// One-shot backfill seam for activations whose persisted
-    /// <c>LeafStateBytes</c> slot was written before
-    /// incremental accounting was added. The activation path calls this
-    /// once after the cache has been populated (snapshot rehydrate + WAL
-    /// tail replay), at which point the running counter matches a fresh
-    /// walk by construction. Idempotent.
-    /// <para>
-    /// Forces a lazily hydrated snapshot to materialise first: the supplied
-    /// figure describes the whole projection, so it may only replace the
-    /// running counter once that counter also describes the whole projection
-    /// and no residual remains to be added to it.
-    /// </para>
-    /// </summary>
-    internal void OverwriteStateBytesForBackfill(long value)
-    {
-        HydrateAll(LeafSnapshotDetachSeam.StateBytesBackfill);
-        _stateBytes = value;
-    }
-
-    /// <summary>
     /// Computes the per-entry logical-payload contribution to
     /// <see cref="StateBytes"/>: UTF-8 key length plus stored value length
     /// (or zero for a tombstone). Public-static so callers outside the
@@ -681,7 +661,20 @@ internal sealed partial class LeafEntryCache
     /// <summary>Key seeks performed against a lazily hydrated snapshot since this cache was last cleared.</summary>
     internal long SnapshotSeeks => _detachedSeeks + (_hydration?.Seeks ?? 0L);
 
-    /// <summary>Hydration blocks evicted under the resident-footprint budget.</summary>
+    /// <summary>
+    /// Hydration blocks evicted under the resident-footprint budget.
+    /// <para>
+    /// Like <see cref="PendingHydrationRowCount"/>, <see cref="HydratedRowCount"/>,
+    /// <see cref="SnapshotBytesRead"/>, <see cref="SnapshotRowsMaterialised"/> and
+    /// <see cref="SnapshotSeeks"/>, this is a read window onto a counter the
+    /// production path maintains rather than a value production reads back.
+    /// Fixtures observe the family through <c>BPlusLeafGrain.CacheForTest</c>,
+    /// which is the documented alternative to <c>EntriesForTest</c> precisely
+    /// because it does not detach the frame. Several of them use this counter as
+    /// a non-vacuity anchor ("the resident budget must actually bite"), so it is
+    /// load-bearing despite having no caller in <c>src/</c>.
+    /// </para>
+    /// </summary>
     internal long EvictedBlockCount => _evictedBlocks;
 
     /// <summary>
@@ -889,7 +882,7 @@ internal sealed partial class LeafEntryCache
     // detach on the ranged seam keeps the frame attached (and still evictable
     // via TrimToBudget) so TryGetBisectingKeyWithoutHydrating succeeds. Whole-
     // cache accessors (KeysAccessor / EnumerateRowsAccessor /
-    // UnderlyingRowsAccessor / StateBytesBackfill) are unaffected: their seam
+    // UnderlyingRowsAccessor) are unaffected: their seam
     // is never RangeHydrationCompleted, so they still detach here, and
     // HydrateAll additionally detaches on its own trailing path.
     private void HydrateBlock(LeafSnapshotHydrationSource source, int block, LeafSnapshotDetachSeam seam)

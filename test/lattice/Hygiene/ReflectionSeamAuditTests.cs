@@ -87,6 +87,8 @@ public sealed class ReflectionSeamAuditTests
             "ResolveTtl override has no production call site by design; the fixture says so inline and guards the opt-out.",
         ["test/lattice/BPlusTree/Grains/LeafCacheGrainTests.DivisionCookie.cs"] =
             "Same SplitAsync exemption as BoundedSplitTransfer: gated by SplitIfNeededUnderGateAsync, whose wiring SplitGate's Split_proceeds_normally_when_gate_is_free drives. Reflection here isolates the division from a triggering write, so the cache refresh is attributed to the division alone.",
+        ["test/lattice/BPlusTree/Grains/LeafSnapshotDetachAttributionTests.cs"] =
+            "Census: Every_detach_seam_has_its_own_metric_tag's subject is the population of LeafSnapshotDetachSeam members and their projection onto detach_seam, so there is no single wiring to exempt. DetachSeamTag's sole production caller, RecordBisectRefusal, applies it unconditionally on every recorded refusal, so no gate can decline it; the reflected assert also fails loudly if the method is renamed rather than passing vacuously.",
         ["test/lattice/BPlusTree/Grains/WalCommitLogWriterWedgeDiagnosticsTests.cs"] =
             "Arrange-only: wedges private tracker state by reflection, then asserts through the public AppendAsync.",
         ["test/lattice/BPlusTree/Grains/WalMaterialiserPinGrainFaultArmsTests.cs"] =

@@ -256,10 +256,19 @@ public sealed class LeafSnapshotDetachAttributionTests
     [Test]
     public void The_reason_reporting_overload_agrees_with_the_bare_one()
     {
-        // The bare overload is the one production called before the reason
-        // existed, and several fixtures still use it. It must stay a pure
-        // delegation, or the instrument measures a different decision from the
-        // one the split path actually takes.
+        // Why this still matters, restated for issue #2865. The original
+        // justification said production called the bare overload and that
+        // divergence would make "the instrument measure a different decision
+        // from the one the split path actually takes". That second clause is
+        // false: since #2837 the split path calls only the reason-reporting
+        // overload, so no divergence can reach the instrument through the bare
+        // one. The clause that IS still true is the fixture one. Eight
+        // assertions across four fixtures pin leaf-division behaviour through
+        // the bare form, so if it stopped being a pure delegation those
+        // fixtures would silently assert about a different decision from the
+        // one production takes - green, and measuring the wrong thing. The
+        // overload is therefore convenience for tests, not dead code, and this
+        // arm is what keeps the convenience honest.
         var attached = CacheWithFrame(rowCount: 64);
         var detached = NewCache();
 
@@ -483,7 +492,7 @@ public sealed class LeafSnapshotDetachAttributionTests
             // Constraint from the epic: None and RangeHydrationCompleted are
             // BOTH legitimate outcomes of a correct conversion in general - the
             // budget-to-leaf ratio decides which - so the ratio-independent
-            // invariant is that the seam is none of the four whole-cache
+            // invariant is that the seam is none of the three whole-cache
             // accessors. This arm additionally controls the ratio (the budget
             // covers the whole leaf, so the ranged walk completes in one
             // protected window with no eviction), which is exactly what lets it
@@ -494,8 +503,7 @@ public sealed class LeafSnapshotDetachAttributionTests
                 grain.CacheForTest.LastDetachSeam,
                 Is.Not.EqualTo(LeafSnapshotDetachSeam.KeysAccessor)
                     .And.Not.EqualTo(LeafSnapshotDetachSeam.EnumerateRowsAccessor)
-                    .And.Not.EqualTo(LeafSnapshotDetachSeam.UnderlyingRowsAccessor)
-                    .And.Not.EqualTo(LeafSnapshotDetachSeam.StateBytesBackfill),
+                    .And.Not.EqualTo(LeafSnapshotDetachSeam.UnderlyingRowsAccessor),
                 "the ranged completion must not detach through any whole-cache accessor");
             Assert.That(
                 grain.CacheForTest.LastDetachSeam,
@@ -634,6 +642,78 @@ public sealed class LeafSnapshotDetachAttributionTests
                 grain.CacheForTest.HasPendingHydration,
                 Is.True,
                 "the frame is still attached after the bisect - reading the pivot did not consume it");
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #2865: the seam-to-tag projection must be TOTAL.
+    //
+    // RecordBisectRefusal projects LastDetachSeam onto the closed vocabulary
+    // carried on detach_seam via BPlusLeafGrain.DetachSeamTag, whose switch
+    // ends in `_ => "none"`. That default is not a harmless fallback: `none` is
+    // the tag value meaning "no frame was ever attached", which is the BENIGN
+    // reading this counter exists to separate from the harmful one. A seam
+    // member with no arm is therefore not merely untagged - it is actively
+    // mislabelled as the opposite case, on a counter whose documented reading
+    // is "reason=no_snapshot_attached with detach_seam=none is benign". The
+    // failure is silent: no series goes missing, one simply reports the wrong
+    // thing, and an operator reads a forfeiture as a leaf that never had a
+    // frame.
+    //
+    // This is exactly the shape #2865 removed a dead arm for, taken from the
+    // other side. Removing a member that nothing can emit costs nothing;
+    // ADDING one without a tag costs an operator a wrong verdict. The arms are
+    // otherwise unguarded, because DetachSeamTag is private and every existing
+    // fixture asserts on LeafSnapshotDetachSeam rather than on the projection.
+    // ---------------------------------------------------------------
+
+    [Test]
+    public void Every_detach_seam_has_its_own_metric_tag()
+    {
+        var project = typeof(BPlusLeafGrain).GetMethod(
+            "DetachSeamTag",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        // Loud on rename: a reflection probe that silently finds nothing would
+        // pass this whole fixture vacuously, which is the defect it exists to
+        // catch elsewhere.
+        Assert.That(
+            project,
+            Is.Not.Null,
+            "BPlusLeafGrain.DetachSeamTag was renamed or removed - this guard is now measuring "
+            + "nothing and must be repointed rather than deleted");
+
+        var seams = Enum.GetValues<LeafSnapshotDetachSeam>();
+        Assert.That(
+            seams, Has.Length.GreaterThan(1),
+            "precondition: the enum must carry more than the None member, or the loop below is empty");
+
+        var tags = seams.ToDictionary(
+            seam => seam,
+            seam => (string)project!.Invoke(null, [seam])!);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                tags[LeafSnapshotDetachSeam.None],
+                Is.EqualTo("none"),
+                "the benign reading must keep its tag, or the documented pairing "
+                + "'no_snapshot_attached with none is benign' names a value nothing emits");
+
+            foreach (var (seam, tag) in tags.Where(kv => kv.Key != LeafSnapshotDetachSeam.None))
+            {
+                Assert.That(
+                    tag,
+                    Is.Not.EqualTo("none"),
+                    $"{seam} falls through DetachSeamTag's default arm, so a real forfeiture through "
+                    + "it would be reported as the benign 'no frame was ever attached' case");
+            }
+
+            Assert.That(
+                tags.Values.Distinct().Count(),
+                Is.EqualTo(tags.Count),
+                "two seams share a tag, so the counter cannot attribute a forfeiture to the "
+                + "surface that caused it");
         });
     }
 }
