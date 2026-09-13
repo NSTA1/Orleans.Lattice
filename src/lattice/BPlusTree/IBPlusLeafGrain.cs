@@ -694,8 +694,29 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Bulk-merges entries (including tombstones) into this leaf using LWW semantics,
     /// preserving original timestamps. Used during splits to transfer entries without
     /// re-stamping them. Idempotent - re-merging the same entries is a no-op.
+    /// <para>
+    /// The batch is marked <see cref="ImmutableAttribute"/> so that a same-silo
+    /// call hands the caller's dictionary and payload arrays straight through
+    /// instead of deep-copying every value. Without the marker Orleans clones
+    /// each <c>byte[]</c> on a co-located call, so a bounded batch sized to fit
+    /// a memory budget transiently occupies twice that budget - the copy is
+    /// unconditional on the same-silo path and every caller of this method is
+    /// co-located in a single-silo deployment.
+    /// </para>
+    /// <para>
+    /// THE INVARIANT THIS BUYS THE PERFORMANCE WITH: a caller must not mutate
+    /// the dictionary, or any payload array in it, after handing it over. The
+    /// callee retains the payload references in its cache, so a post-call write
+    /// by the caller would be observable as silent corruption of committed leaf
+    /// state rather than as a failure. This is the same bargain <c>WalRecord</c>
+    /// already makes: its payload crosses to the WAL grain uncopied for exactly
+    /// this reason, and the arrays it shares are the very ones passed to this
+    /// method. All callers are internal
+    /// (<c>EnsureInternalOrigin</c> forbids an external origin), so the
+    /// invariant is checkable by inspection rather than hoped for.
+    /// </para>
     /// </summary>
-    Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries);
+    Task MergeEntriesAsync([Immutable] Dictionary<string, LwwValue<byte[]>> entries);
 
     /// <summary>
     /// Returns the sorted list of live (non-tombstoned) keys in this leaf

@@ -732,6 +732,11 @@ internal sealed partial class BPlusLeafGrain
         // that to MergeEntriesAsync to be deep-copied: three whole-leaf-scale
         // costs alive at once, on a leaf already known to be oversized.
         //
+        // The third of those costs is now gone outright rather than bounded:
+        // MergeEntriesAsync's parameter is marked [Immutable] (issue #2799), so
+        // the same-silo call hands these payload arrays through instead of
+        // cloning each one. Read the paragraph below as bounding the first two.
+        //
         // Batching bounds the peak to one batch regardless of how large the
         // leaf is, which is the property that makes this a fix rather than a
         // mitigation: a leaf twice the size divides at the same peak, not at
@@ -795,6 +800,12 @@ internal sealed partial class BPlusLeafGrain
                 // MergeEntriesAsync so the gate is armed before the migrated value
                 // becomes visible on the sibling.
                 await TransferShadowMarkersToSiblingAsync(newLeaf, batch.Keys);
+
+                // The batch's payload arrays are the donor cache's own arrays,
+                // and MergeEntriesAsync's parameter is [Immutable], so the
+                // sibling retains these references rather than copies of them.
+                // Nothing below may write into them: the removal loop only drops
+                // the donor's reference, which is why sharing them is safe here.
                 await newLeaf.MergeEntriesAsync(batch);
 
                 // Drop the batch from the donor before reading the next one, so
