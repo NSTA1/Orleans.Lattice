@@ -239,15 +239,32 @@ public sealed class InstrumentPrimingEnrolmentTests
                 continue;
             }
 
+            // A single resolved value contradicts the claim just as a multi-valued domain
+            // does. None asserts that the instrument carries NO bounded tag dimension, and a
+            // tag key that resolved to exactly one literal demonstrably has one. Treating
+            // Count == 1 as "not bounded" was a live defect in this gate: the emission site
+            // for LatticeReplicationMetrics.ShipDuration tags outcome from a local that is
+            // initialised to "error" and reassigned to "ok" on the success path, and the
+            // resolver reads initialisers but not reassignment, so the domain came back as
+            // the single value ['error']. Classified None, that read as "no taxonomy here"
+            // rather than as "a taxonomy I failed to read" - a parse failure laundered into
+            // a negative claim, which is the precise failure Unresolved exists to prevent.
+            // Any dimension the parser found contradicts the claim, resolved or not. None
+            // asserts that the instrument carries NO bounded tag dimension; an ambiguous or
+            // unreadable dimension means a dimension demonstrably exists and could not be
+            // read, which is Unresolved's claim, not None's. Counting only fully-resolved
+            // dimensions here would let every parse failure settle into a negative claim.
             var resolved = declaration.Dimensions
-                .Where(d => !d.Value.Ambiguous && d.Value.Values.Count > 1)
+                .Where(d => d.Value.Ambiguous || d.Value.Values.Count > 0)
                 .ToList();
 
             if (resolved.Count > 0)
             {
                 var detail = string.Join(
                     ", ",
-                    resolved.Select(d => $"{d.Key} -> [{string.Join(", ", d.Value.Values)}]"));
+                    resolved.Select(d => d.Value.Ambiguous
+                        ? $"{d.Key} -> unresolved ({d.Value.Note})"
+                        : $"{d.Key} -> [{string.Join(", ", d.Value.Values)}]"));
                 contradicted.Add($"{row.Key}: {detail}");
             }
         }
@@ -673,7 +690,13 @@ public sealed class InstrumentPrimingEnrolmentTests
 
         foreach (var declaration in declarations.OrderBy(d => d.Key, StringComparer.Ordinal))
         {
-            if (existing.TryGetValue(declaration.Key, out var row))
+            // Preserve a curated row, EXCEPT a None row the parser now contradicts. None is a
+            // claim that the instrument carries no tag dimension; once a dimension is visible
+            // the row is a stale negative claim, and preserving it would let the regeneration
+            // path quietly re-assert something the gate already knows to be false.
+            var hasDimension = declaration.Dimensions.Count > 0;
+            if (existing.TryGetValue(declaration.Key, out var row)
+                && !(row.Enrolment == Enrolment.None && hasDimension))
             {
                 builder.AppendLine($"{row.Key}\t{Render(row.Enrolment)}\t{row.Detail}");
                 continue;
@@ -682,6 +705,9 @@ public sealed class InstrumentPrimingEnrolmentTests
             var bounded = declaration.Dimensions
                 .Where(d => !d.Value.Ambiguous && d.Value.Values.Count > 1)
                 .ToList();
+            var single = declaration.Dimensions
+                .Where(d => !d.Value.Ambiguous && d.Value.Values.Count == 1)
+                .ToList();
             var ambiguous = declaration.Dimensions.Where(d => d.Value.Ambiguous).ToList();
 
             if (bounded.Count > 0)
@@ -689,10 +715,20 @@ public sealed class InstrumentPrimingEnrolmentTests
                 builder.AppendLine(
                     $"{declaration.Key}\tunresolved\treason=bounded domain found, enrolment not yet chosen");
             }
+            else if (single.Count > 0)
+            {
+                // A tag key resolving to exactly one literal is far likelier to be an
+                // under-resolved dimension than a genuine constant, so it is seeded as a
+                // named blind spot rather than as a negative claim.
+                builder.AppendLine(
+                    $"{declaration.Key}\tunresolved\treason=single-value domain {single[0].Key} -> "
+                    + $"[{string.Join(", ", single[0].Value.Values)}]; likely under-resolved, not a constant");
+            }
             else if (ambiguous.Count > 0)
             {
                 builder.AppendLine(
-                    $"{declaration.Key}\tunresolved\treason={ambiguous[0].Value.Note ?? "domain not resolvable"}");
+                    $"{declaration.Key}\tunresolved\treason=dimension {ambiguous[0].Key}: "
+                    + $"{ambiguous[0].Value.Note ?? "domain not resolvable"}");
             }
             else
             {
@@ -996,18 +1032,38 @@ public sealed class InstrumentPrimingEnrolmentTests
                 var args = SplitArguments(blob, m.Index + m.Length);
                 if (args.Count < 2)
                 {
+                    // Never drop a tag pair silently. A discarded pair leaves the instrument
+                    // with no dimensions at all, which seeds as None - a claim that the
+                    // instrument carries NO bounded dimension. That converts a parse failure
+                    // into a negative claim, which is precisely the silent exclusion this gate
+                    // exists to prevent, occurring inside the gate's own parser.
+                    yield return (
+                        "(unreadable-tag-pair)",
+                        new DomainResult(
+                            Array.Empty<string>(),
+                            true,
+                            "a tag pair could not be split into key and value"));
                     continue;
                 }
 
                 var key = ResolveSingle(args[0], path);
                 if (key is null)
                 {
+                    yield return (
+                        $"(unresolved-key:{Collapse(args[0])})",
+                        new DomainResult(
+                            Array.Empty<string>(),
+                            true,
+                            $"tag key {Collapse(args[0])} did not resolve to a single literal"));
                     continue;
                 }
 
                 yield return (key, ResolveDomain(args[1], path));
             }
         }
+
+        private static string Collapse(string expression) =>
+            Regex.Replace(expression.Trim(), @"\s+", " ");
 
         private string? ResolveSingle(string expression, string path)
         {
@@ -1065,7 +1121,14 @@ public sealed class InstrumentPrimingEnrolmentTests
 
             if (Regex.IsMatch(e, @"^[\w\.]+$"))
             {
-                return ResolveConstant(e.Split('.')[^1], path);
+                // Keep the qualifier. LatticeReplicationMetrics.TagTree names its declaring
+                // type, and discarding that left a bare TagTree, which collides with the
+                // identically-named const in LatticeMetrics and so resolved as ambiguous. The
+                // never-union rule was right to refuse it; throwing away the information that
+                // disambiguates it was the defect.
+                var segments = e.Split('.');
+                var qualifier = segments.Length >= 2 ? segments[^2] : null;
+                return ResolveConstant(segments[^1], path, qualifier);
             }
 
             return new DomainResult(Array.Empty<string>(), true, $"unrecognised value expression: {Truncate(e)}");
@@ -1123,11 +1186,27 @@ public sealed class InstrumentPrimingEnrolmentTests
             return null;
         }
 
-        private DomainResult ResolveConstant(string name, string path)
+        private DomainResult ResolveConstant(string name, string path, string? qualifier = null)
         {
             if (!_consts.TryGetValue(name, out var candidates) || candidates.Count == 0)
             {
                 return new DomainResult(Array.Empty<string>(), true, $"no declaration found for {name}");
+            }
+
+            // A qualified reference narrows the candidates to the declaring type. The repository
+            // convention is one top-level type per file, so the file's base name is a sound proxy
+            // for the type name; if it narrows to nothing the qualifier is not a type here and the
+            // ordinary file-local-first rule still applies.
+            if (qualifier is not null)
+            {
+                var qualified = candidates
+                    .Where(c => string.Equals(
+                        Path.GetFileNameWithoutExtension(c.File), qualifier, StringComparison.Ordinal))
+                    .ToList();
+                if (qualified.Count > 0)
+                {
+                    candidates = qualified;
+                }
             }
 
             var chosen = ChooseUnique(candidates, path, name, out var failure);
