@@ -129,11 +129,16 @@ internal sealed class DashboardBucketUnitSuffixTests
                 + "with no counter-example anywhere in the bundled dashboards."),
 
             ["By"] = new(
-                [string.Empty, "bytes"],
-                "Whether the exporter appends 'bytes' for the UCUM unit 'By' is not established from "
-                + "this repository, because every By-unit histogram declared under src/ is already "
-                + "named '*_bytes'. Both candidates are carried, and the gate asserts only where they "
-                + "agree."),
+                ["bytes"],
+                "Measured, not inferred. The rival candidate previously carried here was resolvable "
+                + "from this repository's instruments only if one of them declared 'By' without "
+                + "already being named '*_bytes', and none does - so the question was settled by "
+                + "scraping OpenTelemetry.Exporter.Prometheus.AspNetCore 1.15.3-beta.1, the version "
+                + "every host here pins, against a synthetic control instrument named without the "
+                + "'_bytes' suffix. The exporter appended '_bytes' to the control and did not double "
+                + "it on the repository's own '*_bytes' names (issue #2941). The do-not-double rule "
+                + "lives in PredictedBucketTokens, so this single candidate still predicts the bare "
+                + "name for every instrument already carrying the suffix."),
 
             ["1"] = new(
                 [string.Empty, "ratio"],
@@ -149,12 +154,17 @@ internal sealed class DashboardBucketUnitSuffixTests
     /// instrument leaving this list means the collapse no longer holds and the panel
     /// is no longer provably correct.
     /// </summary>
+    /// <remarks>
+    /// The three <c>By</c>-unit instruments that were listed here left when that
+    /// unit stopped being a two-candidate rule: it is now a measured single rule
+    /// (see the contract entry), so those panels are provable outright rather than
+    /// only where rival rules happen to agree. That is a strictly stronger verdict
+    /// for them, and it is why this list shrinking is the expected outcome of
+    /// issue #2941 rather than a loss of coverage.
+    /// </remarks>
     private static readonly IReadOnlyList<string> ExpectedCollapsedInstruments =
     [
-        "orleans.lattice.backup.bytes",
         "orleans.lattice.leaf.tombstone.ratio",
-        "orleans.lattice.wal.append.batch_bytes",
-        "orleans.lattice.wal.gc.backlog_bytes",
     ];
 
     private static readonly Lazy<Assessment> AssessmentLazy =
@@ -294,9 +304,12 @@ internal sealed class DashboardBucketUnitSuffixTests
     /// is already present and is not appended twice; if it maps <c>1</c> to nothing,
     /// no suffix is appended either. Both candidates predict the same series name,
     /// so the panel is correct under either behaviour and no experiment against any
-    /// exporter could distinguish them using this repository's instruments. The same
-    /// argument settles <c>By</c>: all three instruments declaring it are already
-    /// named <c>*_bytes</c>.
+    /// exporter could distinguish them using this repository's instruments.
+    /// <c>By</c> was settled the other way: the same argument held for it, which is
+    /// exactly why no instrument here could decide it, so it was decided by scraping
+    /// the pinned exporter against a synthetic control named without the suffix
+    /// (issue #2941). It is now a single measured rule and no longer reaches this
+    /// path.
     /// </para>
     /// <para>
     /// The collapse is what makes those panels provable, so it is asserted rather
