@@ -531,17 +531,22 @@ internal sealed class TreeShardConsolidationGrain(
         var survivor = await GetSurvivorAsync();
         await survivor.ReclaimSlotsAsync(slots, vsc);
 
-        // Re-read the live map so concurrent topology changes compose: this
-        // fold applies its own slot diff onto whatever is currently persisted
-        // rather than clobbering someone else's swap. The registry grain is
-        // non-reentrant, so get-modify-set is atomic across callers.
+        // Apply this fold's slot diff inside a single registry call so
+        // concurrent topology changes compose: ReassignSlotsAsync re-reads the
+        // live map and persists the reassigned copy without interleaving, so
+        // an adaptive split landing alongside this fold cannot erase either
+        // coordinator's reassignment. Performing the same get-modify-set here
+        // across two calls would not be atomic - the registry grain's
+        // non-reentrancy serialises each individual call, not a sequence of
+        // them, so a split persisting in the gap would be clobbered by the
+        // write below and its moved slots would keep routing to the source it
+        // had already migrated away from.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var currentMap = await registry.GetShardMapAsync(TreeId) ?? state.State.OriginalShardMap!;
-        var newSlots = (int[])currentMap.Slots.Clone();
-        var survivorIndex = state.State.SurvivorShardIndex;
-        for (var i = 0; i < slots.Length; i++)
-            newSlots[slots[i]] = survivorIndex;
-        await registry.SetShardMapAsync(TreeId, new ShardMap { Slots = newSlots });
+        await registry.ReassignSlotsAsync(
+            TreeId,
+            slots,
+            state.State.SurvivorShardIndex,
+            state.State.OriginalShardMap!);
 
         await AdvancePhaseAsync(ShardConsolidationPhase.Reject);
     }
