@@ -71,6 +71,26 @@ internal static class CoordinatorPhaseTickCensus
     private static long _nextToken;
 
     /// <summary>
+    /// The observable gauge itself. Registered here rather than beside the other
+    /// instruments in <see cref="LatticeMetrics"/> because an observable
+    /// instrument's measurements come from its callback rather than from an
+    /// argument list, so the registration and the tenant-dimension emission have
+    /// to be readable together: a registration sitting one file away from the
+    /// callback that tags its measurements is exactly the split the
+    /// tenant-dimension hygiene gate refuses.
+    /// <para>
+    /// Declared below the state <see cref="Observe"/> reads, because a listener
+    /// may observe the gauge as soon as it is published and the callback must not
+    /// find a field that this initialiser has not yet reached.
+    /// </para>
+    /// </summary>
+    internal static readonly ObservableGauge<long> Gauge =
+        LatticeMetrics.Meter.CreateObservableGauge(
+            LatticeMetrics.CoordinatorPhaseTickConsecutiveFailuresGaugeName,
+            Observe, unit: "{failure}",
+            description: "Length of the current run of consecutive failed coordinator phase-timer ticks, tagged by coordinator kind and tree, reported as the maximum over the activations sharing a tag set. Every live coordinator reports, so zero is a reading rather than an absence.");
+
+    /// <summary>
     /// Enrols one coordinator activation at a run length of zero and returns the
     /// token that identifies it for <see cref="Record"/> and
     /// <see cref="Withdraw"/>.

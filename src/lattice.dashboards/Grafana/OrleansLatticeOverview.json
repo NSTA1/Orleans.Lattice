@@ -1619,6 +1619,22 @@
           "legendFormat": "{{tree}} {{outcome}}"
         }
       ]
+    },
+    {
+      "id": 71,
+      "title": "Coordinator consecutive phase-tick failure run",
+      "description": "Length of the CURRENT run of consecutive failed phase ticks per coordinator kind and tree (orleans_lattice_coordinator_phase_tick_consecutive_failures), as the maximum over the activations sharing a tag set. Read it BESIDE the phase-tick failure rate panel, which cannot answer this question: a cumulative counter has no notion of consecutiveness, so a coordinator failing one tick in a thousand and one that has failed every tick since the process started both present as a rising rate - yet the first is a transient the loop absorbs by design and the second is a phase machine that has stopped advancing and will not resume without intervention. That distinction is what issue #2814 turned on, and the only evidence for it was the phrase '156 times in a row' in a 53 MB log stream. Every live coordinator reports, enrolling at zero when its phase timer arms, so this panel deliberately OMITS the 'or vector(0)' fallback its neighbours use: a flat zero is a MEASURED zero meaning the last tick succeeded, and 'No data' means no coordinator of that kind is live, which is itself the finding. A series that keeps returning to zero is a coordinator absorbing transients; one that only climbs is a wedge, and its value is how many ticks of work have been discarded back to back. A zero does NOT mean the coordinator is progressing - a tick that returns without advancing its phase machine is a success by this measure.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1021 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tree, kind) (orleans_lattice_coordinator_phase_tick_consecutive_failures{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}} {{kind}}"
+        }
+      ]
     }
   ]
 }

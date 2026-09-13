@@ -1095,14 +1095,14 @@ public static class LatticeMetrics
     /// Reported as the <b>maximum</b> over the activations sharing a tag set, which
     /// is coarser than the activation because a coordinator with a composite key
     /// deliberately reports under the subject alone. See
-    /// <c>CoordinatorPhaseTickCensus</c> for why <c>max</c> is the correct
+    /// <c>CoordinatorPhaseTickCensus</c> - which both registers this gauge and
+    /// supplies its callback, so that the tenant dimension is emitted in the same
+    /// file the instrument is created in - for why <c>max</c> is the correct
     /// reduction.
     /// </para>
     /// </summary>
     public static readonly ObservableGauge<long> CoordinatorPhaseTickConsecutiveFailures =
-        Meter.CreateObservableGauge(CoordinatorPhaseTickConsecutiveFailuresGaugeName,
-            CoordinatorPhaseTickCensus.Observe, unit: "{failure}",
-            description: "Length of the current run of consecutive failed coordinator phase-timer ticks, tagged by coordinator kind and tree, reported as the maximum over the activations sharing a tag set. Every live coordinator reports, so zero is a reading rather than an absence.");
+        CoordinatorPhaseTickCensus.Gauge;
 
     /// <summary>
     /// Counter incremented once per tree-lifecycle transition. Tagged with
