@@ -107,6 +107,19 @@ public static class LatticeMetrics
     public const string TagDetachSeam = "detach_seam";
 
     /// <summary>
+    /// Tag key for the class of failure that faulted an operation. Paired with
+    /// <see cref="TagOutcome"/> = <c>faulted</c> on
+    /// <see cref="LeafSplitAttempts"/>, where it routes the remedy: a division
+    /// that ran out of memory and one that ran out of time present identically
+    /// as a bare fault, yet the first calls for a smaller leaf or a larger
+    /// hydration budget and the second for the storage path to be examined.
+    /// Deliberately distinct from <see cref="TagReason"/>, which names why
+    /// something was <em>refused</em> - a refusal is a decision the code took,
+    /// whereas a failure class is a property of an exception it caught.
+    /// </summary>
+    public const string TagFailureClass = "failure_class";
+
+    /// <summary>
     /// Tag key for the decision a control loop reached on one observation
     /// pass (e.g. <c>admitted</c>, <c>not_over_split</c>, <c>backpressure</c>
     /// on <see cref="ShardHealingDecisions"/>). Distinct from
@@ -1963,7 +1976,7 @@ public static class LatticeMetrics
     /// evidence at all.
     /// </para>
     /// <para>
-    /// All three outcomes are zero-primed at the capture seam, for the reason
+    /// All four outcomes are zero-primed at the capture seam, for the reason
     /// established by issue #2756 on <see cref="LeafByteOverflows"/>: a
     /// <see cref="Counter{T}"/> exports nothing until its first
     /// <c>Add</c>, so an absent series and a measured zero are the same
@@ -1971,10 +1984,34 @@ public static class LatticeMetrics
     /// one" a positive reading rather than an absence, which is precisely the
     /// state that must not collapse into "divided successfully".
     /// </para>
+    /// <para>
+    /// <b><see cref="LeafSplitFaulted"/> is what makes that promise true rather
+    /// than merely stated (issue #2845).</b> Until it existed the outcome arms
+    /// covered only the ways a division could <em>decline</em> to run, so a
+    /// division that began and threw incremented
+    /// <see cref="LeafSplits"/> and nothing at all here - and the primed zero
+    /// and the every-division-threw zero were the same reading, which is the
+    /// exact collapse this counter exists to prevent. That was not a corner
+    /// case: it was the observed state of a production tree, where fifteen
+    /// divisions had begun, none had recorded an outcome, and the instrument
+    /// read as though no division had ever been sought.
+    /// </para>
+    /// <para>
+    /// The fault arm additionally carries <see cref="TagFailureClass"/>,
+    /// because the two classes that occur in practice have opposite remedies -
+    /// see <see cref="LeafSplitFaultUnaffordable"/> and
+    /// <see cref="LeafSplitFaultTimeout"/>. Read the fault arm against
+    /// <see cref="LeafSplits"/> rather than on its own: that counter increments
+    /// only once the split intent is durable, so <c>splits - divided</c> is the
+    /// number of divisions that stranded a leaf mid-division, while a fault
+    /// with no matching <see cref="LeafSplits"/> increment threw before the
+    /// intent was persisted and stranded nothing. The subtraction is the
+    /// reading; the fault count alone does not distinguish the two.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> LeafSplitAttempts =
         Meter.CreateCounter<long>("orleans.lattice.leaf.split_attempts", unit: "{attempt}",
-            description: "Leaf divisions sought on an over-capacity leaf, tagged by tree and outcome (divided/gate_contended/already_under_capacity). Read alongside leaf bisect refusals, which is uninterpretable at zero without it.");
+            description: "Leaf divisions sought on an over-capacity leaf, tagged by tree and outcome (divided/gate_contended/already_under_capacity/faulted, the last also tagged failure_class as unaffordable/timeout/other). Read alongside leaf bisect refusals, which is uninterpretable at zero without it.");
 
     /// <summary>Canonical name of <see cref="LeafSplitAttempts"/>.</summary>
     public const string LeafSplitAttemptsName = "orleans.lattice.leaf.split_attempts";
@@ -2002,6 +2039,75 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> LeafSplitAlreadyUnderCapacity =
         new(TagOutcome, "already_under_capacity");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>faulted</c> on
+    /// <see cref="LeafSplitAttempts"/>: the division began and threw before it
+    /// could complete. Always accompanied by <see cref="TagFailureClass"/>.
+    /// <para>
+    /// This arm is the difference between the counter answering its own
+    /// question and silently refusing to (issue #2845). The other three
+    /// outcomes all describe a division that declined to start, so before this
+    /// existed there was no arm a started-and-failed division could land on,
+    /// and it landed on none of them - leaving the instrument reading exactly
+    /// as it reads on a tree where nothing was ever attempted.
+    /// </para>
+    /// <para>
+    /// It is also the wedge signal on this counter, but only in conjunction
+    /// with <see cref="LeafSplits"/>, and the two must be read together.
+    /// <see cref="LeafSplits"/> is incremented only after
+    /// <c>SplitState = SplitInProgress</c> is persisted, so a fault whose
+    /// division got that far left a leaf holding a half-finished division - a
+    /// pivot chosen, a sibling grain id allocated, the next-sibling pointer
+    /// repointed - which the recovery path will re-enter on the next write.
+    /// A fault thrown <em>before</em> that point persisted no intent and
+    /// stranded nothing, and the hydration admission gate is exactly that case:
+    /// it declines in advance, so a
+    /// <see cref="LeafSplitFaultUnaffordable"/> fault is the arm least likely
+    /// to have wedged anything. The count that means "wedged" is therefore
+    /// <c>splits - divided</c>, not the fault count; a non-zero fault arm with
+    /// <see cref="LeafSplits"/> flat is a tree failing to start divisions, not
+    /// one stuck in the middle of them, and reaching for recovery tooling on
+    /// the strength of the fault arm alone will find nothing to recover.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitFaulted =
+        new(TagOutcome, "faulted");
+
+    /// <summary>
+    /// <see cref="TagFailureClass"/> = <c>unaffordable</c> on
+    /// <see cref="LeafSplitAttempts"/>: the division could not be paid for in
+    /// memory, either because the hydration admission gate refused it
+    /// (<c>LeafSnapshotUnaffordableException</c>) or because the allocation
+    /// failed outright. The remedy is to reduce what a division has to
+    /// materialise or to raise the hydration budget; waiting does not help,
+    /// because the leaf only grows.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitFaultUnaffordable =
+        new(TagFailureClass, "unaffordable");
+
+    /// <summary>
+    /// <see cref="TagFailureClass"/> = <c>timeout</c> on
+    /// <see cref="LeafSplitAttempts"/>: the division exceeded a deadline -
+    /// an Orleans response deadline, or one of the typed
+    /// <see cref="TimeoutException"/> subclasses this library raises. The
+    /// remedy is the opposite of the unaffordable one: the division was
+    /// affordable and the path under it was too slow, so the storage path and
+    /// the configured deadline are what to examine.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitFaultTimeout =
+        new(TagFailureClass, "timeout");
+
+    /// <summary>
+    /// <see cref="TagFailureClass"/> = <c>other</c> on
+    /// <see cref="LeafSplitAttempts"/>: the division threw something outside
+    /// the two classified families. Deliberately a real arm rather than an
+    /// absent tag, so that a fault is never uncounted merely because it was
+    /// unrecognised - an unclassifiable fault must still be visible as a
+    /// fault.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitFaultOther =
+        new(TagFailureClass, "other");
 
 
     /// <summary>
