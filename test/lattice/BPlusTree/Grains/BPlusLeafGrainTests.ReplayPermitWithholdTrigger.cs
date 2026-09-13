@@ -90,7 +90,7 @@ public partial class BPlusLeafGrainTests
         state.State.TreeId = UniqueReplayPermitTree();
 
         Assert.ThrowsAsync<OutOfMemoryException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None),
+            async () => await LeafActivationHarness.ActivateAsync((IGrainBase)grain, CancellationToken.None),
             "the injected memory fault must still propagate - attribution observes the withholding, "
             + "it does not absorb the failure that caused it");
     }

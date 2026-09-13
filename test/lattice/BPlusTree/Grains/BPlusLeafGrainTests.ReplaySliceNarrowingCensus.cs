@@ -106,7 +106,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _) = BuildResumableLeaf(state, coord.Stub, store.Stub, reclassifyEveryN: 1);
 
         var measurements = await RecordNarrowingsAsync(
-            () => ((IGrainBase)grain).OnActivateAsync(CancellationToken.None));
+            () => LeafActivationHarness.ActivateAsync((IGrainBase)grain, CancellationToken.None));
 
         var mine = ForResumableTree(measurements).ToList();
 
@@ -143,7 +143,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _) = BuildResumableLeaf(state, coord.Stub, store.Stub, reclassifyEveryN: 1);
 
         var measurements = await RecordNarrowingsAsync(
-            () => ((IGrainBase)grain).OnActivateAsync(CancellationToken.None));
+            () => LeafActivationHarness.ActivateAsync((IGrainBase)grain, CancellationToken.None));
 
         var narrowings = ForResumableTree(measurements).Where(m => m.Value > 0).ToList();
 
@@ -193,7 +193,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _) = BuildResumableLeaf(state, coord.Stub, store.Stub, reclassifyEveryN: 1);
 
         var measurements = await RecordNarrowingsAsync(
-            () => ((IGrainBase)grain).OnActivateAsync(CancellationToken.None));
+            () => LeafActivationHarness.ActivateAsync((IGrainBase)grain, CancellationToken.None));
 
         var mine = ForResumableTree(measurements).ToList();
 
