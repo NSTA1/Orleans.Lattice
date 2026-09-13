@@ -1950,6 +1950,61 @@ public static class LatticeMetrics
     public const string LeafBisectRefusalsName = "orleans.lattice.leaf.bisect_refusals";
 
     /// <summary>
+    /// Counter incremented once per leaf division sought on an over-capacity
+    /// leaf, tagged by tree, <see cref="TagOutcome"/> and the tenant label.
+    /// <para>
+    /// This exists to make <see cref="LeafBisectRefusals"/> interpretable when
+    /// it reads zero, and it is the only thing that does. A refusal count of
+    /// zero on a leaf that is over threshold and undivided spans two states
+    /// with opposite meanings: a division was sought and completed (not a
+    /// defect), or no division was ever sought at all (says nothing either
+    /// way). Without a separate attempt signal those are indistinguishable, so
+    /// a zero would read as a refutation of the forfeiture when it is no
+    /// evidence at all.
+    /// </para>
+    /// <para>
+    /// All three outcomes are zero-primed at the capture seam, for the reason
+    /// established by issue #2756 on <see cref="LeafByteOverflows"/>: a
+    /// <see cref="Counter{T}"/> exports nothing until its first
+    /// <c>Add</c>, so an absent series and a measured zero are the same
+    /// observation to a reader. Priming makes "sought a division and never got
+    /// one" a positive reading rather than an absence, which is precisely the
+    /// state that must not collapse into "divided successfully".
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSplitAttempts =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.split_attempts", unit: "{attempt}",
+            description: "Leaf divisions sought on an over-capacity leaf, tagged by tree and outcome (divided/gate_contended/already_under_capacity). Read alongside leaf bisect refusals, which is uninterpretable at zero without it.");
+
+    /// <summary>Canonical name of <see cref="LeafSplitAttempts"/>.</summary>
+    public const string LeafSplitAttemptsName = "orleans.lattice.leaf.split_attempts";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>divided</c> on
+    /// <see cref="LeafSplitAttempts"/>: the division ran to completion.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitDivided =
+        new(TagOutcome, "divided");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>gate_contended</c> on
+    /// <see cref="LeafSplitAttempts"/>: another turn held the split gate, so
+    /// this turn returned without evaluating the leaf. No division was
+    /// attempted and none was refused.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitGateContended =
+        new(TagOutcome, "gate_contended");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>already_under_capacity</c> on
+    /// <see cref="LeafSplitAttempts"/>: the in-gate re-check found the leaf
+    /// back under threshold, because a concurrent turn had already divided it.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitAlreadyUnderCapacity =
+        new(TagOutcome, "already_under_capacity");
+
+
+    /// <summary>
     /// <see cref="TagOutcome"/> = <c>immediate</c> on
     /// <see cref="LeafSnapshotHydrationAdmissions"/>: the hydration fitted inside
     /// the remaining budget and started without waiting.
