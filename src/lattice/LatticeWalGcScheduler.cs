@@ -478,7 +478,16 @@ internal sealed class LatticeWalGcScheduler(
     /// <summary>
     /// What a single reactivation touch established about the blocking leaf.
     /// </summary>
-    private enum ReactivationOutcome
+    /// <remarks>
+    /// Internal rather than private so the exhaustive-arming fixture can
+    /// enumerate its members by reflection (issue #2938). A gate that took the
+    /// member list from anywhere other than the enum itself could not detect the
+    /// case it exists for - a member added without an arm - because it would be
+    /// checking a copy that the new member was also missing from. This is the
+    /// ordinary test-visible level in this assembly, which already exposes its
+    /// grains to the test project the same way.
+    /// </remarks>
+    internal enum ReactivationOutcome
     {
         /// <summary>The leaf was resolved and touched without error.</summary>
         Completed,
@@ -519,6 +528,84 @@ internal sealed class LatticeWalGcScheduler(
         /// </remarks>
         Undelivered,
     }
+
+    /// <summary>
+    /// The single mapping from a terminal outcome to its metric arm.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// One choke point rather than a tag chosen at each recording site, so
+    /// "every outcome is counted" is a property of one switch instead of a claim
+    /// about scattered call sites that has to be re-audited after every change.
+    /// The unmapped arm throws rather than falling back to a catch-all: an
+    /// outcome nobody has classified must not be silently folded into a
+    /// neighbouring bucket, because that produces a plausible wrong number in
+    /// exactly the place a reader trusts one. Failing loudly is the same
+    /// reasoning that governs metric field ordering in this repository.
+    /// </para>
+    /// <para>
+    /// This function is also what the exhaustive-arming fixture drives: it calls
+    /// it for every declared member, so a member added without a case here fails
+    /// the suite rather than reaching production as an uncounted outcome.
+    /// </para>
+    /// </remarks>
+    internal static KeyValuePair<string, object?> ReactivationOutcomeTag(ReactivationOutcome outcome) =>
+        outcome switch
+        {
+            ReactivationOutcome.Completed => LatticeMetrics.BlockedLeafReactivationCompleted,
+            ReactivationOutcome.Unresolvable => LatticeMetrics.BlockedLeafReactivationUnresolvable,
+            ReactivationOutcome.Faulted => LatticeMetrics.BlockedLeafReactivationFaulted,
+            ReactivationOutcome.Undelivered => LatticeMetrics.BlockedLeafReactivationUndelivered,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(outcome),
+                outcome,
+                "Every reactivation outcome must have a metric arm; an unmapped one would report as a structural zero indistinguishable from a measured one (issue #2938)."),
+        };
+
+    /// <summary>
+    /// Whether an outcome is refunded against the attempt budget.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Extracted from the recording loop so that recording and refunding stop
+    /// sharing one piece of control flow (issue #2938). They were one branch,
+    /// which meant adding an arm for an uncounted outcome could not be done
+    /// without editing the code that decides budgets.
+    /// </para>
+    /// <para>
+    /// The split is by what the touch established. A fault or a timeout is
+    /// evidence about the silo - the call failed, or has not answered yet -
+    /// and neither shows that activation would fail to heal the leaf, which is
+    /// the only thing abandonment is entitled to conclude. A completed touch is
+    /// a real measurement that says the leaf did not heal, and an unresolvable
+    /// id is a permanent property of the id that retrying cannot change; both
+    /// are therefore charged.
+    /// </para>
+    /// <para>
+    /// These classes are load-bearing beyond their behaviour. A refunded outcome
+    /// costs <see cref="MaxReactivationAttempts"/> +
+    /// <see cref="MaxReactivationRefunds"/> touches per abandonment and an
+    /// unrefunded one costs <see cref="MaxReactivationAttempts"/>, and that
+    /// ratio was used to diagnose two production trees at a time when three of
+    /// the four outcomes had no counter. Moving an outcome between classes
+    /// silently invalidates that reading, so the classes are pinned by
+    /// <c>LatticeWalGcSchedulerCadenceTests.ReactivationRefundClass</c>.
+    /// </para>
+    /// </remarks>
+    internal static bool IsRefundableReactivationOutcome(ReactivationOutcome outcome) =>
+        outcome is ReactivationOutcome.Faulted or ReactivationOutcome.Undelivered;
+
+    /// <summary>
+    /// Every declared terminal outcome, cached once.
+    /// </summary>
+    /// <remarks>
+    /// Cached because the priming path walks it per tree per pass and
+    /// <see cref="Enum.GetValues{TEnum}"/> allocates a fresh array on each call.
+    /// Derived from the enum rather than written out, so it cannot fall behind
+    /// the type it describes - which is the failure this whole issue is about.
+    /// </remarks>
+    private static readonly ReactivationOutcome[] AllReactivationOutcomes =
+        Enum.GetValues<ReactivationOutcome>();
 
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -1071,7 +1158,19 @@ internal sealed class LatticeWalGcScheduler(
         RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationHealed, treeTag, tenantTag, 0);
         RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationAbandoned, treeTag, tenantTag, 0);
         RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationRearmed, treeTag, tenantTag, 0);
-        RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationUndelivered, treeTag, tenantTag, 0);
+
+        // The four above are lifecycle events and are named individually because
+        // there is no enum to derive them from. The terminal outcomes are primed
+        // by walking the enum instead of by listing them (issue #2938), which
+        // makes the priming exhaustive by construction: a member added later is
+        // primed without anyone remembering to, and if it has no arm the mapping
+        // throws here on the first pass rather than reporting an uncounted
+        // outcome as a measured zero. Listing them was how three of the four
+        // came to be missing.
+        foreach (var outcome in AllReactivationOutcomes)
+        {
+            RecordBlockedLeafReactivation(ReactivationOutcomeTag(outcome), treeTag, tenantTag, 0);
+        }
     }
 
     /// <summary>
@@ -1506,12 +1605,15 @@ internal sealed class LatticeWalGcScheduler(
         // which is the failure mode this whole change exists to remove.
         for (var i = 0; i < outcomes.Length; i++)
         {
-            if (outcomes[i] == ReactivationOutcome.Undelivered)
-            {
-                RecordBlockedLeafReactivation(
-                    LatticeMetrics.BlockedLeafReactivationUndelivered, treeTag, tenantTag);
-            }
-            else if (outcomes[i] != ReactivationOutcome.Faulted)
+            // Recording is unconditional and no longer shares a branch with the
+            // refund decision below (issue #2938). While the two were one piece
+            // of control flow, only the outcome that happened to need a refund
+            // was counted, and the other three reported a structural zero that
+            // read as a measured one.
+            RecordBlockedLeafReactivation(
+                ReactivationOutcomeTag(outcomes[i]), treeTag, tenantTag);
+
+            if (!IsRefundableReactivationOutcome(outcomes[i]))
             {
                 continue;
             }
