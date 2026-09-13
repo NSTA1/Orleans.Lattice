@@ -191,14 +191,24 @@ public partial class CoordinatorGrainPhaseTickMetricsTests
         // invent a run no activation experienced; last-writer-wins would let a
         // healthy sibling hide a wedged one. Only max answers 'is anything here
         // wedged, and for how long'.
+        //
+        // The three runs are 5, 3 and 0 rather than the one-wedged-one-healthy
+        // pair this test first used, because that pair could not fail. With runs
+        // of 5 and 0, sum and max are both 5, so the assertion held just as well
+        // against a reduction this test exists to reject. Three distinct non-zero
+        // runs separate every candidate: max is 5, sum is 8, min is 0, and first
+        // or last writer is whichever the dictionary happened to yield.
         var wedged = Create("consec-shared/1", composite: true);
-        var healthy = Create("consec-shared/2", composite: true);
+        var struggling = Create("consec-shared/2", composite: true);
+        var healthy = Create("consec-shared/3", composite: true);
 
         var measurements = await ObserveRunAsync(async () =>
         {
             wedged.Grain.ArmPhaseTimer();
+            struggling.Grain.ArmPhaseTimer();
             healthy.Grain.ArmPhaseTimer();
             await FailTimesAsync(wedged, 5);
+            await FailTimesAsync(struggling, 3);
             await CapturedTick(healthy.Timers)(CancellationToken.None);
         });
 
@@ -207,7 +217,8 @@ public partial class CoordinatorGrainPhaseTickMetricsTests
         {
             Assert.That(shared, Has.Count.EqualTo(1),
                 "One tag set must produce exactly one measurement per observation.");
-            Assert.That(shared[0].Value, Is.EqualTo(5));
+            Assert.That(shared[0].Value, Is.EqualTo(5),
+                "Max reports the worst run present; a sum would report 8, a run no activation was ever in.");
         });
     }
 
