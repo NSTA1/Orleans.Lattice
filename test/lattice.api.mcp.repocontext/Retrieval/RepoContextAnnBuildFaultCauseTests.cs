@@ -36,21 +36,37 @@ public sealed class RepoContextAnnBuildFaultCauseTests
     /// <summary>One measurement seen on the slice instrument.</summary>
     /// <param name="Progress">The <c>progress</c> tag, or <c>null</c> when untagged.</param>
     /// <param name="Cause">The <c>cause</c> tag, or <c>null</c> when the measurement carries none.</param>
+    /// <param name="Phase">The <c>phase</c> tag, or <c>null</c> when the measurement carries none.</param>
+    /// <param name="Repository">The <c>repository</c> tag, or <c>null</c>.</param>
+    /// <param name="Space">The <c>space</c> tag, or <c>null</c>.</param>
     /// <param name="Value">The value added.</param>
-    private readonly record struct SliceMeasurement(string? Progress, string? Cause, long Value);
+    private readonly record struct SliceMeasurement(
+        string? Progress,
+        string? Cause,
+        string? Phase,
+        string? Repository,
+        string? Space,
+        long Value);
+
+    /// <summary>The repository every measurement in this fixture is recorded under.</summary>
+    private const string Repo = "acme/widgets";
+
+    /// <summary>The embedding space every measurement in this fixture is recorded under.</summary>
+    private static readonly EmbeddingSpaceTag TestSpace =
+        new("test-model", 8, VectorNormalization.UnitL2);
 
     /// <summary>
     /// Runs <paramref name="act"/> against a freshly constructed reporter with a
     /// listener already attached, and returns every measurement the slice
-    /// instrument emitted - constructor priming included.
+    /// instrument emitted - plane priming included.
     /// </summary>
     /// <param name="act">What to drive through the reporter.</param>
     /// <returns>The measurements, in order.</returns>
     /// <remarks>
-    /// The listener is started BEFORE the reporter is constructed, because the
-    /// zero-prime happens inside the constructor and an instrument cannot be passed
-    /// by reference until it exists. Matching by meter and instrument name is the
-    /// only way to be attached in time.
+    /// The listener is started BEFORE the reporter is constructed, because an
+    /// instrument cannot be passed by reference until it exists and the first
+    /// recording call primes its plane in the same breath. Matching by meter and
+    /// instrument name is the only way to be attached in time.
     /// </remarks>
     private static List<SliceMeasurement> Observe(Action<RepoContextAnnBuildSliceReporter> act)
     {
@@ -75,6 +91,9 @@ public sealed class RepoContextAnnBuildFaultCauseTests
         {
             string? progress = null;
             string? cause = null;
+            string? phase = null;
+            string? repository = null;
+            string? space = null;
             foreach (var tag in tags)
             {
                 if (string.Equals(tag.Key, RepoContextAnnBuildSliceReporter.ProgressTagKey, StringComparison.Ordinal))
@@ -85,11 +104,24 @@ public sealed class RepoContextAnnBuildFaultCauseTests
                 {
                     cause = tag.Value?.ToString();
                 }
+                else if (string.Equals(tag.Key, RepoContextAnnBuildSliceReporter.PhaseTagKey, StringComparison.Ordinal))
+                {
+                    phase = tag.Value?.ToString();
+                }
+                else if (string.Equals(
+                    tag.Key, RepoContextAnnBuildSliceReporter.RepositoryTagKey, StringComparison.Ordinal))
+                {
+                    repository = tag.Value?.ToString();
+                }
+                else if (string.Equals(tag.Key, RepoContextAnnBuildSliceReporter.SpaceTagKey, StringComparison.Ordinal))
+                {
+                    space = tag.Value?.ToString();
+                }
             }
 
             lock (observed)
             {
-                observed.Add(new SliceMeasurement(progress, cause, value));
+                observed.Add(new SliceMeasurement(progress, cause, phase, repository, space, value));
             }
         });
 
@@ -121,7 +153,7 @@ public sealed class RepoContextAnnBuildFaultCauseTests
         {
             foreach (var cause in causes)
             {
-                reporter.RecordFaulted(cause);
+                reporter.RecordFaulted(cause, Repo, TestSpace, RepoContextAnnBuildStepPhase.Ingesting);
             }
         });
 
@@ -162,11 +194,19 @@ public sealed class RepoContextAnnBuildFaultCauseTests
         // evidence of a fault.
         var measurements = Observe(reporter =>
         {
-            reporter.RecordSlice(RepoContextAnnBuildSliceOutcome.Advanced);
-            reporter.RecordSlice(RepoContextAnnBuildSliceOutcome.Idle);
-            reporter.RecordSlice(RepoContextAnnBuildSliceOutcome.Starved);
-            reporter.RecordSlice(RepoContextAnnBuildSliceOutcome.Churned);
-            reporter.RecordFaulted(RepoContextAnnBuildFaultCause.ScanPageStalled);
+            reporter.RecordSlice(
+                RepoContextAnnBuildSliceOutcome.Advanced, Repo, TestSpace, RepoContextAnnBuildStepPhase.Ingesting);
+            reporter.RecordSlice(
+                RepoContextAnnBuildSliceOutcome.Idle, Repo, TestSpace, RepoContextAnnBuildStepPhase.Ingesting);
+            reporter.RecordSlice(
+                RepoContextAnnBuildSliceOutcome.Starved, Repo, TestSpace, RepoContextAnnBuildStepPhase.Ingesting);
+            reporter.RecordSlice(
+                RepoContextAnnBuildSliceOutcome.Churned, Repo, TestSpace, RepoContextAnnBuildStepPhase.Ingesting);
+            reporter.RecordFaulted(
+                RepoContextAnnBuildFaultCause.ScanPageStalled,
+                Repo,
+                TestSpace,
+                RepoContextAnnBuildStepPhase.Ingesting);
         });
 
         var moved = measurements.Where(m => m.Value != 0).ToArray();
@@ -195,7 +235,7 @@ public sealed class RepoContextAnnBuildFaultCauseTests
     }
 
     [Test]
-    public void No_cause_is_minted_when_the_reporter_is_constructed()
+    public void No_cause_is_minted_when_a_plane_is_primed()
     {
         // THE DELIBERATE NON-PRIMING, pinned so it is a decision rather than an
         // omission somebody later "fixes".
@@ -204,7 +244,7 @@ public sealed class RepoContextAnnBuildFaultCauseTests
         // absent series and a measured zero are byte-identical on a scrape and a
         // verdict resting on an unproven zero is worthless. The cause dimension is
         // deliberately the exception: pre-minting five causes would put five
-        // permanently-zero series on every host that never faults, and would assert
+        // permanently-zero series on every plane that never faults, and would assert
         // a partition of fault space that this classifier explicitly does not claim
         // to have (its 'unexpected' arm exists precisely because the space is open).
         //
@@ -213,7 +253,11 @@ public sealed class RepoContextAnnBuildFaultCauseTests
         // read the cause dimension only when progress=faulted is non-zero, and read
         // the absence of a cause series as "no fault of that kind has been recorded
         // yet", never as "that cause does not occur".
-        var measurements = Observe(_ => { });
+        //
+        // Priming is per PLANE and no longer happens in the constructor, because a
+        // constructor cannot know which repositories and spaces exist and a primed
+        // series for a plane that does not exist claims a build nobody asked for.
+        var measurements = Observe(reporter => reporter.EnsurePrimed(Repo, TestSpace));
 
         Assert.Multiple(() =>
         {
@@ -222,10 +266,10 @@ public sealed class RepoContextAnnBuildFaultCauseTests
             // and the absence assertion would confirm the belief it was written to
             // test.
             Assert.That(measurements, Is.Not.Empty,
-                "positive control: the constructor must have primed SOMETHING, or this fixture "
+                "positive control: priming the plane must have minted SOMETHING, or this fixture "
                 + "is a blind detector reporting an absence it could not have seen");
             Assert.That(
-                measurements.Select(m => m.Progress),
+                measurements.Select(m => m.Progress).Distinct(),
                 Is.EquivalentTo(
                     Enum.GetValues<RepoContextAnnBuildSliceOutcome>()
                         .Select(RepoContextAnnBuildSliceReporter.DescribeOutcome)),
@@ -298,10 +342,12 @@ public sealed class RepoContextAnnBuildFaultCauseTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                () => reporter.RecordSlice(RepoContextAnnBuildSliceOutcome.Faulted),
+                () => reporter.RecordSlice(
+                    RepoContextAnnBuildSliceOutcome.Faulted, Repo, TestSpace, RepoContextAnnBuildStepPhase.Ingesting),
                 Throws.TypeOf<ArgumentOutOfRangeException>());
             Assert.That(
-                () => reporter.RecordSlice(RepoContextAnnBuildSliceOutcome.Idle),
+                () => reporter.RecordSlice(
+                    RepoContextAnnBuildSliceOutcome.Idle, Repo, TestSpace, RepoContextAnnBuildStepPhase.Ingesting),
                 Throws.Nothing,
                 "positive control: the other outcomes must still be accepted, or the refusal "
                 + "above is indistinguishable from an entry point that rejects everything");
@@ -315,12 +361,21 @@ public sealed class RepoContextAnnBuildFaultCauseTests
         // the meter rather than being a second, independently-wrong ledger.
         using var reporter = new RepoContextAnnBuildSliceReporter();
 
-        reporter.RecordFaulted(RepoContextAnnBuildFaultCause.ScanPageStalled);
-        reporter.RecordFaulted(RepoContextAnnBuildFaultCause.ScanPageStalled);
-        reporter.RecordFaulted(RepoContextAnnBuildFaultCause.DependencyUnavailable);
-        reporter.RecordFaulted(RepoContextAnnBuildFaultCause.ProjectionStale);
-        reporter.RecordFaulted(RepoContextAnnBuildFaultCause.PlaneRejected);
-        reporter.RecordFaulted((RepoContextAnnBuildFaultCause)9999);
+        reporter.RecordFaulted(
+            RepoContextAnnBuildFaultCause.ScanPageStalled, Repo, TestSpace, RepoContextAnnBuildStepPhase.Ingesting);
+        reporter.RecordFaulted(
+            RepoContextAnnBuildFaultCause.ScanPageStalled, Repo, TestSpace, RepoContextAnnBuildStepPhase.Ingesting);
+        reporter.RecordFaulted(
+            RepoContextAnnBuildFaultCause.DependencyUnavailable,
+            Repo,
+            TestSpace,
+            RepoContextAnnBuildStepPhase.Persisting);
+        reporter.RecordFaulted(
+            RepoContextAnnBuildFaultCause.ProjectionStale, Repo, TestSpace, RepoContextAnnBuildStepPhase.Opening);
+        reporter.RecordFaulted(
+            RepoContextAnnBuildFaultCause.PlaneRejected, Repo, TestSpace, RepoContextAnnBuildStepPhase.Training);
+        reporter.RecordFaulted(
+            (RepoContextAnnBuildFaultCause)9999, Repo, TestSpace, RepoContextAnnBuildStepPhase.Reconciling);
 
         var slices = reporter.Read();
 
@@ -339,6 +394,17 @@ public sealed class RepoContextAnnBuildFaultCauseTests
             Assert.That(slices.FaultedByCause.Total, Is.EqualTo(slices.Faulted),
                 "the per-cause arms must PARTITION the faulted total. A cause split that does "
                 + "not sum to the total is the shape that makes a dashboard ratio quietly wrong");
+            Assert.That(slices.FaultedByPhase.Ingesting, Is.EqualTo(2));
+            Assert.That(slices.FaultedByPhase.Persisting, Is.EqualTo(1));
+            Assert.That(slices.FaultedByPhase.Opening, Is.EqualTo(1));
+            Assert.That(slices.FaultedByPhase.Training, Is.EqualTo(1));
+            Assert.That(slices.FaultedByPhase.Reconciling, Is.EqualTo(1));
+            Assert.That(slices.FaultedByPhase.Coordinating, Is.EqualTo(0));
+            Assert.That(slices.FaultedByPhase.Total, Is.EqualTo(slices.Faulted),
+                "and so must the per-phase arms. THE DENOMINATOR IS ASSERTED BEFORE ANY RATIO "
+                + "is read off this instrument: an enumerated sample is not a population until "
+                + "an independent measure agrees on its size, and the phase split is the arm "
+                + "epic #2368 scores DoD-1b against");
         });
     }
 

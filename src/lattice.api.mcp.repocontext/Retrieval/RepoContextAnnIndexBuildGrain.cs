@@ -165,6 +165,30 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     private bool _sliceRecordedThisTick;
 
     /// <summary>
+    /// Whether the tick currently executing is inside, or has passed through, the
+    /// call to the plane's build step. Reset at the top of every tick, set
+    /// immediately before the step and cleared immediately after it returns, so the
+    /// outer fault seam can tell a fault RAISED BY THE STEP - whose phase the probe
+    /// below has placed - from one raised by the coordinator around it, which has no
+    /// phase and must be reported as <see cref="RepoContextAnnBuildStepPhase.Coordinating"/>.
+    /// <para>
+    /// Without it the probe's last reading would be reused for a fault that happened
+    /// after the step returned cleanly, attributing a coordinator-state write to the
+    /// persist or a gate probe to the ingest read - which is precisely the
+    /// misattribution the phase dimension was added to remove.
+    /// </para>
+    /// </summary>
+    private bool _steppedThisTick;
+
+    /// <summary>
+    /// The box the plane writes its current phase into, allocated once per
+    /// activation and reused. Safe to reuse because a grain activation processes one
+    /// turn at a time and the tick resets it before every step, so it can never
+    /// carry one tick's phase into another.
+    /// </summary>
+    private readonly RepoContextAnnBuildPhaseProbe _phaseProbe = new();
+
+    /// <summary>
     /// The repository this coordinator builds for, parsed once from the grain key.
     /// The key is immutable for the life of the activation, so re-splitting it on
     /// every phase tick would allocate three strings a tick for the whole build and
@@ -304,6 +328,27 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         // timer's behaviour, the checkpoint-resume path, and the reminder lifetime
         // exactly as they were.
         _sliceRecordedThisTick = false;
+        _steppedThisTick = false;
+        _phaseProbe.Reset();
+
+        // Priming sits HERE, above the try and above every early return inside it,
+        // and not on the path that records a step. An arm minted only by the code
+        // that also writes to it is not primed in the sense that matters: the zero a
+        // reader sees was produced by machinery that never ran, which is
+        // byte-identical to a measured absence (issue #2952). A coordinator whose
+        // every tick dies resolving its credential must still publish this plane's
+        // twenty-two arms at zero, or the epic cannot tell "no steps faulted on the
+        // ingest read" from "nothing ever looked".
+        //
+        // Guarded on a stamped space because an unstamped coordinator has no plane
+        // to name: EnsureBuildingAsync refuses an unspecified space, so the guard
+        // excludes only the window before the first arming call, in which there is
+        // genuinely no plane rather than a plane reading zero.
+        if (state.State.Space.IsSpecified)
+        {
+            sliceReporter.EnsurePrimed(RepoId, state.State.Space);
+        }
+
         try
         {
             await ProcessNextPhaseCoreAsync().ConfigureAwait(true);
@@ -315,7 +360,18 @@ internal sealed class RepoContextAnnIndexBuildGrain(
                 // Classified HERE, at the site, rather than inside the reporter. The
                 // reporter sees a cause; only this frame sees what the tick was
                 // doing when it threw.
-                sliceReporter.RecordFaulted(ClassifyBuildFault(ex));
+                //
+                // The phase comes from the probe only when the tick actually reached
+                // the plane. A tick that threw before the step - or after it
+                // returned - is Coordinating, because the probe would otherwise hand
+                // back the phase of a step that is not the one that failed. That is
+                // the same double-counting hazard the flag above guards, one
+                // dimension over.
+                sliceReporter.RecordFaulted(
+                    ClassifyBuildFault(ex),
+                    RepoId,
+                    state.State.Space,
+                    _steppedThisTick ? _phaseProbe.Phase : RepoContextAnnBuildStepPhase.Coordinating);
             }
 
             throw;
@@ -477,9 +533,11 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         // checkpoint had fallen off the write-ahead log threw on every read, and the
         // designed self-heal that would have cleared it was refused by the access
         // gate, so the fault was permanent rather than transient.
+        _steppedThisTick = true;
         var progress = await registry
-            .BuildStepAsync(repoId, space, CancellationToken.None)
+            .BuildStepAsync(repoId, space, _phaseProbe, CancellationToken.None)
             .ConfigureAwait(true);
+        _steppedThisTick = false;
 
         _advancedThisActivation = true;
 
@@ -498,7 +556,10 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         // moving this call under the Ready check would restore exactly the
         // blindness it was added to remove.
         sliceReporter.RecordSlice(
-            RepoContextAnnBuildSliceReporter.Classify(_previousProgress, progress));
+            RepoContextAnnBuildSliceReporter.Classify(_previousProgress, progress),
+            repoId,
+            space,
+            _phaseProbe.Phase);
         _sliceRecordedThisTick = true;
         _previousProgress = progress;
 

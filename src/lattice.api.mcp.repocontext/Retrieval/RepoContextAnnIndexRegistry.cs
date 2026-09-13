@@ -187,9 +187,30 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
     internal Task<VectorIndexBuildProgress> BuildStepAsync(
         string repoId, EmbeddingSpaceTag space, CancellationToken cancellationToken)
+        => BuildStepAsync(repoId, space, phase: null, cancellationToken);
+
+    /// <summary>
+    /// Advances one index by a single bounded build step, reporting the phase the
+    /// step ran in through <paramref name="phase"/> so a caller that meters the
+    /// step can place a fault inside it.
+    /// </summary>
+    /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>
+    /// <param name="space">The embedding space.</param>
+    /// <param name="phase">
+    /// The caller's phase probe, or <see langword="null"/> when the caller does not
+    /// meter the step.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the step.</param>
+    /// <returns>Progress after the step.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    internal Task<VectorIndexBuildProgress> BuildStepAsync(
+        string repoId,
+        EmbeddingSpaceTag space,
+        RepoContextAnnBuildPhaseProbe? phase,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
-        return GetOrCreate(repoId, space).AdvanceAsync(cancellationToken);
+        return GetOrCreate(repoId, space).AdvanceAsync(phase, cancellationToken);
     }
 
     /// <summary>
