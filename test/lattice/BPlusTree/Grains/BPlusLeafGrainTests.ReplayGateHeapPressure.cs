@@ -332,6 +332,91 @@ public partial class BPlusLeafGrainTests
 
     [Test]
     [NonParallelizable]
+    public async Task Sustained_heap_pressure_never_starves_the_gate_of_its_last_replay_permit()
+    {
+        // THE STARVATION DOOR. Withholding under heap pressure lengthens permit
+        // queues by construction, and a cold leaf that queues past the activation
+        // request timeout is cancelled - which banks no snapshot, leaves the
+        // durable materialiser pin unusable, and blocks WAL GC exactly as an OOM
+        // cancellation does. The two failures sit at opposite ends of one dial,
+        // so a proactive trigger that could drive availability to zero would open
+        // the far door while closing the near one.
+        //
+        // The floor lives in TryWithholdReplayPermitOnPressure and is shared by
+        // both triggers, but sharing it is an implementation fact, not an
+        // observable. What this pins is that the PROACTIVE path routes through it
+        // rather than decrementing the gate itself: pressure is held continuously
+        // across more activations than the ceiling admits, and the gate is
+        // required to saturate one permit short rather than empty.
+        var gate = await QuiescentReplayGateAsync();
+        var ceiling = BPlusLeafGrain.ReplayConcurrencyCeilingForTest;
+        Assert.That(ceiling, Is.GreaterThan(1),
+            "this test needs a ceiling above one for a floor to be distinguishable from an "
+            + "exhausted gate");
+
+        var activations = ceiling + 3;
+        var lowestObservedCount = int.MaxValue;
+
+        try
+        {
+            using (SimulatedHeap(
+                inUseBytes: RunTenHeapCeilingBytes / 10 * 9,
+                ceilingBytes: RunTenHeapCeilingBytes))
+            {
+                for (var i = 0; i < activations; i++)
+                {
+                    // Starvation does not present as a wrong number, it presents
+                    // as an activation that never returns - so it is bounded here
+                    // rather than left to deadlock. Against a build with no floor
+                    // this is the clause that reddens, and it reddens the way the
+                    // production failure reads: the replay waits on a permit that
+                    // will never be released, which in the silo is what the
+                    // activation request timeout eventually cancels.
+                    var activation = ActivateWithCleanReplayAsync();
+                    var completed = await Task.WhenAny(activation, Task.Delay(TimeSpan.FromSeconds(30)));
+
+                    Assert.That(completed, Is.SameAs(activation),
+                        $"activation {i + 1} of {activations} never acquired a replay permit. "
+                        + "Withholding has taken every permit out of circulation, so no replay can "
+                        + "run, nothing can observe the clean replay that would restore a permit, "
+                        + "and the gate has latched shut");
+
+                    await activation;
+                    lowestObservedCount = Math.Min(lowestObservedCount, gate.CurrentCount);
+                }
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(activations, Is.GreaterThan(ceiling),
+                    "the run must outnumber the ceiling, or saturation is never attempted and a "
+                    + "build with no floor at all would pass this unchanged");
+
+                Assert.That(BPlusLeafGrain.WithheldReplayPermitsForTest, Is.EqualTo(ceiling - 1),
+                    "sustained pressure must saturate withholding exactly one permit short of the "
+                    + "ceiling. More than that is starvation; fewer means the proactive trigger "
+                    + "stopped reducing before the floor and is not the mechanism it claims to be");
+
+                Assert.That(lowestObservedCount, Is.EqualTo(1),
+                    "at least one permit must remain in circulation at every point of the run. A "
+                    + "gate that admits nothing can never observe the clean replay that recovers "
+                    + "it, so the reduction would latch permanently (issue #2783), and every cold "
+                    + "leaf behind it would queue until the request timeout cancelled it");
+            });
+
+            Assert.That(gate.Wait(0), Is.True,
+                "the surviving permit must be acquirable rather than an accounting figure with no "
+                + "permit behind it");
+            gate.Release();
+        }
+        finally
+        {
+            DrainWithheldReplayPermits(gate);
+        }
+    }
+
+    [Test]
+    [NonParallelizable]
     public async Task Withholding_under_heap_pressure_records_the_withheld_arm_of_the_adaptation_counter()
     {
         // The issue is scored on this counter, so the counter is part of the
