@@ -911,8 +911,11 @@ public static class LatticeMetrics
     /// <summary>
     /// Counter incremented once per terminal completion of a <b>cross-tree</b>
     /// atomic write (the coordinator grain), tagged with <see cref="TagOutcome"/>
-    /// = <c>committed</c> or <c>precondition_failed</c> / <c>aborted</c> and a
-    /// <see cref="TagTreeCount"/> bucket. Distinguishes multi-tree saga volume
+    /// = <c>committed</c> or <c>precondition_failed</c> and a
+    /// <see cref="TagTreeCount"/> bucket. Those two are the whole domain: the
+    /// coordinator has no compensation arm of its own, so a panel filtering
+    /// this counter for <c>failed</c> or <c>compensated</c> selects zero series
+    /// forever. Distinguishes multi-tree saga volume
     /// from the single-tree <see cref="AtomicWriteCompleted"/> stream.
     /// </summary>
     public static readonly Counter<long> CrossTreeAtomicWriteCompleted =

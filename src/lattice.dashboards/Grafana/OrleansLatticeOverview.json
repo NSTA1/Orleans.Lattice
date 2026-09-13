@@ -894,8 +894,13 @@
           "legendFormat": "{{tree}} compensated"
         },
         {
+          "refId": "SHUT",
+          "expr": "sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{outcome=\"shutdown_refused\",tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)",
+          "legendFormat": "{{tree}} shutdown_refused"
+        },
+        {
           "refId": "TOTAL_FAIL",
-          "expr": "sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{outcome=~\"failed|compensated\",tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)",
+          "expr": "sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{outcome!=\"committed\",tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)",
           "legendFormat": "{{tree}} non-committed"
         }
       ]
