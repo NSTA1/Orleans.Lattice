@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public class CoordinatorGrainPhaseTickMetricsTests
+public partial class CoordinatorGrainPhaseTickMetricsTests
 {
     private const string GrainKey = "tree-a";
     private const string CompositeGrainKey = "tree-b/7";
@@ -56,6 +56,12 @@ public class CoordinatorGrainPhaseTickMetricsTests
         }
 
         public void ArmPhaseTimer() => StartPhaseTimer();
+
+        /// <summary>
+        /// Exposes the completion path so the consecutive-failure gauge's
+        /// withdrawal can be driven from a test.
+        /// </summary>
+        public Task CompleteAsync() => CompleteCoordinatorAsync();
     }
 
     /// <summary>

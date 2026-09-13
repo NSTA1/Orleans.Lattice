@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice;
 
@@ -1059,6 +1060,49 @@ public static class LatticeMetrics
     public static readonly Counter<long> CoordinatorPhaseTickFailures =
         Meter.CreateCounter<long>("orleans.lattice.coordinator.phase_tick.failures", unit: "{failure}",
             description: "Coordinator phase-timer ticks whose phase step threw and was swallowed, tagged by coordinator kind and tree. Zero-primed when a coordinator arms its phase timer, so zero on a live series is a reading rather than an absence.");
+
+    /// <summary>
+    /// The name of the observable gauge reporting, per coordinator kind and tree,
+    /// the length of the <i>current run</i> of consecutive failed phase ticks.
+    /// </summary>
+    public const string CoordinatorPhaseTickConsecutiveFailuresGaugeName =
+        "orleans.lattice.coordinator.phase_tick.consecutive_failures";
+
+    /// <summary>
+    /// Observable gauge reporting the length of the current run of consecutive
+    /// failed phase ticks, tagged identically to
+    /// <see cref="CoordinatorPhaseTickFailures"/> so the two series join.
+    /// <para>
+    /// <b>It answers the one question the counter beside it cannot.</b> A
+    /// cumulative counter has no notion of consecutiveness, so a coordinator that
+    /// fails one tick in a thousand and a coordinator that has failed every tick
+    /// since the process started both present as a rising total - yet the first is
+    /// a transient the pump absorbs by design and the second is a phase machine
+    /// that has stopped advancing. Issue #2814 settled exactly that distinction for
+    /// the repository-context approximate-index build, and the evidence that made
+    /// it a wedge rather than a flaky read was the phrase "156 times in a row" in a
+    /// 53 MB log stream. This gauge makes that reading available from one scrape.
+    /// </para>
+    /// <para>
+    /// <b>Every live coordinator reports</b>, enrolling at <c>0</c> when it arms
+    /// its phase timer - the same priming point as the counter, and for the same
+    /// reason: an unprimed zero is byte-identical to an absent series. So <c>0</c>
+    /// here means "the last tick succeeded", not "no data". It does <b>not</b> mean
+    /// the coordinator is advancing: a tick that returns without moving its phase
+    /// machine forward is a success by this measure.
+    /// </para>
+    /// <para>
+    /// Reported as the <b>maximum</b> over the activations sharing a tag set, which
+    /// is coarser than the activation because a coordinator with a composite key
+    /// deliberately reports under the subject alone. See
+    /// <c>CoordinatorPhaseTickCensus</c> - which both registers this gauge and
+    /// supplies its callback, so that the tenant dimension is emitted in the same
+    /// file the instrument is created in - for why <c>max</c> is the correct
+    /// reduction.
+    /// </para>
+    /// </summary>
+    public static readonly ObservableGauge<long> CoordinatorPhaseTickConsecutiveFailures =
+        CoordinatorPhaseTickCensus.Gauge;
 
     /// <summary>
     /// Counter incremented once per tree-lifecycle transition. Tagged with
