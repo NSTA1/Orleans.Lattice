@@ -145,6 +145,17 @@ public sealed class DashboardPanelTagDomainTests
             ["Replication|70|orleans.lattice.wal.gc.passes|outcome"] =
                 ["failed", "idle", "no_consumer", "reclaimed", "unclassified"],
 
+            // Panel 143 charts both arms on its unfiltered target, and adds a
+            // second target narrowed to outcome="withheld" so the withheld arm
+            // can be split by trigger (issue #2883). Only the narrowed target
+            // carries a matcher, so the restored arm is omitted from the
+            // matcher-bearing set while still being drawn on the graph. It is
+            // deliberately not split by trigger: withheld permits are fungible,
+            // so the restored arm carries no trigger tag and a per-trigger
+            // level is not derivable.
+            ["CommitPath|143|orleans.lattice.wal.replay.permit_adaptations|outcome"] =
+                ["restored"],
+
             // Panel 2783 charts the terminal reactivation arms. "attempted" is
             // the denominator arm (one per touch issued, not a terminal state)
             // and is charted by its own target on the same panel without a
