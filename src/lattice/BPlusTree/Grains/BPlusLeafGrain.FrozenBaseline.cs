@@ -215,8 +215,10 @@ internal sealed partial class BPlusLeafGrain
             // fanned out across every frozen leaf of the shard with no replay
             // permit held, so both terms of the peak-memory product were
             // unbounded here. The reader supplies the narrowing, the widening
-            // and the counter's priming together.
-            var sliceReader = new ReplaySliceReader(coordinator, treeId, partition);
+            // and the counter's priming together, starting at the configured
+            // width (issue #2898).
+            var sliceReader = new ReplaySliceReader(
+                coordinator, treeId, partition, (await GetOptionsAsync()).WalReplaySliceBudget);
 
             while (fromExclusive < toInclusive)
             {

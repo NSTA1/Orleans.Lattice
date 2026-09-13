@@ -54,15 +54,26 @@ internal sealed class ReplaySliceReader
 {
     /// <summary>
     /// Width a replay starts at, and the ceiling
-    /// <see cref="ReadSliceAsync"/> widens back towards after a narrowing.
+    /// <see cref="ReadSliceAsync"/> widens back towards after a narrowing, when
+    /// a caller supplies no configured width.
+    /// <para>
+    /// Bound to <see cref="LatticeOptions.DefaultWalReplaySliceBudget"/> rather
+    /// than repeating the literal (issue #2898). The binding is a compile-time
+    /// dependency, so the two cannot drift apart at all - deleting or renaming
+    /// the option's default is a build error here, where an equality test
+    /// between two independently declared constants could be deleted and a
+    /// comparison of their values is the detector that already failed between
+    /// issues #2742 and #2899.
+    /// </para>
     /// </summary>
-    internal const int InitialBudget = 256;
+    internal const int InitialBudget = LatticeOptions.DefaultWalReplaySliceBudget;
 
     private readonly ILeafReplayCoordinatorGrain _coordinator;
     private readonly string _treeId;
     private readonly int _partition;
+    private readonly int _initialBudget;
 
-    private int _budget = InitialBudget;
+    private int _budget;
 
     /// <summary>
     /// Creates a reader for one partition's replay and zero-primes the
@@ -84,7 +95,21 @@ internal sealed class ReplaySliceReader
     /// <param name="coordinator">Per-shard WAL read coordinator to read through.</param>
     /// <param name="treeId">Tree whose log is being replayed; a metric dimension.</param>
     /// <param name="partition">WAL partition being replayed; a metric dimension.</param>
-    internal ReplaySliceReader(ILeafReplayCoordinatorGrain coordinator, string treeId, int partition)
+    /// <param name="initialBudget">
+    /// Configured starting width, from
+    /// <see cref="LatticeOptions.WalReplaySliceBudget"/> (issue #2898). Omitted
+    /// by call sites that have no resolved options to hand, which fall back to
+    /// <see cref="InitialBudget"/>. Values below one are clamped to one rather
+    /// than rejected: the validator refuses them at configuration time, and a
+    /// reader that threw here would turn a misconfiguration into an
+    /// unreplayable partition at activation, which is a far worse failure than
+    /// a narrow read.
+    /// </param>
+    internal ReplaySliceReader(
+        ILeafReplayCoordinatorGrain coordinator,
+        string treeId,
+        int partition,
+        int initialBudget = InitialBudget)
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(treeId);
@@ -92,6 +117,24 @@ internal sealed class ReplaySliceReader
         _coordinator = coordinator;
         _treeId = treeId;
         _partition = partition;
+        // Clamp rather than throw, and do not "tidy" this into agreement with
+        // the validator. The two guards sit on the same value at seams where
+        // failure costs differently, so their postures differ deliberately.
+        // LatticeOptionsValidator rejects a width below one at CONFIGURATION
+        // time, where failing is free and precise: nothing has activated, the
+        // operator is handed the property name, and the process does not start.
+        // This runs during ACTIVATION on the recovery path, where throwing
+        // converts a misconfiguration into an unreplayable partition whose
+        // frozen projection checkpoint holds the whole-tree WAL GC pin - the
+        // self-reinforcing failure issues #2742 and #2867 exist to break. A
+        // too-narrow read is recoverable; a dead partition pinning the log is
+        // not. So: fail closed where failing is cheap, fail open into a correct
+        // degraded mode where failing is catastrophic. Unreachable through
+        // supported configuration, and covered by a test regardless, because an
+        // unreachable guard with no test is indistinguishable from one that was
+        // never correct.
+        _initialBudget = initialBudget < 1 ? 1 : initialBudget;
+        _budget = _initialBudget;
 
         LatticeMetrics.WalReplaySliceNarrowings.Add(
             0,
@@ -111,7 +154,7 @@ internal sealed class ReplaySliceReader
     /// <summary>
     /// Reads one slice of <c>(fromExclusive, toInclusive]</c>, narrowing the
     /// width and retrying the same range while the read fails for memory
-    /// pressure, and widening back towards <see cref="InitialBudget"/> on
+    /// pressure, and widening back towards the configured starting width on
     /// success.
     /// <para>
     /// Retrying the same range is safe at every site because the throwing
@@ -140,7 +183,7 @@ internal sealed class ReplaySliceReader
     /// <para>
     /// The retry is bounded rather than merely convergent: each narrowing is an
     /// integer quarter floored at one, and the guard excludes a width of one, so
-    /// a read can narrow at most four times from <see cref="InitialBudget"/>
+    /// a read can narrow at most four times from the default starting width
     /// before the failure is allowed to propagate. A single entry is the
     /// narrowest read there is, so at that point there is no cheaper attempt to
     /// make and the caller must decide what an unreplayable partition means for
@@ -185,8 +228,12 @@ internal sealed class ReplaySliceReader
                 // Issue #2867. Counted before the site's log runs, because the
                 // log is throttled by the sink's own configuration and this has
                 // to be the exact census of a factor that is otherwise
-                // invisible - there is no option, no environment variable and
-                // no other series behind the per-replay width.
+                // invisible. Since issue #2898 the width is configurable via
+                // LatticeOptions.WalReplaySliceBudget, so the census is no
+                // longer the ONLY thing behind the width - but it remains the
+                // only thing that reports the width actually in force, because
+                // an option records what was asked for and this records what
+                // pressure made of it.
                 LatticeMetrics.WalReplaySliceNarrowings.Add(
                     1,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _treeId),
@@ -202,10 +249,10 @@ internal sealed class ReplaySliceReader
             // which converges so slowly it is indistinguishable from the stall
             // being fixed. Doubling recovers full width in a handful of slices
             // while still backing off immediately if pressure returns.
-            if (_budget < InitialBudget)
+            if (_budget < _initialBudget)
             {
                 var widened = _budget * 2;
-                _budget = widened > InitialBudget ? InitialBudget : widened;
+                _budget = widened > _initialBudget ? _initialBudget : widened;
             }
 
             return slice;

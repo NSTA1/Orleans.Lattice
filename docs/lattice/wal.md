@@ -565,7 +565,7 @@ the WAL through `ILeafReplayCoordinatorGrain`. Three cases:
   outside this leaf's `[LowKeyInclusive, HighKeyExclusive)` ownership range
   on iteration, so the iteration cost is bounded by the leaf's own range
   rather than by the WAL head. The replay still bounds the per-slice work
-  via `ReplaySliceBudget` on the read side.
+  via `WalReplaySliceBudget` on the read side.
 - **Fall-off-log rebuild.** The persisted checkpoint is older than the WAL trim
   watermark - the entries it would replay are no longer available. The
   coordinator falls back to `ILeafProjection.Rebuild`, which drains the leaf's

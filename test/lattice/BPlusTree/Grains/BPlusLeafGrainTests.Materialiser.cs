@@ -610,7 +610,7 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task Materialiser_replays_multiple_slices_when_budget_exceeded()
     {
-        // Seed > ReplaySliceBudget (256) entries so the inner while-loop
+        // Seed > WalReplaySliceBudget (256) entries so the inner while-loop
         // must stitch slices. Each slice returns at most 256 entries
         // (BuildCoordinator honours the budget arg). The materialiser
         // must continue iterating until fromExclusive reaches head.
@@ -646,7 +646,7 @@ public partial class BPlusLeafGrainTests
     public async Task Materialiser_request_slice_budget_does_not_exceed_const()
     {
         // Bound assertion: the materialiser must never request a slice
-        // larger than the documented ReplaySliceBudget (256). If a
+        // larger than the documented WalReplaySliceBudget (256). If a
         // future refactor accidentally raises the per-call request
         // size the leaf's worst-case activation memory footprint
         // grows unboundedly. NSubstitute captures the largest budget

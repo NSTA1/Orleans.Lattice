@@ -4224,8 +4224,10 @@ internal sealed partial class BPlusLeafGrain
         // pressure, and the zero-priming of the narrowing counter (issues
         // #2742, #2867, #2899). Constructed here rather than beside the loop so
         // the prime still happens on a replay that returns before reading
-        // anything, which is what makes a later zero a measurement.
-        var sliceReader = new ReplaySliceReader(coordinator, treeId, partition);
+        // anything, which is what makes a later zero a measurement. The width
+        // it starts at is configured (issue #2898).
+        var sliceReader = new ReplaySliceReader(
+            coordinator, treeId, partition, (await GetOptionsAsync()).WalReplaySliceBudget);
 
         // Reuse the head the sweep-order pre-pass already probed when it has
         // one, so ordering the sweep costs no extra grain call. A head probed

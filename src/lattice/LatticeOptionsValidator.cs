@@ -409,6 +409,14 @@ if (options.WalReplayMaxRecordsPerTurn < 0)
         + "(zero disables the cooperative activation-replay yield; a positive value bounds the number of WAL "
         + "records applied per scheduler turn before the replay yields).");
 }
+if (options.WalReplaySliceBudget < 1)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalReplaySliceBudget)} must be greater than or equal to 1 "
+        + "(the number of WAL entries one activation-time replay requests per commit-log slice read, and the "
+        + "width it widens back towards after a memory-pressure narrowing; a single entry is the narrowest "
+        + "legal read, so zero would request nothing and the replay could never advance).");
+}
 if (options.WalAdmissionSaturationWaitBudget < TimeSpan.Zero
     && options.WalAdmissionSaturationWaitBudget != Timeout.InfiniteTimeSpan)
 {

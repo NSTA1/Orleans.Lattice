@@ -680,8 +680,10 @@ internal sealed class SnapshotLeafGrain(
             // snapshot rebuild reads the WHOLE pinned WAL prefix rather than the
             // gap above a checkpoint, and it takes no replay permit - so before
             // this change it had neither of the two factors that bound peak
-            // replay memory working for it.
-            var sliceReader = new ReplaySliceReader(coordinator, _treeId, partition);
+            // replay memory working for it. The starting width is configured
+            // per tree (issue #2898), which matters most at exactly this site.
+            var sliceReader = new ReplaySliceReader(
+                coordinator, _treeId, partition, optionsMonitor.Get(_treeId).WalReplaySliceBudget);
 
             while (fromExclusive < toInclusive)
             {

@@ -204,6 +204,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
 | [`WalReplayMaxRecordsPerTurn`](#walreplaymaxrecordsperturn) | `int` | 256 | Yes |
+| [`WalReplaySliceBudget`](#walreplayslicebudget) | `int` | 256 | Yes |
 | [`WalSaturationDispatchTimeoutThreshold`](#walsaturationdispatchtimeoutthreshold) | `int` | 1 | Yes |
 | [`WalSaturationFlushLatencySampleWindows`](#walsaturationflushlatencysamplewindows) | `int` | 3 | Yes |
 | [`WalSaturationFlushLatencyThreshold`](#walsaturationflushlatencythreshold) | `TimeSpan?` | `null` (disabled) | Yes |
@@ -1521,19 +1522,52 @@ The resolved ceiling, the configured option, the processor count, and the grant 
 
 Set to a positive value to pin the ceiling explicitly; an explicit value supersedes both figures. Must be `>= 0`; the validator rejects negative values.
 
-**This ceiling is one of two factors, and it is the only one you can configure (issue #2867).** Peak replay memory is the **product** of how many replays run concurrently and how much each one buffers, and the paragraph above is careful about the first while being silent about the second - which is how the ceiling came to be treated as *the* control. It is not. The per-replay factor is the slice width the replay reads the commit log in, and that width is a private constant (`ReplaySliceBudget`, 256 entries) compiled into the leaf grain. **There is no option, no environment variable, and no overlay entry behind it.** Lowering peak memory by lowering the width is therefore not something configuration can express today.
+**This ceiling is one of two factors (issue #2867).** Peak replay memory is the **product** of how many replays run concurrently and how much each one buffers, and the paragraph above is careful about the first while being silent about the second - which is how the ceiling came to be treated as *the* control. It is not. The per-replay factor is the slice width the replay reads the commit log in, and it is settable in its own right as [`WalReplaySliceBudget`](#walreplayslicebudget) (issue #2898). Until that option existed the width was a private constant with no option, no environment variable and no overlay entry behind it, so lowering peak memory by lowering the width was not something configuration could express. Both terms of the product are now settable.
 
 That matters because both ends of the one dial you do have are failure modes, so there is not always a setting that works. Set the ceiling too high and the concurrent whole-window buffers sum past the managed heap hard limit, an `OutOfMemoryException` cancels the activation, and the replay banks nothing. Set it too low and cold leaves queue for a permit past the request timeout, the runtime cancels the activation, and the replay again banks nothing. Either way no snapshot is banked, the durable materialiser pin stays unusable, and WAL garbage collection reports `blocked` - so the next replay window is larger than the one that just failed.
 
-The width is not entirely fixed at runtime: a replay whose slice read fails for memory pressure narrows its own width to a quarter and retries the same range (issue #2742), which is a reactive, per-replay, per-activation adaptation that resets to 256 on the next activation. It is not a setting and it cannot be pre-empted. Whether it is engaging at all is visible in `orleans.lattice.wal.replay.slice_narrowings`, tagged by tree and partition and primed at zero, which is the instrument to read before concluding that a memory-pressure failure was caused by the slice width - a flat zero alongside climbing activation failures means the failing allocation was somewhere else and the width is not the lever. See [Metrics](metrics.md).
+The configured width is a starting point, not a floor: a replay whose slice read fails for memory pressure narrows its own width to a quarter and retries the same range (issue #2742), a reactive, per-replay, per-activation adaptation that widens back towards the configured width on success and starts afresh at it on the next activation. Setting the option lowers the ceiling that adaptation works down from; it does not disable it. Whether it is engaging at all is visible in `orleans.lattice.wal.replay.slice_narrowings`, tagged by tree and partition and primed at zero, which is the instrument to read before concluding that a memory-pressure failure was caused by the slice width - a flat zero alongside climbing activation failures means the failing allocation was somewhere else and the width is not the lever. See [Metrics](metrics.md).
 
-Note also that the narrowing applies to the **activation-time** replay only. `SnapshotLeafGrain` carries its own constant of the same name and value and passes it straight through, so a snapshot rebuild that cannot afford its slice has no narrower attempt to make. The recovery path is currently the one without the resilience.
+The narrowing reached only the **activation-time** replay when it was introduced. Two further replay sites - the snapshot-cursor rebuild and the frozen-baseline tail fold - kept a constant of the same name and the same value and passed it straight through, so for a period the recovery path was the one without the resilience, and every check that compared the two *values* passed while the *behaviour* had diverged. All three sites now read through one shared reader that owns the width, the retry, the widening and the counter's priming together (issue #2899), and all three honour this option.
 
 ### `WalReplayMaxRecordsPerTurn`
 
-Number of WAL records a single activation-time replay projects before yielding the Orleans turn cooperatively (`await Task.Yield()`), so a long replay does not monopolise the activation's turn and starve other grain calls on the same activation (default: 256). This is distinct from the cross-RPC `ReplaySliceBudget` slicing; it bounds the synchronous run length **within** a single replay turn.
+Number of WAL records a single activation-time replay projects before yielding the Orleans turn cooperatively (`await Task.Yield()`), so a long replay does not monopolise the activation's turn and starve other grain calls on the same activation (default: 256). This is distinct from the cross-RPC slice width, [`WalReplaySliceBudget`](#walreplayslicebudget), which bounds how many entries a single slice read returns; this option bounds the synchronous run length **within** a single replay turn. They default to the same number and mean different things.
 
 Set to `0` to disable the cooperative yield so replay runs to completion without voluntarily yielding (the historical shape). Must be `>= 0`; the validator rejects negative values.
+
+### `WalReplaySliceBudget`
+
+Number of WAL entries a single replay requests per commit-log slice read, and the
+width it widens back towards after a memory-pressure narrowing (default: 256).
+
+**This is the second of the two factors that set peak replay memory (issue
+#2898).** Peak draw is the *product* of how many replays run at once and how much
+each one buffers; the first factor is
+[`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) and
+this is the second. Lowering it trades round trips for a smaller resident slice on
+a host that cannot afford the default width.
+
+Do not confuse it with
+[`WalReplayMaxRecordsPerTurn`](#walreplaymaxrecordsperturn), which defaults to the
+same number. That option bounds how many records a replay applies **within** one
+scheduler turn before yielding cooperatively, and so governs silo responsiveness.
+This one bounds how many entries a single cross-RPC slice read **returns**, and so
+governs allocation. Changing one does not change the other.
+
+The value is the *starting* width, not a floor. A read refused for memory pressure
+is retried at a quarter of the current width, floored at a single entry, and widens
+back towards this value on success - so configuring it lowers the ceiling the
+replay works down from rather than disabling the adaptation. Whether the adaptation
+is engaging is visible in `orleans.lattice.wal.replay.slice_narrowings`; see
+[Metrics](metrics.md).
+
+All three replay sites honour it: the activation-time replay, the snapshot-cursor
+rebuild, and the frozen-baseline tail fold.
+
+Must be `>= 1`; the validator rejects zero and negative values, because a single
+entry is the narrowest legal read and a width of zero would request nothing and
+never advance.
 
 ### `WalGcInterval`
 
