@@ -501,6 +501,17 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LatticeMetrics.LeafSnapshotCoverageRepairs"/>. Returns whether
     /// a capture was attempted.
     /// <para>
+    /// <b>Every path through this method records an outcome</b> (issue #2940).
+    /// It did not always: the entry guard and the attempted-but-unsatisfied exit
+    /// both returned in silence, so "the guard rejected, the repair never ran"
+    /// and "the repair ran and coverage is still missing" were the same
+    /// non-event - and they have opposite remedies, the first at the pin/guard
+    /// seam and the second at the capture seam. The one deliberate exception is a
+    /// repeat exhaustion within a single activation, which
+    /// <see cref="ReportZeroCoverageRepairExhaustion"/> deduplicates so the
+    /// <c>exhausted</c> arm counts stuck activations rather than retries.
+    /// </para>
+    /// <para>
     /// Shared by the two drivers that must both be able to reach it: the
     /// activation-time hook, which covers a leaf that entered the activation
     /// already uncovered (including a tree that has stopped taking writes
@@ -562,8 +573,28 @@ internal sealed partial class BPlusLeafGrain
         int partitionCount,
         CancellationToken cancellationToken = default)
     {
-        if (_snapshotCaptureInFlight || !HasCheckpointedPartitionWithoutCoverage(partitionCount))
+        // The guard's two conjuncts are recorded SEPARATELY and the
+        // short-circuit order is preserved exactly (issue #2940). Before this,
+        // one combined `if` returned false in silence, so "a capture was already
+        // running" and "there is nothing to repair" were the same non-event as
+        // "the repair ran and failed" further down. Those three have different
+        // remedies, and the middle one - no checkpointed partition lacking
+        // coverage - is the only POSITIVE observation that this repair is
+        // structurally unable to address a leaf that is blocking its tree.
+        //
+        // The in-flight test stays FIRST and still short-circuits, so the
+        // predicate is not evaluated when a capture is running. That is not a
+        // style choice: HasCheckpointedPartitionWithoutCoverage walks every
+        // partition, and this method runs on every checkpoint persist.
+        if (_snapshotCaptureInFlight)
         {
+            RecordCoverageRepairOutcome(LatticeMetrics.CoverageRepairCaptureInFlight);
+            return false;
+        }
+
+        if (!HasCheckpointedPartitionWithoutCoverage(partitionCount))
+        {
+            RecordCoverageRepairOutcome(LatticeMetrics.CoverageRepairNoUncoveredPartition);
             return false;
         }
 
@@ -600,6 +631,16 @@ internal sealed partial class BPlusLeafGrain
         {
             RecordCoverageRepairOutcome(LatticeMetrics.CoverageRepairRepaired);
         }
+        else
+        {
+            // The attempted-but-unsatisfied exit (issue #2940). This used to
+            // fall straight through to `return true` recording nothing, which
+            // made a repair that RAN and failed indistinguishable from one that
+            // was never attempted - and those point at opposite seams. The
+            // budget is not yet spent here, so this is not `exhausted`: a later
+            // driver on this activation will try again.
+            RecordCoverageRepairOutcome(LatticeMetrics.CoverageRepairUnsatisfied);
+        }
 
         return true;
     }
@@ -629,6 +670,36 @@ internal sealed partial class BPlusLeafGrain
             MaxZeroCoverageRepairAttempts);
     }
 
+    // Trees whose zero-coverage repair series has been primed in this process.
+    // Process-wide rather than per-activation: the property being bought is that
+    // the series EXISTS for a tree, and a per-activation flag would re-emit five
+    // zeros on every activation of every leaf for no additional information.
+    private static readonly ConcurrentDictionary<string, byte> PrimedCoverageRepairTrees = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Records one zero-coverage repair evaluation on
+    /// <see cref="LatticeMetrics.LeafSnapshotCoverageRepairs"/>, zero-priming
+    /// every arm for this tree the first time the tree is seen in this process.
+    /// <para>
+    /// <b>Why the prime is here and not at a driver.</b> This method is the sole
+    /// funnel for the instrument - every arm goes through it - so priming here
+    /// makes the primed tag shape identical to a real emission BY CONSTRUCTION
+    /// rather than by two sites agreeing. A prime on a divergent tag set would
+    /// mint a second series that no real emission ever writes to, which is the
+    /// false absence the prime exists to remove, reintroduced one level down.
+    /// </para>
+    /// <para>
+    /// <b>Why priming here is a reachability proof.</b> Since issue #2940 split
+    /// the entry guard, <c>TryRepairZeroCoverageAsync</c> records an arm on every
+    /// path it can take, so the first evaluation for a tree primes it. The
+    /// instrument's HELP text previously promised that a zero on
+    /// <c>exhausted</c> is a measured zero; that held only for a tree which had
+    /// already emitted <c>repaired</c>, which is exactly the trees NOT under
+    /// diagnosis. It now holds for any tree whose leaves evaluate the repair path
+    /// at all - which is every leaf activation carrying a tree id, and every
+    /// checkpoint persist.
+    /// </para>
+    /// </summary>
     private void RecordCoverageRepairOutcome(KeyValuePair<string, object?> outcome)
     {
         var treeId = state.State.TreeId;
@@ -637,11 +708,24 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-            1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-            outcome,
-            LatticeTenantLabel.ForTree(treeId));
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        if (PrimedCoverageRepairTrees.TryAdd(treeId, 0))
+        {
+            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
+                0, treeTag, LatticeMetrics.CoverageRepairRepaired, tenantTag);
+            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
+                0, treeTag, LatticeMetrics.CoverageRepairUnsatisfied, tenantTag);
+            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
+                0, treeTag, LatticeMetrics.CoverageRepairExhausted, tenantTag);
+            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
+                0, treeTag, LatticeMetrics.CoverageRepairCaptureInFlight, tenantTag);
+            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
+                0, treeTag, LatticeMetrics.CoverageRepairNoUncoveredPartition, tenantTag);
+        }
+
+        LatticeMetrics.LeafSnapshotCoverageRepairs.Add(1, treeTag, outcome, tenantTag);
     }
 
     /// <summary>

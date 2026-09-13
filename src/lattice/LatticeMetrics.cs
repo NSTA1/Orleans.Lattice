@@ -2880,21 +2880,42 @@ public static class LatticeMetrics
         new(TagReason, "no_coverage_claim");
 
     /// <summary>
-    /// Counter of off-cadence leaf snapshot captures driven by the zero-coverage
-    /// repair path (issue #2692). Tagged with <see cref="TagTree"/> and
-    /// <see cref="TagOutcome"/>: <c>repaired</c> when a capture gave a
-    /// checkpointed partition the durable coverage it previously lacked, and
-    /// <c>exhausted</c> when an activation spent its entire repair budget with a
-    /// checkpointed partition still uncovered.
+    /// Counter of zero-coverage leaf snapshot repair EVALUATIONS (issues #2692,
+    /// #2940), tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>.
+    /// Five arms partition every invocation of
+    /// <c>BPlusLeafGrain.TryRepairZeroCoverageAsync</c>:
+    /// <list type="bullet">
+    /// <item><description><see cref="CoverageRepairRepaired"/> - a capture gave
+    /// every checkpointed partition the durable coverage it lacked.</description></item>
+    /// <item><description><see cref="CoverageRepairUnsatisfied"/> - a capture ran
+    /// and a checkpointed partition is STILL uncovered.</description></item>
+    /// <item><description><see cref="CoverageRepairExhausted"/> - the
+    /// per-activation budget was spent with a partition still uncovered.</description></item>
+    /// <item><description><see cref="CoverageRepairCaptureInFlight"/> - declined
+    /// because a capture was already running on this leaf.</description></item>
+    /// <item><description><see cref="CoverageRepairNoUncoveredPartition"/> -
+    /// declined because no checkpointed partition lacks coverage. The healthy
+    /// majority, and the only positive observation that a leaf is NOT in the
+    /// repairable population.</description></item>
+    /// </list>
     /// <para>
-    /// <b>Why one instrument carries both outcomes.</b> A counter publishes no
-    /// series at all until its first <c>Add</c>, so a dedicated exhaustion
-    /// counter would sit dark in the healthy case and read identically to an
-    /// instrument that was never wired up. Sharing one instrument means any
-    /// repair traffic whatsoever proves the series is live, after which a zero
-    /// on <c>exhausted</c> is a measured zero rather than silence. That
-    /// distinction is the whole point: this counter exists because the defect it
-    /// watches for was invisible for months behind exactly that ambiguity.
+    /// <b>Why the arms share one instrument.</b> A counter publishes no series at
+    /// all until its first <c>Add</c>, so a dedicated exhaustion counter would sit
+    /// dark in the healthy case and read identically to an instrument that was
+    /// never wired up. Sharing one instrument means any repair traffic whatsoever
+    /// proves the series is live. That argument was load-bearing but CONDITIONAL -
+    /// it held only for a tree that had already emitted some arm - so issue #2940
+    /// made it unconditional by zero-priming all five arms the first time a tree
+    /// is seen in this process. An absent series now means the repair path never
+    /// ran for that tree (or the build predates the instrument); a zero is a
+    /// measured zero.
+    /// </para>
+    /// <para>
+    /// <b>The two rejection arms are why this instrument was widened.</b> Before
+    /// issue #2940 the guard exit and the attempted-but-unsatisfied exit both
+    /// recorded NOTHING, so "the repair never ran" and "the repair ran and failed"
+    /// were byte-identical silence - and they have opposite remedies, the first at
+    /// the pin/guard seam and the second at the capture seam.
     /// </para>
     /// <para>
     /// <c>exhausted</c> is the alarm condition and is never benign. A
@@ -2905,10 +2926,18 @@ public static class LatticeMetrics
     /// carried on the paired warning rather than as a tag, because the leaf
     /// population is unbounded and would be an unbounded metric dimension.
     /// </para>
+    /// <para>
+    /// <b>Boundary on the partition claim.</b> Every invocation records exactly
+    /// one arm EXCEPT a repeat exhaustion within one activation, which
+    /// <c>ReportZeroCoverageRepairExhaustion</c> deliberately deduplicates so that
+    /// <c>exhausted</c> counts stuck activations rather than retries. The sum
+    /// across arms is therefore an invocation count minus those suppressed
+    /// repeats, which is a lower bound and never an over-count.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> LeafSnapshotCoverageRepairs =
-        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.coverage_repairs", unit: "{capture}",
-            description: "Off-cadence leaf snapshot captures driven by the zero-coverage repair path (issue #2692), tagged by tree and outcome (repaired/exhausted). Both outcomes share one instrument so that a zero on 'exhausted' is a measured zero and not an unpublished series.");
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.coverage_repairs", unit: "{evaluation}",
+            description: "Zero-coverage leaf snapshot repair evaluations (issues #2692, #2940), tagged by tree and outcome: 'repaired' (capture left every checkpointed partition covered), 'unsatisfied' (capture ran, a checkpointed partition is still uncovered), 'exhausted' (per-activation budget spent, recorded once per activation), 'capture_in_flight' (declined, a capture was already running) and 'no_checkpointed_uncovered_partition' (declined, nothing to repair - the healthy majority). All five arms are zero-primed the first time a tree is seen in this process, so an absent series means the path never ran for that tree and a zero is a measured zero. Every invocation records one arm except a repeat exhaustion within one activation, which is deduplicated on purpose.");
 
     /// <summary>Canonical name of <see cref="LeafSnapshotCoverageRepairs"/>.</summary>
     public const string LeafSnapshotCoverageRepairsName = "orleans.lattice.leaf.snapshot.coverage_repairs";
@@ -2932,6 +2961,60 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> CoverageRepairExhausted =
         new(TagOutcome, "exhausted");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="LeafSnapshotCoverageRepairs"/> for a repair capture that RAN
+    /// and left a checkpointed partition still uncovered, without yet spending
+    /// the per-activation budget (issue #2940).
+    /// <para>
+    /// This arm is the discriminator the instrument previously lacked. It says
+    /// the repair is REACHING the fault and failing, so the remedy belongs at the
+    /// capture seam - the snapshot store, the eligibility gate inside
+    /// <c>CaptureSnapshotCoreAsync</c>, or the coverage stamp - and specifically
+    /// NOT at the pin/guard seam that
+    /// <see cref="CoverageRepairNoUncoveredPartition"/> points at. Before it
+    /// existed this exit recorded nothing at all, so it was indistinguishable
+    /// from a repair that never ran.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageRepairUnsatisfied =
+        new(TagOutcome, "unsatisfied");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="LeafSnapshotCoverageRepairs"/> for an evaluation declined
+    /// because a snapshot capture was already in flight on this leaf (issue
+    /// #2940).
+    /// <para>
+    /// The first conjunct of the entry guard, and it short-circuits: when this
+    /// arm is recorded the uncovered-partition predicate was NOT evaluated, so
+    /// this reading makes no claim about whether the leaf is repairable. A
+    /// sustained rate means repair evaluations are colliding with captures, which
+    /// burns no attempt budget but does defer the repair to a later driver.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageRepairCaptureInFlight =
+        new(TagOutcome, "capture_in_flight");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="LeafSnapshotCoverageRepairs"/> for an evaluation declined
+    /// because no checkpointed partition on this leaf lacks durable snapshot
+    /// coverage (issue #2940).
+    /// <para>
+    /// The healthy majority - every leaf that is not in the repairable
+    /// population records this on every activation and every checkpoint persist -
+    /// and it is deliberately recorded rather than left silent. It is the only
+    /// POSITIVE observation that a leaf blocking its tree's WAL cursor floor is
+    /// doing so for a reason this repair cannot address, which routes the remedy
+    /// to the pin/guard seam rather than to the capture seam. Without it, "the
+    /// repair guard never passed" and "the repair ran and failed" were the same
+    /// silence.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageRepairNoUncoveredPartition =
+        new(TagOutcome, "no_checkpointed_uncovered_partition");
 
     /// <summary>
     /// Reactivations of a dormant leaf whose unusable durable materialiser pin
