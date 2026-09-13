@@ -6,13 +6,27 @@ namespace Orleans.Lattice.Embedding.Onnx;
 /// stack is (no config file, no command line).
 /// </summary>
 /// <remarks>
+/// <para>
 /// Every knob has a working default except the two asset paths, which are baked
 /// into the image by the Dockerfile. Parsing is deliberately lenient: an
 /// unparseable numeric or an unknown provider name falls back to the default
 /// rather than aborting startup, because a model server that refuses to boot is
-/// strictly worse for the caller than one that boots on the CPU. The one
-/// exception is a missing model or vocabulary file, which is fatal - serving
-/// wrong vectors is worse than serving none.
+/// strictly worse for the caller than one that boots on the CPU. A missing model
+/// or vocabulary file is fatal - serving wrong vectors is worse than serving
+/// none.
+/// </para>
+/// <para>
+/// <b><see cref="IntraOpThreadsKey"/> is the second exception, and the boundary
+/// is the whole of it (issue #2887).</b> Leniency is right for a knob whose
+/// misreading costs throughput and announces itself in the startup line. It is
+/// wrong for the one knob that selects an <i>operating mode</i>: an unparseable
+/// value there derives silently, and the resulting deployment is
+/// indistinguishable - from the overlay, from <c>docker inspect</c>, and from
+/// the container's behaviour - from one deliberately left unpinned. A boot
+/// failure costs one deploy cycle; a silent mode change costs an acceptance run
+/// scored against a configuration nobody can vouch for. So that knob refuses,
+/// and every other knob on this type keeps the lenient default.
+/// </para>
 /// </remarks>
 internal sealed record EmbedServerOptions
 {
@@ -139,7 +153,9 @@ internal sealed record EmbedServerOptions
     /// <returns>The resolved options.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="read"/> is null.</exception>
     /// <exception cref="InvalidOperationException">A required asset path is
-    /// unset, or points at a file that does not exist.</exception>
+    /// unset, or points at a file that does not exist; or
+    /// <see cref="IntraOpThreadsKey"/> is present but unusable, which is refused
+    /// rather than derived from (issue #2887).</exception>
     public static EmbedServerOptions FromEnvironment(Func<string, string?> read)
     {
         ArgumentNullException.ThrowIfNull(read);
@@ -196,30 +212,93 @@ internal sealed record EmbedServerOptions
     /// <see langword="null"/> when unlimited or unreadable.</param>
     /// <param name="processorCount">The process's reported processor count.</param>
     /// <returns>The resolved count and its provenance.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="declared"/> is present but is neither
+    /// <see cref="AutoToken"/> nor a non-negative integer. It is refused rather
+    /// than derived from, because a derivation reached by accident is
+    /// indistinguishable from one chosen on purpose (issue #2887). The message
+    /// names the variable and the offending value, and the two refusals - a
+    /// value that is not a number at all, and a number that is negative - are
+    /// worded distinctly, because they are different operator mistakes with
+    /// different fixes.
+    /// </exception>
     public static IntraOpThreadCount ResolveIntraOpThreads(
         string? declared, int? containerCpuGrant, int processorCount)
     {
         var trimmed = (declared ?? string.Empty).Trim();
 
-        if (int.TryParse(trimmed, out var parsed) && parsed >= 0)
+        if (int.TryParse(
+                trimmed,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var parsed)
+            && parsed >= 0)
         {
             return new IntraOpThreadCount(parsed, IntraOpThreadSource.Declared);
         }
 
         // Recognised EXPLICITLY rather than left to the fallthrough below, even
-        // though the fallthrough already produces the right number. An
-        // unparseable value derives silently here, so without this branch `auto`
-        // would be indistinguishable from a typo: the same count, the same
-        // provenance, and no way for an operator to tell a deliberate choice from
-        // a mistake that happened to land somewhere reasonable. Naming it keeps
-        // the startup line honest about who chose (issue #2863).
+        // though the fallthrough already produces the right number. Naming it
+        // keeps the startup line honest about who chose (issue #2863).
         var declaredAuto = string.Equals(trimmed, AutoToken, StringComparison.OrdinalIgnoreCase);
+
+        // UNSET and SET-TO-NONSENSE are kept apart here, and that separation is
+        // the point of the change rather than a detail of it. They are different
+        // operator errors with different remedies - one supplied nothing, the
+        // other supplied something that was not understood - and collapsing them
+        // into one outcome is exactly what let a typo become an unannounced mode
+        // change. Only the genuinely-unset case derives; the derived path itself
+        // is unchanged and remains correct (issue #2887).
+        if (!declaredAuto && trimmed.Length > 0)
+        {
+            throw new InvalidOperationException(BuildRefusal(trimmed));
+        }
 
         return containerCpuGrant is int grant
             ? new IntraOpThreadCount(
                 Math.Max(1, grant), IntraOpThreadSource.ContainerCpuGrant, declaredAuto)
             : new IntraOpThreadCount(
                 Math.Max(1, processorCount), IntraOpThreadSource.ProcessorCount, declaredAuto);
+    }
+
+    /// <summary>
+    /// Words the refusal for a present-but-unusable <see cref="IntraOpThreadsKey"/>.
+    /// </summary>
+    /// <remarks>
+    /// A negative integer and a non-numeric token are reported differently on
+    /// purpose. "Not a number" sent to someone who wrote <c>-1</c> is false, and
+    /// "must not be negative" sent to someone who wrote <c>banana</c> is
+    /// baffling; in both cases the operator has to guess which half of the rule
+    /// they broke. The remedy line is shared so the two cannot drift apart.
+    /// </remarks>
+    /// <param name="trimmed">The offending value, already trimmed.</param>
+    /// <returns>The refusal message.</returns>
+    private static string BuildRefusal(string trimmed)
+    {
+        var parsedAsLong = long.TryParse(
+            trimmed,
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var wide);
+
+        var complaint = parsedAsLong switch
+        {
+            true when wide < 0 =>
+                $"{IntraOpThreadsKey} is set to '{trimmed}', which is negative. A thread count cannot "
+                    + "be below zero.",
+            true =>
+                $"{IntraOpThreadsKey} is set to '{trimmed}', which is larger than a thread count can "
+                    + $"be (the maximum is {int.MaxValue}).",
+            false =>
+                $"{IntraOpThreadsKey} is set to '{trimmed}', which is not a number.",
+        };
+
+        return complaint
+            + $" Write '{AutoToken}' to size the intra-op pool from the enforced container CPU grant"
+            + $" deliberately, or pin a non-negative integer ('{LetRuntimeChoose}' hands the decision"
+            + " back to ONNX Runtime). Leaving the variable UNSET also derives, and is a different"
+            + " thing from setting it to a value that was not understood - that is why this is"
+            + " refused instead of derived (issue #2887).";
     }
 
     /// <summary>
