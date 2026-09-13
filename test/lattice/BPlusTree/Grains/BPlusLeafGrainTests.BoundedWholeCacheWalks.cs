@@ -125,7 +125,19 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
             grain.CacheForTest.TryAttachSnapshot(LeafSnapshotCodec.Encode(rows), residentBudgetBytes),
             Is.True,
             "the corpus must back a bounded read, or the fixture proves nothing");
-        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True);
+
+        // Load-bearing, not a sanity check. Every frame-attachment assertion in
+        // this fixture is vacuous unless the frame is attached here first, and
+        // a seeding or inspection helper that reaches for a whole-cache
+        // accessor (EntriesForTest, UnderlyingRows, Keys) detaches it before
+        // the test body ever runs - leaving a test that exercises the detached
+        // fallback while appearing to exercise the attached path, and that
+        // therefore passes identically with and without the fix. Seed and
+        // inspect only through non-detaching accessors.
+        Assert.That(
+            grain.CacheForTest.HasPendingHydration,
+            Is.True,
+            "seeding must leave the frame attached");
         return grain;
     }
 
@@ -345,9 +357,107 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
         // Ordinally above every key in the corpus, so every window clips empty.
         ((ILeafProjection)grain).Apply(DeleteRange("z0", "z9"));
 
+        // Asserted before any row is read, deliberately. Reading rows back
+        // routes through the ranged hydrate, so a check made after the
+        // comparison below would be reporting the state the comparison itself
+        // left behind rather than the state the mutation left behind.
+        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True);
+        Assert.That(grain.CacheForTest.TryGetBisectingKeyWithoutHydrating(out _), Is.True);
+
         Assert.That(TombstonedKeys(grain, corpus), Is.EqualTo(
             corpus.Where(r => r.Value.IsTombstone).Select(r => r.Key).ToArray()).AsCollection);
+    }
+
+    // ---------------------------------------------------------------------
+    // The budget/leaf boundary - where windowing stops helping
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// The premise the rest of this fixture rests on, asserted rather than
+    /// assumed: the seeded corpus is materially larger than the resident
+    /// budget, so the walks under test really do evict between windows.
+    /// </summary>
+    [Test]
+    public void The_fixture_corpus_is_materially_larger_than_the_resident_budget()
+    {
+        var cache = LeafWithAttachedSnapshot(Corpus(512)).CacheForTest;
+
+        Assert.That(
+            cache.StateBytes,
+            Is.GreaterThan(4L * 16L * 1024),
+            "the corpus must exceed the 16 KiB fixture budget by a wide margin, or every "
+            + "frame-attachment assertion here is proving something narrower than it claims");
+    }
+
+    /// <summary>
+    /// The adversarial case, and the honest boundary of this conversion.
+    /// <para>
+    /// A ranged fold does not avoid detachment by being ranged. It avoids it by
+    /// evicting: <c>HydrateBlock</c> detaches the moment the source reports
+    /// itself fully hydrated, and eviction is what keeps it from ever
+    /// reporting that. So a fold that covers the whole leaf detaches anyway
+    /// whenever the budget exceeds the leaf, and <c>HydrateAll</c>'s own
+    /// trailing detach is not the only route to one.
+    /// </para>
+    /// <para>
+    /// This is benign rather than a hole, and the reason is structural rather
+    /// than a property of any host's tuning. The budget defaults to 1 MiB and
+    /// the division threshold is 64 MiB, so a leaf small enough to be fully
+    /// covered within budget is two orders of magnitude below the size at
+    /// which it would ever need to divide. Detaching it forfeits a cheap
+    /// division the leaf had no use for, and leaves resident a footprint
+    /// already under the budget. The condition under which the fold stops
+    /// helping is exactly the condition under which the defect does not bite.
+    /// </para>
+    /// <para>
+    /// It stops being benign only if an operator raises the budget to the same
+    /// order as the division threshold, which is a 64x departure from the
+    /// default. That is worth knowing about and is why it is pinned here.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_baseline_freeze_of_a_leaf_wholly_within_budget_detaches_and_that_is_benign()
+    {
+        var corpus = Corpus(64);
+        var grain = LeafWithAttachedSnapshot(corpus, residentBudgetBytes: 8L * 1024 * 1024);
+        var leafBytes = grain.CacheForTest.StateBytes;
+
+        Assert.That(leafBytes, Is.LessThan(8L * 1024 * 1024), "this arm requires a leaf inside the budget");
+
+        var freeze = await grain.FreezeProjectionAsync(CancellationToken.None);
+
+        Assert.That(freeze.Rows, Has.Count.EqualTo(corpus.Length), "the freeze is still correct");
+        Assert.That(
+            grain.CacheForTest.HasPendingHydration,
+            Is.False,
+            "covering the whole leaf within budget hydrates the final block, which detaches - "
+            + "windowing does not prevent this and is not claimed to");
+
+        // The detachment is harmless here because the leaf is orders of
+        // magnitude below the size at which it would need to divide.
+        Assert.That(leafBytes, Is.LessThan(LatticeOptions.DefaultLeafHydrationResidentBytes));
+    }
+
+    /// <summary>
+    /// The complement, and the case the epic is actually about: at the default
+    /// budget a leaf large enough to need dividing is far larger than the
+    /// budget, so the fold evicts, never completes the source, and the frame
+    /// survives.
+    /// </summary>
+    [Test]
+    public async Task A_baseline_freeze_of_a_leaf_larger_than_the_budget_keeps_the_frame()
+    {
+        var corpus = Corpus(2048);
+        var grain = LeafWithAttachedSnapshot(corpus, residentBudgetBytes: 64L * 1024);
+        var leafBytes = grain.CacheForTest.StateBytes;
+
+        Assert.That(leafBytes, Is.GreaterThan(4L * 64L * 1024), "this arm requires a leaf well past the budget");
+
+        var freeze = await grain.FreezeProjectionAsync(CancellationToken.None);
+
+        Assert.That(freeze.Rows, Has.Count.EqualTo(corpus.Length));
         Assert.That(grain.CacheForTest.HasPendingHydration, Is.True);
+        Assert.That(grain.CacheForTest.TryGetBisectingKeyWithoutHydrating(out _), Is.True);
     }
 
     // ---------------------------------------------------------------------
