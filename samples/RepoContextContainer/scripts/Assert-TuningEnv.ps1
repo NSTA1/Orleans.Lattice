@@ -34,6 +34,22 @@
 .PARAMETER Quiet
 	Suppress the success line. Violations are always written.
 
+.PARAMETER BuildCommit
+	The commit the image is about to be built from. When supplied, the .env's
+	tokens are additionally checked against what that commit's binary would
+	understand (issue #2931).
+
+	This is a claim about an ARTEFACT, not about source, and the two come apart:
+	when this was written the running image was built from a commit predating
+	the one that taught the resolver `auto`, so migrating the .env to `auto`
+	before rebuilding would have thrown at silo configuration rather than
+	falling back. Omitting this parameter skips the check; it never passes it
+	silently.
+
+.PARAMETER RepositoryPath
+	Where to resolve -BuildCommit. Defaults to the repository containing this
+	script.
+
 .OUTPUTS
 	Exit code, matching the vocabulary Assert-ContainerProvenance.ps1 beside it
 	already uses:
@@ -62,6 +78,10 @@ param(
 
 	[Parameter(ParameterSetName = 'Reading', Mandatory)]
 	[hashtable] $Reading,
+
+	[string] $BuildCommit,
+
+	[string] $RepositoryPath,
 
 	[switch] $Quiet
 )
@@ -160,6 +180,45 @@ else {
 # perfectly good .env. That is the passing direction failing silently, which is
 # the exact shape of defect this file exists to catch, so it is worth the note.
 $violations = Get-TuningEnvViolation -Reading $reading
+
+# The token-ancestry check is ADDITIVE and opt-in. It answers a different
+# question from everything above - not "is this value meaningful?" but "will the
+# binary we are about to run understand it?" - and it needs a repository, which
+# the value checks deliberately do not.
+if (-not [string]::IsNullOrWhiteSpace($BuildCommit)) {
+	$repository = if ([string]::IsNullOrWhiteSpace($RepositoryPath)) { $PSScriptRoot } else { $RepositoryPath }
+	$ancestry = @{}
+
+	foreach ($requirement in (Get-TokenAncestryRequirement | Sort-Object IntroducedIn -Unique)) {
+		# A sha this repository has never heard of is left ABSENT from the map
+		# rather than recorded as $false. "Not an ancestor" and "I could not
+		# tell" are different findings with different remedies, and the pure
+		# adjudicator words them differently - collapsing them here would throw
+		# that distinction away before it ever reached the operator.
+		& git -C $repository cat-file -e "$($requirement.IntroducedIn)^{commit}" 2>$null
+
+		if ($LASTEXITCODE -ne 0) {
+			continue
+		}
+
+		& git -C $repository merge-base --is-ancestor $requirement.IntroducedIn $BuildCommit 2>$null
+		$ancestry[$requirement.IntroducedIn] = ($LASTEXITCODE -eq 0)
+	}
+
+	# Assigned to a variable BEFORE any @() wrapper, for exactly the reason the
+	# comment above gives. @(Get-TokenAncestryViolation ...) would wrap this
+	# function's single empty-array output into a ONE-element array holding an
+	# empty array, and the script would report one blank violation on a healthy
+	# config. Assigning first unwraps it; @($ancestryViolations) on the variable
+	# is then a no-op. This is the passing direction failing silently, so the
+	# two-step is deliberate and not redundant.
+	$ancestryViolations = Get-TokenAncestryViolation `
+		-Reading $reading `
+		-AncestryResult $ancestry `
+		-BuildCommit $BuildCommit
+
+	$violations = @($violations) + @($ancestryViolations)
+}
 
 if ($violations.Count -eq 0) {
 	if (-not $Quiet) {

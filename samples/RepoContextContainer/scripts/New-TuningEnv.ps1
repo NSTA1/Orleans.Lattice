@@ -42,9 +42,29 @@
     Print the derivation and the resulting file without writing anything.
 
 .PARAMETER Force
-    Overwrite an existing .env. Without it an existing file is left alone, because it may
-    carry hand-set values (REPOCONTEXT_MEMORY_ARCHIVE_PATH in particular) that this script
-    does not derive and must not discard.
+    Overwrite the derived keys in an existing .env, PRESERVING every key this script does
+    not derive.
+
+    -Force used to rewrite the file wholesale, which silently dropped REPO_PATH along with
+    every other hand-set key (issue #2929). That is not a cosmetic loss: with REPO_PATH
+    gone, the base compose file falls back to its own default and mounts a DIFFERENT tree
+    at /workspace, so the container indexes the wrong corpus while every layer reports
+    success. It now merges: derived keys are replaced, unrecognised keys are carried
+    across untouched, and both counts are reported.
+
+.PARAMETER ExpectedCorpusFiles
+    Refuse unless the measured corpus is within -CorpusTolerance of this count.
+
+    The memory grant derives from the corpus size, so two runs measured against corpora
+    of different sizes are not comparable - and that is the basis the acceptance rig
+    scores on. Declaring the expected size makes a moved corpus a refusal instead of an
+    unremarked change in the denominator (issue #2930).
+
+.PARAMETER CorpusTolerance
+    Fractional drift allowed by -ExpectedCorpusFiles. Defaults to 0.02 (2%), which
+    absorbs ordinary commit-to-commit churn while catching a changed workspace. Measured
+    across three checkouts of this repository the tracked count varied by 0.2%, and a
+    wrong-tree measurement differed by 106%, so the two are not close together.
 
 .EXAMPLE
     pwsh -File ./scripts/New-TuningEnv.ps1 -DryRun
@@ -56,11 +76,22 @@ param(
     [switch] $DryRun,
     [switch] $CorpusOnly,
     [switch] $IgnoreHostLoad,
+    [int] $ExpectedCorpusFiles,
+    [ValidateRange(0.0, 1.0)]
+    [double] $CorpusTolerance = 0.02,
     [switch] $Force
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# The knob table is the single place that knows each knob's RADIX. The heap count is
+# emitted through Format-TuningKnobValue rather than string-interpolated, because
+# DOTNET_GCHeapCount is read by the CLR in base 16 and this script used to write it in
+# decimal (issue #2928). That was inert at 6 - below 10 the two bases agree - and
+# becomes a real misconfiguration the moment a host is large enough for the derived
+# count to reach 10, where a written 10 is honoured as 16.
+. (Join-Path $PSScriptRoot '_tuningKnobs.ps1')
 
 # ---------------------------------------------------------------------------
 # PROVENANCE OF EVERY CONSTANT.
@@ -193,25 +224,93 @@ $HEADROOM_FRACTION = 0.20
 
 # ---------------------------------------------------------------------------
 
-function Measure-Corpus {
+function Get-CorpusCommit {
     <#
-        Counts the files under a root that repocontext would plausibly ingest, excluding
-        the directories named in $ExcludedDirectoryNames.
+        The commit the measured workspace is sitting on, or $null.
 
-        Returns BOTH the raw and the counted figure. Reporting only the filtered number
-        would hide the exclusion doing its job: the ratio between them is the signal that
-        tells an operator the filter is alive, and it is the first thing to look at when a
-        derived grant is surprising.
+        Recorded next to the count because a count without a commit cannot be checked
+        later. "8,621 files" is unverifiable a week afterwards; "8,621 files at
+        <sha>, tracked" can be re-derived by anyone.
     #>
     param([string] $Root)
 
-    $raw = 0
-    $counted = 0
+    if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    $sha = & git -C $Root rev-parse HEAD 2>$null
+
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sha)) {
+        return $null
+    }
+
+    $dirty = & git -C $Root status --porcelain 2>$null
+    $suffix = if ($LASTEXITCODE -eq 0 -and @($dirty).Where({ -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+        '-dirty'
+    }
+    else {
+        ''
+    }
+
+    return (([string] $sha).Trim() + $suffix)
+}
+
+function Measure-Corpus {
+    <#
+        Counts the files under a root that repocontext would plausibly ingest.
+
+        TWO methods, and which one ran is part of the answer (issue #2930).
+
+        `Tracked` asks git for the working tree minus everything .gitignore excludes.
+        That is the corpus repocontext ingests, and - this is the point - it is a
+        property of the COMMIT, so two checkouts of the same commit agree. The
+        directory-name filter alone is a property of the CHECKOUT: it cannot see
+        untracked build output under a name not on the list, editor state, tool caches,
+        or deploy backups, so the same commit measured in two worktrees returns two
+        numbers and derives two different grants. A grant that is not stable across
+        runs silently breaks run-to-run comparison, which is the basis the acceptance
+        rig scores on.
+
+        `Walk` is the filesystem fallback for a root that is not a git checkout. It is
+        the old behaviour, kept because it is better than refusing, and REPORTED
+        because a reader must be able to tell that the weaker method ran.
+
+        Returns the raw total, the counted figure, and the method. Reporting only the
+        filtered number would hide the exclusion doing its job: the ratio between them
+        is the signal that tells an operator the filter is alive, and it is the first
+        thing to look at when a derived grant is surprising.
+    #>
+    param([string] $Root)
+
     $excludedPattern = ($ExcludedDirectoryNames | ForEach-Object {
         [regex]::Escape([IO.Path]::DirectorySeparatorChar + $_ + [IO.Path]::DirectorySeparatorChar)
     }) -join '|'
 
-    foreach ($file in Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction SilentlyContinue) {
+    $tracked = Get-TrackedCorpusFile -Root $Root
+
+    if ($null -ne $tracked) {
+        $counted = 0
+
+        foreach ($relative in $tracked) {
+            $candidate = [IO.Path]::DirectorySeparatorChar +
+                ($relative -replace '/', [IO.Path]::DirectorySeparatorChar)
+
+            if ($candidate -notmatch $excludedPattern) {
+                $counted++
+            }
+        }
+
+        return [pscustomobject]@{ Raw = $tracked.Count; Counted = $counted; Method = 'Tracked' }
+    }
+
+    $raw = 0
+    $counted = 0
+
+    # -ErrorAction Stop, NOT SilentlyContinue. A permission-denied subtree that is
+    # swallowed here produces a LOW count, and a low count derives a SMALL grant that
+    # the deployment then honours without complaint. The failure mode of the quiet
+    # version is a run that is under-provisioned for a reason nothing recorded.
+    foreach ($file in (Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction Stop)) {
         $raw++
 
         # Match on the path WITH separators on both sides so a directory called `bin`
@@ -224,7 +323,49 @@ function Measure-Corpus {
         }
     }
 
-    return [pscustomobject]@{ Raw = $raw; Counted = $counted }
+    return [pscustomobject]@{ Raw = $raw; Counted = $counted; Method = 'Walk' }
+}
+
+function Get-TrackedCorpusFile {
+    <#
+        The tracked-and-not-ignored file list for a git checkout, or $null when the root
+        is not one (or git is unavailable, or the call fails).
+
+        $null means "I could not measure this way", and the caller falls back and says
+        so. It deliberately does not mean "zero files": an empty result from a real
+        repository is returned as an empty array, so a genuinely empty corpus stays
+        distinguishable from an unmeasurable one.
+    #>
+    param([string] $Root)
+
+    if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    # --cached --others --exclude-standard is the working tree as git sees it: tracked
+    # files plus untracked ones that .gitignore does not exclude. Deleted-but-staged
+    # entries are filtered by existence below, so a dirty index does not inflate it.
+    $output = & git -C $Root ls-files --cached --others --exclude-standard 2>$null
+
+    if ($LASTEXITCODE -ne 0) {
+        return $null
+    }
+
+    $files = @()
+
+    foreach ($line in @($output)) {
+        $relative = ([string] $line).Trim()
+
+        if ([string]::IsNullOrWhiteSpace($relative)) {
+            continue
+        }
+
+        if (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf) {
+            $files += $relative
+        }
+    }
+
+    return ,$files
 }
 
 function Format-Bytes {
@@ -320,10 +461,12 @@ Write-Host ("  scanning {0} ..." -f $WorkspacePath)
 
 $fileCount = 0
 $rawFileCount = 0
+$corpusMethod = 'Unknown'
 try {
     $corpus = Measure-Corpus -Root $WorkspacePath
     $fileCount = $corpus.Counted
     $rawFileCount = $corpus.Raw
+    $corpusMethod = $corpus.Method
 }
 catch {
     throw "Could not enumerate '$WorkspacePath': $($_.Exception.Message)"
@@ -338,14 +481,58 @@ Pass -WorkspacePath explicitly if the default is wrong.
 "@
 }
 
+$corpusCommit = Get-CorpusCommit -Root $WorkspacePath
+
 Write-Host ("  indexable files   : {0:N0}   (of {1:N0} on disk; {2:N0} excluded as {3})" -f `
     $fileCount, $rawFileCount, ($rawFileCount - $fileCount), ($ExcludedDirectoryNames -join '/'))
+Write-Host ("  method            : {0}{1}" -f $corpusMethod, $(
+    if ($corpusMethod -eq 'Tracked') { '   (git ls-files, .gitignore honoured)' }
+    else { '   [WEAK: not a git checkout, count includes untracked debris]' }))
+Write-Host ("  corpus commit     : {0}" -f $(if ($corpusCommit) { $corpusCommit } else { 'unknown' }))
+
+# -ExpectedCorpusFiles is the fail-closed half of issue #2930. Measuring the corpus
+# reproducibly is necessary but not sufficient: nothing yet NOTICES when the number
+# moves. An acceptance run that re-derives against a corpus of a different size is not
+# comparable with its predecessors, and the movement is invisible unless someone
+# happens to read two headers side by side. Declaring the expected count turns that
+# into a refusal.
+#
+# The tolerance is fractional rather than exact because the corpus legitimately drifts
+# by a few files between commits, and a guard that fires on every commit is one that
+# gets passed -Force out of habit.
+if ($PSBoundParameters.ContainsKey('ExpectedCorpusFiles')) {
+    $drift = [Math]::Abs($fileCount - $ExpectedCorpusFiles)
+    $allowed = [Math]::Max(1, [Math]::Ceiling($ExpectedCorpusFiles * $CorpusTolerance))
+
+    if ($drift -gt $allowed) {
+        throw @"
+Corpus size has moved outside the declared tolerance, so this derivation is NOT
+comparable with the runs that preceded it.
+
+  expected  : $('{0:N0}' -f $ExpectedCorpusFiles) files
+  measured  : $('{0:N0}' -f $fileCount) files ($corpusMethod)
+  drift     : $('{0:N0}' -f $drift) files, tolerance $('{0:N0}' -f $allowed) ($('{0:P1}' -f $CorpusTolerance))
+  root      : $WorkspacePath
+  commit    : $(if ($corpusCommit) { $corpusCommit } else { 'unknown' })
+
+Either the workspace is not the one the expectation was set against, or the corpus has
+genuinely grown. Both are real findings and neither should be absorbed silently: the
+memory grant derives from this number, so a run scored against a differently-sized
+corpus is being compared on a basis that changed underneath it.
+
+Re-run with -ExpectedCorpusFiles $fileCount once you have decided the new size is the
+one you mean, and record why in the run log.
+"@
+    }
+}
 
 if ($CorpusOnly) {
     [pscustomobject]@{
         Root = $WorkspacePath
         Raw = $rawFileCount
         Counted = $fileCount
+        Method = $corpusMethod
+        Commit = $corpusCommit
         Excluded = $ExcludedDirectoryNames
     } | ConvertTo-Json -Compress | Write-Output
     return
@@ -508,6 +695,19 @@ Write-Host ("  embedder   : cpus={0} mem={1} intraThreads={2}" -f `
 $grantedMiB = [int][Math]::Floor($granted / 1MB)
 $embedderMiB = [int][Math]::Floor($EMBEDDER_MEMORY_BYTES / 1MB)
 
+# Rendered through the knob table, not interpolated. See the dot-source note at the top
+# of this file: only this knob is hex, because only this knob is read by the CLR.
+# REPOCONTEXT_MAX_CONCURRENT_REPLAYS goes through our own decimal int.TryParse, so
+# emitting 0x there would be a new bug rather than a fix for an old one.
+$gcHeapCountKnob = Get-TuningKnob | Where-Object { $_.Name -eq 'REPOCONTEXT_GC_HEAP_COUNT' }
+
+if ($null -eq $gcHeapCountKnob) {
+    throw 'REPOCONTEXT_GC_HEAP_COUNT is not in the knob table, so its radix cannot be ' +
+        'determined and it would be written in the wrong base (issue #2928).'
+}
+
+$gcHeapCountLiteral = Format-TuningKnobValue -Knob $gcHeapCountKnob -Value $gcHeapCount
+
 $content = @"
 # GENERATED by scripts/New-TuningEnv.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss').
 # Issue #2779. Re-run that script after changing hosts or materially changing the size
@@ -518,13 +718,24 @@ $content = @"
 # Derived from:
 #   host logical CPUs : $hostCpus
 #   host memory       : $(Format-Bytes $hostMemory)
-#   indexable files   : $fileCount
+#   indexable files   : $fileCount  ($corpusMethod)
+#   corpus root       : $WorkspacePath
+#   corpus commit     : $(if ($corpusCommit) { $corpusCommit } else { 'unknown' })
 #   corpus requirement: $(Format-Bytes $corpusRequirement) (+$('{0:P0}' -f $HEADROOM_FRACTION) headroom, floor $(Format-Bytes $FLOOR_BYTES))
 #   measurement cond. : replay gate = CPU grant (see the script's provenance block)
+#
+# The four corpus lines above are the grant's provenance, and they are recorded because
+# the grant DERIVES from the file count: a run measured against a different corpus is
+# not comparable with its predecessors, and without these lines that difference leaves
+# no trace anywhere (issue #2930). Method 'Tracked' means git ls-files with .gitignore
+# honoured, which is a property of the commit and so reproducible in any checkout of it;
+# 'Walk' is the weaker filesystem fallback and its count includes untracked debris.
+# Re-derive with -ExpectedCorpusFiles $fileCount to make a later movement a refusal.
 
 REPOCONTEXT_CPUS=$repocontextCpus
 REPOCONTEXT_MEM_LIMIT=${grantedMiB}m
-REPOCONTEXT_GC_HEAP_COUNT=$gcHeapCount
+# Base 16: the CLR reads DOTNET_GCHeapCount as hexadecimal (issue #2928).
+REPOCONTEXT_GC_HEAP_COUNT=$gcHeapCountLiteral
 REPOCONTEXT_MAX_CONCURRENT_REPLAYS=$maxConcurrentReplays
 
 EMBEDDER_CPUS=$embedderCpus
@@ -538,6 +749,91 @@ EMBEDDER_INTRA_THREADS=$embedderIntraThreads
 # REPOCONTEXT_MEMORY_ARCHIVE_PATH=
 "@
 
+function Merge-TuningEnvContent {
+    <#
+        Fold freshly derived content into an existing .env, preserving every key the
+        existing file carries that the new content does not.
+
+        THIS IS THE FIX FOR #2929. -Force previously wrote the derived content over the
+        top, which discarded REPO_PATH silently. REPO_PATH is the one key whose loss is
+        invisible AND consequential: the base compose file has its own default, so the
+        stack still starts, still reports healthy, and indexes a different tree. An
+        acceptance run taken in that state is void and looks clean.
+
+        The merge is deliberately conservative in one direction only. A key present in
+        BOTH files takes the derived value, because that is what re-deriving means. A key
+        present only in the existing file is carried across, because this script has no
+        basis for deciding it is obsolete - it does not know what it does not derive.
+
+        Pure: takes and returns strings, touches no disk, so it is directly testable.
+        Returns the merged text plus the names carried across and replaced, because the
+        counts are the operator's evidence that the merge did something rather than
+        nothing.
+    #>
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Existing,
+        [Parameter(Mandatory)] [string] $Derived
+    )
+
+    $derivedKeys = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($line in ($Derived -split "`r?`n")) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=') {
+            [void] $derivedKeys.Add($Matches[1])
+        }
+    }
+
+    $carried = @()
+    $carriedLines = @()
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($line in ($Existing -split "`r?`n")) {
+        # Commented-out assignments are NOT carried. A `# FOO=` line is documentation,
+        # and the derived content supplies its own; carrying them would accumulate a
+        # duplicate comment block on every re-derivation.
+        if ($line -notmatch '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=') {
+            continue
+        }
+
+        $name = $Matches[1]
+
+        if ($derivedKeys.Contains($name) -or -not $seen.Add($name)) {
+            continue
+        }
+
+        $carried += $name
+        $carriedLines += $line.TrimEnd()
+    }
+
+    $replaced = @(foreach ($line in ($Existing -split "`r?`n")) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=' -and $derivedKeys.Contains($Matches[1])) {
+            $Matches[1]
+        }
+    }) | Select-Object -Unique
+
+    $merged = $Derived
+
+    if ($carriedLines.Count -gt 0) {
+        $merged = $Derived.TrimEnd() + "`n`n" + @"
+# ---------------------------------------------------------------------------
+# CARRIED ACROSS from the previous .env by -Force. This script does not derive
+# these keys, so it has no basis for dropping them. REPO_PATH in particular is
+# load-bearing and silent when absent: the base compose file falls back to its
+# own default and mounts a different tree at /workspace, so the container
+# indexes the wrong corpus while every layer reports success (issue #2929).
+# ---------------------------------------------------------------------------
+"@ + "`n" + ($carriedLines -join "`n") + "`n"
+    }
+
+    return [pscustomobject]@{
+        Content  = $merged
+        Carried  = @($carried)
+        Replaced = @($replaced)
+    }
+}
+
 if ($DryRun) {
     Write-Host ''
     Write-Host "--- would write $OutFile ---" -ForegroundColor Yellow
@@ -550,17 +846,46 @@ if ((Test-Path $OutFile) -and -not $Force) {
     Write-Warning @"
 $OutFile already exists and was NOT overwritten.
 
-It may carry hand-set values this script does not derive - REPOCONTEXT_MEMORY_ARCHIVE_PATH
-in particular, whose loss is how #2627 happened. Re-run with -Force once you have
-confirmed nothing in it is worth keeping, or merge the values above by hand.
+It may carry hand-set values this script does not derive - REPO_PATH and
+REPOCONTEXT_MEMORY_ARCHIVE_PATH in particular, whose loss is how #2627 and #2929
+happened. Re-run with -Force to replace the derived keys while carrying those across,
+or merge the values above by hand.
 "@
-    return
+
+    # The EXISTING file is what a deploy would use, so it is the one worth adjudicating.
+    # Returning silently here would mean the one path that touches nothing is also the
+    # one path that checks nothing, and an operator who ran this script and saw no
+    # refusal would reasonably conclude the .env on disk is fine.
+    Write-Host ''
+    & (Join-Path $PSScriptRoot 'Assert-TuningEnv.ps1') -EnvFile $OutFile
+    exit $LASTEXITCODE
+}
+
+$carriedNames = @()
+
+if (Test-Path $OutFile) {
+    $merge = Merge-TuningEnvContent `
+        -Existing ([System.IO.File]::ReadAllText($OutFile)) `
+        -Derived $content
+
+    $content = $merge.Content
+    $carriedNames = $merge.Carried
+
+    Write-Host ''
+    Write-Host ("MERGE: replaced {0} derived key(s), carried across {1}." -f `
+        @($merge.Replaced).Count, $(
+            if ($carriedNames.Count -eq 0) { 'nothing' }
+            else { "$($carriedNames.Count) - $($carriedNames -join ', ')" }
+        )) -ForegroundColor Cyan
 }
 
 [System.IO.File]::WriteAllText($OutFile, $content)
 Write-Host ''
 Write-Host "Wrote $OutFile" -ForegroundColor Green
-Write-Host 'Remember to set REPOCONTEXT_MEMORY_ARCHIVE_PATH before `docker compose up`.'
+
+if ($carriedNames -notcontains 'REPOCONTEXT_MEMORY_ARCHIVE_PATH') {
+    Write-Host 'Remember to set REPOCONTEXT_MEMORY_ARCHIVE_PATH before `docker compose up`.'
+}
 
 # Adjudicate what was just written, rather than trusting that writing it was
 # enough. The overlay guards each knob with a compose presence check, which

@@ -42,9 +42,7 @@ public sealed class IntraOpThreadResolutionTests
     [TestCase(null)]
     [TestCase("")]
     [TestCase("   ")]
-    [TestCase("-1")]
-    [TestCase("many")]
-    public void An_unusable_declaration_falls_through_to_the_grant(string? declared)
+    public void An_ABSENT_declaration_falls_through_to_the_grant(string? declared)
     {
         var resolved = EmbedServerOptions.ResolveIntraOpThreads(declared, 4, 16);
 
@@ -59,6 +57,58 @@ public sealed class IntraOpThreadResolutionTests
                 + "choice of the derivation. That conflation is the whole of issue #2863, and "
                 + "it would be reintroduced here if the fallthrough set this flag.");
         });
+    }
+
+    [TestCase("-1")]
+    [TestCase("many")]
+    [TestCase("4.5")]
+    [TestCase("99999999999999999999")]
+    public void A_PRESENT_but_unusable_declaration_is_refused_rather_than_derived(string declared)
+    {
+        // Issue #2887. Absence and a typo are different facts about a deployment, and
+        // deriving from both makes them indistinguishable: the operator who wrote
+        // EMBED_INTRA_THREADS=-1 sees a server that starts, reports healthy, and runs on
+        // a number they did not choose. A run taken in that state is misconfigured and
+        // says so nowhere, which is the defect class this whole change addresses.
+        var refusal = Assert.Throws<InvalidOperationException>(
+            () => EmbedServerOptions.ResolveIntraOpThreads(declared, 4, 16));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                refusal!.Message,
+                Does.Contain("EMBED_INTRA_THREADS"),
+                "the refusal must name the variable, or the operator has to guess which "
+                + "of the container's settings the server is objecting to.");
+            Assert.That(
+                refusal.Message,
+                Does.Contain(declared),
+                "the refusal must quote the value it could not use. A typo is only obvious "
+                + "once you can see what was actually read.");
+            Assert.That(
+                refusal.Message,
+                Does.Contain("auto"),
+                "diagnosing without a remedy leaves the operator to discover the escape "
+                + "hatch themselves; 'auto' is the spelling that means 'derive on purpose'.");
+        });
+    }
+
+    [Test]
+    public void The_refusals_are_DISTINGUISHABLE_so_the_complaint_matches_the_mistake()
+    {
+        // A single generic complaint for every unusable value would pass the test above
+        // while telling the operator nothing about which mistake they made.
+        var negative = Assert.Throws<InvalidOperationException>(
+            () => EmbedServerOptions.ResolveIntraOpThreads("-1", 4, 16))!.Message;
+        var notANumber = Assert.Throws<InvalidOperationException>(
+            () => EmbedServerOptions.ResolveIntraOpThreads("many", 4, 16))!.Message;
+        var tooLarge = Assert.Throws<InvalidOperationException>(
+            () => EmbedServerOptions.ResolveIntraOpThreads("99999999999999999999", 4, 16))!.Message;
+
+        Assert.That(
+            new[] { negative, notANumber, tooLarge },
+            Is.Unique,
+            "three different mistakes must not produce one indistinguishable complaint.");
     }
 
     [TestCase("auto")]
@@ -95,22 +145,30 @@ public sealed class IntraOpThreadResolutionTests
         => Assert.That(
             EmbedServerOptions.AutoToken,
             Is.EqualTo("auto"),
-            "the sample deployment's preflight and .env.example both name this literal. Renaming "
-            + "it here without renaming it there is the dangerous direction for THIS knob: an "
-            + "unrecognised value derives silently rather than throwing, so the mismatch would "
-            + "present as a successful boot.");
+            "the sample deployment's preflight, its .env.example and the container document "
+            + "all name this literal, and the tuning preflight's ancestry guard is keyed to it. "
+            + "Renaming it here without renaming it there would make every deployment that "
+            + "writes the documented spelling refuse to start (issue #2887 turned the silent "
+            + "derivation into a refusal), and would leave the ancestry guard asserting an "
+            + "ancestor for a token no build requires.");
 
     [Test]
     public void A_near_miss_of_the_token_is_not_treated_as_the_token()
     {
-        var resolved = EmbedServerOptions.ResolveIntraOpThreads("atuo", 4, 16);
+        // Before issue #2887 this derived silently and the assertion was that it did not
+        // set DeclaredAuto. Refusing is the stronger form of the same claim: a typo of the
+        // token is now neither treated as the token nor quietly resolved to a number the
+        // operator did not choose.
+        var refusal = Assert.Throws<InvalidOperationException>(
+            () => EmbedServerOptions.ResolveIntraOpThreads("atuo", 4, 16));
 
         Assert.That(
-            resolved.DeclaredAuto,
-            Is.False,
-            "matching must be exact. A prefix or fuzzy match would let a typo claim a deliberate "
-            + "choice, which is the reassurance-in-the-broken-case failure this fixture's "
-            + "provenance assertions exist to prevent.");
+            refusal!.Message,
+            Does.Contain("atuo"),
+            "matching must be exact AND the near miss must be visible. A prefix or fuzzy "
+            + "match would let a typo claim a deliberate choice, which is the "
+            + "reassurance-in-the-broken-case failure this fixture's provenance assertions "
+            + "exist to prevent.");
     }
 
     [Test]

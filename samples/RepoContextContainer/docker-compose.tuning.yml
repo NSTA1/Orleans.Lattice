@@ -159,8 +159,12 @@ services:
       DOTNET_gcServer: "1"
       DOTNET_GCHeapCount: "${REPOCONTEXT_GC_HEAP_COUNT:?unset - run ./scripts/New-TuningEnv.ps1 to derive it, or set it by hand from .env.example. No default by design (issue #2779).}"
       # ---- WAL replay concurrency ---------------------------------------
-      # DOTNET_PROCESSOR_COUNT: "16" USED TO BE HERE. IT IS GONE (issue #2779).
-      # Do not restore it. Its comment read, in full:
+      # DOTNET_PROCESSOR_COUNT: "16" USED TO BE HERE AS A PIN. THE PIN IS GONE
+      # (issue #2779) and is not coming back. What IS here, at the bottom of
+      # this block, is the same name declared as an UNSET pass-through - which
+      # is a different object and is explained there (issue #2931).
+      #
+      # Do not restore the pin. Its comment read, in full:
       #
       #   "DO NOT REMOVE. This decouples the WAL replay concurrency gate from
       #    the CPU cap below. BPlusLeafGrain sizes that process-wide gate from
@@ -213,6 +217,45 @@ services:
       # refused at startup if unparseable, and - unlike the pin - does not also
       # resize the GC, the thread pool, and every other ProcessorCount consumer
       # in the process as a side effect.
+      #
+      # ---- The name, declared UNSET, so the value is attributable (#2931) ----
+      #
+      # Everything above is about the PIN and remains true. This is about the
+      # NAME, and the two were conflated by deleting the line outright.
+      #
+      # Deleting it did remove the pin. It also removed the variable, and with
+      # it any way to express the value without editing this tracked file. The
+      # cost landed on attribution rather than on tuning: run 9's predicate was
+      # amended to bind that run to run 8's grants INCLUDING
+      # DOTNET_PROCESSOR_COUNT=16, so that run 9 would be a code-only
+      # comparison. The variable was by then not merely different, it was
+      # ABSENT, and Environment.ProcessorCount was resolving from the cgroup.
+      # A replay-gate ceiling then moved 16 -> 6 in a step that also removed a
+      # pin, giving one movement two sufficient causes and no way to separate
+      # them. That is a measurement lost, not a value mis-set.
+      #
+      # DECLARED WITH NO VALUE, which is a compose idiom and not an omission.
+      # A null-valued mapping entry is resolved from the shell environment or
+      # .env, and is OMITTED FROM THE CONTAINER ENTIRELY when neither supplies
+      # it. Verified on this rig rather than assumed:
+      #
+      #   unset        -> `docker compose config` renders `null`, and in the
+      #                   container `${DOTNET_PROCESSOR_COUNT+x}` is empty,
+      #                   i.e. the variable is ABSENT, not empty-string;
+      #   set in .env  -> present with that value.
+      #
+      # So today's absent state is preserved BYTE FOR BYTE - no effective value
+      # moves by adding this line - while a controlled run can pin it without
+      # editing a tracked file, which is what #2931 asked for.
+      #
+      # IT IS STILL AN OVERSUBSCRIPTION HAZARD. The final paragraph of the old
+      # comment above is correct and applies unchanged to anyone who sets this:
+      # it overrides Environment.ProcessorCount process-wide and wins over the
+      # cgroup quota. Setting it is a deliberate act for a controlled
+      # comparison, and Assert-DeployManifest.ps1 reports the resolved count
+      # and WHERE IT CAME FROM on every deploy, so a set value cannot be a
+      # silent one and neither can an unset one.
+      DOTNET_PROCESSOR_COUNT:
       LATTICE_WAL_MAX_CONCURRENT_REPLAYS: "${REPOCONTEXT_MAX_CONCURRENT_REPLAYS:?unset - run ./scripts/New-TuningEnv.ps1 to derive it from this container's CPU grant, or set it by hand from .env.example. No default by design (issue #2779).}"
 
       # Diagnostic for issue #2252, NOT tuning, and so deliberately left

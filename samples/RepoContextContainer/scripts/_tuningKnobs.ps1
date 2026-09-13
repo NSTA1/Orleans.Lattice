@@ -117,6 +117,33 @@ $script:TuningAutoToken = 'auto'
 	         comparison against "0". The sibling site here is a SPELLING, not a
 	         call site, and a naive -eq '0' would pass every one of them.
 
+	RADIX exists because ONE knob is read in base 16 and the rest are not, and
+	getting that boundary wrong in either direction is a new defect rather than
+	a fix (issue #2928).
+
+	  Decimal  the consumer parses base 10. `0x6` is meaningless to it.
+	  Hex      the consumer parses base 16 WHETHER OR NOT the value is
+	           0x-prefixed. Only DOTNET_GCHeapCount is in this class, because
+	           only the CLR reads it, and the CLR's numeric knobs go through a
+	           base-16 conversion.
+
+	The hazard is exact and was MEASURED on .NET 10 with server GC on a 16-CPU
+	host rather than argued from documentation, because a claim about a runtime
+	is a claim about an artefact:
+
+	    DOTNET_GCHeapCount=6     -> 6 heaps
+	    DOTNET_GCHeapCount=0x6   -> 6 heaps
+	    DOTNET_GCHeapCount=10    -> 16 heaps   (0x10)
+	    DOTNET_GCHeapCount=0x0C  -> 12 heaps
+
+	So values below 10 read identically in both bases and everything from 10 up
+	does not. THE BOUNDARY IS THE FINDING. On the live rig the derived value is
+	6, which is why this is currently LATENT and must not be described as a live
+	misconfiguration; it becomes live on any host whose derivation crosses 10,
+	which is 25 or more logical CPUs at the current 0.4 share. The remedy is to
+	EMIT the 0x form, which is unambiguous, and to refuse a bare value at or
+	above 10 because nobody can tell which base its author meant.
+
 	AUTOTOKEN is the token that selects the derivation, or $null where no
 	derivation is reachable. DERIVATION says what `auto` actually runs, so the
 	message can promise something specific rather than gesturing at automatic
@@ -133,6 +160,7 @@ function Get-TuningKnob {
 			Service = 'repocontext'
 			Setting = 'cpus'
 			Kind = 'Cpus'
+			Radix = 'Decimal'
 			AutoToken = $null
 			Derivation = $null
 			Consumer = 'Docker'
@@ -143,6 +171,7 @@ function Get-TuningKnob {
 			Service = 'repocontext'
 			Setting = 'mem_limit'
 			Kind = 'Bytes'
+			Radix = 'Decimal'
 			AutoToken = $null
 			Derivation = $null
 			Consumer = 'Docker'
@@ -153,6 +182,7 @@ function Get-TuningKnob {
 			Service = 'repocontext'
 			Setting = 'DOTNET_GCHeapCount'
 			Kind = 'Count'
+			Radix = 'Hex'
 			AutoToken = $null
 			Derivation = $null
 			Consumer = 'the CLR'
@@ -163,6 +193,7 @@ function Get-TuningKnob {
 			Service = 'repocontext'
 			Setting = 'LATTICE_WAL_MAX_CONCURRENT_REPLAYS'
 			Kind = 'Count'
+			Radix = 'Decimal'
 			AutoToken = $script:TuningAutoToken
 			Derivation = 'the library sizes the WAL replay gate from the lesser of Environment.ProcessorCount and the enforced cgroup CPU grant (ResolveGateSizing, issue #2821)'
 			Consumer = 'RepoContextReplayConcurrency.ResolveMaxConcurrentReplays'
@@ -173,6 +204,7 @@ function Get-TuningKnob {
 			Service = 'embedder'
 			Setting = 'cpus'
 			Kind = 'Cpus'
+			Radix = 'Decimal'
 			AutoToken = $null
 			Derivation = $null
 			Consumer = 'Docker'
@@ -183,6 +215,7 @@ function Get-TuningKnob {
 			Service = 'embedder'
 			Setting = 'mem_limit'
 			Kind = 'Bytes'
+			Radix = 'Decimal'
 			AutoToken = $null
 			Derivation = $null
 			Consumer = 'Docker'
@@ -193,6 +226,7 @@ function Get-TuningKnob {
 			Service = 'embedder'
 			Setting = 'EMBED_INTRA_THREADS'
 			Kind = 'Count'
+			Radix = 'Decimal'
 			AutoToken = $script:TuningAutoToken
 			Derivation = 'the embedding server sizes the ONNX intra-op pool from the enforced cgroup CPU grant (ResolveIntraOpThreads, issue #2610)'
 			Consumer = 'EmbedServerOptions.ResolveIntraOpThreads'
@@ -220,12 +254,23 @@ function Get-TuningKnob {
 	                  runtime"
 	  AutoUnsupported an `auto` token on a knob whose consumer would never
 	                  understand it
+	  HexUnsupported  an 0x-prefixed value on a knob whose consumer parses base
+	                  10, where it would not fail cleanly but would be read as
+	                  0 or rejected deep inside a runtime we do not own
+	  AmbiguousRadix  a BARE value of 10 or more on a knob its consumer reads as
+	                  hexadecimal, so the author's intended base is unrecoverable
 	  Unparseable     a value that is none of the above
 
 	AutoUnsupported is its own verdict rather than an Unparseable because the
 	operator's mistake is specific and so is the remedy: they generalised a
 	token that is real elsewhere in this same file. Telling them "unparseable"
 	would be true and useless.
+
+	AmbiguousRadix is likewise its own verdict, and it is NOT a claim that the
+	value is wrong - `12` is a perfectly good hex number and the CLR will honour
+	it as 18. The objection is that nobody can tell whether its author meant 12
+	or 18, and a configuration whose meaning depends on a fact about the reader
+	is not one an acceptance run can be scored against (issue #2928).
 #>
 function Test-TuningKnobValue {
 	[CmdletBinding()]
@@ -267,6 +312,46 @@ function Test-TuningKnobValue {
 	}
 	elseif ($looksAuto) {
 		return New-Verdict 'AutoUnsupported' $null
+	}
+
+	# ---- Radix, before any numeric parse (issue #2928) ------------------
+	#
+	# Whether these digits mean what they look like is a property of the
+	# CONSUMER, not of the string, so it has to be settled before parsing and
+	# not after. Getting the boundary wrong in either direction is a new defect:
+	# emitting 0x on a decimal knob would hand our own int.TryParse a string it
+	# rejects, and treating a hex knob as decimal is the original bug.
+	$hexPrefixed = $raw.StartsWith('0x', [StringComparison]::OrdinalIgnoreCase)
+
+	if ($hexPrefixed -and $Knob.Radix -ne 'Hex') {
+		return New-Verdict 'HexUnsupported' $null
+	}
+
+	if ($Knob.Radix -eq 'Hex') {
+		$digits = if ($hexPrefixed) { $raw.Substring(2) } else { $raw }
+		$hexValue = 0
+
+		if ($digits.Length -eq 0 -or -not [int]::TryParse(
+				$digits,
+				[Globalization.NumberStyles]::HexNumber,
+				[Globalization.CultureInfo]::InvariantCulture,
+				[ref] $hexValue)) {
+			return New-Verdict 'Unparseable' $null
+		}
+
+		if ($hexValue -eq 0) {
+			return New-Verdict 'Sentinel' ([double] $hexValue)
+		}
+
+		# A bare value BELOW 10 reads identically in both bases, so there is
+		# nothing to disambiguate and refusing it would be pedantry that broke
+		# the live rig's current, correct `6`. At 10 and above the two readings
+		# diverge and the author's intent is unrecoverable from the file.
+		if (-not $hexPrefixed -and $hexValue -ge 10) {
+			return New-Verdict 'AmbiguousRadix' ([double] $hexValue)
+		}
+
+		return New-Verdict 'Ok' ([double] $hexValue)
 	}
 
 	# Strip a Docker size suffix before parsing. Deliberately tolerant of the
@@ -340,6 +425,11 @@ function Get-TuningKnobRemedy {
 		default { 'a positive size, for example 12g or 12288m' }
 	}
 
+	if ($Knob.Radix -eq 'Hex') {
+		$expected = "a positive count WRITTEN IN THE 0x FORM, for example 0x6 or 0x18, because $($Knob.Consumer) " +
+			'reads this knob in base 16 (issue #2928)'
+	}
+
 	if ($null -ne $Knob.AutoToken) {
 		return "Write '$($Knob.AutoToken)' to run the derivation deliberately - $($Knob.Derivation) - " +
 			"or pin $expected. Derive a pinned value with ./scripts/New-TuningEnv.ps1."
@@ -348,6 +438,187 @@ function Get-TuningKnobRemedy {
 	return "Pin $expected; this knob has no runtime derivation to select, because $($Knob.Setting) is read by " +
 		"$($Knob.Consumer) and its vocabulary is not ours to extend. " +
 		'Derive a pinned value with ./scripts/New-TuningEnv.ps1.'
+}
+
+<#
+.SYNOPSIS
+	Renders a derived numeric value in the notation its consumer actually reads.
+
+.DESCRIPTION
+	Issue #2928, the WRITE side. New-TuningEnv.ps1 derives a heap count as an
+	ordinary integer and used to write it verbatim, which is correct for every
+	knob whose consumer parses base 10 and wrong for the one whose consumer does
+	not. The derived value on the reference host is 6, which reads the same in
+	both bases - so the defect never surfaced there, and a fix that only ever
+	ran against that host could not demonstrate itself.
+
+	Pure, and separated from the script that calls it, precisely so a test can
+	assert 24 renders as `0x18` without needing a 60-CPU host to derive 24 on.
+	That is the whole reason this is a function rather than a format string at
+	the call site: the interesting inputs are unreachable on the machine the
+	code runs on.
+
+	The 0x form is emitted even when the value is below 10 and would read
+	identically either way. Emitting it conditionally would mean the file's
+	notation silently changed the first time a host crossed the boundary, which
+	is a worse property than a slightly redundant `0x6`: an operator who has
+	learned to read `6` would meet `0x10` exactly once, on the run where it
+	mattered.
+#>
+function Format-TuningKnobValue {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[Parameter(Mandatory)] [pscustomobject] $Knob,
+		[Parameter(Mandatory)] [int] $Value
+	)
+
+	if ($Knob.Radix -eq 'Hex') {
+		if ($Value -lt 0) {
+			throw "Cannot render a negative value ($Value) for $($Knob.Name)."
+		}
+
+		return '0x{0:X}' -f $Value
+	}
+
+	return [string] $Value
+}
+
+<#
+.SYNOPSIS
+	The commits that taught each consumer the token its .env may carry.
+
+.DESCRIPTION
+	A DEPLOYED ARTEFACT CHECK, and the reason it exists is worth stating because
+	the guard looks like belt-and-braces until you have been caught by it.
+
+	`auto` is understood by the two consumers we own. That is a fact about
+	SOURCE. What runs is a binary in an image, and the image can predate the
+	commit that taught it the token - which was exactly the state of the live
+	rig when this was written: the running image was built from a commit that
+	does not contain the string `auto` in that file at all, so migrating the
+	.env to `auto` before rebuilding would not have fallen back, it would have
+	thrown InvalidOperationException at silo configuration and the stack would
+	not have started.
+
+	The general pattern, which is the most expensive thing this epic has
+	learned: SOURCE AND ARTEFACT ARE DIFFERENT OBJECTS, and a claim has to say
+	which one it is about. Three separate defects in this same rig are instances
+	of it - a value (#2928), a checkout (#2930), and this, an image.
+
+	SCOPE, stated so the next reader is not misled about what is covered: this
+	guard checks the `auto` token on the two knobs that accept it. It is not a
+	general "every token the .env uses" check, because every token the .env
+	currently uses IS that one. When a second token is added, add its row here;
+	the shape is ready for it and the adjudicator iterates the table.
+
+	VERIFIEDTOKEN is a literal on purpose, and is the part that makes this fail
+	loudly rather than quietly stop applying. The adjudicator asserts it still
+	equals the knob's live AutoToken, so renaming the token without revisiting
+	the introducing commit is a reported staleness rather than a guard that
+	silently matches nothing.
+#>
+function Get-TokenAncestryRequirement {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param()
+
+	return @(
+		[pscustomobject]@{
+			KnobName = 'REPOCONTEXT_MAX_CONCURRENT_REPLAYS'
+			VerifiedToken = 'auto'
+			IntroducedIn = '52d5cd2ea0ebbb2641b3d0d542db67c5f633c350'
+			IntroducedBy = 'PR #2896, fixing issue #2863'
+			Consumer = 'RepoContextReplayConcurrency.ResolveMaxConcurrentReplays'
+			Consequence = 'an image built before this commit throws InvalidOperationException at silo configuration and the stack does not start'
+		},
+		[pscustomobject]@{
+			KnobName = 'EMBEDDER_INTRA_THREADS'
+			VerifiedToken = 'auto'
+			IntroducedIn = '52d5cd2ea0ebbb2641b3d0d542db67c5f633c350'
+			IntroducedBy = 'PR #2896, fixing issue #2863'
+			Consumer = 'EmbedServerOptions.ResolveIntraOpThreads'
+			Consequence = 'an image built before this commit does not recognise the token'
+		}
+	)
+}
+
+<#
+.SYNOPSIS
+	Adjudicates whether the image about to run understands the tokens the .env
+	uses.
+
+.DESCRIPTION
+	PURE. `AncestryResult` is a hashtable mapping a commit sha to $true when it
+	is an ancestor of the commit being built, $false when it is not, and absent
+	when the caller could not determine it. Assert-TuningEnv.ps1 supplies it by
+	running `git merge-base --is-ancestor`; this function never shells out, so a
+	test can drive the REFUSING direction without a repository in a particular
+	state.
+
+	An UNDETERMINED ancestry is reported rather than assumed either way. This is
+	the same fail-closed choice as everywhere else in this rig: the guard exists
+	because a confident wrong answer about a deployed artefact cost a stack
+	restart, and a guard that quietly passes when it cannot tell would reproduce
+	that with extra steps.
+#>
+function Get-TokenAncestryViolation {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[Parameter(Mandatory)] [hashtable] $Reading,
+		[Parameter(Mandatory)] [hashtable] $AncestryResult,
+		[Parameter(Mandatory)] [string] $BuildCommit
+	)
+
+	$violations = @()
+	$knobsByName = @{}
+
+	foreach ($knob in Get-TuningKnob) {
+		$knobsByName[$knob.Name] = $knob
+	}
+
+	foreach ($requirement in Get-TokenAncestryRequirement) {
+		if (-not $knobsByName.ContainsKey($requirement.KnobName)) {
+			$violations += "The token-ancestry table names $($requirement.KnobName), which is not a knob. " +
+				'The table has drifted from Get-TuningKnob and is no longer checking what it claims to.'
+			continue
+		}
+
+		$knob = $knobsByName[$requirement.KnobName]
+
+		if ($knob.AutoToken -ne $requirement.VerifiedToken) {
+			$violations += "The token-ancestry table records '$($requirement.VerifiedToken)' for " +
+				"$($requirement.KnobName), but that knob's token is now '$($knob.AutoToken)'. The token was " +
+				'renamed without revisiting the commit that introduced it, so this guard would silently stop ' +
+				'applying. Update the table, verifying the new introducing commit.'
+			continue
+		}
+
+		$value = if ($Reading.ContainsKey($knob.Name)) { ([string] $Reading[$knob.Name]).Trim() } else { '' }
+
+		if ($value -ine $requirement.VerifiedToken) {
+			continue
+		}
+
+		if (-not $AncestryResult.ContainsKey($requirement.IntroducedIn)) {
+			$violations += "$($knob.Name) is set to '$($requirement.VerifiedToken)', but whether the commit " +
+				"about to be built ($BuildCommit) contains $($requirement.IntroducedIn) could not be " +
+				'determined. The token is understood by the SOURCE; whether it is understood by the ARTEFACT ' +
+				'is the question, and an undetermined answer is not a yes.'
+			continue
+		}
+
+		if (-not $AncestryResult[$requirement.IntroducedIn]) {
+			$violations += "$($knob.Name) is set to '$($requirement.VerifiedToken)', which " +
+				"$($requirement.Consumer) only learned in $($requirement.IntroducedIn) " +
+				"($($requirement.IntroducedBy)). That commit is NOT an ancestor of $BuildCommit, so " +
+				"$($requirement.Consequence). Rebuild from a commit that contains it BEFORE putting this " +
+				'value in .env - never the other way round, and never with a container start in between.'
+		}
+	}
+
+	return ,$violations
 }
 
 <#
@@ -405,6 +676,30 @@ function Get-TuningEnvViolation {
 			$violations += "$($knob.Name) is set to '$($verdict.Value)'. " +
 				"$($knob.Setting) is read by $($knob.Consumer), which would not recognise that token. " +
 				$remedy
+			continue
+		}
+
+		if ($verdict.Verdict -eq 'HexUnsupported') {
+			$violations += "$($knob.Name) is set to '$($verdict.Value)', which is HEXADECIMAL NOTATION on a " +
+				"knob that is read in base 10. $($knob.Setting) is read by $($knob.Consumer), which parses " +
+				'decimal, so the 0x form is not a more precise way of writing this value - it is a different ' +
+				'value or a parse failure. Only DOTNET_GCHeapCount is read as hexadecimal, because only the ' +
+				'CLR reads it; generalising the 0x form from there to here is the same class of mistake as ' +
+				'generalising the auto token (issue #2928). ' +
+				$remedy
+			continue
+		}
+
+		if ($verdict.Verdict -eq 'AmbiguousRadix') {
+			$asHex = [int] $verdict.Magnitude
+			$asDecimal = [int] $verdict.Value
+			$violations += "$($knob.Name) is set to '$($verdict.Value)', and $($knob.Setting) is read by " +
+				"$($knob.Consumer) IN BASE 16. So this is $asHex heaps, not $asDecimal - and nobody reading " +
+				'the file can tell which was meant. The value is not necessarily wrong; it is ' +
+				'unattributable, which is what an acceptance run cannot be scored against. ' +
+				"Write '0x$('{0:X}' -f $asHex)' to mean $asHex, or '0x$('{0:X}' -f $asDecimal)' to mean " +
+				"$asDecimal. Values below 10 are exempt because they read identically in both bases, which " +
+				'is why the live rig has been safe at 6 (issue #2928).'
 			continue
 		}
 

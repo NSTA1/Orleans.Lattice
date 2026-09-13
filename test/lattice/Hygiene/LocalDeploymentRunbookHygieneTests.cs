@@ -169,6 +169,40 @@ public sealed class LocalDeploymentRunbookHygieneTests
     };
 
     /// <summary>
+    /// The marker an UNSET row must carry in the Value column. Distinct from both markers
+    /// above, because it expresses a third thing again: a redacted value is one the runbook
+    /// declines to reproduce, a derived value is one it cannot reproduce, and an unset value
+    /// is one that <b>does not exist</b> in the running container at all.
+    /// </summary>
+    private const string UnsetMarker = "unset";
+
+    /// <summary>
+    /// Settings the overlay declares by NAME with no value, so that a controlled run can
+    /// supply one without editing a tracked file, while the default state leaves the
+    /// variable absent from the container (issue #2931).
+    /// <para>
+    /// A null-valued compose mapping entry resolves from the shell environment or
+    /// <c>.env</c>, and is omitted from the container entirely when neither supplies it.
+    /// That is the whole point of the declaration: it restores the ability to set the
+    /// variable deliberately, which #2779 removed along with the pin, WITHOUT setting it.
+    /// </para>
+    /// <para>
+    /// Like <see cref="DerivedValues"/> and unlike <see cref="RedactedValues"/>, this does
+    /// not widen a hole. The value comparison is exchanged for a stricter pair: the resolved
+    /// value must be EMPTY (asserted below, the mirror image of the other two seams, which
+    /// require non-empty), and the tracked declaration must be incapable of carrying a value
+    /// at all (asserted in
+    /// <see cref="Every_unset_setting_is_declared_with_no_value_in_the_overlay"/>). Together
+    /// those say what an empty table cell could not: that absence is deliberate and enforced,
+    /// rather than a row somebody forgot to fill in.
+    /// </para>
+    /// </summary>
+    private static readonly HashSet<string> UnsetValues = new(StringComparer.Ordinal)
+    {
+        "repocontext.DOTNET_PROCESSOR_COUNT",
+    };
+
+    /// <summary>
     /// Values supplied to <c>docker compose config</c> purely so the document RESOLVES.
     /// </summary>
     /// <remarks>
@@ -366,6 +400,7 @@ public sealed class LocalDeploymentRunbookHygieneTests
             .Where(entry => resolved.TryGetValue(entry.Key, out var actual)
                 && !RedactedValues.Contains(entry.Key)
                 && !DerivedValues.Contains(entry.Key)
+                && !UnsetValues.Contains(entry.Key)
                 && !Normalise(entry.Key, entry.Value).Equals(Normalise(entry.Key, actual), StringComparison.Ordinal))
             .Select(entry => $"{entry.Key}: runbook says '{entry.Value}', resolved document says "
                 + $"'{resolved[entry.Key]}'")
@@ -394,6 +429,19 @@ public sealed class LocalDeploymentRunbookHygieneTests
             .Where(key => !documented.TryGetValue(key, out var cell)
                 || !cell.Equals(DerivedMarker, StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(resolved[key]))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        // The unset seam is the mirror image of the two above. They replace the value
+        // comparison with "the marker is present AND the real value is non-empty"; this
+        // one replaces it with "the marker is present AND the real value is EMPTY",
+        // because the property being asserted is that the variable does not reach the
+        // container at all. A declaration that acquired a value would satisfy neither.
+        var badUnset = UnsetValues
+            .Where(resolved.ContainsKey)
+            .Where(key => !documented.TryGetValue(key, out var cell)
+                || !cell.Equals(UnsetMarker, StringComparison.Ordinal)
+                || !string.IsNullOrEmpty(resolved[key]))
             .Order(StringComparer.Ordinal)
             .ToArray();
 
@@ -435,6 +483,83 @@ public sealed class LocalDeploymentRunbookHygieneTests
                 + "number into the table is how the transcription comes back: the table is "
                 + "read as the value to use, and the next operator copies a figure measured "
                 + "on 16 logical CPUs and 55.7 GiB of RAM onto a machine that has neither.");
+
+            Assert.That(
+                badUnset,
+                Is.Empty,
+                $"these settings are declared by NAME with no value (#2931), so {RunbookPath} "
+                + $"must document them with the exact cell `{UnsetMarker}` and the resolved "
+                + "document must supply an EMPTY value. A non-empty one means the declaration "
+                + "has acquired a value and the variable now reaches the container, which is "
+                + "the state the declaration exists to avoid: DOTNET_PROCESSOR_COUNT overrides "
+                + "Environment.ProcessorCount process-wide and wins over the cgroup quota, so "
+                + "it must be set deliberately or not at all, never by drift.");
+        });
+    }
+
+    /// <summary>
+    /// Every unset pass-through must be declared in the tracked overlay as a bare
+    /// <c>NAME:</c>, so the file is INCAPABLE of carrying a value for it.
+    /// <para>
+    /// This is to <see cref="UnsetValues"/> what
+    /// <see cref="Every_derived_resource_setting_is_declared_as_a_variable_reference"/> is
+    /// to <see cref="DerivedValues"/>, and it is separate from the parity test for the same
+    /// two reasons. A value comparison cannot distinguish a deliberately unset declaration
+    /// from one that is merely unset on the machine the suite happens to run on; only a
+    /// check on the declaration's FORM can. And reading the tracked file as text needs no
+    /// Docker, so the property that cannot be satisfied by luck is not the one that silently
+    /// skips on a developer machine.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void Every_unset_setting_is_declared_with_no_value_in_the_overlay()
+    {
+        var path = Path.Combine(
+            HygieneRepository.FindRepoRoot(),
+            ComposeDirectory.Replace('/', Path.DirectorySeparatorChar),
+            TuningComposeFile);
+
+        var valued = new List<string>();
+        var missing = new List<string>();
+
+        foreach (var key in UnsetValues.Order(StringComparer.Ordinal))
+        {
+            var setting = key[(key.IndexOf('.') + 1)..];
+            var declaration = File.ReadAllLines(path)
+                .Select(line => line.Trim())
+                .FirstOrDefault(line => line.StartsWith($"{setting}:", StringComparison.Ordinal));
+
+            if (declaration is null)
+            {
+                missing.Add(key);
+                continue;
+            }
+
+            if (declaration.Length > setting.Length + 1)
+            {
+                valued.Add($"{key}: declared as `{declaration}`");
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                missing,
+                Is.Empty,
+                $"these settings are documented as `{UnsetMarker}` but {TuningComposeFile} no "
+                + "longer declares them at all. Deleting the declaration is what issue #2931 "
+                + "is about: it removes the pin AND the name, and with the name goes any way "
+                + "to set the value for a controlled run without editing a tracked file.");
+
+            Assert.That(
+                valued,
+                Is.Empty,
+                $"these settings must be declared as a bare `NAME:` in {TuningComposeFile}, "
+                + "with nothing after the colon. Giving one a value in the tracked file - "
+                + "including an empty string or a `${VAR:-}` default - makes it reach the "
+                + "container on every deployment, which is the pin again under another "
+                + "spelling. The point of the bare form is that the variable is ABSENT unless "
+                + "the environment or .env supplies it.");
         });
     }
 
