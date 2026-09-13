@@ -51,6 +51,15 @@ internal abstract class CoordinatorGrain<TSelf>(
     private int _consecutiveTickFailures;
 
     /// <summary>
+    /// This activation's enrolment token in <see cref="CoordinatorPhaseTickCensus"/>,
+    /// or <c>0</c> when not enrolled. Minted when the phase timer is armed and
+    /// surrendered when the coordinator completes or the activation is
+    /// deactivated, so the exported run length belongs to an activation that is
+    /// actually ticking and cannot be inherited by a successor.
+    /// </summary>
+    private long _censusToken;
+
+    /// <summary>
     /// Consecutive swallowed ticks after which the warning escalates to an
     /// error. One swallowed tick is a transient the pump absorbs and retries;
     /// a run of them is a phase loop that has stopped advancing, which nothing
@@ -75,7 +84,10 @@ internal abstract class CoordinatorGrain<TSelf>(
         => Task.CompletedTask;
 
     Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
-        => OnDeactivateCoreAsync(reason, cancellationToken);
+    {
+        WithdrawFromPhaseTickCensus();
+        return OnDeactivateCoreAsync(reason, cancellationToken);
+    }
 
     /// <summary>
     /// Hook invoked when Orleans activates the grain, regardless of what
@@ -211,6 +223,11 @@ internal abstract class CoordinatorGrain<TSelf>(
         // perturb the value.
         LatticeMetrics.CoordinatorPhaseTickFailures.Add(0, PhaseTickFailureTags());
 
+        // Enrol at a run length of zero for the same reason, and at the same
+        // moment. A gauge that reported only coordinators currently failing would
+        // make a healthy coordinator byte-identical to an absent one.
+        _censusToken = CoordinatorPhaseTickCensus.Enrol(KeepaliveReminderName, MetricsTreeId);
+
         _phaseTimer = this.RegisterGrainTimer(
             OnPhaseTimerTickAsync,
             new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: PhaseTimerPeriod));
@@ -225,6 +242,7 @@ internal abstract class CoordinatorGrain<TSelf>(
     {
         _phaseTimer?.Dispose();
         _phaseTimer = null;
+        WithdrawFromPhaseTickCensus();
         await UnregisterKeepaliveAsync();
         this.DeactivateOnIdle();
     }
@@ -255,6 +273,7 @@ internal abstract class CoordinatorGrain<TSelf>(
         {
             await ProcessNextPhaseAsync();
             _consecutiveTickFailures = 0;
+            RecordPhaseTickRun();
         }
         catch (Exception ex)
         {
@@ -268,6 +287,7 @@ internal abstract class CoordinatorGrain<TSelf>(
             LatticeMetrics.CoordinatorPhaseTickFailures.Add(1, PhaseTickFailureTags());
 
             _consecutiveTickFailures++;
+            RecordPhaseTickRun();
             if (_consecutiveTickFailures >= PhaseTickFailureEscalationThreshold)
             {
                 logger.LogError(ex,
@@ -284,6 +304,30 @@ internal abstract class CoordinatorGrain<TSelf>(
                     KeepaliveReminderName, LogContext);
             }
         }
+    }
+
+    /// <summary>
+    /// Reports this activation's current consecutive-failure run to
+    /// <see cref="CoordinatorPhaseTickCensus"/>, re-supplying the tags for the
+    /// same reason <see cref="PhaseTickFailureTags"/> rebuilds them per emission:
+    /// <see cref="MetricsTreeId"/> is a derived-class hook that may only become
+    /// resolvable after activation, so a value read when the timer was armed can
+    /// be superseded by a better one.
+    /// </summary>
+    private void RecordPhaseTickRun() =>
+        CoordinatorPhaseTickCensus.Record(
+            _censusToken, KeepaliveReminderName, MetricsTreeId, _consecutiveTickFailures);
+
+    /// <summary>
+    /// Surrenders this activation's census enrolment so the gauge stops reporting
+    /// a run for a coordinator that is no longer ticking. Idempotent, so the
+    /// completion path and the deactivation path may both call it.
+    /// </summary>
+    private void WithdrawFromPhaseTickCensus()
+    {
+        if (_censusToken == 0) return;
+        CoordinatorPhaseTickCensus.Withdraw(_censusToken);
+        _censusToken = 0;
     }
 
     /// <summary>
