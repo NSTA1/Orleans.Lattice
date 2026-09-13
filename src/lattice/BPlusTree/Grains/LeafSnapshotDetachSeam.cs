@@ -27,11 +27,37 @@ internal enum LeafSnapshotDetachSeam
     /// <summary>The whole-cache row enumeration hydrated the whole cache.</summary>
     EnumerateRowsAccessor = 3,
 
-    /// <summary>The backing dictionary accessor hydrated the whole cache.</summary>
+    /// <summary>
+    /// The backing dictionary accessor hydrated the whole cache.
+    /// <para>
+    /// Recorded only by <c>LeafEntryCache.UnderlyingRows</c>, whose sole caller
+    /// is <c>BPlusLeafGrain.EntriesForTest</c> - a test-only live window that is
+    /// deliberately retained because fixtures seed rows through it, so it cannot
+    /// be converted to a bounded copy. A deployed process therefore never
+    /// records this seam and never emits <c>detach_seam=underlying_rows_accessor</c>
+    /// on <c>orleans.lattice.leaf.bisect_refusals</c>. That absence is expected
+    /// and carries no information about leaf behaviour; do not read it as
+    /// evidence that no whole-cache accessor consumed a frame.
+    /// </para>
+    /// <para>
+    /// It is kept rather than deleted because the surface really does detach and
+    /// this is its correct attribution. Reporting some other seam would be
+    /// misattribution, and reporting <see cref="None"/> would make a detached
+    /// frame indistinguishable from one that was never attached - the exact
+    /// benign-versus-harmful collapse the seam exists to resolve, and the
+    /// property <c>LeafSnapshotDetachAttributionTests</c> pins by name.
+    /// </para>
+    /// </summary>
     UnderlyingRowsAccessor = 4,
 
-    /// <summary>The state-bytes backfill hydrated the whole cache.</summary>
-    StateBytesBackfill = 5,
+    // Ordinal 5 was StateBytesBackfill, assigned by a one-shot LeafStateBytes
+    // migration helper that never had a production caller in its entire
+    // history and backfilled a persisted slot that does not exist (the cache's
+    // running counter is rebuilt from the rows on every activation). Removed
+    // in issue #2865 rather than retained the way RangeHydrationCompleted
+    // below is: that member was once recorded and so has historical series to
+    // keep stable, whereas nothing ever emitted this one. The ordinal is left
+    // unused so no new member silently inherits it.
 
     /// <summary>
     /// Retained for wire and diagnostic stability. Ranged and keyed hydration

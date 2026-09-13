@@ -269,12 +269,6 @@ public sealed class LeafEntryCacheHydrationTests
         var viaUnderlying = Attached(rows);
         Assert.That(viaUnderlying.UnderlyingRows, Has.Count.EqualTo(rows.Length));
         Assert.That(viaUnderlying.HasPendingHydration, Is.False);
-
-        var viaBackfill = Attached(rows);
-        viaBackfill.OverwriteStateBytesForBackfill(123L);
-        Assert.That(viaBackfill.HasPendingHydration, Is.False);
-        Assert.That(viaBackfill.StateBytes, Is.EqualTo(123L),
-            "the backfill figure describes the whole projection, so no residual may be added to it");
     }
 
     [Test]

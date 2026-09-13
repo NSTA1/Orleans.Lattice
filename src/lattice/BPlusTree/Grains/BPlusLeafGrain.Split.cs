@@ -517,13 +517,35 @@ internal sealed partial class BPlusLeafGrain
         _ => "none",
     };
 
+    /// <summary>
+    /// Projects a detach seam onto the closed vocabulary carried on
+    /// <see cref="LatticeMetrics.TagDetachSeam"/>.
+    /// <para>
+    /// Every member of <see cref="LeafSnapshotDetachSeam"/> has an arm here, and
+    /// that is load-bearing rather than tidy: a member with no arm falls through
+    /// to <c>none</c>, which is the tag value that means "no frame was ever
+    /// attached". A real forfeiture would then be reported as the benign case
+    /// this counter exists to distinguish it from, silently and with no missing
+    /// series to notice. <c>Every_detach_seam_has_its_own_metric_tag</c> pins
+    /// the total mapping so a member added without an arm reddens.
+    /// </para>
+    /// <para>
+    /// Two arms are unreachable in a deployed process and are kept deliberately:
+    /// <see cref="LeafSnapshotDetachSeam.UnderlyingRowsAccessor"/>, whose only
+    /// producer is reached solely through a test accessor, and
+    /// <see cref="LeafSnapshotDetachSeam.RangeHydrationCompleted"/>, which
+    /// nothing assigns since issue #2843. Their absence from a scrape is
+    /// expected and is not evidence that no frame was consumed; see the
+    /// <c>orleans.lattice.leaf.bisect_refusals</c> row in
+    /// <c>docs/lattice/metrics.md</c>.
+    /// </para>
+    /// </summary>
     private static string DetachSeamTag(LeafSnapshotDetachSeam seam) => seam switch
     {
         LeafSnapshotDetachSeam.Clear => "clear",
         LeafSnapshotDetachSeam.KeysAccessor => "keys_accessor",
         LeafSnapshotDetachSeam.EnumerateRowsAccessor => "enumerate_rows_accessor",
         LeafSnapshotDetachSeam.UnderlyingRowsAccessor => "underlying_rows_accessor",
-        LeafSnapshotDetachSeam.StateBytesBackfill => "state_bytes_backfill",
         LeafSnapshotDetachSeam.RangeHydrationCompleted => "range_hydration_completed",
         LeafSnapshotDetachSeam.FrameDecodeFallback => "frame_decode_fallback",
         _ => "none",

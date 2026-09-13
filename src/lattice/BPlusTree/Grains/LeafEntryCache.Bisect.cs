@@ -42,6 +42,16 @@ internal sealed partial class LeafEntryCache
     /// </para>
     /// </summary>
     /// <param name="key">Receives the bisecting key on success.</param>
+    /// <remarks>
+    /// Convenience form for callers that do not need the refusal reason. The
+    /// split path is not one of them - it has taken the reason-reporting
+    /// overload since issue #2837, because a refusal's cost depends on which
+    /// reason fired - so every caller of this form is a fixture. It is kept
+    /// because eight assertions across four fixtures read better without a
+    /// discard, and it must stay a pure delegation or those fixtures would
+    /// assert about a different decision from the one production takes;
+    /// <c>The_reason_reporting_overload_agrees_with_the_bare_one</c> pins that.
+    /// </remarks>
     internal bool TryGetBisectingKeyWithoutHydrating(out string key)
         => TryGetBisectingKeyWithoutHydrating(out key, out _);
 
