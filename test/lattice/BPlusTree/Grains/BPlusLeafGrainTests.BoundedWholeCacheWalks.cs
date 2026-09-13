@@ -188,15 +188,13 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
     /// </summary>
     /// <remarks>
     /// Deliberately an exclusion of the four accessor seams rather than an
-    /// equality against <see cref="LeafSnapshotDetachSeam.None"/>. A correct
-    /// conversion reports <c>None</c> when eviction kept the hydration source
-    /// incomplete, and <see cref="LeafSnapshotDetachSeam.RangeHydrationCompleted"/>
-    /// when the fold covered every block within budget - which of the two you
-    /// get is decided by the budget-versus-leaf ratio, a quantity a caller
-    /// does not control. Pinning to <c>None</c> would therefore make the
-    /// verdict depend on something the test cannot govern, and would fail on a
-    /// leaf that fits inside the resident budget even though nothing is wrong.
-    /// The four accessor seams are the defect; the other members are not.
+    /// equality against <see cref="LeafSnapshotDetachSeam.None"/>. Since issue
+    /// #2843 a ranged fold reports <c>None</c> whether or not it completes the
+    /// source - completing a bounded walk retains the frame rather than
+    /// releasing it - so an equality against <c>None</c> would also pass. The
+    /// exclusion is kept because it states the property that matters directly:
+    /// no whole-cache accessor consumed the frame. Those four seams are the
+    /// defect; the other members are not.
     /// </remarks>
     private static void AssertNoWholeCacheSeam(BPlusLeafGrain grain) =>
         Assert.That(
@@ -424,33 +422,25 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
     }
 
     /// <summary>
-    /// The adversarial case, and the honest boundary of this conversion.
+    /// The case the epic once treated as an unavoidable boundary, now closed by
+    /// issue #2843.
     /// <para>
-    /// A ranged fold does not avoid detachment by being ranged. It avoids it by
-    /// evicting: <c>HydrateBlock</c> detaches the moment the source reports
-    /// itself fully hydrated, and eviction is what keeps it from ever
-    /// reporting that. So a fold that covers the whole leaf detaches anyway
-    /// whenever the budget exceeds the leaf, and <c>HydrateAll</c>'s own
-    /// trailing detach is not the only route to one.
+    /// A ranged fold that covers the whole leaf within budget hydrates the final
+    /// block and so completes the source. That used to detach the frame - benign
+    /// for this leaf's own memory, but a forfeited bisect for any leaf that later
+    /// has to divide. Since #2843 completing a ranged hydration RETAINS the
+    /// frame: the frame is what a division bisects from, and finishing a bounded
+    /// read is not a reason to release it. So even a within-budget freeze now
+    /// leaves the frame attached and the division fast path available.
     /// </para>
     /// <para>
-    /// This is benign rather than a hole, and the reason is structural rather
-    /// than a property of any host's tuning. The budget defaults to 1 MiB and
-    /// the division threshold is 64 MiB, so a leaf small enough to be fully
-    /// covered within budget is two orders of magnitude below the size at
-    /// which it would ever need to divide. Detaching it forfeits a cheap
-    /// division the leaf had no use for, and leaves resident a footprint
-    /// already under the budget. The condition under which the fold stops
-    /// helping is exactly the condition under which the defect does not bite.
-    /// </para>
-    /// <para>
-    /// It stops being benign only if an operator raises the budget to the same
-    /// order as the division threshold, which is a 64x departure from the
-    /// default. That is worth knowing about and is why it is pinned here.
+    /// The frame stays evictable while attached, so retention costs the frame
+    /// overhead, not a pinned decoded leaf; the four whole-cache accessors are
+    /// still the only surfaces that detach.
     /// </para>
     /// </summary>
     [Test]
-    public async Task A_baseline_freeze_of_a_leaf_wholly_within_budget_detaches_and_that_is_benign()
+    public async Task A_baseline_freeze_of_a_leaf_wholly_within_budget_retains_the_frame_for_the_division()
     {
         var corpus = Corpus(64);
         var grain = LeafWithAttachedSnapshot(corpus, residentBudgetBytes: 8L * 1024 * 1024);
@@ -461,27 +451,37 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
         var freeze = await grain.FreezeProjectionAsync(CancellationToken.None);
 
         Assert.That(freeze.Rows, Has.Count.EqualTo(corpus.Length), "the freeze is still correct");
-        Assert.That(
-            grain.CacheForTest.HasPendingHydration,
-            Is.False,
-            "covering the whole leaf within budget hydrates the final block, which detaches - "
-            + "windowing does not prevent this and is not claimed to");
 
-        // The detachment is harmless here because the leaf is orders of
-        // magnitude below the size at which it would need to divide.
-        Assert.That(leafBytes, Is.LessThan(LatticeOptions.DefaultLeafHydrationResidentBytes));
-
-        // The load-bearing half, and the reason this arm asserts a seam rather
-        // than being exempted from the seam rule. "Detaching here is benign"
-        // is only true if the release came from the bounded path completing
-        // the source. Had a whole-cache accessor consumed the frame instead,
-        // HasPendingHydration would read exactly the same false, and this test
-        // would be asserting the defect and calling it benign.
+        // Non-vacuity, independent of the retention property: the freeze ran the
+        // ranged hydration to completion. Every row is now resident, which only
+        // a completed hydration achieves; an unconverted path that
+        // short-circuited would leave this below the row count and fail here.
         Assert.That(
-            grain.CacheForTest.LastDetachSeam,
-            Is.EqualTo(LeafSnapshotDetachSeam.RangeHydrationCompleted),
-            "the release must be attributable to ranged hydration completing the final block, "
-            + "not to a whole-cache accessor - the two are indistinguishable by frame state alone");
+            grain.CacheForTest.HydratedRowCount,
+            Is.EqualTo(corpus.Length),
+            "the within-budget freeze must complete the source, or this arm proves nothing");
+
+        Assert.Multiple(() =>
+        {
+            // The #2843 property: completing the ranged hydration retained the
+            // frame rather than detaching it. Frame state alone does not
+            // discriminate the defect (a whole-cache accessor leaves it
+            // identical), so the seam attribution is asserted alongside it.
+            Assert.That(
+                grain.CacheForTest.HasPendingHydration,
+                Is.True,
+                "completing a within-budget ranged hydration must retain the frame (issue #2843)");
+            Assert.That(
+                grain.CacheForTest.LastDetachSeam,
+                Is.EqualTo(LeafSnapshotDetachSeam.None),
+                "nothing detached; ranged hydration no longer releases the frame on completion");
+            // And the consequence the retention exists for: the leaf can bisect.
+            Assert.That(
+                grain.CacheForTest.TryGetBisectingKeyWithoutHydrating(out _, out var reason),
+                Is.True,
+                "with the frame retained, a division takes its pivot from the frame");
+            Assert.That(reason, Is.EqualTo(LeafBisectRefusalReason.None));
+        });
     }
 
     /// <summary>

@@ -547,15 +547,25 @@ public partial class BPlusLeafGrainTests
         // around it. The canonical full-walk hash the chained internal-node
         // fold depends on cannot be folded over rows the leaf has not read, so
         // a leaf that takes a write while maintaining its digest materialises
-        // in full. Bounded hydration therefore pays off on the read-dominated
+        // every row. Bounded hydration therefore pays off on the read-dominated
         // cold-start path, which is the path the epic targets.
+        //
+        // The digest recompute (ComputeFullProjectionHashFromState) walks the
+        // leaf through the windowed EnumerateRange path, so its completion
+        // carries the RangeHydrationCompleted seam. Post-#2843 that completion
+        // no longer detaches the frame: every row is still materialised
+        // (SnapshotRowsMaterialised == rows.Length), but the snapshot frame is
+        // RETAINED so a subsequent division can take a bisect pivot from it.
+        // HasPendingHydration therefore stays true even though the leaf is
+        // fully resident.
         var rows = HydrationRows(128);
         var grain = await RehydratedLeafAsync(rows, maintainProjectionDigest: true);
         Assert.That(grain.CacheForTest.HasPendingHydration, Is.True);
 
         await grain.SetAsync(HydrationKey(0), Encoding.UTF8.GetBytes("v"));
 
-        Assert.That(grain.CacheForTest.HasPendingHydration, Is.False);
+        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True,
+            "completing the digest recompute retains the frame post-#2843 rather than detaching it");
         Assert.That(grain.CacheForTest.SnapshotRowsMaterialised, Is.EqualTo(rows.Length),
             "and the work counter still reports what the activation actually read");
     }

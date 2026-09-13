@@ -34,9 +34,13 @@ internal enum LeafSnapshotDetachSeam
     StateBytesBackfill = 5,
 
     /// <summary>
-    /// Ranged hydration materialised the final outstanding block, so the frame
-    /// held nothing further and was released. This is the benign case: the rows
-    /// were paid for one bounded window at a time rather than all at once.
+    /// Retained for wire and diagnostic stability. Ranged and keyed hydration
+    /// once released the frame when their final outstanding block completed the
+    /// source; issue #2843 established that doing so forfeits the bisect a
+    /// subsequent leaf division needs, because completing a bounded read is not
+    /// a reason to discard the frame. Ranged and keyed hydration now retain the
+    /// frame, so no surface assigns this value; it is never recorded as a live
+    /// detach seam and remains only so the enum ordinals do not shift.
     /// </summary>
     RangeHydrationCompleted = 6,
 

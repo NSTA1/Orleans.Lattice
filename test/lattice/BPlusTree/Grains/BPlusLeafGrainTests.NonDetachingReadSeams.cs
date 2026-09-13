@@ -25,13 +25,12 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// The assertions use <c>LastDetachSeam</c> rather than a bare
-/// <c>HasPendingHydration</c> boolean, because "the frame is gone" is not by
-/// itself a defect. <see cref="LeafSnapshotDetachSeam.RangeHydrationCompleted"/>
-/// records a release that a bounded walk paid for one window at a time, which is
-/// benign; the four whole-cache accessors record a release that consumed the
-/// frame in one go, which is the defect. Collapsing that distinction back to a
-/// boolean would make each arm's verdict depend on the budget-to-leaf ratio
-/// instead of on whether the seam is correct.
+/// <c>HasPendingHydration</c> boolean, because the seam names WHICH surface
+/// released the frame. Only the four whole-cache accessors detach; a bounded or
+/// ranged walk retains the frame even when it completes the source (issue
+/// #2843), so its seam stays <see cref="LeafSnapshotDetachSeam.None"/>.
+/// Asserting the seam rather than the boolean keeps each arm's verdict on
+/// whether the correct surface ran, not on the budget-to-leaf ratio.
 /// </para>
 /// </summary>
 public partial class BPlusLeafGrainTests
@@ -48,11 +47,10 @@ public partial class BPlusLeafGrainTests
 
     /// <summary>
     /// Asserts that the frame survived the operation and that nothing released
-    /// it. Valid only on an arm whose leaf is larger than the resident budget,
-    /// where eviction is guaranteed; on an arm that does not pin that ratio the
-    /// honest assertion is that no whole-cache ACCESSOR detached, since
-    /// <see cref="LeafSnapshotDetachSeam.RangeHydrationCompleted"/> is also a
-    /// pass and which of the two occurs is decided by the ratio.
+    /// it. Since issue #2843 a ranged or bounded walk retains the frame even
+    /// when it completes the source, so this holds regardless of the
+    /// budget-to-leaf ratio; only a whole-cache accessor would detach and flip
+    /// it.
     /// </summary>
     private static void AssertFrameSurvived(BPlusLeafGrain grain, string because)
     {
@@ -69,9 +67,11 @@ public partial class BPlusLeafGrainTests
         // The regression that motivated the clip. CountAsync() forwards
         // (null, null), so a single Cache.EnumerateRange over those bounds spans
         // every block; HydrateRange then protects the whole span in its own
-        // TrimToBudget call, nothing is evictable, every block lands resident at
-        // once, and HydrateBlock's IsFullyHydrated check detaches exactly as
-        // HydrateAll would. Walking budget-sized windows is what keeps the frame.
+        // TrimToBudget call, nothing is evictable, and every block lands
+        // resident at once. Since issue #2843 completing the source no longer
+        // detaches the frame, but a single whole-span window still pins the
+        // whole leaf resident. Walking budget-sized windows is what keeps the
+        // peak footprint bounded and the frame both attached and evictable.
         var grain = await WindowedLeafAsync();
 
         var count = await grain.CountAsync();
@@ -144,33 +144,23 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task A_leaf_smaller_than_the_hydration_budget_releases_the_frame_to_the_bounded_path()
+    public async Task A_leaf_smaller_than_the_hydration_budget_retains_the_frame_through_completion()
     {
-        // The adversarial case, asserted deliberately rather than avoided.
+        // The former adversarial case, closed by issue #2843.
         //
-        // Windowing does NOT preserve the frame because coverage is partial -
-        // it preserves it because TrimToBudget evicts behind the walk, and
-        // eviction calls MarkEvicted, which decrements the source's resident
-        // block count. IsFullyHydrated is _hydratedBlocks == _blockCount, an
-        // "all blocks resident AT ONCE" test rather than "all blocks ever
-        // read", so a fold whose coverage is total still never completes the
-        // source while the budget is smaller than the leaf.
+        // Where the budget EXCEEDS the leaf nothing is evictable, so a bounded
+        // walk materialises the final outstanding block and completes the
+        // source. That used to detach the frame (recorded as
+        // RangeHydrationCompleted): benign for this leaf's memory, but a
+        // forfeited bisect for any leaf that later has to divide. Since #2843
+        // the completion RETAINS the frame instead - finishing a ranged read is
+        // not a reason to release the frame a division pivots from.
         //
-        // Where the budget EXCEEDS the leaf nothing is evictable, so the fold
-        // materialises the final outstanding block and the frame is released.
-        // The assertion is that the release is attributed to
-        // RangeHydrationCompleted and NOT to a whole-cache accessor. That
-        // distinction is the whole point: this arm is a pass because the rows
-        // were paid for one bounded window at a time, which is exactly what a
-        // bare "nothing detached" boolean could not express - it would fail
-        // here by construction, and the cheapest way to satisfy it would be to
-        // delete this arm.
-        //
-        // The boundary is also benign, and structurally so: a leaf that fits
-        // inside the 1 MiB default budget is about two orders of magnitude
-        // below the 64 MiB division threshold, so it has no cheap division to
-        // forfeit. The condition under which windowing stops helping is
-        // co-extensive with the condition under which the defect cannot bite.
+        // The boundary that made this "adversarial" is gone. A leaf that fits
+        // inside the 1 MiB default budget is about two orders of magnitude below
+        // the 64 MiB division threshold, so it had no cheap division to forfeit
+        // anyway - but retaining the frame means it keeps the fast path
+        // regardless of the ratio.
         var rows = HydrationRows(16);
         var grain = await RehydratedLeafAsync(rows, residentBudgetBytes: 8L * 1024 * 1024);
 
@@ -179,11 +169,25 @@ public partial class BPlusLeafGrainTests
 
         _ = await grain.CountAsync();
 
-        Assert.That(grain.CacheForTest.LastDetachSeam,
-            Is.EqualTo(LeafSnapshotDetachSeam.RangeHydrationCompleted),
-            "a within-budget leaf has nothing to evict, so the bounded walk "
-            + "completes the source - but the release must still be attributed "
-            + "to the bounded path rather than to a whole-cache accessor");
+        // Non-vacuity, independent of the retention property: the bounded walk
+        // ran to completion. Every row is resident, which only a completed
+        // hydration achieves; an unconverted path that short-circuited would
+        // leave this below the row count and fail here first.
+        Assert.That(grain.CacheForTest.HydratedRowCount, Is.EqualTo(rows.Length),
+            "the within-budget walk must complete the source, or this arm proves nothing");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.CacheForTest.LastDetachSeam,
+                Is.EqualTo(LeafSnapshotDetachSeam.None),
+                "completing a within-budget ranged hydration must not detach the frame (issue #2843)");
+            Assert.That(grain.CacheForTest.HasPendingHydration, Is.True,
+                "the frame is retained so a division can still bisect");
+            Assert.That(grain.CacheForTest.TryGetBisectingKeyWithoutHydrating(out _, out var reason),
+                Is.True,
+                "the split path takes its pivot from the retained frame");
+            Assert.That(reason, Is.EqualTo(LeafBisectRefusalReason.None));
+        });
     }
 
     [Test]

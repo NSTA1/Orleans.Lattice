@@ -289,7 +289,7 @@ public sealed class LeafSnapshotDetachAttributionTests
     // so neither arm is satisfiable by an instrument stuck on one value.
     // ---------------------------------------------------------------
 
-    private static async Task<BPlusLeafGrain> RehydratedLeafAsync(int rowCount)
+    private static async Task<BPlusLeafGrain> RehydratedLeafAsync(int rowCount, long residentBudgetBytes = 4L * 1024)
     {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
@@ -319,7 +319,7 @@ public sealed class LeafSnapshotDetachAttributionTests
                 {
                     WalPartitions = 1,
                     LeafPartialHydrationEnabled = true,
-                    LeafHydrationResidentBytes = 4L * 1024,
+                    LeafHydrationResidentBytes = residentBudgetBytes,
                 },
                 maxLeafKeys: 1_000_000,
                 shardCount: 1,
@@ -398,6 +398,242 @@ public sealed class LeafSnapshotDetachAttributionTests
                 grain.CacheForTest.LastDetachSeam,
                 Is.EqualTo(LeafSnapshotDetachSeam.UnderlyingRowsAccessor),
                 "and the seam must name EntriesForTest's route, not the division itself");
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #2843: completing a ranged hydration must NOT forfeit the bisect.
+    //
+    // This is the third distinct outcome, and the one the epic had been
+    // conflating with the first two. The bounded conversions merged upstream
+    // stopped the frame being consumed through a whole-cache accessor, but
+    // completing a ranged hydration - which happens legitimately whenever the
+    // budget covers the leaf - still released the frame, so every division that
+    // followed forfeited its pivot.
+    //
+    // The two arms below are the two-sided proof. They run on an IDENTICAL
+    // corpus and an identical generous budget, so the only thing that differs
+    // between them is the accessor that completes the leaf: the positive arm
+    // completes it through the ranged read seam and the frame is RETAINED
+    // (seam None); the contrast arm completes the same leaf through a
+    // whole-cache accessor and the frame is still DETACHED (seam
+    // UnderlyingRowsAccessor). Pinning both proves the retention is specific to
+    // the ranged seam and that the fix is surgical - it does not over-retain on
+    // the whole-cache accessors, whose transient whole-leaf materialisation is
+    // the separately-tracked #2842 memory harm. The positive arm is the
+    // non-vacuous guard (the negative control reverts the source fix and it
+    // reddens); the contrast arm is a control whose job is to stay green and
+    // show the difference is the accessor, not the corpus. Each arm establishes
+    // its frame state WITHOUT the instrument under test, from the resident row
+    // count, so neither is satisfiable by an instrument stuck on one value.
+    // ---------------------------------------------------------------
+
+    [Test]
+    public async Task A_completed_ranged_hydration_retains_the_frame_so_a_division_can_still_bisect()
+    {
+        // Budget generous enough that a single unbounded window covers the whole
+        // leaf, so the ranged walk completes the source. Before #2843 that
+        // detached the frame (LastDetachSeam == RangeHydrationCompleted), and
+        // the bisect below refused with NoSnapshotAttached.
+        var grain = await RehydratedLeafAsync(512, residentBudgetBytes: 64L * 1024 * 1024);
+
+        Assert.That(
+            grain.CacheForTest.HydratedRowCount,
+            Is.Zero,
+            "precondition: nothing may be resident before the walk, or the frame has already gone");
+
+        // Drive a completing ranged hydration through the real read seam.
+        // CountAsync resolves to an unbounded EnumerateRange, which within this
+        // budget is a single protected window covering every block.
+        _ = await grain.CountAsync();
+
+        // Non-vacuity, established WITHOUT the property under test: the ranged
+        // walk actually ran to completion. Every row is resident, which only a
+        // completed hydration achieves; a seam that short-circuited would leave
+        // this below the row count and fail here first. This holds identically
+        // whether or not the frame was retained, so it cannot mask the property.
+        Assert.That(
+            grain.CacheForTest.HydratedRowCount,
+            Is.EqualTo(512),
+            "the ranged walk must have completed the source, or this arm proves nothing");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                grain.CacheForTest.HasPendingHydration,
+                Is.True,
+                "a completed ranged hydration must retain the frame (issue #2843)");
+            // Resident-bytes attribution (review point #1). ResidentFootprintBytes
+            // is StateBytes plus the retained frame's length, so it strictly
+            // exceeds StateBytes exactly when the frame is retained. Pre-#2843 the
+            // completion detached the frame, so the footprint would have collapsed
+            // to StateBytes with the decoded rows PINNED unsheddable (TrimToBudget
+            // no-ops on a null source - that is the #2842 harm in miniature). The
+            // retained frame is the compressed source the rows decode from, so it
+            // is both the sheddability precondition (TrimToBudget can now evict the
+            // decoded blocks back to the residual) and strictly smaller than a
+            // second whole-leaf ordered-view buffer the forfeited fast path would
+            // have built. This asserts the frame is genuinely resident-accounted,
+            // not merely flagged.
+            Assert.That(
+                grain.CacheForTest.ResidentFootprintBytes,
+                Is.GreaterThan(grain.CacheForTest.StateBytes),
+                "the retained frame must be resident-accounted; pre-#2843 the footprint "
+                + "would equal StateBytes with the frame detached and the rows pinned");
+            // Constraint from the epic: None and RangeHydrationCompleted are
+            // BOTH legitimate outcomes of a correct conversion in general - the
+            // budget-to-leaf ratio decides which - so the ratio-independent
+            // invariant is that the seam is none of the four whole-cache
+            // accessors. This arm additionally controls the ratio (the budget
+            // covers the whole leaf, so the ranged walk completes in one
+            // protected window with no eviction), which is exactly what lets it
+            // pin the stronger equality: post-#2843 the completion no longer
+            // detaches, so RangeHydrationCompleted is never produced and the
+            // seam is precisely None.
+            Assert.That(
+                grain.CacheForTest.LastDetachSeam,
+                Is.Not.EqualTo(LeafSnapshotDetachSeam.KeysAccessor)
+                    .And.Not.EqualTo(LeafSnapshotDetachSeam.EnumerateRowsAccessor)
+                    .And.Not.EqualTo(LeafSnapshotDetachSeam.UnderlyingRowsAccessor)
+                    .And.Not.EqualTo(LeafSnapshotDetachSeam.StateBytesBackfill),
+                "the ranged completion must not detach through any whole-cache accessor");
+            Assert.That(
+                grain.CacheForTest.LastDetachSeam,
+                Is.EqualTo(LeafSnapshotDetachSeam.None),
+                "nothing detached; RangeHydrationCompleted is no longer produced, so the "
+                + "seam that once marked this forfeiture is never recorded");
+            Assert.That(
+                grain.CacheForTest.TryGetBisectingKeyWithoutHydrating(out var key, out var reason),
+                Is.True,
+                "with the frame retained, the split path takes its pivot from the frame rather "
+                + "than materialising the whole leaf through the fallback");
+            Assert.That(reason, Is.EqualTo(LeafBisectRefusalReason.None));
+            Assert.That(key, Is.Not.Null.And.Not.Empty);
+        });
+    }
+
+    [Test]
+    public async Task A_whole_cache_completion_of_the_same_leaf_still_detaches_and_forfeits_the_bisect()
+    {
+        // The contrast arm: the SAME corpus and the SAME generous budget as the
+        // positive arm, so the only variable is the accessor. Completing the
+        // leaf through a whole-cache accessor (EntriesForTest routes through
+        // UnderlyingRows -> HydrateAll -> DetachSnapshot) must STILL detach and
+        // forfeit the bisect. This is what makes the positive arm's "seam is
+        // None" meaningful - it proves the instrument can report a non-None
+        // seam on this exact corpus and budget - and it pins that the #2843 fix
+        // did not leak retention onto the whole-cache accessors that carry the
+        // separately-tracked #2842 memory harm.
+        var grain = await RehydratedLeafAsync(512, residentBudgetBytes: 64L * 1024 * 1024);
+
+        Assert.That(
+            grain.CacheForTest.HydratedRowCount,
+            Is.Zero,
+            "precondition: nothing may be resident before the accessor runs");
+
+        // Complete the leaf through the whole-cache route.
+        Assert.That(grain.EntriesForTest, Is.Not.Empty, "the accessor must materialise the leaf");
+
+        // Non-vacuity, established WITHOUT the detach property: the whole-cache
+        // walk read every row. Independent of whether the frame detached.
+        Assert.That(
+            grain.CacheForTest.HydratedRowCount,
+            Is.EqualTo(512),
+            "the whole-cache accessor must have materialised the whole leaf");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                grain.CacheForTest.HasPendingHydration,
+                Is.False,
+                "a whole-cache completion still releases the frame - the #2843 fix is ranged-only");
+            Assert.That(
+                grain.CacheForTest.LastDetachSeam,
+                Is.EqualTo(LeafSnapshotDetachSeam.UnderlyingRowsAccessor),
+                "the seam names the whole-cache accessor, not a ranged completion");
+            Assert.That(
+                grain.CacheForTest.TryGetBisectingKeyWithoutHydrating(out _, out var reason),
+                Is.False,
+                "with the frame released the division forfeits its pivot, exactly as before the fix");
+            Assert.That(reason, Is.EqualTo(LeafBisectRefusalReason.NoSnapshotAttached));
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #2843, acceptance concern: the fix must reach the OVERSIZED leaf,
+    // not only the small ones. Production over the wedged corpus recorded 16
+    // divisions of which exactly one completed and 15 threw; the one that
+    // completed was small enough that the forfeited fallback (Cache.Keys ->
+    // whole-leaf ordered view, the #2842 transient) was affordable, while the
+    // single leaf holding 99.04% of the retained WAL was not. So a remedy is
+    // only a remedy if the FIXED path's cost does not scale with leaf size -
+    // otherwise it passes on the easy members and leaves the one leaf the epic
+    // exists to divide untouched.
+    //
+    // This is the inverse of the whole-cache contrast arm above. There the SEAM
+    // is the variable and size is held fixed; here SIZE is the variable and the
+    // seam is held fixed (the frame is attached at both sizes). It pins that the
+    // pivot the retained frame yields is read straight from the frame's ordinal
+    // index - a single key decode - and materialises ZERO blocks at either size,
+    // so it is exactly as affordable on the oversized leaf as on the small one.
+    // Like the contrast arm it is green with or without the source fix by
+    // construction (a freshly-rehydrated leaf never reaches the completion
+    // detach line): its job is to make executable WHY retaining the frame - which
+    // the positive arm proves the fix does after a ranged completion - is what
+    // keeps the oversized leaf divisible. The positive arm is the guard; this is
+    // its rationale.
+    // ---------------------------------------------------------------
+
+    [TestCase(512)]
+    [TestCase(4096)]
+    public async Task The_retained_frames_pivot_is_read_without_materialising_any_block_so_it_reaches_the_oversized_leaf(
+        int rowCount)
+    {
+        var grain = await RehydratedLeafAsync(rowCount);
+
+        // Established WITHOUT the property under test: the frame is attached and
+        // the leaf is entirely unmaterialised, so any block materialised across
+        // the bisect below is the bisect's own cost and nothing else.
+        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True, "precondition: the frame is attached");
+        Assert.That(
+            grain.CacheForTest.HydratedRowCount,
+            Is.Zero,
+            "precondition: nothing resident, so the post-bisect count is purely the bisect's cost");
+
+        var placed = grain.CacheForTest.TryGetBisectingKeyWithoutHydrating(out var key, out var reason);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(placed, Is.True, "an attached frame must place its cut at any leaf size");
+            Assert.That(reason, Is.EqualTo(LeafBisectRefusalReason.None));
+            // The pivot is the frame's MEDIAN key, read by ordinal at index
+            // rowCount/2 - not the median of the resident set, which is empty.
+            // Pinning the exact key proves the read went through the frame's
+            // order rather than any materialised structure, and it is the same
+            // derivation at both sizes.
+            Assert.That(
+                key,
+                Is.EqualTo(Key(rowCount / 2)),
+                "the pivot is the frame's median row, decoded by ordinal, not computed from resident rows");
+            // The size-independence itself, and the whole point of this arm:
+            // obtaining the pivot materialised NO block and trimmed none, at
+            // BOTH 512 and 4096 rows. The forfeited fallback would instead have
+            // materialised the whole leaf, whose cost scales with rowCount - so
+            // this flat cost is exactly what lets the fix divide the oversized
+            // leaf the small-leaf fallback cannot afford.
+            Assert.That(
+                grain.CacheForTest.HydratedRowCount,
+                Is.Zero,
+                "the pivot decoded a single frame key and materialised no block - its cost is flat "
+                + "in leaf size, unlike the whole-leaf ordered-view fallback the frame's absence forces");
+            Assert.That(
+                grain.CacheForTest.EvictedBlockCount,
+                Is.Zero,
+                "and nothing was hydrated only to be trimmed");
+            Assert.That(
+                grain.CacheForTest.HasPendingHydration,
+                Is.True,
+                "the frame is still attached after the bisect - reading the pivot did not consume it");
         });
     }
 }
