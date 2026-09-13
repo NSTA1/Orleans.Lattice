@@ -97,8 +97,6 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.atomic_action.duration` | histogram (ms) | `outcome` | Overview | Atomic action - saga duration |
 | `orleans.lattice.grain.call.outstanding_depth` | histogram (`{call}`) | `grain_type` | Overview | Outstanding calls per target activation, by grain type |
 | `orleans.lattice.grain.call.duration` | histogram (ms) | `grain_type`, `outcome` | Overview | Grain-call duration by grain type and outcome |
-| `orleans.lattice.leaf.replay.duration` | histogram (ms) | `tree`, `outcome` | CommitPath | Activation replay duration by outcome |
-| `orleans.lattice.leaf.replay.entries` | counter | `tree`, `outcome` | CommitPath | Replay entries (applied vs skipped) |
 | `orleans.lattice.shard_root.forward.timeouts` | counter | `tree` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.shard_root.scan_page.stalls` | counter | `tree`, `shard`, `phase` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.shard_root.scan_page.ceiling_outcomes` | counter | `tree`, `shard`, `outcome` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |

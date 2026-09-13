@@ -865,8 +865,6 @@ tree id and (for `leaf.commit.duration`) the pipeline step.
 | Instrument | Type | Tags | Meaning |
 |---|---|---|---|
 | `leaf.commit.duration` | histogram (ms) | `tree`, `step` ∈ `{wal, apply, observer}` | Per-step latency of the foreground commit pipeline. The `wal` step is the durability cost; `apply` is in-memory-only; `observer` is the publish under the commit-log scope. |
-| `leaf.replay.duration` | histogram (ms) | `tree`, `outcome` ∈ `{tail, rebuild}` | Wall-clock cost of activation-time WAL replay. `tail` is the cheap incremental path; `rebuild` is the fall-off-log path. |
-| `leaf.replay.entries` | counter | `tree`, `result` ∈ `{applied, skipped}` | Mutations consumed during replay. `skipped` covers entries below the persisted checkpoint or out-of-order arrivals filtered by LWW. |
 
 The bundled Grafana dashboards consume these instruments directly; see
 [`../lattice.dashboards/README.md`](../lattice.dashboards/README.md).
