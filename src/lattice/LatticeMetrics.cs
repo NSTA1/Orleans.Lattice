@@ -3934,19 +3934,39 @@ public static class LatticeMetrics
     /// signature of the defect.
     /// </para>
     /// <para>
-    /// <b>There is deliberately no third arm for a reused result.</b> Only a
-    /// read still in flight is ever joined: once the leaf's turn ends, later
-    /// writes are ordered after the read, so serving its rows again would be a
-    /// scan page that misses committed writes. An earlier revision retained
-    /// settled results briefly and emitted a <c>served</c> arm; that was
-    /// incorrect at any window length and both were removed.
+    /// <b>The third arm, <c>served</c>, is real and is not recency-based
+    /// reuse.</b> An earlier revision of this fix did retain settled results for
+    /// one ceiling on the reasoning that the window was short, emitted a
+    /// <c>served</c> arm for it, and was wrong in kind rather than in degree:
+    /// once the leaf's turn ends later writes are ordered after the read, so
+    /// replaying its rows returns a scan page that misses committed writes,
+    /// which is incorrect at any window length. That clause and its arm were
+    /// removed outright. Issue #2786 reinstated a <c>served</c> arm on a
+    /// different and sufficient basis - the leaf's activation-fenced revision
+    /// cookie, sampled before the read is issued and compared at attach time -
+    /// so a settled read is served only when the leaf published no mutation
+    /// across a window strictly containing it. The distinction matters when
+    /// reading the arm: <c>joined</c> is serialisable by construction, whereas
+    /// <c>served</c> rests entirely on that cookie comparison.
     /// </para>
     /// <para>
-    /// <b>Reading a zero.</b> All three arms are primed at zero on first
-    /// guarded use, through the same recorder the live path uses, so a zero
-    /// here is a measured absence rather than an absent measurement. An
-    /// unguarded walk never reports, by design - it cannot strand a read, so it
-    /// has nothing to attach to.
+    /// <b>Reading a zero.</b> All three arms are primed at zero from shard-root
+    /// ACTIVATION, through the same recorder the live path uses, so a zero here
+    /// is a measured absence rather than an absent measurement. The priming
+    /// point is load-bearing and was moved deliberately (issue #2809): it was
+    /// once taken on the guarded read path, below <c>!scan.IsStallGuarded</c>,
+    /// which made an absent series ambiguous between "the build does not carry
+    /// the instrument" and "it does, but no stall-guarded scan-page leaf read
+    /// ever ran on that <c>(tree, shard)</c>". Primed from activation the series
+    /// exists for every activated <c>(tree, shard)</c> with no scan traffic of
+    /// any kind, so absence has exactly one cause again. Note the consequence
+    /// for the older reading: a flat zero across all three arms no longer says
+    /// the walks on this tree are unguarded - it says no read was coalesced,
+    /// which an unguarded tree is only one way of achieving. Take the
+    /// guarded-or-not question from <see cref="ScanPageStalls"/> instead, and
+    /// note that priming is per activation, so partial presence across
+    /// <c>(tree, shard)</c> pairs means only that some shard roots have not
+    /// activated.
     /// </para>
     /// <para>
     /// <b>One name is not one cause.</b> <c>issued</c> is the ordinary steady
