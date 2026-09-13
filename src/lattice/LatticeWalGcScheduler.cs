@@ -487,6 +487,10 @@ internal sealed class LatticeWalGcScheduler(
     /// ordinary test-visible level in this assembly, which already exposes its
     /// grains to the test project the same way.
     /// </remarks>
+    [InstrumentedEnum(
+        typeof(LatticeWalGcScheduler),
+        "orleans.lattice.wal.gc.blocked_leaf_reactivations",
+        LatticeMetrics.TagOutcome)]
     internal enum ReactivationOutcome
     {
         /// <summary>The leaf was resolved and touched without error.</summary>
