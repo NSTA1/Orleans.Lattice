@@ -309,6 +309,49 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
+    /// <summary>
+    /// Records that a division could not pivot from the snapshot frame and is
+    /// about to materialise the whole leaf, tagged with the refusal reason and
+    /// the cache surface that had already released the frame.
+    /// <para>
+    /// This is the only seam at which the forfeiture is observable. The split
+    /// path cannot distinguish a leaf that never attached a frame from one whose
+    /// frame an unrelated whole-leaf operation consumed - both present as a bare
+    /// refusal - yet the first costs nothing and the second costs the whole leaf,
+    /// resident and unsheddable for the life of the activation.
+    /// </para>
+    /// </summary>
+    private void RecordBisectRefusal(LeafBisectRefusalReason reason, LeafSnapshotDetachSeam seam)
+    {
+        var treeId = state.State.TreeId ?? string.Empty;
+        LatticeMetrics.LeafBisectRefusals.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagReason, BisectRefusalTag(reason)),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagDetachSeam, DetachSeamTag(seam)),
+            LatticeTenantLabel.ForTree(treeId));
+    }
+
+    private static string BisectRefusalTag(LeafBisectRefusalReason reason) => reason switch
+    {
+        LeafBisectRefusalReason.NoSnapshotAttached => "no_snapshot_attached",
+        LeafBisectRefusalReason.TooFewRows => "too_few_rows",
+        LeafBisectRefusalReason.FrameKeyUnreadable => "frame_key_unreadable",
+        LeafBisectRefusalReason.NoKeySortsBelowPivot => "no_key_sorts_below_pivot",
+        _ => "none",
+    };
+
+    private static string DetachSeamTag(LeafSnapshotDetachSeam seam) => seam switch
+    {
+        LeafSnapshotDetachSeam.Clear => "clear",
+        LeafSnapshotDetachSeam.KeysAccessor => "keys_accessor",
+        LeafSnapshotDetachSeam.EnumerateRowsAccessor => "enumerate_rows_accessor",
+        LeafSnapshotDetachSeam.UnderlyingRowsAccessor => "underlying_rows_accessor",
+        LeafSnapshotDetachSeam.StateBytesBackfill => "state_bytes_backfill",
+        LeafSnapshotDetachSeam.RangeHydrationCompleted => "range_hydration_completed",
+        LeafSnapshotDetachSeam.FrameDecodeFallback => "frame_decode_fallback",
+        _ => "none",
+    };
+
     private async Task<SplitResult> SplitAsync()
     {
         // Only the median key is needed to pivot the split. Asking the cache's
@@ -320,12 +363,27 @@ internal sealed partial class BPlusLeafGrain
         // is the only thing that would have made it smaller (issue #2771).
         //
         // Take the pivot from the frame's ordinal index instead, which decodes
-        // one key and no payload. The fallback is the old path, used when
-        // nothing is lazily hydrated (the leaf is already resident, so the
-        // ordered view costs nothing extra) or when a strictly interior pivot
-        // cannot be established from the frame alone.
-        if (!Cache.TryGetBisectingKeyWithoutHydrating(out var splitKey))
+        // one key and no payload.
+        //
+        // The fallback is the old path. Its cost is NOT uniform, and the
+        // difference is invisible from here (issue #2787). When no frame was
+        // ever attached - a leaf replayed from the WAL, say - the leaf is
+        // already resident and the ordered view costs nothing extra. But the
+        // same refusal arrives when a frame WAS attached and some unrelated
+        // whole-leaf operation consumed it, and there the fallback materialises
+        // the entire leaf, unsheddable for the life of the activation, on
+        // precisely the oversized leaf that can least afford it. The refusal is
+        // a function of activation history, not of leaf size, so this seam
+        // cannot tell the benign case from the harmful one. That is why the
+        // refusal is metered with the detaching seam rather than merely taken.
+        if (!Cache.TryGetBisectingKeyWithoutHydrating(out var splitKey, out var refusalReason))
         {
+            // Recorded before the fallback runs, because the fallback detaches
+            // the frame and overwrites LastDetachSeam with its own surface. Read
+            // afterwards it would always report the division itself and never
+            // the operation that actually forfeited the fast path.
+            RecordBisectRefusal(refusalReason, Cache.LastDetachSeam);
+
             var keys = Cache.Keys;
             int mid = keys.Count() / 2;
             splitKey = keys.ElementAt(mid);

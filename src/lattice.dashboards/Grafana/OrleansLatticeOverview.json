@@ -1587,6 +1587,22 @@
           "legendFormat": "{{tree}} {{kind}}"
         }
       ]
+    },
+    {
+      "id": 69,
+      "title": "Leaf division fast path forfeited (rate)",
+      "description": "Rate of leaf splits that could not place their pivot from the snapshot frame and fell back to materialising the whole leaf (orleans_lattice_leaf_bisect_refusals_total), split by the refusal reason and by the cache surface that had already released the frame. Read the two tags together - the reason alone cannot tell a benign refusal from a harmful one. reason=no_snapshot_attached with detach_seam=none is benign: no frame was ever attached (a leaf replayed from the WAL), the leaf is already resident, and the fallback costs nothing extra. The SAME reason with any other detach_seam is the defect (issue #2787): a frame WAS attached and an unrelated whole-leaf operation consumed it, so the division must now make every row resident and unsheddable for the life of the activation - on precisely the oversized leaf that can least afford the allocation, and the operation that would have reduced its size. The refusal is a function of activation history, not of leaf size, so the split seam itself cannot distinguish the two cases and this counter is the only place the forfeiture is observable. Any sustained non-zero rate carrying a detach_seam other than 'none' is operator-actionable, and names the seam to convert.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1014 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, reason, detach_seam) (rate(orleans_lattice_leaf_bisect_refusals_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "{{tree}} {{reason}} via {{detach_seam}}"
+        }
+      ]
     }
   ]
 }

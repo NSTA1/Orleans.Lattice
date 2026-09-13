@@ -90,6 +90,21 @@ internal sealed partial class LeafEntryCache
     private long _detachedBytesRead;
     private long _detachedRowsMaterialised;
     private long _detachedSeeks;
+    private LeafSnapshotDetachSeam _lastDetachSeam;
+
+    /// <summary>
+    /// The cache surface that released this cache's lazily hydrated snapshot
+    /// frame, or <see cref="LeafSnapshotDetachSeam.None"/> when no frame has
+    /// been released.
+    /// <para>
+    /// Detaching is irreversible for the life of the activation, so this is the
+    /// only signal that distinguishes a leaf which never attached a frame - one
+    /// replayed from the write-ahead log, whose rows are already resident - from
+    /// one whose frame an unrelated whole-leaf operation consumed. The split
+    /// seam cannot tell those apart on its own, and their costs are opposite.
+    /// </para>
+    /// </summary>
+    internal LeafSnapshotDetachSeam LastDetachSeam => _lastDetachSeam;
 
     /// <summary>
     /// Wraps an existing sorted dictionary of leaf rows. The cache does not copy
@@ -158,7 +173,7 @@ internal sealed partial class LeafEntryCache
     /// </summary>
     internal void OverwriteStateBytesForBackfill(long value)
     {
-        HydrateAll();
+        HydrateAll(LeafSnapshotDetachSeam.StateBytesBackfill);
         _stateBytes = value;
     }
 
@@ -384,7 +399,7 @@ internal sealed partial class LeafEntryCache
 
     /// <summary>Clears all rows from the cache, including every typed shadow
     /// and any lazily hydrated snapshot backing.</summary>
-    internal void Clear()
+    internal void Clear(LeafSnapshotDetachSeam seam = LeafSnapshotDetachSeam.Clear)
     {
         _rows.Clear();
         _typedShadows?.Clear();
@@ -393,7 +408,7 @@ internal sealed partial class LeafEntryCache
         _mergeModes?.Clear();
         _stateBytes = 0;
         _liveCount = 0;
-        DetachSnapshot();
+        DetachSnapshot(seam);
         _detachedBytesRead = 0;
         _detachedRowsMaterialised = 0;
         _detachedSeeks = 0;
@@ -511,7 +526,7 @@ internal sealed partial class LeafEntryCache
     {
         get
         {
-            HydrateAll();
+            HydrateAll(LeafSnapshotDetachSeam.KeysAccessor);
             return _rows.Keys;
         }
     }
@@ -530,7 +545,7 @@ internal sealed partial class LeafEntryCache
     /// </summary>
     internal IEnumerable<KeyValuePair<string, LwwValue<byte[]>>> EnumerateRows()
     {
-        HydrateAll();
+        HydrateAll(LeafSnapshotDetachSeam.EnumerateRowsAccessor);
         DrainDeferred();
         return _rows;
     }
@@ -596,7 +611,7 @@ internal sealed partial class LeafEntryCache
     {
         get
         {
-            HydrateAll();
+            HydrateAll(LeafSnapshotDetachSeam.UnderlyingRowsAccessor);
             DrainDeferred();
             return _rows;
         }
@@ -685,8 +700,16 @@ internal sealed partial class LeafEntryCache
     /// <summary>
     /// Materialises every row a lazily hydrated snapshot still owns. A no-op
     /// when nothing is pending, so a fully hydrated cache pays a null check.
+    /// <para>
+    /// Ends in <c>DetachSnapshot</c> and is therefore irreversible: once it
+    /// runs, every row is resident for the life of the activation and no later
+    /// eviction can recover the footprint. <paramref name="seam"/> records
+    /// which surface paid that cost, so a later operation - a division in
+    /// particular - can attribute a frame it did not find.
+    /// </para>
     /// </summary>
-    internal void HydrateAll()
+    /// <param name="seam">The cache surface requesting whole-cache hydration.</param>
+    internal void HydrateAll(LeafSnapshotDetachSeam seam)
     {
         var source = _hydration;
         if (source is null)
@@ -694,12 +717,18 @@ internal sealed partial class LeafEntryCache
             return;
         }
 
+        // The seam must be carried into HydrateBlock rather than relied upon
+        // below: hydrating the final block completes the source, and
+        // HydrateBlock detaches there and then. The trailing call is reached
+        // only by a source that is somehow not fully hydrated after the loop,
+        // so attributing the seam here alone would report every whole-cache
+        // detach as a ranged hydration that happened to finish.
         for (var block = 0; block < source.BlockCount; block++)
         {
-            HydrateBlock(source, block);
+            HydrateBlock(source, block, seam);
         }
 
-        DetachSnapshot();
+        DetachSnapshot(seam);
     }
 
     /// <summary>
@@ -729,7 +758,7 @@ internal sealed partial class LeafEntryCache
         var lastBlock = LeafSnapshotHydrationSource.BlockOf(lastExclusive - 1);
         for (var block = firstBlock; block <= lastBlock; block++)
         {
-            HydrateBlock(source, block);
+            HydrateBlock(source, block, LeafSnapshotDetachSeam.RangeHydrationCompleted);
         }
 
         TrimToBudget(firstBlock, lastBlock);
@@ -755,7 +784,7 @@ internal sealed partial class LeafEntryCache
         }
 
         var block = LeafSnapshotHydrationSource.BlockOf(index);
-        HydrateBlock(source, block);
+        HydrateBlock(source, block, LeafSnapshotDetachSeam.RangeHydrationCompleted);
         if (pin)
         {
             _hydration?.Pin(block);
@@ -840,7 +869,11 @@ internal sealed partial class LeafEntryCache
         }
     }
 
-    private void HydrateBlock(LeafSnapshotHydrationSource source, int block)
+    // `seam` attributes the detach that completing the source triggers. It is
+    // the calling surface, not the mechanism: a whole-cache accessor reaches
+    // the same line a ranged hydration does, and only the seam distinguishes a
+    // forfeited division fast path from a bounded read that finished the leaf.
+    private void HydrateBlock(LeafSnapshotHydrationSource source, int block, LeafSnapshotDetachSeam seam)
     {
         if (source.IsHydrated(block))
         {
@@ -871,7 +904,7 @@ internal sealed partial class LeafEntryCache
         source.CommitHydrated(block);
         if (source.IsFullyHydrated)
         {
-            DetachSnapshot();
+            DetachSnapshot(seam);
         }
     }
 
@@ -903,7 +936,7 @@ internal sealed partial class LeafEntryCache
     private void DecodeWholeFrameAndDetach(LeafSnapshotHydrationSource source)
     {
         var frame = source.Frame;
-        Clear();
+        Clear(LeafSnapshotDetachSeam.FrameDecodeFallback);
         foreach (var row in LeafSnapshotRowSequence.FromFrame(frame))
         {
             StoreRow(row.Key, row.Value);
@@ -958,7 +991,7 @@ internal sealed partial class LeafEntryCache
         _evictedBlocks++;
     }
 
-    private void DetachSnapshot()
+    private void DetachSnapshot(LeafSnapshotDetachSeam seam)
     {
         if (_hydration is { } source)
         {
@@ -969,6 +1002,13 @@ internal sealed partial class LeafEntryCache
             _detachedRowsMaterialised += source.RowsMaterialised;
             _detachedSeeks += source.Seeks;
             source.Release();
+
+            // Recorded only when a frame was actually released. A detach call
+            // against a cache that never attached one must leave this None, or
+            // it would report a forfeiture that did not happen and make a leaf
+            // replayed from the write-ahead log indistinguishable from one whose
+            // frame a whole-cache operation consumed.
+            _lastDetachSeam = seam;
         }
 
         _hydration = null;

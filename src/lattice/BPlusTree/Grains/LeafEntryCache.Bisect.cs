@@ -43,22 +43,47 @@ internal sealed partial class LeafEntryCache
     /// </summary>
     /// <param name="key">Receives the bisecting key on success.</param>
     internal bool TryGetBisectingKeyWithoutHydrating(out string key)
+        => TryGetBisectingKeyWithoutHydrating(out key, out _);
+
+    /// <summary>
+    /// As <see cref="TryGetBisectingKeyWithoutHydrating(out string)"/>, and also
+    /// reports why a refusal occurred.
+    /// <para>
+    /// The reason is not diagnostic decoration. A refusal's cost depends
+    /// entirely on which one fired:
+    /// <see cref="LeafBisectRefusalReason.NoSnapshotAttached"/> on a leaf that
+    /// had a frame means the fast path was forfeited by an earlier whole-cache
+    /// operation and the fallback will materialise the whole leaf, whereas the
+    /// same reason on a leaf replayed from the write-ahead log costs nothing
+    /// extra because those rows are already resident. Without the reason - and
+    /// without <see cref="LastDetachSeam"/> to separate those two cases - a
+    /// caller sees only <see langword="false"/> and cannot tell an expensive
+    /// refusal from a free one.
+    /// </para>
+    /// </summary>
+    /// <param name="key">Receives the bisecting key on success.</param>
+    /// <param name="reason">Receives the refusal reason, or
+    /// <see cref="LeafBisectRefusalReason.None"/> on success.</param>
+    internal bool TryGetBisectingKeyWithoutHydrating(out string key, out LeafBisectRefusalReason reason)
     {
         key = string.Empty;
         var source = _hydration;
         if (source is null)
         {
+            reason = LeafBisectRefusalReason.NoSnapshotAttached;
             return false;
         }
 
         var rowCount = source.RowCount;
         if (rowCount < 2)
         {
+            reason = LeafBisectRefusalReason.TooFewRows;
             return false;
         }
 
         if (!source.TryReadRowKeyAt(rowCount / 2, out var candidate))
         {
+            reason = LeafBisectRefusalReason.FrameKeyUnreadable;
             return false;
         }
 
@@ -104,10 +129,12 @@ internal sealed partial class LeafEntryCache
 
         if (!someKeySortsBelow)
         {
+            reason = LeafBisectRefusalReason.NoKeySortsBelowPivot;
             return false;
         }
 
         key = candidate;
+        reason = LeafBisectRefusalReason.None;
         return true;
     }
 
