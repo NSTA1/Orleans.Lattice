@@ -12,10 +12,52 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// the projection-digest fold (<see cref="ProjectionHash"/>), the checkpoint
 /// offsets, and the HLC clock plus version vectors. See the reserved
 /// <c>[Id(0)]</c> slot note below.
+/// <para>
+/// Persisted through the Orleans binary serializer
+/// (<see cref="ILatticeBinaryPersistedState"/>) rather than the default JSON
+/// grain-storage serializer. The JSON path materialises the whole document as
+/// one contiguous UTF-16 string at roughly 2.7x the payload, which that
+/// interface's own documentation identifies as "the allocation that fails
+/// first when a silo is replaying a warm volume under memory pressure". That
+/// remedy was applied to <c>LeafSnapshotBlob</c> when it was introduced but
+/// not to this type, which is read and written on <b>every</b> leaf
+/// activation and carries the deliberately unbounded
+/// <see cref="UnresolvedReplayWork"/> ledger - so it was the more exposed of
+/// the two, not the less.
+/// </para>
+/// <para>
+/// Safe to mark because the interface's stated criterion holds here: every
+/// member of this type carries <c>[Id(n)]</c>, so the binary serializer
+/// persists its full state. Reads stay compatible in both directions - rows
+/// already written as JSON are detected by payload and still read, and rows
+/// written in binary stay readable if this type is later unmarked - so no
+/// migration is required.
+/// </para>
+/// <para>
+/// This lowers a constant factor; it does not bound the row. An unbounded
+/// <see cref="UnresolvedReplayWork"/> ledger still grows without limit
+/// (issue #2304, which records why an age-based reaper is unsafe: a prepare
+/// whose decision aged out reads Indeterminate yet may be committed, so
+/// discarding it loses an acknowledged write). Nor does it rescue a row
+/// already too large to deserialize, because rewriting it in binary requires
+/// activating the leaf, and the read that fails happens before any grain code
+/// runs.
+/// </para>
+/// <para>
+/// That second limit is the load-bearing one, because the cost this removes
+/// lands on <b>activation</b>. A leaf whose activation read exceeds the
+/// request timeout cannot be compacted, since compaction must activate it
+/// first, so its tombstones are never reclaimed and it only grows - an
+/// absorbing state with no escape. Removing the multiplier lowers activation
+/// cost and so raises the size at which a leaf enters that state, but it
+/// cannot return a leaf that is already in it. Whether the reduction is large
+/// enough to matter in practice is <b>unmeasured</b>; treat it as a smaller
+/// constant on a hot path, not as a proven remedy for that ratchet.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LeafNodeState)]
-internal sealed class LeafNodeState
+internal sealed class LeafNodeState : ILatticeBinaryPersistedState
 {
     // [Id(0)] previously held a SortedDictionary<string, LwwValue<byte[]>>
     // Entries per-key projection. The persisted leaf row was collapsed:
