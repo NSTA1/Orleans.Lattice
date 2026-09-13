@@ -141,13 +141,6 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
     /// <param name="outcome">How the attempt ended.</param>
     public void Record(RepoContextAnnIndexLoadOutcome outcome)
     {
-        var tag = outcome switch
-        {
-            RepoContextAnnIndexLoadOutcome.Fresh => OutcomeFreshTag,
-            RepoContextAnnIndexLoadOutcome.Resumed => OutcomeResumedTag,
-            _ => OutcomeFaultedTag,
-        };
-
         lock (_gate)
         {
             switch (outcome)
@@ -164,10 +157,34 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
             }
         }
 
-        _loads.Add(
-            1,
-            new KeyValuePair<string, object?>(OutcomeTagKey, tag),
-            LatticeTenantLabel.Platform);
+        // One emission site per arm, each naming its tag constant literally, rather
+        // than one site passing a switch-selected local. Not duplication, and it must
+        // not be folded back together: the priming gate resolves an instrument's tag
+        // domain from its emission sites, so a computed tag leaves the domain ambiguous
+        // and the gate SKIPS this instrument entirely - deleting the zero-priming above
+        // would then redden nothing. Verified by perturbation: with the single
+        // parameterised site, removing all three primed arms left the gate green.
+        switch (outcome)
+        {
+            case RepoContextAnnIndexLoadOutcome.Fresh:
+                _loads.Add(
+                    1,
+                    new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFreshTag),
+                    LatticeTenantLabel.Platform);
+                break;
+            case RepoContextAnnIndexLoadOutcome.Resumed:
+                _loads.Add(
+                    1,
+                    new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeResumedTag),
+                    LatticeTenantLabel.Platform);
+                break;
+            default:
+                _loads.Add(
+                    1,
+                    new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag),
+                    LatticeTenantLabel.Platform);
+                break;
+        }
     }
 
     /// <summary>
