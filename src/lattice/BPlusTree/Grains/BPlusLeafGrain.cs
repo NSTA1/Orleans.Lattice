@@ -1701,6 +1701,22 @@ internal sealed partial class BPlusLeafGrain(
         // fault for a correctness one. A sound probe has to ask for a resident
         // key at or above the bound, or an UNHYDRATED frame block at or above
         // it, which is new cache surface rather than a call-site change.
+        //
+        // BEWARE THE COMMIT RECORD HERE, WHICH OVERSTATES WHAT WAS CONVERTED.
+        // 563681c99 carries the subject "stop the baseline freeze and range
+        // delete detaching the leaf frame (#2835)". The "range delete" in that
+        // subject is ApplyDeleteRange in BPlusLeafGrain.Projection.cs - the
+        // REPLAYED range delete - and that commit does not touch this method at
+        // all. The foreground DeleteRangeAsync you are reading is still a
+        // whole-cache walk, deliberately, for the reasons above.
+        //
+        // That discrepancy is recorded here rather than quietly reconciled. A
+        // merged commit subject cannot be rewritten, so the only place a reader
+        // can discover the overstatement is from the source side, and an
+        // epic-level reader reconciling subjects against the definition of done
+        // would otherwise score this seam as converted when it is not. The
+        // source is the honest record; the subject is the overstated one
+        // (issue #2864).
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         List<string>? keysToDelete = null;
         var pastRange = false;
@@ -3181,7 +3197,7 @@ internal sealed partial class BPlusLeafGrain(
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var result = new List<LwwEntry>(Cache.Count);
-        // NOT converted to a bounded windowed walk, unlike the sibling
+        // NOT YET converted to a bounded windowed walk, unlike the sibling
         // GetLiveEntriesAsync directly above (issue #2368). The difference is
         // the Cache.GetMergeMode(key) call in the loop body: it is a
         // key-addressed accessor, and a key-addressed accessor trims the
@@ -3194,8 +3210,28 @@ internal sealed partial class BPlusLeafGrain(
         // not rescue it either: EvictBlock drops the evicted rows' entries from
         // the merge-mode map, so a post-eviction lookup returns null where a
         // mode exists and the answer changes rather than merely costing more.
-        // Converting this seam needs a ranged merge-mode accessor, or a window
-        // pin, on the cache - not a call-site change.
+        //
+        // THE BLOCKER THIS COMMENT USED TO RECORD HAS SINCE BEEN REMOVED, and
+        // the sentence recording it has been deleted rather than left to
+        // mislead. It read "converting this seam needs a ranged merge-mode
+        // accessor, or a window pin, on the cache - not a call-site change".
+        // That was true when #2839 wrote it, and it stayed true for twelve
+        // seconds: #2835 landed at 08:07:36 against 08:07:24 and added
+        // LeafEntryCache.GetMergeModeWithoutHydrating, which reads the
+        // merge-mode side-map directly and never hydrates, touches, or trims.
+        // Called inline on a key an EnumerateRange walk has just yielded - so
+        // resident by construction - it avoids both hazards above: nothing
+        // trims under the enumerator, and nothing is looked up after an
+        // eviction could have dropped it.
+        //
+        // So converting this seam IS now a call-site change, and the pattern to
+        // copy is GetFullScanWindowsWithoutHydrating() plus a per-window
+        // EnumerateRange with an inline GetMergeModeWithoutHydrating, exactly
+        // as BPlusLeafGrain.FrozenBaseline.cs already does for this same
+        // reason. It is unconverted here because nobody has done it, NOT
+        // because the cache lacks the surface - do not re-derive a blocker from
+        // the two paragraphs above, which explain why the naive conversion is
+        // unsound and not why a conversion is impossible (issue #2864).
         foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (pendingKeys.TryGetValue(key, out var pending))

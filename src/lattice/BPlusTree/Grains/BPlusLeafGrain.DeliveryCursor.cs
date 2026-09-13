@@ -173,15 +173,34 @@ internal sealed partial class BPlusLeafGrain
             var snapshot = new Dictionary<string, LwwValue<byte[]>>(
                 Cache.Count,
                 StringComparer.Ordinal);
-            // MUST stay EnumerateRows(). This is a full resync, so the delta it
-            // returns is the consumer's entire view and has to enumerate every
-            // row this leaf holds; EnumerateRows() hydrates all deferred rows
-            // first, so it is complete by construction. EnumerateRange(start,
-            // end) is deliberately partial (it hydrates only the requested
-            // span), so swapping it in here would silently ship an incomplete
-            // mirror under a green call - the same defect class PR #2420 closed
-            // on the rehydrate path, where a cache left short of the rows the
-            // leaf had persisted still reported a clean activation.
+            // MUST NOT become a single EnumerateRange(start, end) call. This is
+            // a full resync, so the delta it returns is the consumer's entire
+            // view and has to enumerate every row this leaf holds;
+            // EnumerateRows() hydrates all deferred rows first, so it is
+            // complete by construction. One ranged call is deliberately partial
+            // (it hydrates only the requested span), so swapping one in here
+            // would silently ship an incomplete mirror under a green call - the
+            // same defect class PR #2420 closed on the rehydrate path, where a
+            // cache left short of the rows the leaf had persisted still
+            // reported a clean activation.
+            //
+            // Read that prohibition as SCOPED TO THE SINGLE RANGED CALL, which
+            // is the only form it was ever true of. It is not a prohibition on
+            // ranged enumeration as such, and in particular it does not rule
+            // out the exhaustive GetFullScanWindowsWithoutHydrating() plus
+            // per-window EnumerateRange walk the epic built later (#2839,
+            // #2835). Those windows are disjoint and exhaustive and visit every
+            // row exactly once - LeafEntryCache.Bisect.cs documents the
+            // property, and LeafSnapshotDetachAttributionTests pins it at
+            // 512/512 rows visited with the frame still attached - so that walk
+            // is complete by construction too, and is the supported way to
+            // convert this seam should the resync ever need to stop forfeiting
+            // the division fast path.
+            //
+            // The requirement here is COMPLETENESS. EnumerateRows() is one way
+            // to meet it, not the only way, and reading the paragraph above as
+            // "ranged walks are banned on this seam" is the generalisation to
+            // avoid (issue #2864).
             foreach (var (key, lww) in Cache.EnumerateRows())
             {
                 snapshot[key] = lww;
