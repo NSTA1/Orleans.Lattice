@@ -98,6 +98,32 @@ $mockServer = {
                 continue
             }
 
+            if ($path -eq '/health/ready') {
+                # Scenarios model the three readiness shapes the rig can show:
+                # ready, not-ready-with-a-diagnosis, and an endpoint that is
+                # not answering at all.
+                if ($Scenario -eq 'ready-unreachable') {
+                    # Answer nothing at all: close the connection without a
+                    # reply so the probe's catch arm is exercised.
+                    $context.Response.Abort()
+                    continue
+                }
+
+                if ($Scenario -eq 'approximate') {
+                    Write-Reply -Context $context -Body 'Healthy' -ContentType 'text/plain' -Status 200
+                    continue
+                }
+
+                $notReady = 'Not ready: the vector plane has not served semantic retrieval, so ' +
+                            'searches are answering as keyword.vector_plane_unavailable, or as ' +
+                            'keyword.exact_fallback_suppressed when a stalled gather has left the ' +
+                            'exact fallback withheld. Run a search and read its retrievalPath to ' +
+                            'tell which. Whether a build is in progress is not known here; check ' +
+                            "the index build's own status rather than inferring it from this line."
+                Write-Reply -Context $context -Body $notReady -ContentType 'text/plain' -Status 503
+                continue
+            }
+
             if ($path -eq '/metrics') {
                 # Which arm absorbs the served queries depends on the scenario.
                 $bootstrapping = 0
@@ -106,6 +132,7 @@ $mockServer = {
                 switch ($Scenario) {
                     'approximate' { $approximate = $served }
                     'contaminated' { $approximate = $served }
+                    'ready-unreachable' { $approximate = $served }
                     'exhaustive' { $exhaustive = $served }
                     'bootstrapping' { $bootstrapping = $served }
                     'suppressed' { $bootstrapping = $served }
@@ -335,7 +362,8 @@ Invoke-Scenario -Name 'approximate arm moves' -Scenario 'approximate' -ExpectedE
     'APPROXIMATE-ARM-MOVED',
     'Issued         : 8',
     'Succeeded      : 8',
-    'Attribution: EXACT'
+    'Attribution: EXACT',
+    '/health/ready 200 (READY)'
 )
 
 # Concurrent internal retrieval lands in the same window. The probe must report
@@ -352,8 +380,28 @@ Invoke-Scenario -Name 'internal traffic contaminates the delta' -Scenario 'conta
 Invoke-Scenario -Name 'exact fallback suppressed (live rig shape)' -Scenario 'suppressed' -ExpectedExitCode 0 -MustContain @(
     'PLANE-CONSULTED-APPROXIMATE-ZERO',
     'keyword.exact_fallback_suppressed',
-    'OUTLIVE its',
-    'deterministic defect'
+    'OUTLIVES its',
+    'deterministic defect',
+    'DO NOT record the breaker as the root cause',
+    'ShardRootGrain.ReadLeafAsync -> TimeoutException'
+)
+
+# A 503 on readiness is the system's own diagnosis and is the most authoritative
+# line the harness can emit. It must be reported verbatim, and it must NOT be
+# treated as a probe failure or gate the measurement.
+Invoke-Scenario -Name 'readiness 503 is reported, not treated as failure' -Scenario 'suppressed' -ExpectedExitCode 0 -MustContain @(
+    '/health/ready 503 (NOT READY)',
+    'The system says, in its own words:',
+    'the vector plane has not served semantic retrieval',
+    'more authoritative than any counter delta'
+)
+
+# Readiness unreadable must not abort the run: liveness already passed, so the
+# counter delta still stands and suppressing it would discard the measurement.
+Invoke-Scenario -Name 'readiness unreadable does not gate the measurement' -Scenario 'ready-unreachable' -ExpectedExitCode 0 -MustContain @(
+    '/health/ready could not be read',
+    'Continuing. The counter delta below stands on its own.',
+    'APPROXIMATE-ARM-MOVED'
 )
 
 # The plane answered exhaustively. The approximate arm is zero, but the total

@@ -798,6 +798,28 @@ sends you to `lattice_metrics_series` and
 `lattice_metrics_dropped_measurements_by_family_total` before you conclude
 anything from it.
 
+**It reads `/health/ready`, and prints the answer verbatim.** This is a
+different endpoint from `/health/live` and answers a different question.
+Liveness asks whether anything is there; readiness asks whether this box can
+actually serve semantic retrieval, and on the repocontext host it is the
+conjunction of the lifecycle component and the vector plane. When the vector
+plane is down the readiness body already says so, in specific and self-limiting
+terms, and it even names the `retrievalPath` discrimination you would otherwise
+have to rediscover.
+
+The endpoint is easy to miss, and has been missed: the container healthcheck
+runs a grain-liveness self-probe rather than an HTTP readiness call, so Docker
+can report `healthy` straight through a total retrieval outage, and the
+acceptance playbook's only outbound call is `/metrics`. The probe therefore
+reads it explicitly rather than assuming something upstream already did.
+
+A 503 here is a **successful** probe result, not a probe failure. It is the
+system diagnosing itself, which is more authoritative than anything this harness
+can infer from a counter delta, so the probe prints the status and the full body
+and says as much. It is deliberately **not** a gate: a 503 is the expected
+reading on a rig whose vector plane is down, and refusing to continue would
+suppress the very measurement the harness exists to take.
+
 **The total across all three arms is the liveness witness.** The arms partition
 the whole query population - `SearchCoreAsync` records an outcome for every
 query including bootstrapping - so a moving total proves the instrument is
@@ -819,8 +841,10 @@ Its own refusal paths are regression-tested rather than proven once:
 pwsh -File ./scripts/Test-AnnQueryProbe.ps1
 ```
 
-Ten scenarios against a real in-process HTTP listener, covering both refusals,
-the absent-arm case, the contaminated delta, and the suppressed-fallback state.
+Twelve scenarios against a real in-process HTTP listener, covering both refusals,
+the absent-arm case, the contaminated delta, the suppressed-fallback state, and
+all three readiness shapes (ready, not-ready-with-a-diagnosis, and a readiness
+endpoint that cannot be read at all).
 The suite asserts its own scenario count is non-zero before reporting, for the
 same reason the probe asserts its issued count: a harness that ran nothing
 reports success in a way that is indistinguishable from a harness that ran

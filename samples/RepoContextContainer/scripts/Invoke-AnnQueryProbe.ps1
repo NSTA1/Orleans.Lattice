@@ -406,6 +406,47 @@ function Get-MemberOrNull {
     return $null
 }
 
+<#
+    Reads /health/ready and returns the verdict WITHOUT throwing on a 503.
+
+    /health/ready is a different endpoint from /health/live and answers a
+    different question. Liveness asks "is anything there"; readiness asks "can
+    this box actually serve semantic retrieval", and on the repocontext host it
+    is the conjunction of the lifecycle component and the vector plane.
+
+    A 503 here is a SUCCESSFUL probe result, not a probe failure. The body is
+    the system's own diagnosis of why retrieval is degraded, and it is more
+    authoritative than anything this harness can infer from a counter delta.
+    Treating it as an error would discard exactly the line worth reading.
+
+    Nothing in this repository consults this endpoint on the normal path: the
+    container healthcheck runs a grain-liveness self-probe instead, so Docker
+    reports 'healthy' straight through a total retrieval outage, and the
+    acceptance playbook's only outbound call is /metrics. That is why the probe
+    reads it explicitly rather than assuming somebody upstream already did.
+#>
+function Get-ReadinessVerdict {
+    param([string] $Uri, [int] $Timeout)
+
+    try {
+        $response = Invoke-WebRequest -Uri "$Uri/health/ready" -TimeoutSec $Timeout -UseBasicParsing -SkipHttpErrorCheck
+        return [pscustomobject]@{
+            Reached = $true
+            Status  = [int] $response.StatusCode
+            Body    = ([string] $response.Content).Trim()
+            Error   = $null
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Reached = $false
+            Status  = 0
+            Body    = ''
+            Error   = $_.Exception.Message
+        }
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Probe
 # ---------------------------------------------------------------------------
@@ -425,6 +466,35 @@ catch {
     Write-Host "REFUSED: the container did not answer /health/live at $BaseUri." -ForegroundColor Red
     Write-Host "  $($_.Exception.Message)"
     exit 3
+}
+
+# Readiness. Deliberately NOT a gate: a 503 is the expected reading on a rig
+# whose vector plane is down, and refusing to continue would suppress the
+# measurement this harness exists to take.
+$readiness = Get-ReadinessVerdict -Uri $BaseUri -Timeout $TimeoutSeconds
+if ($readiness.Reached) {
+    $readyLabel = if ($readiness.Status -eq 200) { 'READY' } else { 'NOT READY' }
+    Write-Host "Readiness      : /health/ready $($readiness.Status) ($readyLabel)"
+    if ($readiness.Body) {
+        Write-Host '  The system says, in its own words:'
+        foreach ($readyLine in ($readiness.Body -split "`r?`n")) {
+            Write-Host "    $readyLine"
+        }
+    }
+    else {
+        Write-Host '  (no body returned; the endpoint answered but said nothing)'
+    }
+
+    if ($readiness.Status -ne 200) {
+        Write-Host '  This verdict is more authoritative than any counter delta below.'
+        Write-Host '  It is the box diagnosing itself, not this probe inferring from a zero.'
+    }
+}
+else {
+    # Not fatal. Liveness already passed, so the box is up; readiness being
+    # unreachable is itself worth reporting rather than silently skipping.
+    Write-Host "Readiness      : /health/ready could not be read ($($readiness.Error))" -ForegroundColor Yellow
+    Write-Host '  Continuing. The counter delta below stands on its own.'
 }
 
 $baselineSeries = Get-AnnSearchSeries -Uri $BaseUri -Timeout $TimeoutSeconds
@@ -678,12 +748,26 @@ else {
             Write-Host "  $suppressed response(s) reported keyword.exact_fallback_suppressed." -ForegroundColor Yellow
             Write-Host '  A stalled gather has left the exact fallback deliberately withheld, so'
             Write-Host '  neither the approximate plane nor the exact scan is answering and keyword'
-            Write-Host '  recall is serving in their place. Note this suppression can OUTLIVE its'
-            Write-Host '  cause: the breaker retries with a half-open probe, and if that probe re-runs'
-            Write-Host '  the same gather against the same corpus reading it can only re-trip. Read the'
-            Write-Host '  guard summary in the container log for the evaluation-to-trip ratio: a ratio'
-            Write-Host '  at or near 1 is a deterministic defect, not the transient load that the'
-            Write-Host '  absorbed-versus-propagated fault split would otherwise suggest.'
+            Write-Host '  recall is serving in their place.'
+            Write-Host ''
+            Write-Host '  DO NOT record the breaker as the root cause. The breaker is the last link'
+            Write-Host '  in the chain, not the first, and stopping there misattributes a durable'
+            Write-Host '  storage fault to the component that correctly reacted to it. On the rig as'
+            Write-Host '  measured (issue #2951) the chain runs:'
+            Write-Host '    1. a leaf read against the vector-index tree times out'
+            Write-Host '       (ScanAsync -> ShardRootGrain.ReadLeafAsync -> TimeoutException);'
+            Write-Host '    2. that fault lands inside open/advance, BEFORE any progress assignment,'
+            Write-Host '       so the corpus count is never written and stays at 0;'
+            Write-Host '    3. a corpus of 0 leaves the budget unable to bound the scan, so it'
+            Write-Host '       fails open and the gather runs unbounded;'
+            Write-Host '    4. the unbounded gather faults and the breaker trips.'
+            Write-Host '  The suppression then OUTLIVES its cause, because the half-open probe re-runs'
+            Write-Host '  the identical failing operation against the identical corpus reading, so it'
+            Write-Host '  can only re-trip. Read the guard summary in the container log for the'
+            Write-Host '  evaluation-to-trip ratio: a ratio at or near 1 is a deterministic defect,'
+            Write-Host '  not the transient load that the absorbed-versus-propagated fault split'
+            Write-Host '  would otherwise suggest.'
+            Write-Host '  Look for the leaf-read timeout in the log before concluding anything here.'
         }
     }
 }
@@ -698,6 +782,11 @@ if ($JsonOutputPath) {
         timestampUtc   = (Get-Date).ToUniversalTime().ToString('o')
         repositories   = $targetRepos
         repetitions    = $Repetitions
+        readiness      = @{
+            reached = $readiness.Reached
+            status  = $readiness.Status
+            body    = $readiness.Body
+        }
         issued         = $issued
         succeeded      = $succeeded
         failed         = $issued - $succeeded
