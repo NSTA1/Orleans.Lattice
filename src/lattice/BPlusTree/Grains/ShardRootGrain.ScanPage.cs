@@ -6,6 +6,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// How far a shard range-scan page fill had progressed, so a stall is
 /// attributable to a phase rather than only to a duration.
 /// </summary>
+[InstrumentedEnum(
+    typeof(ShardRootGrain),
+    "orleans.lattice.shard_root.scan_page.stalls",
+    LatticeMetrics.TagPhase)]
 internal enum ScanPagePhase
 {
     /// <summary>Preparing the shard for the operation, before any descent.</summary>

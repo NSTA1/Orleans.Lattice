@@ -17,6 +17,10 @@ namespace Orleans.Lattice;
 /// have reclaimed before this value existed.
 /// </para>
 /// </summary>
+[InstrumentedEnum(
+    typeof(LatticeWalGcScheduler),
+    "orleans.lattice.wal.gc.passes",
+    LatticeMetrics.TagOutcome)]
 public enum WalGcCursorFloorState
 {
     /// <summary>
