@@ -177,7 +177,7 @@ public partial class BPlusLeafGrainTests
         };
 
     private static Task ActivateAsync(BPlusLeafGrain grain, CancellationToken ct = default) =>
-        ((IGrainBase)grain).OnActivateAsync(ct);
+        LeafActivationHarness.ActivateAsync(grain, ct);
 
     [Test]
     public async Task Materialiser_no_op_when_tree_id_unset()

@@ -117,7 +117,7 @@ public partial class BPlusLeafGrainTests
             ColdRebuildSet(1, "k1"), ColdRebuildSet(2, "k2"), ColdRebuildSet(3, "k3"));
         var (grain, state, lastFlush) = BuildColdRebuildLeaf(coord, store.Stub, persistedCheckpoint: 3);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // The cache was rebuilt from the WAL start (all three keys present) but
         // nothing advanced the checkpoint and no capture fired during activation.
@@ -177,7 +177,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _, _) = BuildColdRebuildLeaf(coord, store.Stub, persistedCheckpoint: 3);
 
         Assert.ThrowsAsync<LeafProjectionStaleException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None),
+            async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None),
             "a cold rebuild over a trimmed, un-snapshotted prefix must fail rather than silently rebuild over lost data");
         Assert.That(store.SaveCount, Is.EqualTo(0),
             "no snapshot may be captured when the cache cannot faithfully hold the checkpointed prefix (the #1535 no-loss invariant)");

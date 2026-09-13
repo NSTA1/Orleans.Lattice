@@ -173,7 +173,7 @@ public class BPlusLeafGrainDeclinedActivationCaptureReachTests
                 fallOffDecision: FallOffLogDecision.SnapshotPending);
 
             Assert.ThrowsAsync<LeafSnapshotUnaffordableException>(
-                async () => await ((IGrainBase)grain).OnActivateAsync(
+                async () => await LeafActivationHarness.ActivateAsync(grain, 
                     new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token));
 
             List<Overflow> forTree;
@@ -217,7 +217,7 @@ public class BPlusLeafGrainDeclinedActivationCaptureReachTests
                 maxLeafBytes: 4096L,
                 fallOffDecision: FallOffLogDecision.SnapshotPending);
 
-            await ((IGrainBase)grain).OnActivateAsync(
+            await LeafActivationHarness.ActivateAsync(grain, 
                 new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token);
 
             List<Overflow> forTree;
@@ -266,7 +266,7 @@ public class BPlusLeafGrainDeclinedActivationCaptureReachTests
             maxLeafBytes: 4096L);
 
         Assert.ThrowsAsync<LeafSnapshotUnaffordableException>(
-            async () => await ((IGrainBase)grain1).OnActivateAsync(
+            async () => await LeafActivationHarness.ActivateAsync(grain1, 
                 new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token));
 
         var hintAfterFirst = state.State.SnapshotLoadHintBytes;
@@ -278,7 +278,7 @@ public class BPlusLeafGrainDeclinedActivationCaptureReachTests
             "activation failed", new OutOfMemoryException("simulated heap exhaustion")));
 
         Assert.ThrowsAsync<LeafSnapshotUnaffordableException>(
-            async () => await ((IGrainBase)grain2).OnActivateAsync(
+            async () => await LeafActivationHarness.ActivateAsync(grain2, 
                 new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token));
 
         var hintAfterSecond = state.State.SnapshotLoadHintBytes;
@@ -325,7 +325,7 @@ public class BPlusLeafGrainDeclinedActivationCaptureReachTests
             maxLeafBytes: MaxLeafBytes);
 
         Assert.ThrowsAsync<LeafSnapshotUnaffordableException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(
+            async () => await LeafActivationHarness.ActivateAsync(grain, 
                 new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token));
 
         var banked = state.State.SnapshotLoadHintBytes;
@@ -373,7 +373,7 @@ public class BPlusLeafGrainDeclinedActivationCaptureReachTests
             "activation failed", new OutOfMemoryException("simulated heap exhaustion")));
 
         Assert.ThrowsAsync<LeafSnapshotUnaffordableException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(
+            async () => await LeafActivationHarness.ActivateAsync(grain, 
                 new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token));
 
         TestContext.Out.WriteLine(
@@ -410,7 +410,7 @@ public class BPlusLeafGrainDeclinedActivationCaptureReachTests
         state.ThrowOnWrite = new OutOfMemoryException("the hint write itself ran out of memory");
 
         var ex = Assert.ThrowsAsync<LeafSnapshotUnaffordableException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(
+            async () => await LeafActivationHarness.ActivateAsync(grain, 
                 new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token));
 
         TestContext.Out.WriteLine(
@@ -477,7 +477,7 @@ public class BPlusLeafGrainDeclinedActivationCaptureReachTests
             () => Task.FromResult<LeafSnapshotBlob?>(blob),
             fallOffDecision: FallOffLogDecision.SnapshotPending);
 
-        await ((IGrainBase)grain).OnActivateAsync(
+        await LeafActivationHarness.ActivateAsync(grain, 
             new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token);
 
         var corrected = state.State.SnapshotLoadHintBytes;
@@ -533,7 +533,7 @@ public class BPlusLeafGrainDeclinedActivationCaptureReachTests
             "activation failed", new OutOfMemoryException("simulated heap exhaustion")));
 
         Assert.ThrowsAsync<LeafSnapshotUnaffordableException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(
+            async () => await LeafActivationHarness.ActivateAsync(grain, 
                 new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token));
 
         TestContext.Out.WriteLine(

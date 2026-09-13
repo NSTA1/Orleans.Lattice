@@ -244,7 +244,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _, _, saved) = CreateLeafForCoverageRepair(
             persistedCheckpoint: -1L, reClassifyEveryN: 1000);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         SeedRow(grain);
 
         Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(-1L),
@@ -292,7 +292,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _, _, saved) = CreateLeafForCoverageRepair(
             persistedCheckpoint: -1L, reClassifyEveryN: 0);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         SeedRow(grain);
 
         await ((ILeafProjection)grain).SetCheckpointOffsetAsync(3, CancellationToken.None);
@@ -335,7 +335,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 12L, reClassifyEveryN: 1000);
         SeedRow(grain);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // No SetCheckpointOffsetAsync. No deactivation. The tree is quiescent.
         Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.GreaterThanOrEqualTo(0L),
@@ -371,7 +371,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _, _, saved) = CreateLeafForCoverageRepair(
             persistedCheckpoint: -1L, reClassifyEveryN: 1000, walPartitions: partitions);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         SeedRow(grain);
 
         // Partition 0 checkpoints. Partitions 1..3 never do - they hold rows
@@ -428,7 +428,7 @@ public partial class BPlusLeafGrainTests
             "precondition: the leaf carries the production BIRTH value for partition 0 - the type "
             + "default, not the -1 sentinel, which is the shape the field actually produces");
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         SeedRow(grain);
 
         // Live rows, a checkpoint scalar reading 0, and no durable snapshot:
@@ -495,7 +495,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _, _, saved) = CreateLeafForCoverageRepair(
             persistedCheckpoint: 0L, reClassifyEveryN: 1000, walPartitions: partitions);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         var (dataKey, dataPartition) = FirstKeyInNonZeroPartition(partitions);
         SeedRow(grain, dataKey);
@@ -546,7 +546,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _, _, saved) = CreateLeafForCoverageRepair(
             persistedCheckpoint: -1L, reClassifyEveryN: 1000, walPartitions: partitions);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         SeedRow(grain);
 
         for (var i = 1; i <= 25; i++)
@@ -584,7 +584,7 @@ public partial class BPlusLeafGrainTests
             reClassifyEveryN: 1000,
             saveFailure: new InvalidOperationException("snapshot store is down"));
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         SeedRow(grain);
 
         for (var i = 1; i <= 40; i++)

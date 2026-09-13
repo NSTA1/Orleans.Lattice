@@ -147,7 +147,7 @@ public partial class BPlusLeafGrainTests
 
         var (grain, _) = BuildResumableLeaf(state, coord.Stub, store.Stub, reclassifyEveryN: 1);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(12L),
             "Replay must finish the partition despite the first reads being unaffordable.");
@@ -169,7 +169,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var (grain, _) = BuildResumableLeaf(state, coord.Stub, store.Stub, reclassifyEveryN: 1);
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(coord.RequestedBudgets, Has.Count.GreaterThan(1),
             "A read that was refused must be retried at all.");
@@ -191,7 +191,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var (grain, _) = BuildResumableLeaf(state, coord.Stub, store.Stub, reclassifyEveryN: 1);
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         var lowest = coord.RequestedBudgets.Min();
         var afterLowest = coord.RequestedBudgets.Skip(coord.RequestedBudgets.IndexOf(lowest) + 1).ToArray();
@@ -220,7 +220,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _) = BuildResumableLeaf(state, coord.Stub, store.Stub, reclassifyEveryN: 1);
 
         Assert.ThrowsAsync<WalReadUnderPressureException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None));
+            async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None));
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.GreaterThan(0L),
             "A replay that ran out of memory must leave the checkpoint ahead of where it found it, "
@@ -267,12 +267,12 @@ public partial class BPlusLeafGrainTests
         var calm = new PressuredReplayCoordinator(head: 12, sliceSize: 4, affordableBudget: 256, entries);
         var calmState = NewResumableState();
         var (calmGrain, _) = BuildResumableLeaf(calmState, calm.Stub, new InMemorySnapshotStore().Stub, reclassifyEveryN: 1);
-        await ((IGrainBase)calmGrain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(calmGrain, CancellationToken.None);
 
         var pressured = new PressuredReplayCoordinator(head: 12, sliceSize: 4, affordableBudget: 1, entries);
         var pressuredState = NewResumableState();
         var (pressuredGrain, _) = BuildResumableLeaf(pressuredState, pressured.Stub, new InMemorySnapshotStore().Stub, reclassifyEveryN: 1);
-        await ((IGrainBase)pressuredGrain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(pressuredGrain, CancellationToken.None);
 
         Assert.That(pressured.RequestedBudgets.Min(), Is.LessThan(256),
             "The pressured arm must actually have narrowed, or this proves nothing.");
@@ -309,7 +309,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var (grain, _) = BuildResumableLeaf(state, coord.Stub, store.Stub, reclassifyEveryN: 1);
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(coord.RequestedBudgets, Is.All.EqualTo(256),
             "Nothing refused a read, so nothing should have given up width.");

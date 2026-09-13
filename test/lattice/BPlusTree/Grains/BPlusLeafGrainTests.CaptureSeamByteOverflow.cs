@@ -238,7 +238,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
         // 16 KiB against a 4 KiB bound: 4x over, and well inside the key bound,
         // so the key-count arm cannot be what divides it.
         var h = CreateOversizedLeaf(maxLeafBytes: 4096, entries: 16, bytesEach: 1024);
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
         var before = h.Grain.EntriesForTest.Count;
 
         await h.Grain.CaptureSnapshotAsync();
@@ -281,7 +281,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
     public async Task Capture_persists_a_blob_under_the_byte_bound_for_an_oversized_leaf()
     {
         var h = CreateOversizedLeaf(maxLeafBytes: 4096, entries: 16, bytesEach: 1024);
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         await h.Grain.CaptureSnapshotAsync();
 
@@ -310,7 +310,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
     public async Task Capture_of_an_irreducible_single_entry_leaf_does_not_divide_and_still_persists()
     {
         var h = CreateOversizedLeaf(maxLeafBytes: 1024, entries: 1, bytesEach: 8192);
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         await h.Grain.CaptureSnapshotAsync();
 
@@ -360,7 +360,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
             entries: 64,
             bytesEach: 1024,
             reClassifyEveryNCheckpoints: 1);
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         Assert.That(
             h.SiblingBatches, Is.Empty,
@@ -437,7 +437,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
             entries: 64,
             bytesEach: 1024,
             materialiserCheckpointInterval: TimeSpan.FromHours(1));
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         // Reaching the seam from the deactivation hook is not automatic, and a
         // test that skips this step passes vacuously.
@@ -489,7 +489,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
     public async Task Capture_does_not_divide_a_leaf_that_is_under_the_byte_bound()
     {
         var h = CreateOversizedLeaf(maxLeafBytes: 1024 * 1024, entries: 16, bytesEach: 1024);
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         await h.Grain.CaptureSnapshotAsync();
 
@@ -509,7 +509,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
     public async Task Capture_does_not_divide_when_the_byte_bound_is_disabled()
     {
         var h = CreateOversizedLeaf(maxLeafBytes: 0, entries: 16, bytesEach: 1024);
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         await h.Grain.CaptureSnapshotAsync();
 
@@ -547,7 +547,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
             bytesEach: 1024,
             decision: FallOffLogDecision.SnapshotPending);
 
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         Assert.That(
             h.SiblingBatches, Is.Not.Empty,
@@ -573,7 +573,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
     {
         // 16x over the bound, to exercise more than a single halving.
         var h = CreateOversizedLeaf(maxLeafBytes: 4096, entries: 64, bytesEach: 1024);
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         await h.Grain.CaptureSnapshotAsync();
 
@@ -615,7 +615,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
         // part; this must be the byte arm alone.
         var h = CreateOversizedLeaf(
             maxLeafBytes: 1024, entries: 512, bytesEach: 1024, maxLeafKeys: 100_000);
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         await h.Grain.CaptureSnapshotAsync();
         var afterFirst = h.Grain.EntriesForTest.Count;

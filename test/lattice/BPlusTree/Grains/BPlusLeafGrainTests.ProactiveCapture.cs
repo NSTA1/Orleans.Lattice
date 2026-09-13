@@ -139,7 +139,7 @@ public partial class BPlusLeafGrainTests
             Timestamp = HybridLogicalClock.Zero,
         };
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         await snapshotStub.Received(1).SaveAsync(
             Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
@@ -169,7 +169,7 @@ public partial class BPlusLeafGrainTests
             Timestamp = HybridLogicalClock.Zero,
         };
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         await snapshotStub.DidNotReceive().SaveAsync(
             Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
@@ -189,7 +189,7 @@ public partial class BPlusLeafGrainTests
             reClassifyEveryN: threshold,
             periodicDecision: FallOffLogDecision.SnapshotPending);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // Activation alone did not capture.
         await snapshotStub.DidNotReceive().SaveAsync(
@@ -237,7 +237,7 @@ public partial class BPlusLeafGrainTests
             reClassifyEveryN: threshold,
             periodicDecision: FallOffLogDecision.TailReplay);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // Activation alone did not capture (activation-advisory path is
         // unchanged: TailReplay does not latch a pending capture).
@@ -268,7 +268,7 @@ public partial class BPlusLeafGrainTests
             reClassifyEveryN: 0,
             periodicDecision: FallOffLogDecision.SnapshotPending);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // One activation-time classify already happened; subsequent
         // checkpoint persists must not trigger any further classifies.
@@ -444,7 +444,7 @@ public partial class BPlusLeafGrainTests
         };
 
         Assert.That(
-            async () => await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None),
+            async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None),
             Throws.Nothing,
             "A best-effort proactive snapshot capture must not block activation.");
     }
@@ -475,7 +475,7 @@ public partial class BPlusLeafGrainTests
 
         // Activation drives the first capture; this also stamps the
         // last-captured checkpoint at 7.
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         await snapshotStub.Received(1).SaveAsync(
             Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
 

@@ -219,7 +219,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _, saved) = CreateZeroCoverageLeafWithResolver(
             $"tree-unreachable-repair-{Guid.NewGuid():N}", resolver, factory);
 
-        var activation = ((IGrainBase)grain).OnActivateAsync(cts.Token);
+        var activation = LeafActivationHarness.ActivateAsync(grain, cts.Token);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await cts.CancelAsync();
         Assert.That(async () => await activation, Throws.InstanceOf<OperationCanceledException>());
@@ -302,7 +302,7 @@ public partial class BPlusLeafGrainTests
                     using var cts = new CancellationTokenSource(deadline);
                     try
                     {
-                        await ((IGrainBase)grain).OnActivateAsync(cts.Token);
+                        await LeafActivationHarness.ActivateAsync(grain, cts.Token);
                         Interlocked.Increment(ref succeeded);
                     }
                     catch (Exception)
@@ -352,7 +352,7 @@ public partial class BPlusLeafGrainTests
         // created lazily by the first activation that resolves options.
         var (warmGrain, warmState, _, _) = CreateGrainWithSnapshotAndCoordinator(null, 0, 0);
         warmState.State.TreeId = UniqueReplayPermitTree();
-        await ((IGrainBase)warmGrain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(warmGrain, CancellationToken.None);
         var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest;
         Assert.That(gate, Is.Not.Null);
         var permitsBefore = gate!.CurrentCount;
@@ -370,7 +370,7 @@ public partial class BPlusLeafGrainTests
         int permitsWhileBlocked;
         using (listener)
         {
-            var activation = ((IGrainBase)grain).OnActivateAsync(cts.Token);
+            var activation = LeafActivationHarness.ActivateAsync(grain, cts.Token);
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
             permitsWhileBlocked = gate.CurrentCount;
             await cts.CancelAsync();
@@ -425,7 +425,7 @@ public partial class BPlusLeafGrainTests
         var records = CaptureActivationFailures(out var listener);
         using (listener)
         {
-            var activation = ((IGrainBase)grain).OnActivateAsync(cts.Token);
+            var activation = LeafActivationHarness.ActivateAsync(grain, cts.Token);
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
             await cts.CancelAsync();
             Assert.That(async () => await activation, Throws.InstanceOf<OperationCanceledException>());

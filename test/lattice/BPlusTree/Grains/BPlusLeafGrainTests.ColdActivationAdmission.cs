@@ -494,7 +494,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
                 new OutOfMemoryException("Exception of type 'System.OutOfMemoryException' was thrown.")));
 
         var thrown = Assert.ThrowsAsync<LeafSnapshotUnaffordableException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(ClaimDeadline().Token));
+            async () => await LeafActivationHarness.ActivateAsync(grain, ClaimDeadline().Token));
 
         Assert.Multiple(() =>
         {
@@ -533,7 +533,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
 
         state.State.ProjectionCheckpointOffset = 5L;
 
-        await ((IGrainBase)grain).OnActivateAsync(ClaimDeadline().Token);
+        await LeafActivationHarness.ActivateAsync(grain, ClaimDeadline().Token);
 
         await coord.Received().ReadSliceAsync(
             -1L,
@@ -610,7 +610,7 @@ public class BPlusLeafGrainColdActivationAdmissionTests
             Timestamp = HybridLogicalClock.Zero,
         };
 
-        await ((IGrainBase)grain).OnActivateAsync(ClaimDeadline().Token);
+        await LeafActivationHarness.ActivateAsync(grain, ClaimDeadline().Token);
         await ((IBPlusLeafGrain)grain).CaptureSnapshotAsync();
 
         Assert.That(saved, Is.Not.Null,

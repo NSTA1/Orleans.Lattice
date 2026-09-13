@@ -227,7 +227,7 @@ public partial class BPlusLeafGrainTests
 
             try
             {
-                await ((IGrainBase)grain).OnActivateAsync(cts.Token);
+                await LeafActivationHarness.ActivateAsync(grain, cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -269,7 +269,7 @@ public partial class BPlusLeafGrainTests
         var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub);
 
         Assert.ThrowsAsync<OperationCanceledException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(cts.Token));
+            async () => await LeafActivationHarness.ActivateAsync(grain, cts.Token));
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(4L),
             "An interrupted replay whose window opens with a deferred mutation must still bank "
@@ -310,7 +310,7 @@ public partial class BPlusLeafGrainTests
             var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub, reclassifyEveryN: 1);
             try
             {
-                await ((IGrainBase)grain).OnActivateAsync(cts.Token);
+                await LeafActivationHarness.ActivateAsync(grain, cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -435,7 +435,7 @@ public partial class BPlusLeafGrainTests
 
         var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(persistedOffsets, Is.EqualTo(new long[] { 4, 8, 12 }),
             "The incremental flush must reach every slice boundary regardless of where the "
@@ -473,7 +473,7 @@ public partial class BPlusLeafGrainTests
 
         var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(persistedOffsets, Does.Contain(6L),
             "Once every saga terminal has drained the ceiling must recover to the applied frontier.");
@@ -508,7 +508,7 @@ public partial class BPlusLeafGrainTests
         var store = new InMemorySnapshotStore();
         var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(await grain.GetAsync("m1"), Is.Null, "in-range key written before the range delete is tombstoned");
         Assert.That(await grain.GetAsync("m2"), Is.Null, "in-range key written before the range delete is tombstoned");
@@ -568,7 +568,7 @@ public partial class BPlusLeafGrainTests
         // is guarded by its own counterpart below.
         var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub, maxDurableUnresolvedReplayWork: 0);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(partitionZeroPersists, Does.Not.Contain(3L),
             "Partition 0 must never checkpoint AT a deferred cross-partition DeleteRange.");
@@ -638,7 +638,7 @@ public partial class BPlusLeafGrainTests
 
         var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub, maxDurableUnresolvedReplayWork: 1024);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(persists.Select(p => p.Offset), Does.Contain(4L),
             "With the deferred DeleteRange durably recorded, partition 0 advances past it in pass 1 "
@@ -706,7 +706,7 @@ public partial class BPlusLeafGrainTests
         var store = new InMemorySnapshotStore();
         var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(await grain.GetAsync("b2"), Is.Not.Null,
             "A probe fault on one partition must not cost another partition its replay.");
@@ -762,7 +762,7 @@ public partial class BPlusLeafGrainTests
         var store = new InMemorySnapshotStore();
         var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(readOrder, Has.Count.EqualTo(2), "Both partitions must be swept.");
         Assert.That(readOrder[^1], Is.EqualTo(1),
@@ -806,7 +806,7 @@ public partial class BPlusLeafGrainTests
         // recorded durably, which is what this configuration pins.
         var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub, maxDurableUnresolvedReplayWork: 0);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(grain.PendingTransactionCount, Is.EqualTo(1));
         Assert.That(persistedOffsets, Is.All.LessThanOrEqualTo(1L),
@@ -955,7 +955,7 @@ public partial class BPlusLeafGrainTests
 
         try
         {
-            await ((IGrainBase)grain).OnActivateAsync(cts.Token);
+            await LeafActivationHarness.ActivateAsync(grain, cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -1190,7 +1190,7 @@ public partial class BPlusLeafGrainTests
             var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub);
 
             var before = GC.GetTotalAllocatedBytes(precise: true);
-            await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+            await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
             return GC.GetTotalAllocatedBytes(precise: true) - before;
         }
 
@@ -1369,7 +1369,7 @@ public partial class BPlusLeafGrainTests
 
             try
             {
-                await ((IGrainBase)grain).OnActivateAsync(cts.Token);
+                await LeafActivationHarness.ActivateAsync(grain, cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -1404,7 +1404,7 @@ public partial class BPlusLeafGrainTests
             reclassifyEveryN: 1,
             maxDurableUnresolvedReplayWork: 1024);
 
-        await ((IGrainBase)resumed).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(resumed, CancellationToken.None);
 
         Assert.That(await resumed.GetAsync("g02"), Is.Not.Null,
             "The saga's prepared write must still be committed by the reconstructed terminal - "

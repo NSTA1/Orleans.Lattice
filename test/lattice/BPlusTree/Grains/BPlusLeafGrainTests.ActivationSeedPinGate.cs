@@ -171,7 +171,7 @@ public partial class BPlusLeafGrainTests
         var (grain, state, notes, _) = CreateActivationSeedLeaf(
             persistedCheckpoint: 5, snapshot: SeedPinSnapshotCovering(3));
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(state.State.Clock, Is.EqualTo(HybridLogicalClock.Zero),
             "the scenario is only the seed path while the clock is still Zero");
@@ -214,7 +214,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _, notes, _) = CreateActivationSeedLeaf(
             persistedCheckpoint: 5, snapshot: null, snapshotStoreFails: true);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(notes, Has.Count.EqualTo(1));
         Assert.That(notes[0].Frontier, Is.EqualTo(HybridLogicalClock.Zero),
@@ -242,7 +242,7 @@ public partial class BPlusLeafGrainTests
             snapshot: SeedPinSnapshotCovering(3),
             clock: new HybridLogicalClock { WallClockTicks = 500 });
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(notes, Is.Empty,
             "a leaf whose clock has advanced past Zero must not take the activation-seed path; the seed "
@@ -267,7 +267,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _, notes, _) = CreateActivationSeedLeaf(
             persistedCheckpoint: -1, snapshot: null);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(notes, Has.Count.EqualTo(1));
         Assert.That(notes[0].Frontier, Is.EqualTo(HybridLogicalClock.Zero));

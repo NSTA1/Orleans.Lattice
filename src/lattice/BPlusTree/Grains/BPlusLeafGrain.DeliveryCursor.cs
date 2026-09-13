@@ -140,8 +140,10 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetDeltaSinceCursorAsync"/>
-    public Task<StateDelta> GetDeltaSinceCursorAsync(LeafDeliveryCursor sinceCursor)
+    public async Task<StateDelta> GetDeltaSinceCursorAsync(LeafDeliveryCursor sinceCursor)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         EnsureDeliveryEpochInitialized();
         var current = new LeafDeliveryCursor
@@ -206,7 +208,7 @@ internal sealed partial class BPlusLeafGrain
                 snapshot[key] = lww;
             }
 
-            return Task.FromResult(new StateDelta
+            return new StateDelta
             {
                 Entries = snapshot,
                 Version = state.State.Version.Clone(),
@@ -214,7 +216,7 @@ internal sealed partial class BPlusLeafGrain
                 MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } ms ? ms : null,
                 MovedAwayVsc = state.State.MovedAwayVirtualShardCount,
                 DeliveryCursor = current,
-            });
+            };
         }
 
         // Same epoch, already at head: nothing to ship beyond the
@@ -223,7 +225,7 @@ internal sealed partial class BPlusLeafGrain
             && state.State.SplitKey is null
             && (state.State.MovedAwaySlots is null || state.State.MovedAwaySlots.Length == 0))
         {
-            return Task.FromResult(new StateDelta
+            return new StateDelta
             {
                 Entries = EmptyEntries,
                 Version = state.State.Version.Clone(),
@@ -231,7 +233,7 @@ internal sealed partial class BPlusLeafGrain
                 MovedAwaySlots = null,
                 MovedAwayVsc = null,
                 DeliveryCursor = current,
-            });
+            };
         }
 
         // Incremental delivery: every key whose recorded sequence is
@@ -260,7 +262,7 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        return Task.FromResult(new StateDelta
+        return new StateDelta
         {
             Entries = changed,
             Version = state.State.Version.Clone(),
@@ -268,6 +270,6 @@ internal sealed partial class BPlusLeafGrain
             MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } ms2 ? ms2 : null,
             MovedAwayVsc = state.State.MovedAwayVirtualShardCount,
             DeliveryCursor = current,
-        });
+        };
     }
 }

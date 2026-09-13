@@ -36,6 +36,8 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task<LeafBaselineFreeze> FreezeProjectionAsync(CancellationToken cancellationToken)
     {
+        await AwaitReplayBarrierAsync();
+
         cancellationToken.ThrowIfCancellationRequested();
 
         var resolved = await GetOptionsAsync();
@@ -162,6 +164,8 @@ internal sealed partial class BPlusLeafGrain
         long[] capturedHead,
         CancellationToken cancellationToken)
     {
+        await AwaitReplayBarrierAsync();
+
         ArgumentNullException.ThrowIfNull(freeze);
         ArgumentNullException.ThrowIfNull(capturedHead);
         cancellationToken.ThrowIfCancellationRequested();

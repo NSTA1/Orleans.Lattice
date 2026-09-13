@@ -85,7 +85,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
     public async Task An_under_bound_leaf_reaching_the_capture_seam_mints_both_outcomes_at_zero()
     {
         var h = CreateOversizedLeaf(maxLeafBytes: 1024 * 1024, entries: 16, bytesEach: 1024);
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         var measurements = await RecordByteOverflowAsync(
             LatticeMetrics.LeafByteOverflows,
@@ -139,7 +139,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
         // 16 KiB against a 4 KiB bound, so a real `split` emission is produced
         // alongside the prime and the two tag sets can be compared directly.
         var h = CreateOversizedLeaf(maxLeafBytes: 4096, entries: 16, bytesEach: 1024);
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         var measurements = await RecordByteOverflowAsync(
             LatticeMetrics.LeafByteOverflows,
@@ -186,7 +186,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
     public async Task A_leaf_whose_byte_bound_is_disabled_still_mints_the_series()
     {
         var h = CreateOversizedLeaf(maxLeafBytes: 0, entries: 16, bytesEach: 1024);
-        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
         var measurements = await RecordByteOverflowAsync(
             LatticeMetrics.LeafByteOverflows,

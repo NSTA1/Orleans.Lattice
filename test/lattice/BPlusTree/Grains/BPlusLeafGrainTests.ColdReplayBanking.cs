@@ -186,7 +186,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoints ?? new[] { ColdBankReachedCheckpoint, ColdBankUnreachedCheckpoint });
 
         Assert.ThrowsAsync<OperationCanceledException>(
-            async () => await ((IGrainBase)leaf).OnActivateAsync(cts.Token),
+            async () => await LeafActivationHarness.ActivateAsync(leaf, cts.Token),
             "precondition: the cold activation is torn down by a cancellation, which is the shape the " +
             "SELF-REINFORCING COLD REPLAY LOOP diagnostic reports in the field");
 

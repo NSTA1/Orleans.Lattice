@@ -49,7 +49,7 @@ public partial class BPlusLeafGrainTests
         using (listener)
         {
             Assert.ThrowsAsync<InvalidOperationException>(
-                async () => await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None),
+                async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None),
                 "The observation must OBSERVE AND RETHROW. Swallowing the fault would bring the leaf "
                 + "online over a half-applied projection, which is the issue #1535 no-loss violation "
                 + "that 'failures propagate' exists to prevent.");
@@ -99,7 +99,7 @@ public partial class BPlusLeafGrainTests
         using (listener)
         {
             Assert.ThrowsAsync<OperationCanceledException>(
-                async () => await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None));
+                async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None));
         }
 
         Assert.That(records, Has.Count.EqualTo(1));
@@ -124,7 +124,7 @@ public partial class BPlusLeafGrainTests
         var records = CaptureActivationFailures(out var listener);
         using (listener)
         {
-            await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+            await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         }
 
         Assert.That(records, Is.Empty,
@@ -168,7 +168,7 @@ public partial class BPlusLeafGrainTests
         var (warmGrain, warmState, _, _) = CreateGrainWithSnapshotAndCoordinator(
             preloadedSnapshot: null, persistedCheckpoint: 0, walHead: 0);
         warmState.State.TreeId = UniqueReplayPermitTree();
-        await ((IGrainBase)warmGrain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(warmGrain, CancellationToken.None);
 
         var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest;
         Assert.That(gate, Is.Not.Null);
@@ -193,13 +193,28 @@ public partial class BPlusLeafGrainTests
 
             using (listener)
             {
-                var activation = ((IGrainBase)grain).OnActivateAsync(cts.Token);
+                var activation = LeafActivationHarness.ActivateAsync(grain, cts.Token);
 
                 // Confirm it really is parked on the gate before cancelling,
                 // so a pass cannot come from an activation that had already
                 // failed for some earlier reason.
-                Assert.That(activation.IsCompleted, Is.False,
+                //
+                // Since #2871 this must wait on the admission PHASE, not on
+                // `activation.IsCompleted`. The activation call now returns
+                // before the replay has run at all, so "not completed" no longer
+                // implies "blocked on the gate" - it is equally true of a replay
+                // that has not yet reached the rehydrate. Cancelling on that
+                // weaker signal attributes the cancellation to whichever phase
+                // the replay happened to be in, which is the race this wait
+                // removes.
+                var parked = SpinWait.SpinUntil(
+                    () => grain.ReplayAdmissionPhaseForTest
+                        == BPlusLeafGrain.ReplayAdmissionPhase.QueuedForPermit,
+                    TimeSpan.FromSeconds(10));
+                Assert.That(parked, Is.True,
                     "the activation must be blocked on the drained permit gate");
+                Assert.That(activation.IsCompleted, Is.False,
+                    "an activation queued for a permit cannot have finished replaying");
 
                 await cts.CancelAsync();
                 Assert.That(async () => await activation, Throws.InstanceOf<OperationCanceledException>());

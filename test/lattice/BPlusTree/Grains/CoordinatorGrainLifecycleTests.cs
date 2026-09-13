@@ -58,7 +58,7 @@ public class CoordinatorGrainLifecycleTests
         public Task CompleteAsync() => CompleteCoordinatorAsync();
         public Task UnregisterAsync() => UnregisterKeepaliveAsync();
         public void ArmPhaseTimer() => StartPhaseTimer();
-        public Task ActivateAsync(CancellationToken ct) => ((IGrainBase)this).OnActivateAsync(ct);
+        public Task ActivateAsync(CancellationToken ct) => LeafActivationHarness.ActivateAsync(this, ct);
 
         public string ExposedLogContext => LogContext;
         public TimeSpan ExposedPhasePeriod => PhaseTimerPeriod;

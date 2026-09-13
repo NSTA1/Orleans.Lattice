@@ -31,6 +31,18 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task RebuildProjectionFromWalAsync()
     {
+        // Retire the replay before anything else (issue #2871). This method IS a
+        // replay reset: it clears the projection and sets the checkpoint back so
+        // the NEXT activation re-replays from zero. A replay still in flight from
+        // THIS activation would race that - writing entries into the cache this
+        // method is clearing, and advancing the checkpoint this method is about to
+        // rewind - so the rebuild could complete and leave behind a projection
+        // neither wholly old nor wholly new. Retiring rather than merely
+        // cancelling also stops a later data operation on this activation
+        // re-arming a replay against the half-cleared state; the deactivation at
+        // the end of this method is what returns the leaf to a clean start.
+        RetireReplayBarrier();
+
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG rebuild-enter] gid={context.GrainId} treeId={state.State.TreeId} shardIndex={state.State.ShardIndex} " +
             $"low='{state.State.LowKeyInclusive ?? "<null>"}' high='{state.State.HighKeyExclusive ?? "<null>"}' " +

@@ -157,12 +157,18 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
-    public Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes) =>
-        ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks: 0);
+    public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)
+    {
+        await AwaitReplayBarrierAsync();
+        return await ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks: 0);
+    }
 
     /// <inheritdoc />
-    public Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks) =>
-        ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks, batch: null);
+    public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
+    {
+        await AwaitReplayBarrierAsync();
+        return await ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks, batch: null);
+    }
 
     /// <summary>
     /// Applies one typed CRDT delta. Shared by the single-key entry point and
@@ -562,6 +568,8 @@ internal sealed partial class BPlusLeafGrain
     public async Task<SplitResult?> ApplyCrdtDeltaManyAsync(
         List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.CrdtApply);
         using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(deltas);

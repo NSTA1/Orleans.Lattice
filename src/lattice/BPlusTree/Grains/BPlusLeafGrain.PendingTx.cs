@@ -1349,11 +1349,13 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
-    public Task<List<string>> GetPendingKeysAsync()
+    public async Task<List<string>> GetPendingKeysAsync()
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         if (_pendingTx is null || _pendingTx.Count == 0)
-            return Task.FromResult(new List<string>());
+            return new List<string>();
 
         // De-duplicate keys across pending tx buckets - two independent
         // sagas could (rarely) prepare the same key. Set is then
@@ -1364,12 +1366,14 @@ internal sealed partial class BPlusLeafGrain
             foreach (var key in bucket.Keys)
                 unique.Add(key);
         }
-        return Task.FromResult(new List<string>(unique));
+        return new List<string>(unique);
     }
 
     /// <inheritdoc />
-    public Task<List<PendingMutationSnapshot>> GetPendingMutationsForSlotsAsync(int[] sortedMovedSlots, int virtualShardCount)
+    public async Task<List<PendingMutationSnapshot>> GetPendingMutationsForSlotsAsync(int[] sortedMovedSlots, int virtualShardCount)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         ArgumentNullException.ThrowIfNull(sortedMovedSlots);
         if (virtualShardCount <= 0)
@@ -1380,7 +1384,7 @@ internal sealed partial class BPlusLeafGrain
         // moved-slots array means no work to do. Return an empty list
         // without allocating any further state.
         if (_pendingTx is null || _pendingTx.Count == 0 || sortedMovedSlots.Length == 0)
-            return Task.FromResult(new List<PendingMutationSnapshot>());
+            return new List<PendingMutationSnapshot>();
 
         var result = new List<PendingMutationSnapshot>();
         foreach (var (txid, bucket) in _pendingTx)
@@ -1450,7 +1454,7 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        return Task.FromResult(result);
+        return result;
     }
 
     /// <inheritdoc />
@@ -1459,6 +1463,8 @@ internal sealed partial class BPlusLeafGrain
         bool committed,
         IReadOnlyDictionary<string, byte[]>? committedValues = null)
     {
+        await AwaitReplayBarrierAsync();
+
         if (transactionId == Guid.Empty)
             return;
 
@@ -1862,14 +1868,16 @@ internal sealed partial class BPlusLeafGrain
     private Dictionary<string, HashSet<Guid>>? _shadowedSagas;
 
     /// <inheritdoc />
-    public Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys)
+    public async Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys)
     {
+        await AwaitReplayBarrierAsync();
+
         ArgumentNullException.ThrowIfNull(keys);
         if (transactionId == Guid.Empty)
             throw new ArgumentException("Transaction id must be non-empty.", nameof(transactionId));
 
         if (keys.Count == 0)
-            return Task.CompletedTask;
+            return;
 
         _shadowedSagas ??= new Dictionary<string, HashSet<Guid>>(StringComparer.Ordinal);
         foreach (var key in keys)
@@ -1883,7 +1891,6 @@ internal sealed partial class BPlusLeafGrain
             }
             sagas.Add(transactionId);
         }
-        return Task.CompletedTask;
     }
 
     /// <summary>

@@ -175,7 +175,7 @@ public partial class BPlusLeafGrainTests
             // Must not throw: the advisory handler swallows the failure so a
             // broken snapshot store cannot block a leaf coming online. This
             // fix makes the failure observable, it does not make it fatal.
-            await ((IGrainBase)failedGrain).OnActivateAsync(CancellationToken.None);
+            await LeafActivationHarness.ActivateAsync(failedGrain, CancellationToken.None);
         }
 
         // ---- Arm B: no capture is attempted at all. ----
@@ -198,7 +198,7 @@ public partial class BPlusLeafGrainTests
             CaptureSnapshotCaptureObservations(idleTree, out var idleListener);
         using (idleListener)
         {
-            await ((IGrainBase)idleGrain).OnActivateAsync(CancellationToken.None);
+            await LeafActivationHarness.ActivateAsync(idleGrain, CancellationToken.None);
         }
 
         // Controls: the arms genuinely differed in what they attempted.
@@ -261,7 +261,7 @@ public partial class BPlusLeafGrainTests
         var (outcomes, durations) = CaptureSnapshotCaptureObservations(treeId, out var listener);
         using (listener)
         {
-            await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+            await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         }
 
         await snapshotStub.Received(1).SaveAsync(
@@ -305,7 +305,7 @@ public partial class BPlusLeafGrainTests
         state.State.TreeId = treeId;
         state.State.ProjectionCheckpointOffset = -1;
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // Deliberately seed NO rows, so the leaf has neither a checkpoint nor
         // live data and the gate declines. Call the public capture seam
@@ -489,7 +489,7 @@ public partial class BPlusLeafGrainTests
             walHead: -1);
         declinedState.State.TreeId = declinedTree;
         declinedState.State.ProjectionCheckpointOffset = -1;
-        await ((IGrainBase)declinedGrain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(declinedGrain, CancellationToken.None);
 
         var declinedReasons = CaptureSnapshotDeclineObservations(declinedTree, out var declinedListener);
         using (declinedListener)
@@ -517,7 +517,7 @@ public partial class BPlusLeafGrainTests
         var untouchedReasons = CaptureSnapshotDeclineObservations(untouchedTree, out var untouchedListener);
         using (untouchedListener)
         {
-            await ((IGrainBase)untouchedGrain).OnActivateAsync(CancellationToken.None);
+            await LeafActivationHarness.ActivateAsync(untouchedGrain, CancellationToken.None);
         }
 
         // Controls: neither arm reached the store, so the store cannot be what
@@ -576,7 +576,7 @@ public partial class BPlusLeafGrainTests
         var reasons = CaptureSnapshotDeclineObservations(treeId, out var listener);
         using (listener)
         {
-            var first = ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+            var first = LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.That(first.IsCompleted, Is.False,
@@ -616,7 +616,7 @@ public partial class BPlusLeafGrainTests
             activationDecision: FallOffLogDecision.TailReplay,
             persistedCheckpoint: -1,
             walHead: -1);
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         state.State.TreeId = null;
 
         // Passing null as the expected tree collects exactly the untagged records.

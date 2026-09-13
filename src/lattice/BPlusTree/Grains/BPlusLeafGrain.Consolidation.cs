@@ -20,6 +20,8 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task UnmarkSlotsMovedAwayAsync(int[] sortedSlots, int virtualShardCount)
     {
+        await AwaitReplayBarrierAsync();
+
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");

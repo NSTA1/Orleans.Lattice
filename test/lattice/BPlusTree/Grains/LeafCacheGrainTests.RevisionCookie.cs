@@ -357,7 +357,7 @@ public partial class LeafCacheGrainTests
         // Re-activate with no writes at all. Everything the leaf does here
         // runs on the activation path.
         var second = BPlusLeafGrainTests.CreateLeafGrainForCrossFixtureUse(replicaId: unique);
-        await ((IGrainBase)second).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(second, CancellationToken.None);
 
         // If this fails at Received(1): the primary re-activated and rebuilt
         // its projection, but the cache stayed on its snapshot. With no
