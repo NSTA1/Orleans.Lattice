@@ -104,10 +104,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Returns(_ => Task.FromResult(BlockedReportNaming(reported)));
         var time = new VirtualTimeProvider();
         var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
-        leaf.GetTreeIdAsync().Returns(_ =>
+        leaf.DriveStarvedCheckpointAsync().Returns(_ =>
         {
             reported = string.Equals(reported, first, StringComparison.Ordinal) ? second : first;
-            return Task.FromResult<string?>(StrandedTree);
+            return Task.FromResult(LeafStarvationDriveOutcome.Lifted);
         });
 
         using var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, StrandedTree);
@@ -207,7 +207,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await StartAndRunFirstPassAsync(scheduler, time);
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(70));
 
-        await leaf.DidNotReceive().GetTreeIdAsync();
+        await leaf.DidNotReceive().DriveStarvedCheckpointAsync();
 
         var escalations = logs.Warnings
             .Where(e => e.Message.Contains(UnreachableBlockWarning, StringComparison.Ordinal))
@@ -234,12 +234,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Returns(_ => Task.FromResult(BlockedReportNaming(ConsumerIdFor($"leaf-{healed}"))));
         var time = new VirtualTimeProvider();
         var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
-        leaf.GetTreeIdAsync().Returns(_ =>
+        leaf.DriveStarvedCheckpointAsync().Returns(_ =>
         {
             // Each touched leaf captures its snapshot and stops blocking, and
             // the next blocked leaf takes its place at the head of the queue.
             healed++;
-            return Task.FromResult<string?>(StrandedTree);
+            return Task.FromResult(LeafStarvationDriveOutcome.Lifted);
         });
 
         var (scheduler, logs) = SchedulerWithLogs(factory, gc, time);
@@ -281,10 +281,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 : Report(entriesTrimmed: 9)));
         var time = new VirtualTimeProvider();
         var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
-        leaf.GetTreeIdAsync().Returns(_ =>
+        leaf.DriveStarvedCheckpointAsync().Returns(_ =>
         {
             reported = string.Equals(reported, first, StringComparison.Ordinal) ? second : first;
-            return Task.FromResult<string?>(StrandedTree);
+            return Task.FromResult(LeafStarvationDriveOutcome.Lifted);
         });
 
         using var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, StrandedTree);
@@ -293,7 +293,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         // Three touches across two leaves: a, then b, then a again.
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(20));
-        await leaf.Received(3).GetTreeIdAsync();
+        await leaf.Received(3).DriveStarvedCheckpointAsync();
         Assert.That(Count(Outcomes(recorder), "healed"), Is.Zero,
             "a rotation is not a heal, so nothing may be credited while the floor is still blocked.");
 

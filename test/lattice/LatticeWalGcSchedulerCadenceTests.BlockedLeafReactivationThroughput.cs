@@ -65,7 +65,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         foreach (var key in leafKeys)
         {
             var leaf = Substitute.For<IBPlusLeafGrain>();
-            leaf.GetTreeIdAsync().Returns(_ => Task.FromResult<string?>(treeId));
+            leaf.DriveStarvedCheckpointAsync().Returns(_ => Task.FromResult(LeafStarvationDriveOutcome.Lifted));
             leaves[ThroughputLeafGrainId(key)] = leaf;
         }
 
@@ -129,7 +129,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             foreach (var (grainId, leaf) in leaves)
             {
                 Assert.That(
-                    leaf.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.GetTreeIdAsync)),
+                    leaf.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.DriveStarvedCheckpointAsync)),
                     Is.True,
                     $"every reported blocking leaf must be touched, not only the first; {grainId} was not.");
             }
@@ -207,13 +207,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         // +6: A has served its own minimum and is touched. B is not blocking.
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(6));
-        await leafA.Received(1).GetTreeIdAsync();
+        await leafA.Received(1).DriveStarvedCheckpointAsync();
 
         // B appears. It is NOT immediately eligible: the tree has been blocked
         // for six minutes, but B has not.
         reportB = true;
         await TickAsync(time);
-        await leafB.DidNotReceive().GetTreeIdAsync();
+        await leafB.DidNotReceive().DriveStarvedCheckpointAsync();
 
         // +6 more: B has now served its own minimum, and is touched even though
         // A is still cooling down.
@@ -222,11 +222,11 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                leafB.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.GetTreeIdAsync)),
+                leafB.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.DriveStarvedCheckpointAsync)),
                 Is.EqualTo(1),
                 "a newly revealed blocker must be touched once it has served its own minimum block age.");
             Assert.That(
-                leafA.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.GetTreeIdAsync)),
+                leafA.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.DriveStarvedCheckpointAsync)),
                 Is.EqualTo(1),
                 "and must not re-touch a leaf that is still inside its own retry cooldown.");
         });
@@ -252,8 +252,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Returns(_ => Task.FromResult(BlockedReportNamingAll(ThroughputConsumerId("leaf-a"))));
         var time = new VirtualTimeProvider();
         var (factory, leaves) = FactoryWithBlockedLeaves(StrandedTree, "leaf-a");
-        leaves[ThroughputLeafGrainId("leaf-a")].GetTreeIdAsync()
-            .Returns<Task<string?>>(_ => throw new TimeoutException("response did not arrive on time"));
+        leaves[ThroughputLeafGrainId("leaf-a")].DriveStarvedCheckpointAsync()
+            .Returns<Task<LeafStarvationDriveOutcome>>(_ => throw new TimeoutException("response did not arrive on time"));
 
         using var recorder = new InstrumentRecorder(
             LatticeMetrics.WalGcBlockedLeafReactivations, StrandedTree);
@@ -292,7 +292,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(6));
 
-        await leaf.Received().GetTreeIdAsync();
+        await leaf.Received().DriveStarvedCheckpointAsync();
 
         await scheduler.StopAsync(CancellationToken.None);
     }

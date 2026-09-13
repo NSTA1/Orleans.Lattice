@@ -95,10 +95,41 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Returns(_ => Task.FromResult(BlockedReportNaming(consumerId ?? BlockedConsumerId(treeId))));
 
         var (factory, leaf) = FactoryWithBlockedLeaf(treeId);
-        leaf.GetTreeIdAsync().Returns(_ => probe());
+
+        // Issue #2692 Half B moved the seam this fixture injects on. The
+        // scheduler used to touch the leaf with GetTreeIdAsync and now drives it
+        // with DriveStarvedCheckpointAsync, so the probe has to arrive on the
+        // call the scheduler actually makes. Left on GetTreeIdAsync it still
+        // compiled, still read as fault injection, and injected nothing: every
+        // touch fell through to FactoryWithBlockedLeaf's default Lifted stub and
+        // was classified 'completed', which halved the refunded budgets from six
+        // to three and moved three terminal counts onto the wrong arm.
+        //
+        // Worth naming because the failure was not the fix being wrong - it was a
+        // test double still wired to the old seam, which is the one failure shape
+        // a diff of the production change cannot show you.
+        leaf.DriveStarvedCheckpointAsync().Returns(_ => DriveFromProbe(probe));
+
+        // Inert, and deliberately not the probe. Wiring the probe to both seams
+        // would double-consume any probe that counts its invocations, which is
+        // most of them in this file.
+        leaf.GetTreeIdAsync().Returns(_ => Task.FromResult<string?>(treeId));
 
         var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, treeId);
         return (CreateScheduler(factory, gc, Adaptive(floor: SweepPass), time), recorder);
+    }
+
+    /// <summary>
+    /// Adapts a tree-id probe to a drive verdict, preserving exactly how it
+    /// fails: a throwing probe still throws out of the drive, so the scheduler's
+    /// timeout and fault arms classify it as they always did.
+    /// </summary>
+    private static async Task<LeafStarvationDriveOutcome> DriveFromProbe(Func<Task<string?>> probe)
+    {
+        var treeId = await probe().ConfigureAwait(false);
+        return treeId is null
+            ? LeafStarvationDriveOutcome.NotDriven
+            : LeafStarvationDriveOutcome.Lifted;
     }
 
     [Test]

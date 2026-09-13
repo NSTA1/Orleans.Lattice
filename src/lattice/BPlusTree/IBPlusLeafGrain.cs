@@ -392,6 +392,52 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<string?> GetTreeIdAsync();
 
     /// <summary>
+    /// Drives this leaf's WAL replay forward and reports, per leaf, whether the
+    /// persisted checkpoint actually advanced (issue #2692 Half B). Called by the
+    /// WAL GC blocked-leaf sweep against the leaf whose unusable durable
+    /// materialiser pin is blocking its tree's cursor floor.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this exists rather than a read-only touch.</b> The per-partition
+    /// checkpoint advance is reached from exactly one call site in the whole
+    /// solution, inside <c>OnActivateAsync</c>. For a leaf that is <i>already
+    /// active</i> that site is not merely unlikely to run, it is unreachable, so
+    /// a resident leaf never replays, its checkpoint stays at the sentinel, its
+    /// Zero block pin is permanent, and its tree cannot trim. The sweep's
+    /// previous touch was a read-only <see cref="GetTreeIdAsync"/> chosen because
+    /// "the work is done by activation, not by the call" - correct for a dormant
+    /// leaf and precisely the defect for a live one, which returns promptly and
+    /// replays nothing.
+    /// </para>
+    /// <para>
+    /// <b>Why replaying a live leaf is safe.</b> The checkpoint is a <i>read</i>
+    /// position, not an applied position - the highest offset this leaf has
+    /// scanned, inclusive. Re-applying an entry is idempotent under the CRDT and
+    /// HLC merge, and the per-leaf range and shard filter drops entries this leaf
+    /// does not own while still moving the read position forward. So a drive on a
+    /// live leaf performs exactly the act the claim describes.
+    /// </para>
+    /// <para>
+    /// <b>Why it is <see cref="AlwaysInterleaveAttribute"/>.</b> A drive replays
+    /// the readable WAL window and can run for a long time. Left on the ordinary
+    /// turn-based path it would block every foreground read and write on the leaf
+    /// for its duration, converting a retention defect into a latency outage. The
+    /// leaf bounds itself to one concurrent drive per activation instead, and
+    /// reports <see cref="LeafStarvationDriveOutcome.AlreadyDriving"/> rather than
+    /// stacking a second whole-window replay on the same leaf.
+    /// </para>
+    /// <para>
+    /// Failure propagates to the caller as an ordinary faulted call, which is the
+    /// reason the drive lives on a grain method and not in the activation hook:
+    /// Orleans does not run <c>OnDeactivateAsync</c> when <c>OnActivateAsync</c>
+    /// throws, so a failure there may not legally propagate.
+    /// </para>
+    /// </remarks>
+    [AlwaysInterleave]
+    Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointAsync();
+
+    /// <summary>
     /// Stores a grain reference to the parent internal node so this leaf
     /// can propagate its <see cref="ChildDigestSnapshot"/> upward when
     /// its projection digest changes. Called once by the shard root

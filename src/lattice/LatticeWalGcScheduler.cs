@@ -1175,6 +1175,26 @@ internal sealed class LatticeWalGcScheduler(
         {
             RecordBlockedLeafReactivation(ReactivationOutcomeTag(outcome), treeTag, tenantTag, 0);
         }
+
+        // Issue #2692 Half B. The drive verdicts are primed on the same footing
+        // and for the same reason: 'drove_lifted' is the series a reader will
+        // query to decide whether the sweep repairs anything, so its absence
+        // must mean "the scheduler is not running here" and never "the build
+        // predates the drive".
+        //
+        // Walked rather than listed, for the reason issue #2938 established one
+        // commit earlier on the block above. This change originally named its
+        // five arms individually, which is the same shape that left three of the
+        // four terminal outcomes unprimed; adopting the walk here means a verdict
+        // added to LeafStarvationDriveOutcome later is primed without anyone
+        // remembering to, and one with no arm throws out of DriveOutcomeTag on
+        // the first pass rather than reporting an uncounted verdict as a measured
+        // zero. Priming the whole enum also keeps the set summable - 'attempted'
+        // stays the cost series, and the verdicts partition what came of it.
+        foreach (var outcome in AllStarvationDriveOutcomes)
+        {
+            RecordBlockedLeafReactivation(DriveOutcomeTag(outcome), treeTag, tenantTag, 0);
+        }
     }
 
     /// <summary>
@@ -1585,7 +1605,8 @@ internal sealed class LatticeWalGcScheduler(
         var touches = new Task<ReactivationOutcome>[touching.Count];
         for (var i = 0; i < touching.Count; i++)
         {
-            touches[i] = TryReactivateBlockedLeafAsync(treeId, touching[i], stoppingToken);
+            touches[i] = TryReactivateBlockedLeafAsync(
+                treeId, touching[i], treeTag, tenantTag, stoppingToken);
         }
 
         var outcomes = await Task.WhenAll(touches).ConfigureAwait(false);
@@ -1900,18 +1921,91 @@ internal sealed class LatticeWalGcScheduler(
         LatticeMetrics.WalGcBlockedLeafReactivations.Add(delta, treeTag, outcome, tenantTag);
 
     /// <summary>
-    /// Resolves a blocking consumer id back to its owning leaf and touches it,
-    /// so the leaf activates and runs the activation-time snapshot repair.
+    /// Maps a leaf's starvation-drive verdict onto the
+    /// <see cref="LatticeMetrics.WalGcBlockedLeafReactivations"/> outcome arm
+    /// that names it (issue #2692 Half B).
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// The unmapped verdict throws rather than falling back to a catch-all,
+    /// matching <see cref="ReactivationOutcomeTag"/> and for the reason issue
+    /// #2938 established: a verdict nobody has classified must not be folded
+    /// into a neighbouring bucket, because that produces a plausible wrong
+    /// number in exactly the place a reader trusts one.
+    /// </para>
+    /// <para>
+    /// This replaced a <c>_ =&gt; drove_not_driven</c> fallback, whose stated
+    /// justification was that an unrecognised verdict must not read as a repair.
+    /// That is true and insufficient. A catch-all also makes the omission
+    /// undetectable: a member added without a case here would be absorbed
+    /// silently, the mapping would stay total, and no reflection gate could
+    /// distinguish a classified verdict from an unclassified one. Throwing
+    /// converts a silent miscount into a first-pass failure, which is the only
+    /// form in which the omission is observable at all.
+    /// </para>
+    /// <para>
+    /// Internal rather than private so
+    /// <c>LatticeWalGcSchedulerCadenceTests.StarvationDriveOutcomeArming</c> can
+    /// drive it for every declared member.
+    /// </para>
+    /// </remarks>
+    internal static KeyValuePair<string, object?> DriveOutcomeTag(LeafStarvationDriveOutcome outcome)
+        => outcome switch
+        {
+            LeafStarvationDriveOutcome.NotDriven => LatticeMetrics.BlockedLeafReactivationDroveNotDriven,
+            LeafStarvationDriveOutcome.Lifted => LatticeMetrics.BlockedLeafReactivationDroveLifted,
+            LeafStarvationDriveOutcome.NoAdvance => LatticeMetrics.BlockedLeafReactivationDroveNoAdvance,
+            LeafStarvationDriveOutcome.MemoryRefused => LatticeMetrics.BlockedLeafReactivationDroveMemoryRefused,
+            LeafStarvationDriveOutcome.AlreadyDriving => LatticeMetrics.BlockedLeafReactivationDroveAlreadyDriving,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(outcome),
+                outcome,
+                "Every starvation-drive verdict must have a metric arm; an unmapped one would report as a structural zero indistinguishable from a measured one (issue #2692)."),
+        };
+
+    /// <summary>
+    /// Every declared starvation-drive verdict, cached once.
+    /// </summary>
+    /// <remarks>
+    /// Cached because the priming path walks it per tree per pass and
+    /// <see cref="Enum.GetValues{TEnum}"/> allocates a fresh array on each call.
+    /// Derived from the enum rather than written out, so it cannot fall behind
+    /// the type it describes.
+    /// </remarks>
+    private static readonly LeafStarvationDriveOutcome[] AllStarvationDriveOutcomes =
+        Enum.GetValues<LeafStarvationDriveOutcome>();
+
+    /// <summary>
+    /// Resolves a blocking consumer id back to its owning leaf and drives its
+    /// WAL replay forward, so the leaf advances its persisted checkpoint and
+    /// stamps snapshot coverage even when it is already active.
+    /// </summary>
+    /// <remarks>
+    /// <para>
     /// Best-effort by design. A failure here retains WAL, which is the safe
     /// direction - the block simply persists, exactly as it did before this
     /// path existed - so a fault is logged and the pass continues rather than
     /// failing the collection of every other tree.
+    /// </para>
+    /// <para>
+    /// <b>Why this is no longer a read-only touch (issue #2692 Half B).</b> It
+    /// used to call <c>GetTreeIdAsync</c>, on the reasoning that "the work is
+    /// done by activation, not by the call". That reasoning is sound for a
+    /// <i>dormant</i> leaf and is precisely the defect for a live one: the
+    /// per-partition checkpoint advance is reached from one call site in the
+    /// whole solution, inside <c>OnActivateAsync</c>, so for an already-active
+    /// leaf it is not merely unlikely to run, it is unreachable. The touch
+    /// returned promptly, replayed nothing, and was recorded as
+    /// <see cref="ReactivationOutcome.Completed"/> - a value nothing inspected.
+    /// The sweep was therefore not failing loudly, it was succeeding vacuously,
+    /// and the leaf was re-selected on every cooldown forever.
+    /// </para>
     /// </remarks>
     private async Task<ReactivationOutcome> TryReactivateBlockedLeafAsync(
         string treeId,
         string blockingConsumerId,
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag,
         CancellationToken stoppingToken)
     {
         var factory = grainFactory;
@@ -1926,18 +2020,29 @@ internal sealed class LatticeWalGcScheduler(
 
         try
         {
-            // A read-only call is enough: the work is done by activation, not by
-            // the call. GetTreeIdAsync is chosen precisely because it mutates
-            // nothing, so a reactivation that races ordinary traffic cannot
-            // disturb it.
+            // Drive the leaf's replay rather than merely touching it. A
+            // read-only call is enough ONLY for a dormant leaf; a resident one
+            // answers it immediately and replays nothing, which is the whole of
+            // issue #2692 Half B. The drive is [AlwaysInterleave] and takes a
+            // permit from the same per-silo replay gate an activation replay
+            // takes one from, so it neither blocks the leaf's foreground traffic
+            // nor escapes the concurrency bound.
             var leaf = factory.GetGrain<IBPlusLeafGrain>(leafGrainId);
-            await leaf.GetTreeIdAsync().ConfigureAwait(false);
+            var drive = await leaf.DriveStarvedCheckpointAsync().ConfigureAwait(false);
+
+            // Record what the drive actually achieved, per leaf. 'attempted' is
+            // the cost series and says only that a call was issued; these five
+            // arms partition what came of it. Without them a sweep that repairs
+            // nothing is indistinguishable from one that repairs every leaf it
+            // reaches while the tree stays blocked for an unrelated reason.
+            RecordBlockedLeafReactivation(DriveOutcomeTag(drive), treeTag, tenantTag);
 
             logger.LogInformation(
-                "WAL GC reactivated leaf {Leaf} on tree {Tree} to clear a blocking durable materialiser pin ({Consumer}). Activation replays the WAL forward, which lets the leaf's snapshot repair stamp coverage and resolve the pin to a real offset.",
+                "WAL GC drove leaf {Leaf} on tree {Tree} to clear a blocking durable materialiser pin ({Consumer}); the drive replays the WAL forward and stamps snapshot coverage, and reported {Drive}. Only 'Lifted' means the pin now resolves to a real offset.",
                 leafGrainId,
                 treeId,
-                blockingConsumerId);
+                blockingConsumerId,
+                drive);
 
             return ReactivationOutcome.Completed;
         }
