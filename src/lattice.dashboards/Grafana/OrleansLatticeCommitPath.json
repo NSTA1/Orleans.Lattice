@@ -276,62 +276,6 @@
       ]
     },
     {
-      "id": 6,
-      "title": "Activation replay duration p95 by outcome (ms)",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 0,
-        "y": 22
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(orleans_lattice_leaf_replay_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m]))) or vector(0)",
-          "legendFormat": "p95 {{outcome}}"
-        }
-      ]
-    },
-    {
-      "id": 7,
-      "title": "Replay entries (applied vs skipped, ops/s)",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 22
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (outcome) (rate(orleans_lattice_leaf_replay_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) or vector(0)",
-          "legendFormat": "{{outcome}}"
-        }
-      ]
-    },
-    {
       "id": 8,
       "title": "Tombstones reaped vs expired (TTL churn)",
       "type": "timeseries",

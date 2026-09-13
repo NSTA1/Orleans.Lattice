@@ -126,12 +126,6 @@ internal static class MetricEmissionScanner
         var sites = new List<EmissionSite>();
         foreach (var (relative, text) in files)
         {
-            // An identifier-keyed match is only trusted in a file that actually
-            // talks to the metrics surface, so an unrelated collection that
-            // happens to share a name is never mistaken for an instrument.
-            var metricFile = text.Contains("Metrics", StringComparison.Ordinal)
-                || text.Contains("Meter", StringComparison.Ordinal);
-
             var localNames = groupNames.TryGetValue(TypeGroupKey(relative), out var g)
                 ? g
                 : EmptyNames;
@@ -142,7 +136,30 @@ internal static class MetricEmissionScanner
                 // an instrument declared in this file's own declaring type (its
                 // partial-class group). An instrument name that belongs to a
                 // different type is a name collision, not an emission here.
-                if (m.Groups[2].Success && (!metricFile || !localNames.Contains(m.Groups[2].Value)))
+                //
+                // The partial-group membership test is the whole guard, and it is
+                // strictly stronger than asking whether the file text mentions
+                // "Metrics" or "Meter": membership requires an actual instrument
+                // DECLARATION in this file's declaring type, which a substring
+                // never establishes. Conjoining the substring test with it - as
+                // this did until the declaration-coverage gate exposed it - drops
+                // every bare-identifier emission in a concern file that emits
+                // through an alias field and never names the metrics surface.
+                // src/lattice/Views/ViewMaintainerGrain.AtomicStaging.cs is such a
+                // file: it contains neither word, so its real emission of
+                // ViewAtomicStagingBackstop at line 430 was silently discarded.
+                //
+                // That miss was invisible under this scanner's original quantifier.
+                // An emission-side gate ("for all emissions, the tags are present")
+                // only becomes weaker when a site is dropped - it checks one fewer
+                // call and still reports green - so a false negative here degrades
+                // coverage without ever producing a failure. Under the converse
+                // quantifier ("for all declarations, an emission exists") the same
+                // miss inverts into a false positive that names a live instrument
+                // as dead. Reusing a recogniser across a quantifier flip inverts
+                // its error mode, so a heuristic that was safe in one direction is
+                // not safe in the other.
+                if (m.Groups[2].Success && !localNames.Contains(m.Groups[2].Value))
                 {
                     continue;
                 }

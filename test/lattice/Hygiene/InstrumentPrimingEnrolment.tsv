@@ -229,8 +229,6 @@ src/lattice/LatticeMetrics.cs#LeafDeactivationCheckpointDelta	unresolved	reason=
 src/lattice/LatticeMetrics.cs#LeafDeferredTerminalsDroppedAtCap	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#LeafDigestPublishes	none	
 src/lattice/LatticeMetrics.cs#LeafReplayBarrierOutcomes	primed	
-src/lattice/LatticeMetrics.cs#LeafReplayDuration	none	
-src/lattice/LatticeMetrics.cs#LeafReplayEntries	none	
 src/lattice/LatticeMetrics.cs#LeafResidencySheds	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#LeafScanDuration	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#LeafSnapshotCaptureDeclines	unresolved	reason=dimension tree: no declaration found for treeId

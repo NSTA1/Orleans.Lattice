@@ -1183,35 +1183,6 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.observer.duration", unit: "ms",
             description: "Inline duration of one IMutationObserver callback on the write path, tagged by observer type and tree.");
 
-    // --- Leaf-projection replay instruments ----------------------------------
-
-    /// <summary>
-    /// Histogram of activation-time leaf-projection replay durations,
-    /// emitted by <c>BPlusLeafGrain.OnActivateAsync</c> when the
-    /// activation path consults the persisted projection checkpoint
-    /// and drives <c>ILeafProjection.Apply</c> over the WAL slice.
-    /// Tagged with <see cref="TagOutcome"/> = <c>tail</c> (caught up by
-    /// replaying the slice <c>(checkpoint, head]</c>),
-    /// <c>snapshot_then_wal</c> (a fall-off-log trigger fired and the
-    /// snapshot-then-WAL recovery path was taken), or
-    /// <c>full_rebuild</c> (a full WAL rebuild was forced via
-    /// <see cref="ProjectionRebuildPolicy.FullRebuildFromWal"/>).
-    /// </summary>
-    public static readonly Histogram<double> LeafReplayDuration =
-        Meter.CreateHistogram<double>("orleans.lattice.leaf.replay.duration", unit: "ms",
-            description: "Activation-time leaf-projection replay duration, tagged by recovery outcome.");
-
-    /// <summary>
-    /// Counter of mutations encountered during activation-time leaf
-    /// projection replay. Tagged with <see cref="TagOutcome"/> =
-    /// <c>applied</c> (fed to <c>ILeafProjection.Apply</c>) or
-    /// <c>skipped</c> (filtered by the leaf's key-range responsibility
-    /// before reaching <c>Apply</c>).
-    /// </summary>
-    public static readonly Counter<long> LeafReplayEntries =
-        Meter.CreateCounter<long>("orleans.lattice.leaf.replay.entries", unit: "{entry}",
-            description: "Mutations seen by activation-time leaf-projection replay, tagged by outcome.");
-
     // --- Snapshot-cursor instruments ----------------------------------------
 
     /// <summary>
@@ -1715,8 +1686,10 @@ public static class LatticeMetrics
     /// acquired. Tagged with <see cref="TagTree"/> and
     /// <see cref="TagActivationTemperature"/>. A reactivation storm (issue
     /// #1030) shows as a spike in this counter; pairing it with
-    /// <see cref="LeafReplayDuration"/> reveals whether the per-silo concurrency
-    /// ceiling is queueing replays under load.
+    /// <see cref="WalReplayPermitQueueWait"/> reveals whether the per-silo
+    /// concurrency ceiling is queueing replays under load - queueing is time spent
+    /// waiting for a permit, which that instrument measures directly on every
+    /// admission, rather than time spent replaying once one is held.
     /// <para>
     /// The temperature tag makes the cold:warm activation ratio a direct read
     /// off a single scrape (issue #2148). It is per-tree because #2104 found
