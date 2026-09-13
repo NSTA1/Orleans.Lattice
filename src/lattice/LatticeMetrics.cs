@@ -1211,14 +1211,62 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Counter of WAL garbage-collection passes the per-silo scheduler drove for a
-    /// tree, tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>
-    /// (<see cref="OutcomeReclaimed"/> when the pass trimmed at least one entry,
-    /// <see cref="OutcomeBlocked"/> when it reclaimed nothing because an unusable
-    /// durable materialiser pin disabled the cursor branch,
-    /// <see cref="OutcomeIdle"/> when it reclaimed nothing and was not blocked, and
-    /// <see cref="OutcomeFailed"/> when the pass threw). Pairing the reclaimed rate
-    /// against the total pass rate gives the per-tree reclaim rate, and the failed
-    /// rate isolates a wedged tree without needing to read the scheduler's logs.
+    /// tree, tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>.
+    /// <para>
+    /// <b>Exactly one arm is affirmative.</b> Only
+    /// <see cref="OutcomeReclaimed"/> states that WAL came back; every other arm
+    /// states that nothing was trimmed and differs only in <i>why</i>. In
+    /// particular <see cref="OutcomeIdle"/> must never be read as health, and
+    /// <c>blocked = 0</c> is not evidence of reclamation - it is evidence that
+    /// one named predicate did not fire (issue #2850).
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <see cref="OutcomeReclaimed"/> - the pass trimmed at least one entry.
+    ///     <b>Affirmative.</b>
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="OutcomeBlocked"/> - it reclaimed nothing because an
+    ///     unusable durable materialiser pin disabled the cursor branch
+    ///     (<see cref="WalGcCursorFloorState.BlockedByUnusablePin"/>).
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="OutcomeNoConsumer"/> - it reclaimed nothing because no
+    ///     consumer has ever reported a cursor
+    ///     (<see cref="WalGcCursorFloorState.NoCursorReported"/>), so the cursor
+    ///     branch could not be evaluated at all.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="OutcomeIdle"/> - it evaluated a usable cursor floor
+    ///     (<see cref="WalGcCursorFloorState.Available"/>) and found nothing
+    ///     above it. The genuinely quiet, healthy case, and <i>only</i> that.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="OutcomeUnclassified"/> - the floor state was one this
+    ///     build does not name. Structurally unreachable today and expected to
+    ///     read a permanent measured zero; it exists so that a floor state added
+    ///     later cannot be silently absorbed into <see cref="OutcomeIdle"/>.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="OutcomeFailed"/> - the pass threw.
+    ///   </description></item>
+    /// </list>
+    /// <para>
+    /// Pairing the reclaimed rate against the total pass rate gives the per-tree
+    /// reclaim rate, and the failed rate isolates a wedged tree without needing
+    /// to read the scheduler's logs.
+    /// </para>
+    /// <para>
+    /// <b>Reclaimed outranks blocked on a partially blocked tree.</b> The
+    /// cursor-branch block is evaluated per WAL partition (issue #2849), and the
+    /// TTL branch is independent of the cursor branch, so a pass can trim in one
+    /// partition while another stays blocked. Such a pass is labelled
+    /// <see cref="OutcomeReclaimed"/>, because bytes genuinely came back. The
+    /// block is still visible - the scheduler reads
+    /// <see cref="LatticeWalGcReport.CursorFloorState"/> directly to drive the
+    /// blocked-leaf remedy - so do not read a reclaimed pass as proof that no
+    /// partition is blocked.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> WalGcPasses =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.passes", unit: "{pass}",
@@ -1334,8 +1382,45 @@ public static class LatticeMetrics
     /// <summary><see cref="TagOutcome"/> = <c>reclaimed</c> (a WAL GC pass that trimmed at least one entry).</summary>
     public static readonly KeyValuePair<string, object?> OutcomeReclaimed = new(TagOutcome, "reclaimed");
 
-    /// <summary><see cref="TagOutcome"/> = <c>idle</c> (a WAL GC pass that reclaimed nothing and was <b>not</b> blocked - it had a usable cursor floor, or the tree has no consumer at all, and found nothing above the trim floor). Before <see cref="OutcomeBlocked"/> existed this value also absorbed blocked passes, which is what let a stranded tree and a quiet one present identically (issue #2702).</summary>
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>idle</c> (a WAL GC pass that evaluated a
+    /// usable consumer-cursor floor - <see cref="WalGcCursorFloorState.Available"/> -
+    /// and found nothing above the trim floor).
+    /// <para>
+    /// <b>Idle means "nothing was trimmed", not "healthy".</b> It is the quiet
+    /// steady state only because every other reason for trimming nothing now has
+    /// its own arm. Before <see cref="OutcomeBlocked"/> existed this value also
+    /// absorbed blocked passes, which is what let a stranded tree and a quiet one
+    /// present identically (issue #2702); it then went on absorbing
+    /// <see cref="WalGcCursorFloorState.NoCursorReported"/> - a pass that could
+    /// not evaluate the cursor branch at all - which is what let
+    /// <c>blocked = 0, idle = n</c> be misread as n healthy trees (issue #2850).
+    /// Both are now separate arms, so a rise in <c>idle</c> is a statement about
+    /// a tree with a working floor and no backlog above it.
+    /// </para>
+    /// </summary>
     public static readonly KeyValuePair<string, object?> OutcomeIdle = new(TagOutcome, "idle");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>no_consumer</c> (a WAL GC pass that
+    /// reclaimed nothing because no consumer has ever reported a cursor for the
+    /// tree - <see cref="WalGcCursorFloorState.NoCursorReported"/>).
+    /// <para>
+    /// Split out of <see cref="OutcomeIdle"/> by issue #2850. The two are not
+    /// interchangeable: <c>idle</c> says the cursor branch ran and found nothing,
+    /// whereas this says the cursor branch could not run, so the pass produced no
+    /// information about the tree's backlog at all. A tree nobody consumes is
+    /// legitimately quiet, but a tree whose consumers were expected to report and
+    /// did not is a wiring fault, and that is the distinction this arm makes
+    /// available.
+    /// </para>
+    /// <para>
+    /// Primed at zero per tree alongside the other arms, so an absent series
+    /// means this silo is not reporting rather than that the state never
+    /// occurred.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeNoConsumer = new(TagOutcome, "no_consumer");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>blocked</c> (a WAL GC pass that reclaimed
@@ -1363,6 +1448,30 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagOutcome"/> = <c>failed</c> (a WAL GC pass that threw).</summary>
     public static readonly KeyValuePair<string, object?> OutcomeFailed = new(TagOutcome, "failed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>unclassified</c> (a WAL GC pass that
+    /// reclaimed nothing and whose
+    /// <see cref="LatticeWalGcReport.CursorFloorState"/> is a value this build
+    /// does not name).
+    /// <para>
+    /// No pass can reach this arm today: <see cref="WalGcCursorFloorState"/> has
+    /// three members and all three are named by
+    /// <see cref="OutcomeIdle"/>, <see cref="OutcomeNoConsumer"/> and
+    /// <see cref="OutcomeBlocked"/>. A permanent measured zero here is therefore
+    /// the expected reading and is exactly the point: the arm exists so that a
+    /// floor state added later falls somewhere it can be seen, instead of being
+    /// absorbed by whichever arm happens to be the classifier's fallback.
+    /// </para>
+    /// <para>
+    /// This is the same defect class the partition was split to remove (issue
+    /// #2850): a catch-all arm destroys the guarantee that an arm reading zero is
+    /// a measured absence, because it silently swallows the states nobody named.
+    /// Making the fallback its own arm keeps <see cref="OutcomeIdle"/> honest
+    /// without having to predict which state gets added next.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeUnclassified = new(TagOutcome, "unclassified");
 
     // --- Leaf-materialiser durable pin instruments (issue #1030) ------------
 

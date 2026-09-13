@@ -1476,7 +1476,7 @@ This option can be changed freely at any time. The new value takes effect on the
 
 **This default was re-examined during the bounded-cold-start work and deliberately left disabled.** It is a capacity quota rather than a retention mechanism: a correct value is a fraction of the volume the WAL lives on, which the library cannot know, and any value shipped as a default would be wrong for most deployments in one direction or the other. Enabling it also costs one retained-byte probe per WAL partition on every collection pass, which every consumer would pay for a signal most do not need.
 
-Leaving it off does not blind an operator. `orleans.lattice.wal.gc.passes` is emitted unconditionally with a `reclaimed | blocked | idle | failed` outcome tag, and reclaimed volume is visible through `orleans.lattice.wal.entries_trimmed`, so a tree reporting passes but no `orleans.lattice.wal.gc.backlog_bytes` samples is knowably "not measured" rather than "no backlog". Set `WalMaxRetainedBytes` when the WAL volume has a hard size budget **and** the WAL provider accounts bytes; that is also what makes the backlog histogram emit.
+Leaving it off does not blind an operator. `orleans.lattice.wal.gc.passes` is emitted unconditionally with a `reclaimed | blocked | no_consumer | idle | unclassified | failed` outcome tag, and reclaimed volume is visible through `orleans.lattice.wal.entries_trimmed`, so a tree reporting passes but no `orleans.lattice.wal.gc.backlog_bytes` samples is knowably "not measured" rather than "no backlog". Set `WalMaxRetainedBytes` when the WAL volume has a hard size budget **and** the WAL provider accounts bytes; that is also what makes the backlog histogram emit.
 
 ### `WalPartitions`
 
