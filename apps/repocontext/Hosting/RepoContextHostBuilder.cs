@@ -490,6 +490,11 @@ public static class RepoContextHostBuilder
             healthChecks.AddLatticeScalingHealthCheck(tags: new[] { ReadinessTag });
         }
 
+        // The container's own health verdict, put onto the existing /metrics scrape.
+        // See RepoContextHealthPublication for why detection was never the defect on
+        // issue #2868 and the verdict reaching no consumer was.
+        builder.Services.AddRepoContextHealthPublication();
+
         var app = builder.Build();
 
         app.MapLatticeMcp();
@@ -551,6 +556,14 @@ public static class RepoContextHostBuilder
         // Dispose is idempotent, so registering it here is safe whether or not the
         // service provider also disposes the instance it did not create.
         app.Lifetime.ApplicationStopped.Register(metricsCollector.Dispose);
+
+        // Resolved eagerly, for the same reason the GC and backup meters are
+        // constructed eagerly: an observable instrument that nobody resolves is never
+        // published, so a lazily registered singleton would leave the health series
+        // absent from /metrics - which is precisely the absence this meter exists to
+        // remove. Resolving through the container rather than constructing here keeps
+        // disposal with the provider that owns it.
+        _ = app.Services.GetRequiredService<RepoContextHealthMeter>();
 
         // Disposed after the drain rather than during it: the drain signal samples
         // residency when an overrun latches, and a census torn down first would turn

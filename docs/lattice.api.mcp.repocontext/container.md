@@ -404,6 +404,52 @@ Readiness is therefore not-ready during startup replay and during drain, but tho
 
 Two properties of that state are worth stating because both are deliberate and both are easy to misread. **Issuing a query by hand does not clear a persistent 503, and the host is already trying**: a warmup service issues the same semantic query from application start and retries with backoff (2s, doubling to a 30s cap) until the plane answers or shutdown begins, so a persistent 503 is the warmup failing repeatedly rather than an absence of traffic. A box with a repository **registered** but no vectors for it stays not-ready by design, because the search reports `keyword.vector_plane_unavailable`; a box with **no** repository registered reports ready, because there is nothing it could be asked to serve. And **readiness lags a fault on purpose**: once the plane has served, a fault must persist for a 30-second hold-down before readiness is revoked, and any successful retrieval inside that window clears the episode outright.
 
+### A 200 from `/metrics` is not evidence of a serving container
+
+Issue #2868 recorded 43 minutes during which this container answered `/metrics` with HTTP 200 and a complete scrape while every MCP call needing authorization returned 500. The reserved `sys-auth-policy` tree had wedged, so tool discovery could not resolve a caller's effective permissions and failed with `LatticeApiMcpDiscoveryUnavailableException`. The health signal and the service signal disagreed, and **the reassuring one was the only one anything could read**.
+
+Three facts about that outage are worth separating, because two of them are properties worth keeping and only the third was the defect.
+
+- **Detection already worked.** `/health/silo` reported `Health=unhealthy` for the entire window. The grain-liveness probe point-reads the reserved policy tree through `ILatticeAuthorizationPolicyStore`, so it exercises the exact seam that was wedged. Nothing needed to be added to make the check notice.
+- **`/metrics` is genuinely independent of the grain layer, not merely not exercising it.** It is an in-process render of the collector's aggregated meter state and makes no grain call at all, which is why it stayed up. That independence is a feature: a scrape that failed during the wedge would delete the telemetry at the exact moment it is needed to explain the wedge. **The endpoint therefore still answers 200 when the container is wedged, deliberately.**
+- **The verdict reached no consumer.** It existed only in the container's health log. Prometheus, dashboards, alert rules, and any orchestrator probe pointed at the single exposed port all read the scrape, and the scrape carried no health series whatsoever. The correct answer was computed every fifteen seconds and nothing could read it.
+
+The fix is therefore not a second endpoint, which is something somebody has to wire up and the deployment that most needs it is the one that will not. The verdict is put **on the endpoint that is already scraped**:
+
+| Instrument | Meaning |
+|------------|---------|
+| `lattice_repocontext_health_status` | The current verdict, one series per `component` and `status`, carrying 1 on the component's current verdict and 0 on the other two. |
+| `lattice_repocontext_health_evaluations_total` | Verdicts published per `component` since process start. |
+| `lattice_repocontext_silo_probe_faults_total` | Grain-liveness probe failures attributed to a bounded `cause`. |
+
+Alert on `lattice_repocontext_health_status{component="silo",status="unhealthy"} == 1`.
+
+**Read the status gauge against the evaluation counter, always.** The gauge cannot express "unknown": a component that has never been evaluated carries zero on all three arms, which is byte-identical to a container that is healthy on two arms and zero on the third only because it is healthy. The counter disambiguates them. A zero there means no verdict has been published yet, so the status block is uninformative rather than green; a positive count beside an all-zero status block could only be an export defect. Without that denominator the change would reproduce, one level up, the exact false green it exists to remove.
+
+A rising evaluation count is also positive proof that **the authorization seam is being exercised**, because the grain-liveness component reads the reserved policy tree on every evaluation. That matters because health components are evaluated on demand: before this, the seam was touched only when something probed `/health/silo` over HTTP, so a deployment whose liveness probe was pointed at `/metrics` never exercised it at all. A background publisher now runs the checks on a fixed cadence (first run at 15s, then every 30s), so the seam is exercised whether or not anything asks and the answer is on the scrape either way.
+
+The fault counter attributes a failure to one of five causes, and the taxonomy is drawn where the **remedies** differ rather than where the exceptions do:
+
+| `cause` | Meaning | Remedy |
+|---------|---------|--------|
+| `probe-deadline` | The grain call neither returned nor threw within the probe's own deadline. This is the wedge shape of issue #2868. | Only a restart has been observed to clear it. |
+| `grain-timeout` | A `TimeoutException` surfaced from the call itself, so a downstream deadline expired first. | Investigate the shard named in the exception; often transient. |
+| `access-denied` | The tree answered and refused the grant. | A grant defect on a healthy tree. **A restart does nothing for it.** |
+| `drain-hung` | A graceful shutdown outran its stop-grace window. | The container is already trying to stop; see [Graceful shutdown](#graceful-shutdown). |
+| `unexpected` | A failure this taxonomy does not name. | Read the health body; a sustained non-zero here means the taxonomy needs an arm. |
+
+All five arms, and the full component-by-status product, are published from process start, so **a zero on any of these is a measurement rather than a series nobody has created yet**. The `cause` dimension is bounded and every arm is primed, and the five arms are asserted to sum to an independently maintained total, so the per-cause breakdown accounts for every fault rather than for the subset something remembered to export.
+
+Two readings are deliberately allowed to disagree, and knowing why saves a wasted investigation. The fault counter counts probe **failures**; the status gauge carries the **verdict**. During startup a failing probe is graded `degraded` rather than `unhealthy`, so a container joining slowly and one wedged from its first second are distinguishable - the first raises no faults, the second raises one per evaluation while both read `degraded`. Grading alone cannot tell those apart, which is why the cause is attached to the degraded arm too.
+
+#### Recovery: assessed, and deliberately not automated
+
+Self-recovery of a wedged authorization tree is **not** safely automatable from inside this process, and nothing here attempts it.
+
+The only remedy observed to clear a `probe-deadline` wedge is a process restart, and a process cannot reliably restart itself while the fault it is reacting to is a hung grain call: the shutdown path drains the silo, the drain issues grain calls, and those are exactly the calls that are not answering. That is how a wedge becomes a `drain-hung`, which is strictly worse than the wedge because the container then stops serving the traffic it could still have served on paths that do not need authorization. Worse still, `access-denied` presents on the same health surface and a restart does nothing for it, so a blanket self-restart would loop a container whose configuration, not whose state, is wrong.
+
+Acting on the verdict is therefore a decision for the deployment, and the honest statement of the current gap is this: **Docker does not restart a container on `Health=unhealthy`.** The sample compose file sets `restart: unless-stopped`, which acts on process **exit** and not on health, so an unhealthy container is left running indefinitely. Closing that needs either an autoheal sidecar watching Docker events, or an orchestrator that does act on health (Swarm, Kubernetes, or a systemd unit driven by `docker inspect`). Those are deployment-configuration decisions and are out of scope here; what this change guarantees is that whichever of them is chosen, the signal it needs is now on the surface it can actually read.
+
 ## Metrics scraping
 
 `GET /metrics` serves a Prometheus text exposition (`text/plain; version=0.0.4`) on the same listener as MCP and the health probes, so a scraper needs no second port and no sidecar. Like the probes it is unauthenticated and always on: the listener is expected to sit on a private network, exactly as the sample compose file wires it.
