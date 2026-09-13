@@ -607,13 +607,44 @@ internal sealed partial class BPlusLeafGrain
         }
         else
         {
-            foreach (var (key, _) in Cache.EnumerateRows())
+            // Walked in bounded key windows clipped to the delete range, rather
+            // than over the whole-cache view. Only keys are retained here, so
+            // nothing on this path needs the rows to stay resident - and the
+            // whole-cache view calls HydrateAll, which ends in DetachSnapshot
+            // and leaves every row resident for the life of the activation,
+            // forfeiting the leaf's cheap division (issue #2771). A replayed
+            // unpredicated range delete is a routine mutation, so before this
+            // change any leaf replaying one lost its lazily hydrated frame.
+            //
+            // Clipping matters as much as windowing. An unpredicated range
+            // delete may span the whole leaf, so a single EnumerateRange over
+            // [startInclusive, endExclusive) would materialise all of it at
+            // once and peak exactly where HydrateAll did - bounded only in the
+            // sense that it could be evicted afterwards, which is not the
+            // property this needs.
+            //
+            // The windows are disjoint, exhaustive and ascending, so
+            // intersecting each with the delete range visits every key in the
+            // range exactly once and in the same order the whole-cache walk
+            // produced. The explicit lower/upper guards the one-pass walk
+            // needed are now carried by the range bounds themselves.
+            foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
             {
-                if (string.CompareOrdinal(key, startInclusive) < 0)
+                var from = windowStart is null
+                    || string.CompareOrdinal(windowStart, startInclusive) < 0
+                        ? startInclusive
+                        : windowStart;
+                var to = windowEnd is null
+                    || string.CompareOrdinal(windowEnd, endExclusive) > 0
+                        ? endExclusive
+                        : windowEnd;
+                if (string.CompareOrdinal(from, to) >= 0)
                     continue;
-                if (string.CompareOrdinal(key, endExclusive) >= 0)
-                    break;
-                (toRewrite ??= []).Add(key);
+
+                foreach (var (key, _) in Cache.EnumerateRange(from, to))
+                {
+                    (toRewrite ??= []).Add(key);
+                }
             }
         }
 
