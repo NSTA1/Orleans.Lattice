@@ -55,28 +55,46 @@ internal sealed class LeafSnapshotUnaffordableException : Exception
     /// </summary>
     [Id(3)] public long ContiguousBytes { get; set; }
 
+    /// <summary>
+    /// Whether the admission gate ran this hydration as <b>sole occupant</b>
+    /// because its contiguous requirement exceeded the concurrency ceiling
+    /// (issue #2844).
+    /// <para>
+    /// Carried rather than inferred from the other three figures. It is what the
+    /// gate <b>did</b>, not what was true of the numbers at the moment of
+    /// failure, and the two can differ: a claim admitted concurrently on an
+    /// underestimate and reconciled upward past the ceiling would satisfy a
+    /// recomputed predicate while never having been serialised at all. Only the
+    /// recorded fact can support the message below, which states that
+    /// serialisation already happened.
+    /// </para>
+    /// </summary>
+    [Id(4)] public bool SoleOccupant { get; set; }
+
     /// <summary>Creates a new <see cref="LeafSnapshotUnaffordableException"/>.</summary>
     public LeafSnapshotUnaffordableException(
         string treeId,
         long reservedBytes,
         long budgetBytes,
         long contiguousBytes,
+        bool soleOccupant,
         Exception? innerException)
         : base(
-            BuildMessage(treeId, reservedBytes, budgetBytes, contiguousBytes),
+            BuildMessage(treeId, reservedBytes, budgetBytes, contiguousBytes, soleOccupant),
             innerException)
     {
         TreeId = treeId;
         ReservedBytes = reservedBytes;
         BudgetBytes = budgetBytes;
         ContiguousBytes = contiguousBytes;
+        SoleOccupant = soleOccupant;
     }
 
     /// <summary>Parameterless constructor for Orleans serialization.</summary>
     public LeafSnapshotUnaffordableException() { }
 
-    // Two messages, because the two failures call for opposite reactions and a
-    // single message that averaged them would mislead on both (issue #2844).
+    // Three messages, because the failures call for different reactions and a
+    // single message that averaged them would mislead on all of them (#2844).
     //
     // The message this replaces quoted reserved-against-budget unconditionally.
     // On the arm where the claim FITTED - 394,270,800 bytes of a 1,207,959,552
@@ -88,28 +106,46 @@ internal sealed class LeafSnapshotUnaffordableException : Exception
     // the quantity that actually ran out - one unbroken run of memory - does not
     // improve at all. So the exception has to name which predicate failed, not
     // merely report the numbers and leave the inference to the reader.
+    //
+    // Naming it is only justified when the gate can actually support the claim,
+    // which is why the contiguity arm turns on sole occupancy and not on
+    // reserved <= budget. Reserved <= budget is true of very nearly every claim,
+    // so branching on it asserted a CONTIGUITY failure for the entire ordinary
+    // out-of-memory population - confidently, and usually wrongly. A claim that
+    // ran alongside others has concurrent aggregate demand as a live
+    // explanation, and this message must not rule it out on the reader's behalf.
     private static string BuildMessage(
         string treeId,
         long reservedBytes,
         long budgetBytes,
-        long contiguousBytes)
+        long contiguousBytes,
+        bool soleOccupant)
     {
         var prefix =
             $"The leaf snapshot for tree '{treeId}' could not be materialised within the memory available to "
             + "this process. ";
 
-        var diagnosis = reservedBytes <= budgetBytes
-            ? $"The hydration claim FITTED the gate's budget (reserved {reservedBytes} bytes of {budgetBytes}, "
-                + $"leaving {budgetBytes - reservedBytes} bytes unused) and the load failed anyway while "
-                + $"materialising a single contiguous {contiguousBytes} byte buffer. This is a CONTIGUITY "
-                + "failure, not a shortage of total memory: raising this process's memory limit will not fix "
-                + "it and will make it more frequent, because the hydration budget, the resident working-set "
-                + "budget and the replay gate are all derived from that limit and each admits more concurrent "
-                + "work as it rises. Divide this leaf, or reduce MaxLeafBytes for this tree, so that no single "
-                + "snapshot has to be read into one buffer this large. "
-            : $"The hydration claim exceeded the gate's budget (reserved {reservedBytes} bytes against a "
-                + $"{budgetBytes} byte hydration budget) and was admitted as sole occupant, requiring a single "
-                + $"contiguous {contiguousBytes} byte buffer. ";
+        var diagnosis = soleOccupant
+            ? $"The hydration ran as SOLE OCCUPANT of the gate - nothing else was hydrating alongside it - "
+                + $"and still failed while materialising a single contiguous {contiguousBytes} byte buffer "
+                + $"(it reserved {reservedBytes} bytes against a {budgetBytes} byte hydration budget). This is "
+                + "a CONTIGUITY failure, not a shortage of total memory: concurrent demand was zero by "
+                + "construction, so raising this process's memory limit will not fix it and will make it more "
+                + "frequent, because the hydration budget, the resident working-set budget and the replay gate "
+                + "are all derived from that limit and each admits more concurrent work as it rises. Divide "
+                + "this leaf, or reduce MaxLeafBytes for this tree, so that no single snapshot has to be read "
+                + "into one buffer this large. "
+            : reservedBytes <= budgetBytes
+                ? $"The hydration claim FITTED the gate's budget (reserved {reservedBytes} bytes of "
+                    + $"{budgetBytes}, leaving {budgetBytes - reservedBytes} bytes unused) and the load failed "
+                    + $"anyway while materialising a single contiguous {contiguousBytes} byte buffer. It ran "
+                    + "concurrently with other hydrations, its contiguous requirement being under the ceiling "
+                    + "at which the gate serialises, so both aggregate demand and contiguity remain open "
+                    + "explanations and this message does not choose between them. If the contiguous figure "
+                    + "above is close to the ceiling, suspect contiguity and divide the leaf. "
+                : $"The hydration claim exceeded the gate's budget (reserved {reservedBytes} bytes against a "
+                    + $"{budgetBytes} byte hydration budget) and was admitted only because nothing else was "
+                    + $"in flight, requiring a single contiguous {contiguousBytes} byte buffer. ";
 
         return prefix
             + diagnosis

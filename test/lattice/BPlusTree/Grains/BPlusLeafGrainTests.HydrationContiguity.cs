@@ -374,7 +374,7 @@ public class BPlusLeafGrainHydrationContiguityTests
     // ---------------------------------------------------------------------
 
     [Test]
-    public void The_unaffordable_exception_says_the_claim_FITTED_when_it_did()
+    public void The_unaffordable_exception_names_contiguity_only_when_the_hydration_ran_alone()
     {
         // The message this replaces quoted reserved-against-budget
         // unconditionally, so on the arm where the claim fitted it read as "the
@@ -382,26 +382,33 @@ public class BPlusLeafGrainHydrationContiguityTests
         // memory grant - the single worst available action, because every
         // byte-denominated bound here is derived from that grant and each admits
         // MORE concurrent work as it rises.
+        //
+        // Naming contiguity is only supportable when concurrent demand was zero
+        // by construction, which is what sole occupancy records. See the paired
+        // test below for the other side.
         var error = new LeafSnapshotUnaffordableException(
             "tree-a",
             reservedBytes: 394_270_800L,
             budgetBytes: 1_207_959_552L,
             contiguousBytes: 157_708_320L,
+            soleOccupant: true,
             innerException: new OutOfMemoryException());
 
         Assert.Multiple(() =>
         {
             Assert.That(error.ContiguousBytes, Is.EqualTo(157_708_320L),
                 "the contiguous requirement is carried, not merely described");
-            Assert.That(error.Message, Does.Contain("FITTED"),
-                "the message states plainly that byte accounting admitted this claim");
+            Assert.That(error.SoleOccupant, Is.True,
+                "and so is the admission fact the diagnosis rests on");
+            Assert.That(error.Message, Does.Contain("SOLE OCCUPANT"),
+                "the message states plainly that nothing else was hydrating alongside it, which is what "
+                + "rules out aggregate demand");
             Assert.That(error.Message, Does.Contain("CONTIGUITY"),
                 "and names the predicate that actually failed");
             Assert.That(error.Message, Does.Contain("157708320"),
                 "quoting the buffer that could not be found");
-            Assert.That(error.Message, Does.Contain("813688752"),
-                "and the budget that went unused, which is the figure that makes 'the budget was too "
-                + "small' untenable");
+            Assert.That(error.Message, Does.Contain("394270800"),
+                "and the reservation, which is the figure that makes 'the budget was too small' untenable");
             Assert.That(error.Message, Does.Contain("will not fix"),
                 "the message must actively steer away from raising the memory limit rather than merely "
                 + "omitting the advice");
@@ -409,17 +416,62 @@ public class BPlusLeafGrainHydrationContiguityTests
     }
 
     [Test]
-    public void The_unaffordable_exception_keeps_the_sole_occupant_framing_when_the_claim_overran()
+    public void The_unaffordable_exception_withholds_the_contiguity_verdict_when_the_hydration_ran_concurrently()
     {
-        // The other arm, unchanged in substance: a snapshot larger than the
-        // whole budget is admitted alone and may still fail. That one genuinely
-        // is a shortage of total memory relative to the corpus, so it must not
-        // inherit the contiguity wording.
+        // The other side of the pair, and the one that caught a real regression.
+        //
+        // The first draft branched this message on reserved <= budget, which is
+        // true of very nearly every claim - the budget is a fraction of the heap
+        // and an ordinary leaf reserves a fraction of the budget. So it asserted
+        // a CONTIGUITY failure, in capitals, for the entire ordinary
+        // out-of-memory population, including claims that ran alongside others
+        // and therefore had concurrent aggregate demand as a live explanation.
+        //
+        // Identical figures to the test above. Only the admission fact differs,
+        // which is the point: the numbers cannot carry this verdict on their own.
+        var error = new LeafSnapshotUnaffordableException(
+            "tree-a",
+            reservedBytes: 394_270_800L,
+            budgetBytes: 1_207_959_552L,
+            contiguousBytes: 157_708_320L,
+            soleOccupant: false,
+            innerException: new OutOfMemoryException());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(error.SoleOccupant, Is.False);
+            Assert.That(error.Message, Does.Contain("FITTED"),
+                "the claim did fit, and saying so is still the useful half - it is the verdict that has "
+                + "to be withheld, not the arithmetic");
+            Assert.That(error.Message, Does.Not.Contain("CONTIGUITY"),
+                "a claim that ran concurrently cannot be attributed to contiguity on these figures alone, "
+                + "and a confident wrong attribution costs more than none");
+            Assert.That(error.Message, Does.Contain("does not choose between them"),
+                "the message says explicitly that it is leaving the question open, rather than leaving a "
+                + "reader to notice an absence");
+            Assert.That(error.Message, Does.Contain("157708320"),
+                "the contiguous figure is still quoted, because it is what a reader needs in order to "
+                + "decide the question the message declines to decide");
+        });
+    }
+
+    [Test]
+    public void The_unaffordable_exception_keeps_the_overran_framing_when_the_claim_overran()
+    {
+        // The third arm: a snapshot larger than the whole budget is admitted
+        // only because nothing else is in flight, and may still fail. That one
+        // genuinely is a shortage of total memory relative to the corpus, so it
+        // must not inherit the contiguity wording either.
+        //
+        // Reachable without sole occupancy: on a small heap the budget floors at
+        // 32 MiB, so a claim can overrun it while its contiguous requirement
+        // stays under the ceiling.
         var error = new LeafSnapshotUnaffordableException(
             "tree-a",
             reservedBytes: 4_000L,
             budgetBytes: 1_000L,
             contiguousBytes: 1_600L,
+            soleOccupant: false,
             innerException: new OutOfMemoryException());
 
         Assert.Multiple(() =>
@@ -428,7 +480,9 @@ public class BPlusLeafGrainHydrationContiguityTests
             Assert.That(error.Message, Does.Not.Contain("FITTED"),
                 "a claim that overran the budget did not fit, and saying so on both arms would make the "
                 + "distinction worthless");
-            Assert.That(error.Message, Does.Contain("sole occupant"));
+            Assert.That(error.Message, Does.Not.Contain("CONTIGUITY"),
+                "nor did the gate serialise it, so the contiguity verdict is unsupportable here too");
+            Assert.That(error.Message, Does.Contain("nothing else was in flight"));
         });
     }
 }

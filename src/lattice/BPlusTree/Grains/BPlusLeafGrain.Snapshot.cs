@@ -1610,12 +1610,32 @@ internal sealed partial class BPlusLeafGrain
     {
         var resourceExhaustion = IsResourceExhaustion(error);
 
-        // "The claim fitted and it failed anyway." Evaluated from the gate's own
-        // budget rather than from the exception, because the exception is raised
-        // inside the storage provider and knows nothing about admission.
-        var contiguityExhaustion = resourceExhaustion
-            && lease is not null
-            && lease.HeldBytes <= SnapshotHydrationAdmission.BudgetBytes;
+        // Sole occupancy is the signal, NOT "the claim fitted the budget".
+        //
+        // The first draft of this used lease.HeldBytes <= BudgetBytes, which is
+        // true of very nearly every claim - the budget is a fraction of the heap
+        // and an ordinary leaf reserves a fraction of the budget. That captured
+        // the whole ordinary out-of-memory population and left resource_exhausted
+        // reachable only through the over-budget sole-claimant escape, inverting
+        // which arm is the special case. It was caught by
+        // Snapshot_load_that_runs_out_of_memory_is_counted_as_resource_exhausted.
+        //
+        // Exclusive is the honest predicate because it is what the gate actually
+        // DID, not merely what was true of the numbers: this claim's contiguous
+        // requirement exceeded the ceiling, so it was serialised and ran with the
+        // gate otherwise empty. An out-of-memory failure under those conditions
+        // cannot be attributed to concurrent aggregate demand, because by
+        // construction there was none. It is also what makes the message below
+        // truthful, since that message states the hydration was already
+        // serialised.
+        //
+        // Known boundary: a claim admitted concurrently on an underestimate and
+        // reconciled upward past the ceiling is reported as resource_exhausted,
+        // even though its true contiguous requirement was over the ceiling. That
+        // is deliberate. The gate admitted it on aggregate terms and never
+        // serialised it, so concurrent demand is a live explanation and the
+        // narrower claim would not be supportable.
+        var contiguityExhaustion = resourceExhaustion && lease is { Exclusive: true };
 
         var treeId = state.State.TreeId;
 
@@ -2164,6 +2184,7 @@ internal sealed partial class BPlusLeafGrain
                     lease.HeldBytes,
                     SnapshotHydrationAdmission.BudgetBytes,
                     lease.ContiguousBytes,
+                    lease.Exclusive,
                     ex);
             }
 
