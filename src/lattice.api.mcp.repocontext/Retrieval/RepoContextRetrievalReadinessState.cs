@@ -62,6 +62,16 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     internal const string PhaseNothingRegisteredTag = "nothing_registered";
 
     /// <summary>
+    /// Wire value for <see cref="RepoContextRetrievalReadinessPhase.Building"/>. No
+    /// readiness stamp carries it - <see cref="StampReady(string)"/> records the phase a
+    /// host became ready in, and Building is precisely the phase that is not ready - so
+    /// it has no meter arm. It exists because reporting surfaces must still be able to
+    /// name the phase they observed, and naming it "" or omitting it would make
+    /// "not ready" indistinguishable from "not evaluated".
+    /// </summary>
+    internal const string PhaseBuildingTag = "building";
+
+    /// <summary>
     /// The cause a readiness probe supplies to <see cref="MarkUnavailable(string?)"/>
     /// when it, rather than a real query, observed the plane unable to serve.
     /// </summary>
@@ -160,6 +170,31 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     /// the intended steady state.
     /// </summary>
     public bool IsReady => Phase != RepoContextRetrievalReadinessPhase.Building;
+
+    /// <summary>
+    /// The canonical low-cardinality wire value naming a readiness phase, single-sourced
+    /// from the same constants the meter stamps so a reporting surface and the meter can
+    /// never disagree about what a phase is called.
+    /// <para>
+    /// <b>Deliberately a throwing switch.</b> A phase added to
+    /// <see cref="RepoContextRetrievalReadinessPhase"/> without a value here raises
+    /// rather than falling through to a default, because the alternative is reporting
+    /// the new phase under an existing phase's name - a wrong answer that reads exactly
+    /// like a right one.
+    /// </para>
+    /// </summary>
+    /// <param name="phase">The phase to name.</param>
+    /// <returns>The canonical wire value for <paramref name="phase"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="phase"/> is not a declared phase.</exception>
+    public static string PhaseTag(RepoContextRetrievalReadinessPhase phase) => phase switch
+    {
+        RepoContextRetrievalReadinessPhase.Serving => PhaseServingTag,
+        RepoContextRetrievalReadinessPhase.KeywordOnly => PhaseKeywordOnlyTag,
+        RepoContextRetrievalReadinessPhase.NothingRegistered => PhaseNothingRegisteredTag,
+        RepoContextRetrievalReadinessPhase.Building => PhaseBuildingTag,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(phase), phase, "No canonical wire value is declared for this readiness phase."),
+    };
 
     /// <summary>
     /// Whether the approximate plane is <b>armed</b> - answering from a trained

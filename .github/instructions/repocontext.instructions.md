@@ -884,7 +884,14 @@ sum against a single term is what made a working index look dead.
 
 ## Health and degraded mode
 
-- `repocontext_health` - is the surface registered and reachable.
+- `repocontext_health` - is the surface registered and reachable
+  (`available`), **and** whether retrieval can actually serve
+  (`retrievalReady` / `retrievalPhase`). Read both: `available` reports
+  reachability only, so a host that cannot serve semantic retrieval still
+  reports `available: true` while capture, recall, and scan keep working. A
+  `retrievalPhase` of `building` means searches are answered by degraded keyword
+  recall and results are incomplete; `keyword_only` is an intended deployment
+  with no embedding provider bound and IS ready.
 - `repocontext_index_status {repoId}` - `status` / `phase` / counters
   (`filesScanned`, `filesEmbedded`, `chunksCommitted`, `updatedAt`, `attempt`).
   Note `attempt` is a **cumulative run-start tally**, not a retry or failure

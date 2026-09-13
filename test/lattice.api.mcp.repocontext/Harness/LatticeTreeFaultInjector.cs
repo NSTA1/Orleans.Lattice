@@ -52,6 +52,16 @@ public sealed class LatticeTreeFaultInjector
     /// </summary>
     public int FailAfterMatches { get; set; }
 
+    /// <summary>
+    /// Builds the exception thrown for a faulted call, given the description of the
+    /// call. Defaults to a <see cref="TimeoutException"/>, the production fault
+    /// shape. Override it to inject a different fault class - notably an
+    /// <see cref="OperationCanceledException"/>, which several paths treat
+    /// differently from an ordinary failure and which therefore cannot be covered
+    /// by a timeout.
+    /// </summary>
+    public Func<string, Exception>? FaultFactory { get; init; }
+
     /// <summary>How many matching calls have been seen.</summary>
     public int Matched => Volatile.Read(ref matched);
 

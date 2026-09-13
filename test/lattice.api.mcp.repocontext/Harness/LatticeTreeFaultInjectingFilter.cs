@@ -3,11 +3,14 @@ using Orleans.Runtime;
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
 
 /// <summary>
-/// Incoming grain-call filter that throws a <see cref="TimeoutException"/> for
-/// the calls <see cref="LatticeTreeFaultInjector"/> selects, reproducing the
-/// production fault shape (an <see cref="ILattice"/> write to the vector
-/// membership tree exceeding its response deadline) without any timing
-/// dependence, so the test is deterministic.
+/// Incoming grain-call filter that throws for the calls
+/// <see cref="LatticeTreeFaultInjector"/> selects, defaulting to a
+/// <see cref="TimeoutException"/>, which reproduces the production fault shape (an
+/// <see cref="ILattice"/> write to the vector membership tree exceeding its
+/// response deadline) without any timing dependence, so the test is deterministic.
+/// An injector may supply its own
+/// <see cref="LatticeTreeFaultInjector.FaultFactory"/> to inject a different fault
+/// class instead.
 /// </summary>
 /// <param name="injectors">The selectors deciding which calls fail.</param>
 internal sealed class LatticeTreeFaultInjectingFilter(IEnumerable<LatticeTreeFaultInjector> injectors)
@@ -30,9 +33,11 @@ internal sealed class LatticeTreeFaultInjectingFilter(IEnumerable<LatticeTreeFau
             {
                 if (injector.ShouldFail(method.Name, treeId))
                 {
-                    throw new TimeoutException(
+                    var description =
                         $"Injected fault: {method.Name} on '{context.TargetContext.GrainId.Key}' "
-                        + "did not respond in time.");
+                        + "did not respond in time.";
+                    throw injector.FaultFactory?.Invoke(description)
+                        ?? new TimeoutException(description);
                 }
             }
         }

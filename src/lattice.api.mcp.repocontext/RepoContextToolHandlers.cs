@@ -9,8 +9,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// The adapter behind the repository-context tool module. It exposes the
-/// read-only <c>repocontext_health</c> probe - which proves the module is
-/// registered and that the caller cleared the fail-closed authorization gate -
+/// read-only <c>repocontext_health</c> probe - which reports that the module is
+/// registered, that the caller cleared the fail-closed authorization gate, and
+/// whether retrieval can actually serve -
 /// the mutating <c>repocontext_bootstrap</c> onboarding tool that ingests a
 /// codebase into the context store, and the day-to-day capture, maintenance, and
 /// retrieval tools: the read-only <c>repocontext_recall</c>, <c>_scan</c>, and
@@ -18,34 +19,75 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <c>_update</c>, and <c>_forget</c>.
 /// </summary>
 /// <remarks>
-/// The health result is invariant, so it is built once and reused on every call:
-/// the probe adds no per-invocation allocation to the hot path. The bootstrap
-/// handler resolves its coordinator from the request service provider and adds no
-/// authorization path of its own - the fail-closed gate that advertises the
-/// mutating tool only to a write-opted-in caller is inherited from the discovery
+/// The bootstrap handler resolves its coordinator from the request service provider
+/// and adds no authorization path of its own - the fail-closed gate that advertises
+/// the mutating tool only to a write-opted-in caller is inherited from the discovery
 /// core.
 /// </remarks>
 internal static class RepoContextToolHandlers
 {
     /// <summary>
-    /// The single, shared health result. It carries no caller- or
-    /// request-specific state, so one immutable instance serves every session and
-    /// no allocation occurs per <c>tools/call</c>.
+    /// Reports that the repository-context surface is reachable and the caller is
+    /// authorized, together with whether retrieval can actually serve.
+    /// <para>
+    /// <b>It is not a constant.</b> This handler previously returned a shared
+    /// immutable instance, which made it structurally incapable of reporting a
+    /// degraded host: reachability was the only fact it carried, so a plane that
+    /// could not serve semantic retrieval still read green at the probe an agent is
+    /// instructed to call first. It now folds in the same
+    /// <see cref="RepoContextRetrievalReadinessState"/> that the <c>/health/ready</c>
+    /// endpoint reads, so the MCP probe and the HTTP probe answer from one signal.
+    /// </para>
     /// </summary>
-    private static readonly RepoContextHealthResult Healthy = new()
+    /// <param name="context">The MCP request context, used to resolve the shared retrieval readiness state.</param>
+    /// <returns>The health result for this host's current readiness.</returns>
+    public static RepoContextHealthResult Health(RequestContext<CallToolRequestParams> context)
     {
-        Available = true,
-        Group = LatticeApiMcpGroupCapabilityMap.DisplayName(LatticeApiMcpGroup.RepoContext),
-        Status = "The Orleans.Lattice repository-context MCP surface is registered and reachable.",
-    };
+        var readiness = ResolveReadinessState(context);
+
+        // Read the phase exactly once. It is time-dependent (the fault hold-down is
+        // evaluated on each read), so sampling it again for readiness could straddle
+        // the hold-down boundary and report the self-contradictory pair
+        // "ready = true, phase = building".
+        var phase = readiness.Phase;
+        var ready = phase != RepoContextRetrievalReadinessPhase.Building;
+
+        return new RepoContextHealthResult
+        {
+            Available = true,
+            Group = LatticeApiMcpGroupCapabilityMap.DisplayName(LatticeApiMcpGroup.RepoContext),
+            Status = HealthStatusLine(phase),
+            RetrievalReady = ready,
+            RetrievalPhase = RepoContextRetrievalReadinessState.PhaseTag(phase),
+        };
+    }
 
     /// <summary>
-    /// Reports that the repository-context surface is available to the caller.
-    /// Reaching this handler means the caller was advertised the tool and cleared
-    /// the authorization gate, so it always returns the ready result.
+    /// The human-readable status line for a readiness phase. Every arm names the
+    /// phase's consequence for the caller rather than only its label, because the
+    /// prose is what a reader acts on.
     /// </summary>
-    /// <returns>The shared, immutable health result.</returns>
-    public static RepoContextHealthResult Health() => Healthy;
+    /// <param name="phase">The observed readiness phase.</param>
+    /// <returns>A status line describing what this host can currently serve.</returns>
+    private static string HealthStatusLine(RepoContextRetrievalReadinessPhase phase) => phase switch
+    {
+        RepoContextRetrievalReadinessPhase.Serving =>
+            "The Orleans.Lattice repository-context MCP surface is registered and reachable, "
+            + "and semantic retrieval is serving.",
+        RepoContextRetrievalReadinessPhase.KeywordOnly =>
+            "The Orleans.Lattice repository-context MCP surface is registered and reachable. "
+            + "No embedding provider is bound, so keyword retrieval is the intended steady state "
+            + "and this host is ready.",
+        RepoContextRetrievalReadinessPhase.NothingRegistered =>
+            "The Orleans.Lattice repository-context MCP surface is registered and reachable. "
+            + "No repository is onboarded yet, so there is nothing to retrieve from.",
+        RepoContextRetrievalReadinessPhase.Building =>
+            "The Orleans.Lattice repository-context MCP surface is registered and reachable, "
+            + "but semantic retrieval is NOT serving: searches are answered by degraded keyword "
+            + "recall. Treat retrieval results as incomplete until this clears.",
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(phase), phase, "No status line is declared for this readiness phase."),
+    };
 
     /// <summary>
     /// Reports an aggregate roll-up of the repository-context surface's usage over a bounded
@@ -1260,5 +1302,25 @@ internal static class RepoContextToolHandlers
             ?? throw new InvalidOperationException(
                 "The MCP request has no service provider; the repository-context stats tool cannot resolve its service.");
         return services.GetRequiredService<IRepoContextUsageRecorder>();
+    }
+
+    /// <summary>
+    /// Resolves the shared retrieval readiness state the health probe reports.
+    /// <para>
+    /// Deliberately <see cref="ServiceProviderServiceExtensions.GetRequiredService{T}"/>
+    /// rather than an optional lookup with a healthy default: the registration that
+    /// advertises these tools registers this singleton in the same call, so its absence
+    /// is a wiring fault. Defaulting to "ready" there would reinstate the exact defect
+    /// this probe was changed to remove - a host reporting green because nothing
+    /// measured it.
+    /// </para>
+    /// </summary>
+    private static RepoContextRetrievalReadinessState ResolveReadinessState(
+        RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context health tool cannot resolve its readiness state.");
+        return services.GetRequiredService<RepoContextRetrievalReadinessState>();
     }
 }

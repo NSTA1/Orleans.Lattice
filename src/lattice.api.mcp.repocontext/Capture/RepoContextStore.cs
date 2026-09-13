@@ -613,7 +613,11 @@ internal sealed partial class RepoContextStore
             await accessor.SetAsync(_replicaId, bytes, cancellationToken).ConfigureAwait(false);
         }
 
-        var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+        // POST-COMMIT BOUNDARY. The durable write above has landed. Nothing below may
+        // propagate a fault, because a caller that sees this call throw cannot tell a
+        // rejected write from a committed one, and the default id is a fresh GUID, so
+        // the obvious retry writes a SECOND entry rather than converging on the first.
+        var expiryTicks = await TryReadCommittedExpiryAsync(tree, key, cancellationToken).ConfigureAwait(false);
         await InvalidateMemoryVectorAsync(repoId, key, cancellationToken).ConfigureAwait(false);
         return new RepoContextRememberResult
         {
@@ -622,11 +626,46 @@ internal sealed partial class RepoContextStore
             Topic = topic,
             Id = entryId,
             Created = created,
-            Expires = versioned.ExpiresAtTicks != 0L,
-            ExpiresAtUtc = ToExpiryIso(versioned.ExpiresAtTicks),
+            Expires = expiryTicks is { } ticks ? ticks != 0L : null,
+            ExpiresAtUtc = expiryTicks is { } isoTicks ? ToExpiryIso(isoTicks) : null,
             LinksAdded = linksAdded,
             LinksRemoved = linksRemoved,
         };
+    }
+
+    /// <summary>
+    /// Reads back the expiry of a key that was <b>just committed</b>, reporting
+    /// <see langword="null"/> ("not evaluated") instead of propagating a fault.
+    /// <para>
+    /// This read is enrichment, not the operation. The caller's write is already
+    /// durable by the time it runs, and it exists only to populate the expiry fields
+    /// on the result. Letting it throw would discard the one fact the caller most
+    /// needs - that the write landed - in exchange for two decorative fields, and the
+    /// resulting error is indistinguishable from a write that never happened.
+    /// </para>
+    /// <para>
+    /// Cancellation is absorbed here for the same reason and only here: cancelling a
+    /// token cannot un-commit a durable write, so reporting the write is the honest
+    /// answer even when the caller has stopped waiting. Every pre-commit path in this
+    /// type still observes cancellation normally.
+    /// </para>
+    /// </summary>
+    /// <param name="tree">The tree holding the committed key.</param>
+    /// <param name="key">The key that was just written.</param>
+    /// <param name="cancellationToken">Cancels the read-back only; it never un-commits the write.</param>
+    /// <returns>The expiry in ticks (0 when the entry never expires), or <see langword="null"/> when the read-back could not be evaluated.</returns>
+    private static async Task<long?> TryReadCommittedExpiryAsync(
+        ILattice tree, string key, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+            return versioned.ExpiresAtTicks;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -656,6 +695,15 @@ internal sealed partial class RepoContextStore
     /// capture is the durable act; the vector is a derived projection that the
     /// always-on sweep reconciles anyway.
     /// </para>
+    /// <para>
+    /// <b>Cancellation is absorbed too, and that is deliberate.</b> Every call site is
+    /// past its durable commit, so an <see cref="OperationCanceledException"/> escaping
+    /// here would fail a call whose write had already landed - reporting "nothing
+    /// happened" about something that did. Cancelling a token cannot un-commit a write,
+    /// so the honest answer post-commit is the result, not the fault. This is the only
+    /// place in this type that absorbs cancellation; every pre-commit path still
+    /// observes it normally.
+    /// </para>
     /// </summary>
     private async Task InvalidateMemoryVectorAsync(
         string repoId, string key, CancellationToken cancellationToken)
@@ -665,9 +713,9 @@ internal sealed partial class RepoContextStore
             await _vectorWriter.RetireAsync(repoId, key, cancellationToken).ConfigureAwait(false);
             await _vectorWriter.UnmarkMemoryEmbeddedAsync(repoId, key, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception)
         {
-            // Swallowed deliberately: see the best-effort note above.
+            // Swallowed deliberately, cancellation included: see the post-commit note above.
         }
     }
 
@@ -940,14 +988,18 @@ internal sealed partial class RepoContextStore
             await tree.SetAsync(key, value, TimeSpan.FromSeconds(seconds), cancellationToken).ConfigureAwait(false);
         }
 
-        var lapsed = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+        // POST-COMMIT BOUNDARY: the lapse write above has landed. A fault in the
+        // read-back below must degrade the reported expiry, never discard the lapse.
+        // On a "lapse" result a null ExpiresAtUtc is unambiguous: a lapsed entry always
+        // carries an expiry, so null here can only mean the read-back was not evaluated.
+        var lapsedTicks = await TryReadCommittedExpiryAsync(tree, key, cancellationToken).ConfigureAwait(false);
         await InvalidateMemoryVectorAsync(parsed.RepoId, key, cancellationToken).ConfigureAwait(false);
         return new RepoContextForgetResult
         {
             Key = key,
             Mode = "lapse",
             Existed = true,
-            ExpiresAtUtc = ToExpiryIso(lapsed.ExpiresAtTicks),
+            ExpiresAtUtc = lapsedTicks is { } ticks ? ToExpiryIso(ticks) : null,
             Undecodable = undecodable,
         };
     }
