@@ -107,7 +107,8 @@ internal sealed class TombstoneCompactionGrain(
     /// Everything a leaf batch may mutate about its position within the current
     /// shard, as one value. The chain walk resumes from a <b>key</b>, the
     /// dirty-leaves fast path from an <b>index</b> into its persisted snapshot,
-    /// and the snapshot itself is pulled and cleared by the same batch - but
+    /// and the snapshot itself is pulled by the batch that enters a shard and
+    /// dropped by whichever path leaves it - but
     /// every caller that guards a state write has to save and restore all of it
     /// as a unit, or a failing persist leaves the activation's position ahead of
     /// disk (issue 1973). The superseded leaf-id cursor is carried too, so
@@ -144,11 +145,26 @@ internal sealed class TombstoneCompactionGrain(
     /// leaf-id cursor, so state written by an older build cannot survive into a
     /// pass that no longer reads it.
     /// </summary>
+    /// <remarks>
+    /// The dirty-leaves snapshot is part of the position, not a cache beside
+    /// it: the list names leaves ONE shard root nominated, and the watermark is
+    /// only meaningful against that same shard's dirty set. Leaving either in
+    /// place makes the next shard's first batch find a non-null list, skip its
+    /// own <c>GetDirtyLeavesSinceLastCompactionAsync</c> entirely, walk leaves
+    /// it was never handed, and then drain its dirty set up to a watermark it
+    /// never observed - discarding dirty-leaf signal for leaves that were never
+    /// compacted. The completion path clears it explicitly, so the gap was only
+    /// ever on the paths that LEAVE a shard without finishing it: the
+    /// retries-exhausted skip, a scoped or operator pass re-entering at a
+    /// different shard, and pass completion.
+    /// </remarks>
     private void ClearShardCursor()
     {
         state.State.NextLeafKeyInShard = null;
         state.State.CurrentShardDirtyIndex = 0;
         state.State.NextLeafIdInShard = null;
+        state.State.CurrentShardDirtyLeaves = null;
+        state.State.CurrentShardDirtyAdvance = default;
     }
 
     /// <summary>
@@ -967,12 +983,12 @@ internal sealed class TombstoneCompactionGrain(
                 {
                     // Dirty-set path completion: drain the shard-root dirty
                     // set up to the watermark we observed at snapshot time.
+                    // Read the watermark before clearing, which now drops the
+                    // snapshot with the rest of the in-shard position.
                     // Best-effort - a transient failure here just leaves the
                     // entries in place for the next pass to re-walk.
                     var advance = state.State.CurrentShardDirtyAdvance;
                     ClearShardCursor();
-                    state.State.CurrentShardDirtyLeaves = null;
-                    state.State.CurrentShardDirtyAdvance = default;
                     try
                     {
                         await shardRoot.ClearDirtyLeavesUpToAsync(advance);
