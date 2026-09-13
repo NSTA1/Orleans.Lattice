@@ -83,7 +83,9 @@ public partial class BPlusLeafGrainTests
         // that already holds it, so each successful withholding is matched by a
         // permit taken from the gate and not returned.
         var withheld = 0;
-        while (withheld <= ceiling + 4 && BPlusLeafGrain.TryWithholdReplayPermitOnPressure())
+        while (withheld <= ceiling + 4
+            && BPlusLeafGrain.TryWithholdReplayPermitOnPressure(
+                LatticeMetrics.PermitAdaptationTriggerFault))
         {
             Assert.That(gate.Wait(0), Is.True,
                 "withholding claimed a permit the gate could not supply - the accounting and the "
@@ -133,7 +135,10 @@ public partial class BPlusLeafGrainTests
         var withheld = 0;
         for (var i = 0; i < ToWithhold; i++)
         {
-            Assert.That(BPlusLeafGrain.TryWithholdReplayPermitOnPressure(), Is.True);
+            Assert.That(
+                BPlusLeafGrain.TryWithholdReplayPermitOnPressure(
+                    LatticeMetrics.PermitAdaptationTriggerFault),
+                Is.True);
             Assert.That(gate.Wait(0), Is.True);
             withheld++;
         }
@@ -250,7 +255,10 @@ public partial class BPlusLeafGrainTests
     {
         var gate = await QuiescentReplayGateAsync();
 
-        Assert.That(BPlusLeafGrain.TryWithholdReplayPermitOnPressure(), Is.True);
+        Assert.That(
+            BPlusLeafGrain.TryWithholdReplayPermitOnPressure(
+                LatticeMetrics.PermitAdaptationTriggerFault),
+            Is.True);
         Assert.That(gate.Wait(0), Is.True);
         var depressed = gate.CurrentCount;
 
@@ -280,7 +288,10 @@ public partial class BPlusLeafGrainTests
     {
         var gate = await QuiescentReplayGateAsync();
 
-        Assert.That(BPlusLeafGrain.TryWithholdReplayPermitOnPressure(), Is.True);
+        Assert.That(
+            BPlusLeafGrain.TryWithholdReplayPermitOnPressure(
+                LatticeMetrics.PermitAdaptationTriggerFault),
+            Is.True);
         Assert.That(gate.Wait(0), Is.True);
         var depressed = gate.CurrentCount;
 
@@ -315,7 +326,7 @@ public partial class BPlusLeafGrainTests
 
     [Test]
     [NonParallelizable]
-    public async Task Sizing_the_replay_gate_zero_primes_both_backpressure_arms()
+    public async Task Sizing_the_replay_gate_zero_primes_every_backpressure_arm()
     {
         // The gate is sized once per process, so it must be returned to its
         // unsized state for the priming to be observable at all.
@@ -337,21 +348,55 @@ public partial class BPlusLeafGrainTests
         }
 
         var outcomes = records
-            .Select(r => (Value: r.Value, Outcome: r.Tags.Single(t => t.Key == LatticeMetrics.TagOutcome).Value))
+            .Select(r => (
+                r.Value,
+                Outcome: r.Tags.Single(t => t.Key == LatticeMetrics.TagOutcome).Value,
+                Trigger: r.Tags.SingleOrDefault(t => t.Key == LatticeMetrics.TagTrigger).Value))
             .ToArray();
+
+        // Input validation. Every clause below reads an absence as evidence, and
+        // an absence produced by a listener that captured nothing is
+        // byte-identical to one produced by a build that primed nothing.
+        Assert.That(outcomes, Is.Not.Empty,
+            "instrument validation: the listener captured no measurements at all, so every "
+            + "assertion below would be vacuous rather than satisfied");
 
         Assert.Multiple(() =>
         {
-            Assert.That(outcomes.Any(o => Equals(o.Outcome, "withheld") && o.Value == 0), Is.True,
-                "the withheld arm must be primed at zero when the gate is sized. Unprimed, an "
-                + "absent series cannot distinguish 'backpressure is present and has never "
-                + "engaged' from 'this build does not have backpressure' - and on this epic that "
-                + "exact ambiguity has already been read as evidence of a failed deploy");
+            Assert.That(
+                outcomes.Any(o => Equals(o.Outcome, "withheld")
+                    && Equals(o.Trigger, "fault")
+                    && o.Value == 0),
+                Is.True,
+                "the fault-triggered withheld arm must be primed at zero when the gate is sized. "
+                + "Unprimed, an absent series cannot distinguish 'this trigger is present and has "
+                + "never engaged' from 'this build predates the trigger split' - and on this epic "
+                + "that exact ambiguity has already been read as evidence of a failed deploy");
 
-            Assert.That(outcomes.Any(o => Equals(o.Outcome, "restored") && o.Value == 0), Is.True,
+            Assert.That(
+                outcomes.Any(o => Equals(o.Outcome, "withheld")
+                    && Equals(o.Trigger, "occupancy")
+                    && o.Value == 0),
+                Is.True,
+                "the occupancy-triggered withheld arm must be primed at zero for the same reason. "
+                + "Priming the counter as a whole but not each trigger would reproduce issue "
+                + "#2883's own defect one level down: the split would be unreadable until both "
+                + "triggers happened to fire");
+
+            Assert.That(
+                outcomes.Any(o => Equals(o.Outcome, "restored") && o.Value == 0),
+                Is.True,
                 "the restored arm must be primed at zero for the same reason. The effective "
                 + "ceiling is read as withheld minus restored, so a missing restored series makes "
                 + "the withheld series unreadable rather than merely incomplete");
+
+            Assert.That(
+                outcomes.Where(o => Equals(o.Outcome, "restored")).All(o => o.Trigger is null),
+                Is.True,
+                "the primed restored arm must carry no trigger tag. Withheld permits are fungible, "
+                + "so a trigger on the restored arm would invite the invalid reading "
+                + "withheld{trigger=X} - restored{trigger=X}; the priming must model the shape the "
+                + "live emission actually has");
         });
     }
 }

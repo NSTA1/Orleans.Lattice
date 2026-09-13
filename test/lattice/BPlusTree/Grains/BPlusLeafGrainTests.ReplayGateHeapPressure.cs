@@ -206,7 +206,10 @@ public partial class BPlusLeafGrainTests
         // the behaviour actually under test.
         var gate = await QuiescentReplayGateAsync();
 
-        Assert.That(BPlusLeafGrain.TryWithholdReplayPermitOnPressure(), Is.True);
+        Assert.That(
+            BPlusLeafGrain.TryWithholdReplayPermitOnPressure(
+                LatticeMetrics.PermitAdaptationTriggerOccupancy),
+            Is.True);
         Assert.That(gate.Wait(0), Is.True,
             "instrument validation: the withheld permit must really leave the gate, or the "
             + "restoration assertion below would be about a permit that was never removed");
@@ -262,7 +265,10 @@ public partial class BPlusLeafGrainTests
         // nothing in the system would ever report it.
         var gate = await QuiescentReplayGateAsync();
 
-        Assert.That(BPlusLeafGrain.TryWithholdReplayPermitOnPressure(), Is.True);
+        Assert.That(
+            BPlusLeafGrain.TryWithholdReplayPermitOnPressure(
+                LatticeMetrics.PermitAdaptationTriggerOccupancy),
+            Is.True);
         Assert.That(gate.Wait(0), Is.True);
         var depressed = gate.CurrentCount;
 
