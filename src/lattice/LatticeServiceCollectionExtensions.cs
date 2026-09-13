@@ -156,6 +156,17 @@ public static class LatticeServiceCollectionExtensions
         // re-derive them.
         builder.Services.TryAddSingleton(sp => new BPlusTree.Grains.SnapshotPinCensus(
             sp.GetService<IWalCursorRegistry>()));
+        // Per-silo census of how many leaf-snapshot captures run at once, and
+        // the source of the
+        // orleans.lattice.leaf.snapshot.capture.concurrency_peak observable
+        // gauge (issue #2696). Registered eagerly here rather than on first
+        // capture: a gauge that materialises on first use reports nothing on a
+        // silo that has never captured, so its absence would mean "no detector"
+        // precisely when the operator needs it to mean "measured none". The
+        // census itself is a process-wide static, because the value is a maximum
+        // across every leaf on the silo and a split instance would hold only a
+        // partial maximum.
+        BPlusTree.Grains.LeafSnapshotCaptureConcurrencyCensus.EnsureGaugeRegistered();
         // Always-on in-memory consumer-cursor registry. The WAL is integral to
         // every Lattice deployment, so the registry that the saturation sampler
         // reads to compute materialiser drain lag must never be silently absent:

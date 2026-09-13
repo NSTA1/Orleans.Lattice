@@ -1049,6 +1049,30 @@
       "targets": [
         { "refId": "A", "expr": "max by (instance) (orleans_lattice_leaf_residency_registrations{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "registrations {{instance}}" }
       ]
+    },
+    {
+      "id": 151,
+      "title": "Leaf snapshot capture concurrency peak (silo high-water) - issue #2696 (absent = build did not land)",
+      "description": "Greatest number of leaf-snapshot captures observed running CONCURRENTLY on one silo since process start (orleans.lattice.leaf.snapshot.capture.concurrency_peak) - issue #2696. THIS IS THE ONE CAPTURE QUANTITY NO OTHER PANEL ON THIS DASHBOARD CAN SHOW. Every other capture series is written around the per-leaf single-flight guard, which is an instance field on ONE activation: it stops a leaf capturing twice at once and is blind by construction to how many DIFFERENT leaves are capturing against the one shared snapshot storage provider. A thousand leaves each passing their own guard is exactly the fan-out issue #2696 describes and it registers nowhere else. READ IT AS A LEVEL, NOT A RATE, AND DO NOT EXPECT IT TO FALL. The series is monotone non-decreasing by design, so a spike is reported by the scrape that observes it AND by every scrape afterwards; that is what makes it immune to scrape timing rather than merely unlikely to be missed by it. PR #2723 deferred this metric because an INSTANTANEOUS gauge of the current depth is sampled only when the endpoint is scraped, so the transient spike that makes the reading worth having is precisely what falls between two scrapes - that objection was correct and is why this is a high-water mark. A histogram was equally unavailable: this container renders every histogram as _sum and _count with no buckets and no quantiles, so only the mean survives, and a mean dilutes a spike to nothing - one capture at depth 64 among ten thousand at depth 0 reads as 0.0064. A restart is what clears the peak. THE TARGET DELIBERATELY OMITS or vector(0). The gauge is registered at host build from AddLattice rather than on first capture, so a silo that has never captured still publishes the series: a flat zero line is a MEASURED zero and a MISSING line means the build did not land. Substituting a literal zero would draw those two identically. There is no tree tag and that is deliberate - the maximum spans every leaf on the silo and the contended provider is itself silo-wide, so a per-tree split would report several smaller numbers, none of which is the depth the provider actually saw. Read it beside the concurrent-entries panel below: this one says how deep it got, that one says how often it happens, and a peak alone cannot separate a single transient spike during startup from sustained contention.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 307 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (instance) (orleans_lattice_leaf_snapshot_capture_concurrency_peak{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "peak concurrent captures {{instance}}" }
+      ]
+    },
+    {
+      "id": 152,
+      "title": "Leaf snapshot captures admitted under contention (rate) by tree - issue #2696",
+      "description": "Leaf-snapshot captures admitted across the attempt boundary while at least one OTHER capture was already in flight on the same silo (orleans.lattice.leaf.snapshot.capture.concurrent_entries) - issue #2696. It is the FREQUENCY half of the cross-leaf concurrency reading whose magnitude half is the peak gauge above, and the pairing is load-bearing rather than decorative: a high-water mark alone cannot distinguish one transient depth of 3 during startup from a silo sitting 3 deep continuously for an hour, and those are opposite operational states that call for opposite responses. DO NOT READ THE already_in_flight DECLINE REASON AS A PROXY FOR THIS SERIES. That reason counts a capture the per-leaf guard TURNED AWAY because the same leaf was already capturing; this counts a capture that was ADMITTED while a DIFFERENT leaf was capturing. The two populations are disjoint - one never reaches the attempt boundary and the other is past it - and only this one describes real concurrent load on the shared provider. A deployment can show a high decline rate with zero entries here (one hot leaf, no cross-leaf contention) or the reverse (wide fan-out, every leaf capturing once), and the two demand different fixes. Zero-primed per tree: the instrument adds 0 on an uncontended attempt, so a flat zero is measured absence of contention rather than a tree whose captures never ran.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 314 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_capture_concurrent_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} contended entries/s" }
+      ]
     }
   ]
 }

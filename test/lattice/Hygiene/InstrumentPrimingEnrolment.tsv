@@ -164,6 +164,7 @@ src/lattice/BPlusTree/Grains/CoordinatorPhaseTickCensus.cs#Gauge	none
 src/lattice/BPlusTree/Grains/LeafResidencyMetrics.cs#(unassigned:LatticeMetrics.LeafResidencyBudgetBytesName)	none	
 src/lattice/BPlusTree/Grains/LeafResidencyMetrics.cs#(unassigned:LatticeMetrics.LeafResidencyRegistrationsName)	none	
 src/lattice/BPlusTree/Grains/LeafResidencyMetrics.cs#(unassigned:LatticeMetrics.LeafResidencyResidentBytesName)	none	
+src/lattice/BPlusTree/Grains/LeafSnapshotCaptureConcurrencyCensus.cs#_peakGauge	none	
 src/lattice/BPlusTree/Grains/SnapshotPinCensus.cs#(unassigned:LatticeMetrics.SnapshotPinsGaugeName)	none	
 src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#OrphanRowsRemovedCounter	none	
 src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#SweepDurationHistogram	none	
@@ -233,6 +234,7 @@ src/lattice/LatticeMetrics.cs#LeafReplayDuration	none
 src/lattice/LatticeMetrics.cs#LeafReplayEntries	none	
 src/lattice/LatticeMetrics.cs#LeafResidencySheds	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#LeafScanDuration	unresolved	reason=bounded domain found, enrolment not yet chosen
+src/lattice/LatticeMetrics.cs#LeafSnapshotCaptureConcurrentEntries	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#LeafSnapshotCaptureDeclines	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#LeafSnapshotCaptureDuration	none	
 src/lattice/LatticeMetrics.cs#LeafSnapshotCaptures	none	
