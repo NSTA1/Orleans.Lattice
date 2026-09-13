@@ -561,3 +561,16 @@ confirmed nothing in it is worth keeping, or merge the values above by hand.
 Write-Host ''
 Write-Host "Wrote $OutFile" -ForegroundColor Green
 Write-Host 'Remember to set REPOCONTEXT_MEMORY_ARCHIVE_PATH before `docker compose up`.'
+
+# Adjudicate what was just written, rather than trusting that writing it was
+# enough. The overlay guards each knob with a compose presence check, which
+# cannot inspect a value, so a file this script produced correctly and a file an
+# operator later edited down to a retired sentinel are indistinguishable to
+# compose (issue #2863). Checking here costs nothing and fails at the point the
+# mistake is cheap, instead of tens of minutes into an acceptance run whose
+# comparison arm is by then already void.
+Write-Host ''
+& (Join-Path $PSScriptRoot 'Assert-TuningEnv.ps1') -EnvFile $OutFile
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
