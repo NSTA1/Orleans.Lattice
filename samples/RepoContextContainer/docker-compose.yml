@@ -92,13 +92,20 @@ services:
       # hundreds per inference, a freeze landing mid-barrier stalls the whole
       # operator rather than one thread, so throughput degrades super-linearly.
       #
-      # WHY DOTNET_PROCESSOR_COUNT CANNOT BE REUSED FOR THIS. It is set on the
-      # repocontext service below, where it sizes an unrelated WAL replay gate.
+      # WHY DOTNET_PROCESSOR_COUNT CANNOT BE REUSED FOR THIS. It used to be set
+      # on the repocontext service, where it sized an unrelated WAL replay gate.
       # It OVERRIDES Environment.ProcessorCount and wins over the quota, so
       # copying that service's environment block onto this one - an entirely
       # ordinary thing to do - would silently restore the oversubscription. This
       # server reads the quota directly and is immune to it, and logs a warning
       # naming both figures when the two disagree.
+      #
+      # That pin is GONE as of #2779, which found it holding the replay gate at
+      # 16 permits against a 6.0-CPU quota on the reference host: a 2.67x
+      # oversubscription, and the deployment half of #2692. The warning above is
+      # kept rather than deleted because the HAZARD outlived the instance - the
+      # variable is still global to the process and still outranks the quota, so
+      # anyone reintroducing it anywhere reintroduces exactly this.
       #
       # HOW TO DERIVE IT IF YOU DO SET IT. Use the container's actual CPU grant,
       # rounded UP: `cpus: "4.5"` -> 5. Not the host core count, and not
@@ -646,12 +653,14 @@ services:
     # names a CPU the host does not have, so a copied value fails loudly on a
     # smaller machine. Set them in `.env` beside REPO_PATH; see .env.example.
     #
-    # NOT CHANGED BY THIS KNOB: DOTNET_PROCESSOR_COUNT in
-    # docker-compose.tuning.yml is a number above the effective grant and is the
-    # same SHAPE, but it sizes the WAL replay concurrency gate rather than a
-    # thread pool, and moving it is a separate change with a separate blast
-    # radius that must be measured on its own. See "The pool-sizing class" in
-    # the runbook.
+    # NOT CHANGED BY THIS KNOB, AND NO LONGER PRESENT: DOTNET_PROCESSOR_COUNT in
+    # docker-compose.tuning.yml was a number above the effective grant and the
+    # same SHAPE, but it sized the WAL replay concurrency gate rather than a
+    # thread pool. This comment used to add that moving it was "a separate
+    # change with a separate blast radius that must be measured on its own".
+    # That was right, and #2779 was that change: the pin is gone and the gate is
+    # sized by LATTICE_WAL_MAX_CONCURRENT_REPLAYS (#2279), derived from the same
+    # CPU grant as this cpuset. See "The pool-sizing class" in the runbook.
     cpuset: "${REPOCONTEXT_CPUSET:-}"
     # Cap container log growth: the periodic self-index reconcile (every
     # LATTICE_RECONCILE_INTERVAL_SECONDS) logs continuously, so the default
