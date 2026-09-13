@@ -65,10 +65,10 @@ public sealed class LatticeWalGcBlockingConsumerIdentityTests
         return provider;
     }
 
-    private static IOptionsMonitor<LatticeOptions> Monitor()
+    private static IOptionsMonitor<LatticeOptions> Monitor(int partitions = 1)
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var options = new LatticeOptions { WalPartitions = 1 };
+        var options = new LatticeOptions { WalPartitions = partitions };
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
         return monitor;
@@ -94,8 +94,9 @@ public sealed class LatticeWalGcBlockingConsumerIdentityTests
     private static LatticeWalGc Gc(
         IWalStorageProvider provider,
         IWalCursorRegistry registry,
-        IReadOnlyDictionary<string, HybridLogicalClock> durablePins) =>
-        new(Services(provider, durablePins), registry, Monitor());
+        IReadOnlyDictionary<string, HybridLogicalClock> durablePins,
+        int partitions = 1) =>
+        new(Services(provider, durablePins), registry, Monitor(partitions));
 
     [Test]
     public async Task RunOnceAsync_blocked_by_unusable_pin_names_the_blocking_consumer()
@@ -259,6 +260,157 @@ public sealed class LatticeWalGcBlockingConsumerIdentityTests
         {
             Assert.That(report.BlockingConsumerId, Is.Null);
             Assert.That(report.CursorFloorState, Is.EqualTo(WalGcCursorFloorState.Available));
+        });
+    }
+
+    // ------------------------------------------------- the blocking consumer set
+
+    [Test]
+    public async Task RunOnceAsync_names_every_blocking_consumer_not_only_the_first()
+    {
+        // Issue #2768. Naming one blocker was sufficient to diagnose a tree but
+        // not to drain one: the healing sweep's limits are all per blocking
+        // leaf, so a report naming a single leaf per pass turned them into a
+        // per-tree rate limit and a tree carrying thousands of blocked leaves
+        // could never converge.
+        //
+        // The old floor short-circuited the moment its blocked count reached
+        // the partition count, which with a single partition is the first
+        // unusable pin it saw - so this scenario previously reported exactly
+        // one id no matter how many leaves were blocking.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+
+        var blocking = new[] { "_lattice_materialiser_tree_leaf-1", "_lattice_materialiser_tree_leaf-2", "_lattice_materialiser_tree_leaf-3" };
+        var pins = blocking.ToDictionary(c => c, _ => HybridLogicalClock.Zero, StringComparer.Ordinal);
+
+        Assert.That(pins, Has.Count.EqualTo(3), "The scenario needs several blocking leaves, or the set assertion is vacuous.");
+
+        var report = await Gc(provider, registry, pins).RunOnceAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.CursorFloorState, Is.EqualTo(WalGcCursorFloorState.BlockedByUnusablePin),
+                "Precondition: this pass must actually be the blocked case.");
+            Assert.That(report.BlockingConsumerIds, Is.EquivalentTo(blocking),
+                "A blocked pass must name every blocking consumer it found, so the sweep can work on more than one per pass.");
+            Assert.That(report.BlockingConsumerId, Is.AnyOf(blocking),
+                "And must keep naming a single primary blocker, which existing readers still consume.");
+        });
+    }
+
+    [Test]
+    public async Task RunOnceAsync_bounds_the_blocking_consumer_set()
+    {
+        // The other side of the same change. A blocked tree can carry thousands
+        // of unusable pins, and a report that carried all of them would put an
+        // unbounded list on every pass of a hot diagnostic path. The set is a
+        // work queue for a sweep that touches a handful of leaves per pass, not
+        // an inventory, so it is capped.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+
+        var overCap = LatticeWalGc.MaxReportedBlockingConsumers * 3;
+        var pins = Enumerable.Range(0, overCap)
+            .ToDictionary(i => $"_lattice_materialiser_tree_leaf-{i}", _ => HybridLogicalClock.Zero, StringComparer.Ordinal);
+
+        Assert.That(pins, Has.Count.GreaterThan(LatticeWalGc.MaxReportedBlockingConsumers),
+            "The scenario must exceed the cap, or the bound assertion is vacuous.");
+
+        var report = await Gc(provider, registry, pins).RunOnceAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.CursorFloorState, Is.EqualTo(WalGcCursorFloorState.BlockedByUnusablePin));
+            Assert.That(report.BlockingConsumerIds, Has.Count.EqualTo(LatticeWalGc.MaxReportedBlockingConsumers),
+                "The set must be capped, or a badly blocked tree puts an unbounded list on every pass.");
+        });
+    }
+
+    [Test]
+    public async Task RunOnceAsync_bounds_the_blocking_consumer_set_when_no_short_circuit_applies()
+    {
+        // The bound above is satisfied by the pass's cheap short-circuit, which
+        // returns as soon as every partition is blocked AND the set is full -
+        // so with a single partition that assertion cannot tell whether the
+        // append itself is bounded. It is the append that has to be, because
+        // the short-circuit only fires once every partition is blocked.
+        //
+        // Here several partitions exist and every blocking pin is attributable
+        // to partition 0, so the other partitions stay unblocked, no
+        // short-circuit is reachable, and the whole pin dictionary is walked.
+        // The set is then bounded by the append guard or by nothing at all.
+        const int Partitions = 4;
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+
+        var overCap = LatticeWalGc.MaxReportedBlockingConsumers * 3;
+        var pins = Enumerable.Range(0, overCap)
+            .ToDictionary(i => $"_lattice_materialiser_tree_leaf-{i}_0", _ => HybridLogicalClock.Zero, StringComparer.Ordinal);
+
+        var report = await Gc(provider, registry, pins, Partitions).RunOnceAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.CursorFloorState, Is.EqualTo(WalGcCursorFloorState.BlockedByUnusablePin),
+                "Precondition: this pass must be the blocked case.");
+            Assert.That(report.BlockingConsumerIds, Has.Count.EqualTo(LatticeWalGc.MaxReportedBlockingConsumers),
+                "With no short-circuit reachable, the append itself must bound the set.");
+        });
+    }
+
+    [Test]
+    public async Task RunOnceAsync_never_names_a_usable_pin_in_the_blocking_set()
+    {
+        // The negative control for the set, mirroring the one that already
+        // guards the single id. Without it, an implementation that appended
+        // every consumer it enumerated would satisfy both assertions above.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+
+        var pins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [HealthyLeafConsumer] = Hlc(10),
+            [BlockingLeafConsumer] = HybridLogicalClock.Zero,
+        };
+
+        var report = await Gc(provider, registry, pins).RunOnceAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.BlockingConsumerIds, Is.EquivalentTo(new[] { BlockingLeafConsumer }),
+                "Only consumers whose pin is unusable are blocking anything.");
+            Assert.That(report.BlockingConsumerIds, Does.Not.Contain(HealthyLeafConsumer),
+                "Naming a healthy leaf would send the sweep to reactivate a leaf that is holding nothing.");
+        });
+    }
+
+    [Test]
+    public async Task RunOnceAsync_unblocked_pass_carries_no_blocking_consumer_set()
+    {
+        // An unblocked pass must carry null rather than an empty list, so a
+        // reader cannot mistake "not blocked" for "blocked by nobody".
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+
+        var report = await Gc(
+            provider,
+            registry,
+            new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                [HealthyLeafConsumer] = Hlc(10),
+            }).RunOnceAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.CursorFloorState, Is.Not.EqualTo(WalGcCursorFloorState.BlockedByUnusablePin),
+                "Precondition: this pass must not be the blocked case.");
+            Assert.That(report.BlockingConsumerIds, Is.Null);
         });
     }
 }
