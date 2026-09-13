@@ -747,3 +747,105 @@ observed passing is indistinguishable from one that cannot fail, which is the
 same reason the suite itself is worth measuring rather than trusting: commit
 first, then make one check return no violations unconditionally, re-run, and
 confirm the assertions that fail are the ones covering that check and no others.
+
+## Measuring approximate retrieval on a running container
+
+`scripts/Invoke-AnnQueryProbe.ps1` issues **real retrieval queries** against a
+running container and reports what moved on
+`repocontext_retrieval_ann_search_total`. It exists because a scrape on its own
+cannot answer the question it appears to answer: that counter is written only on
+the per-query path, so a deploy that never issued a query leaves every arm at
+its primed zero, and **that reading is byte-identical to a plane that was
+consulted and answered exactly nothing approximately.**
+
+```bash
+pwsh -File ./scripts/Invoke-AnnQueryProbe.ps1
+pwsh -File ./scripts/Invoke-AnnQueryProbe.ps1 -QueryCount 12 -RepoId lattice
+```
+
+It scrapes the three `state` arms before and after, issues its queries over the
+MCP endpoint on 8080 (the container's only application listener), and reports
+the per-arm delta.
+
+**It refuses to report rather than reporting a zero it cannot stand behind.** The
+refusal is the feature, and there are two of them, kept deliberately distinct
+because they have different owners:
+
+- **issued 0** (exit 2) - the probe never got a query out. Nothing can be
+  concluded about the instrument; the fault is the probe's or the environment's.
+- **issued N, succeeded 0** (exit 2) - queries went out and every one failed. The
+  instrument reading is still inadmissible, but the fault is now the container's
+  and is worth diagnosing.
+
+Collapsing those two into one "no data" would discard exactly the bit that says
+whose problem it is.
+
+**`retrievalPath` on a search result is not evidence about the approximate arm.**
+`AnnRepoContextSemanticIndex.RetrievalPath` is a property of the index, not of a
+query - one index serves every repository, so a state-tracking declaration would
+be wrong the moment two repositories were in different states. It therefore
+reads `semantic.approximate` unconditionally, **including when the exact fallback
+answered with complete recall**, and `NormalizeSemantic` fails closed the same
+way by resolving anything unrecognised to it. The declaration deliberately
+under-promises. Reading it as confirmation that approximate search ran is
+confidently wrong, and the probe prints that caveat rather than assuming you
+know it.
+
+**An absent arm is not a zero.** The probe distinguishes "the series is present
+and reads 0" from "the series is not on the endpoint at all". The first is a
+measurement. The second means the series was refused at creation, and the probe
+sends you to `lattice_metrics_series` and
+`lattice_metrics_dropped_measurements_by_family_total` before you conclude
+anything from it.
+
+**It reads `/health/ready`, and prints the answer verbatim.** This is a
+different endpoint from `/health/live` and answers a different question.
+Liveness asks whether anything is there; readiness asks whether this box can
+actually serve semantic retrieval, and on the repocontext host it is the
+conjunction of the lifecycle component and the vector plane. When the vector
+plane is down the readiness body already says so, in specific and self-limiting
+terms, and it even names the `retrievalPath` discrimination you would otherwise
+have to rediscover.
+
+The endpoint is easy to miss, and has been missed: the container healthcheck
+runs a grain-liveness self-probe rather than an HTTP readiness call, so Docker
+can report `healthy` straight through a total retrieval outage, and the
+acceptance playbook's only outbound call is `/metrics`. The probe therefore
+reads it explicitly rather than assuming something upstream already did.
+
+A 503 here is a **successful** probe result, not a probe failure. It is the
+system diagnosing itself, which is more authoritative than anything this harness
+can infer from a counter delta, so the probe prints the status and the full body
+and says as much. It is deliberately **not** a gate: a 503 is the expected
+reading on a rig whose vector plane is down, and refusing to continue would
+suppress the very measurement the harness exists to take.
+
+**The total across all three arms is the liveness witness.** The arms partition
+the whole query population - `SearchCoreAsync` records an outcome for every
+query including bootstrapping - so a moving total proves the instrument is
+capable of reporting, independently of which arm moved. A zero on
+`approximate` beside a non-zero total is a measured absence. A zero beside a
+zero total is not a reading at all. Because the arms carry no caller tag, a
+total delta larger than the probe's own succeeded count is reported as
+`CONTAMINATED` rather than claimed: concurrent internal retrieval is
+indistinguishable from the probe's own, and pretending otherwise would attribute
+traffic the probe did not generate.
+
+The probe does not deploy, does not score any acceptance predicate, and does not
+tune retrieval parameters. Tuning until the approximate arm fires would encode
+the answer into the instrument.
+
+Its own refusal paths are regression-tested rather than proven once:
+
+```bash
+pwsh -File ./scripts/Test-AnnQueryProbe.ps1
+```
+
+Twelve scenarios against a real in-process HTTP listener, covering both refusals,
+the absent-arm case, the contaminated delta, the suppressed-fallback state, and
+all three readiness shapes (ready, not-ready-with-a-diagnosis, and a readiness
+endpoint that cannot be read at all).
+The suite asserts its own scenario count is non-zero before reporting, for the
+same reason the probe asserts its issued count: a harness that ran nothing
+reports success in a way that is indistinguishable from a harness that ran
+everything and found nothing wrong.
