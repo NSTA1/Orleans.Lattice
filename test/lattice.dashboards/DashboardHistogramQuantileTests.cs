@@ -61,7 +61,11 @@ internal static class DeclaredInstruments
 {
     private static readonly Regex CreateRegex = new(
         @"Create(?<kind>Histogram|UpDownCounter|Counter|ObservableGauge|ObservableCounter|ObservableUpDownCounter)"
-        + @"\s*(?:<[^>()]*>)?\s*\(\s*(?<arg>@?""(?:[^""\\]|\\.)*""|[A-Za-z_][A-Za-z0-9_.]*)",
+        + @"\s*(?:<[^>()]*>)?\s*(?<open>\()\s*(?<arg>@?""(?:[^""\\]|\\.)*""|[A-Za-z_][A-Za-z0-9_.]*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex NamedUnitRegex = new(
+        @"^unit\s*:\s*""(?<u>[^""\\]*)""$",
         RegexOptions.Compiled);
 
     private static readonly Regex ConstRegex = new(
@@ -97,6 +101,37 @@ internal static class DeclaredInstruments
     /// </remarks>
     public static IReadOnlyDictionary<string, (string Dotted, DeclaredInstrumentKind Kind)> BucketTokens =>
         RegistryLazy.Value.BucketTokens;
+
+    /// <summary>
+    /// The unit string each instrument declares, keyed by canonical dotted name.
+    /// An instrument that declares no unit maps to the empty string.
+    /// </summary>
+    /// <remarks>
+    /// The unit is read from the declaration's argument list, which is located by
+    /// balancing parentheses from the factory call rather than by matching a
+    /// trailing anchor such as <c>description:</c>. That distinction is
+    /// load-bearing: an anchored pattern reads only the declarations shaped the
+    /// way its author happened to look at, and silently reports every other
+    /// declaration as <i>no unit</i> rather than as <i>not read</i>. Four
+    /// instruments in <c>src/</c> supply the unit positionally, and an anchored
+    /// scan misses all four while reporting a clean result.
+    /// </remarks>
+    public static IReadOnlyDictionary<string, string> UnitByDottedName => RegistryLazy.Value.UnitByDottedName;
+
+    /// <summary>
+    /// Declarations whose argument list could not be read to its closing
+    /// parenthesis, so the declared unit is <b>unknown</b> rather than absent.
+    /// Asserted empty, because a parser that classifies what it could not read as
+    /// "no unit" reports its own depth as the repository's content.
+    /// </summary>
+    public static IReadOnlyList<string> UnitUnresolved => RegistryLazy.Value.UnitUnresolved;
+
+    /// <summary>
+    /// The number of instruments whose unit was supplied positionally rather than
+    /// with a <c>unit:</c> label. Asserted non-zero, so that the parser's ability
+    /// to read positional units stays proven rather than assumed.
+    /// </summary>
+    public static int PositionalUnitCount => RegistryLazy.Value.PositionalUnitCount;
 
     /// <summary>Generates every Prometheus bucket token a dotted instrument name could produce.</summary>
     public static IEnumerable<string> BucketFormsOf(string dottedName)
@@ -142,7 +177,10 @@ internal static class DeclaredInstruments
         }
 
         var byDotted = new Dictionary<string, DeclaredInstrumentKind>(StringComparer.Ordinal);
+        var unitByDotted = new Dictionary<string, string>(StringComparer.Ordinal);
         var unresolved = new List<string>();
+        var unitUnresolved = new List<string>();
+        var positionalUnits = 0;
         var count = 0;
 
         foreach (var (path, text) in files)
@@ -169,6 +207,15 @@ internal static class DeclaredInstruments
                 }
 
                 byDotted[dotted] = kind;
+
+                var arguments = ReadArgumentList(text, m.Groups["open"].Index);
+                if (arguments is null)
+                {
+                    unitUnresolved.Add($"{Path.GetFileName(path)}: {dotted} - argument list did not close");
+                    continue;
+                }
+
+                unitByDotted[dotted] = ResolveUnit(SplitTopLevelArguments(arguments), ref positionalUnits);
             }
         }
 
@@ -190,7 +237,210 @@ internal static class DeclaredInstruments
         }
 
         unresolved.Sort(StringComparer.Ordinal);
-        return new Registry(byDotted, unresolved, count, bucketTokens);
+        unitUnresolved.Sort(StringComparer.Ordinal);
+        return new Registry(byDotted, unitByDotted, unresolved, unitUnresolved, count, positionalUnits, bucketTokens);
+    }
+
+    /// <summary>
+    /// Returns the text between the parenthesis at <paramref name="openIndex"/> and
+    /// its match, or <see langword="null"/> when the list does not close. String
+    /// literals, character literals, and comments are skipped so that a parenthesis
+    /// inside one cannot unbalance the scan.
+    /// </summary>
+    private static string? ReadArgumentList(string text, int openIndex)
+    {
+        var depth = 0;
+
+        for (var i = openIndex; i < text.Length; i++)
+        {
+            var c = text[i];
+
+            if (c == '"')
+            {
+                i = SkipStringLiteral(text, i);
+                if (i < 0)
+                {
+                    return null;
+                }
+
+                continue;
+            }
+
+            if (c == '\'')
+            {
+                i = SkipCharLiteral(text, i);
+                if (i < 0)
+                {
+                    return null;
+                }
+
+                continue;
+            }
+
+            if (c == '/' && i + 1 < text.Length && text[i + 1] == '/')
+            {
+                while (i < text.Length && text[i] != '\n')
+                {
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (c == '/' && i + 1 < text.Length && text[i + 1] == '*')
+            {
+                var end = text.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                if (end < 0)
+                {
+                    return null;
+                }
+
+                i = end + 1;
+                continue;
+            }
+
+            if (c == '(')
+            {
+                depth++;
+                continue;
+            }
+
+            if (c == ')')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return text[(openIndex + 1)..i];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Returns the index of the closing quote, or -1 when unterminated.</summary>
+    private static int SkipStringLiteral(string text, int quoteIndex)
+    {
+        var verbatim = quoteIndex > 0 && text[quoteIndex - 1] == '@';
+
+        for (var i = quoteIndex + 1; i < text.Length; i++)
+        {
+            if (verbatim)
+            {
+                if (text[i] != '"')
+                {
+                    continue;
+                }
+
+                // A doubled quote inside a verbatim literal is an escaped quote.
+                if (i + 1 < text.Length && text[i + 1] == '"')
+                {
+                    i++;
+                    continue;
+                }
+
+                return i;
+            }
+
+            if (text[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+
+            if (text[i] == '"')
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>Returns the index of the closing quote, or -1 when unterminated.</summary>
+    private static int SkipCharLiteral(string text, int quoteIndex)
+    {
+        for (var i = quoteIndex + 1; i < text.Length; i++)
+        {
+            if (text[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+
+            if (text[i] == '\'')
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>Splits an argument list on its top-level commas.</summary>
+    private static List<string> SplitTopLevelArguments(string arguments)
+    {
+        var parts = new List<string>();
+        var depth = 0;
+        var start = 0;
+
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var c = arguments[i];
+
+            if (c == '"')
+            {
+                var end = SkipStringLiteral(arguments, i);
+                i = end < 0 ? arguments.Length : end;
+                continue;
+            }
+
+            if (c is '(' or '[' or '{' or '<')
+            {
+                depth++;
+                continue;
+            }
+
+            if (c is ')' or ']' or '}' or '>')
+            {
+                depth--;
+                continue;
+            }
+
+            if (c == ',' && depth <= 0)
+            {
+                parts.Add(arguments[start..i].Trim());
+                start = i + 1;
+            }
+        }
+
+        parts.Add(arguments[start..].Trim());
+        return parts;
+    }
+
+    /// <summary>
+    /// Reads the declared unit from a split argument list. A <c>unit:</c> label
+    /// wins; failing that the second positional argument is the unit, which is the
+    /// shape the <c>Meter.Create*</c> overloads define.
+    /// </summary>
+    private static string ResolveUnit(List<string> arguments, ref int positionalUnits)
+    {
+        foreach (var argument in arguments)
+        {
+            var named = NamedUnitRegex.Match(argument);
+            if (named.Success)
+            {
+                return named.Groups["u"].Value;
+            }
+        }
+
+        if (arguments.Count >= 2 && arguments[1].Length > 1 && arguments[1][0] == '"' && arguments[1][^1] == '"')
+        {
+            positionalUnits++;
+            return arguments[1][1..^1];
+        }
+
+        return string.Empty;
     }
 
     private static string? ResolveName(string arg, Dictionary<string, string> constants, HashSet<string> ambiguous)
@@ -216,8 +466,11 @@ internal static class DeclaredInstruments
 
     private sealed record Registry(
         IReadOnlyDictionary<string, DeclaredInstrumentKind> ByDottedName,
+        IReadOnlyDictionary<string, string> UnitByDottedName,
         IReadOnlyList<string> Unresolved,
+        IReadOnlyList<string> UnitUnresolved,
         int DeclarationCount,
+        int PositionalUnitCount,
         IReadOnlyDictionary<string, (string Dotted, DeclaredInstrumentKind Kind)> BucketTokens);
 }
 
@@ -288,7 +541,12 @@ public sealed class DashboardHistogramQuantileTests
 
     private static readonly Lazy<IReadOnlyList<QuerySite>> SitesLazy = new(CollectSites, isThreadSafe: true);
 
-    private static IReadOnlyList<QuerySite> Sites => SitesLazy.Value;
+    /// <summary>
+    /// Every query expression bundled in a dashboard, with its location. Exposed to
+    /// the assembly so that a sibling gate reuses this walk rather than growing a
+    /// second one that can drift from it.
+    /// </summary>
+    internal static IReadOnlyList<QuerySite> Sites => SitesLazy.Value;
 
     /// <summary>
     /// Anti-vacuity. Every other test in this fixture is a statement about a set of
@@ -678,7 +936,7 @@ public sealed class DashboardHistogramQuantileTests
         value.Length <= 160 ? value : value[..160] + " ...";
 
     /// <summary>One PromQL expression on one dashboard, with what the gate needs to judge it.</summary>
-    private sealed class QuerySite
+    internal sealed class QuerySite
     {
         public QuerySite(string dashboard, string site, string refId, string expression)
         {
