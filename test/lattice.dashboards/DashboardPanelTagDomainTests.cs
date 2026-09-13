@@ -159,7 +159,13 @@ public sealed class DashboardPanelTagDomainTests
             // Panel 2783 charts the terminal reactivation arms. "attempted" is
             // the denominator arm (one per touch issued, not a terminal state)
             // and is charted by its own target on the same panel without a
-            // matcher, so it is not part of this allow-list.
+            // matcher, so it is not part of this allow-list. The three arms
+            // added by issue #2938 - completed, faulted and unresolvable - are
+            // charted on this matcher rather than declared omitted: they are
+            // terminal outcomes like the four already there, and completed in
+            // particular has to be legible beside healed, because the gap
+            // between them is what separates a sweep that reaches the leaf
+            // from one that clears the pin.
             ["Replication|2783|orleans.lattice.wal.gc.blocked_leaf_reactivations|outcome"] =
                 ["attempted"],
 
@@ -380,9 +386,14 @@ public sealed class DashboardPanelTagDomainTests
                 ["restored", "withheld"]);
 
             // One forwarding hop: callers pass a KeyValuePair constant into a
-            // private helper that performs the .Add.
+            // private helper that performs the .Add. Since issue #2938 the tag
+            // is produced by a total mapping over the outcome enum rather than
+            // by a hand-written list, so the resolver's ability to follow the
+            // hop is what keeps a newly added arm in scope for the charting
+            // gate below. All four terminal arms and all four lifecycle arms
+            // are derivable; a drop here means the hop stopped resolving.
             AssertDomain("orleans_lattice_wal_gc_blocked_leaf_reactivations_total", "outcome",
-                ["abandoned", "attempted", "healed", "rearmed", "undelivered"]);
+                ["abandoned", "attempted", "completed", "faulted", "healed", "rearmed", "undelivered", "unresolvable"]);
 
             // Collection-built tag list plus a static string-returning helper
             // resolved across files.
