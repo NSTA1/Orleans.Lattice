@@ -296,6 +296,40 @@ internal sealed partial class LeafEntryCache
     }
 
     /// <summary>
+    /// Returns the recorded per-key <see cref="LatticeMergeMode"/> for a row
+    /// that is <em>already resident</em>, reading the merge-mode side-map
+    /// directly and never hydrating, touching, or trimming.
+    /// <para>
+    /// This exists because <c>GetMergeMode</c> cannot be called from inside an
+    /// <c>EnumerateRange</c> walk. It routes through <c>HydrateForKey</c>,
+    /// which ends in <c>TrimToBudget</c>, and a trim removes rows from the
+    /// backing dictionary - structurally modifying the very collection the
+    /// walk's enumerator is positioned on. The hazard is invisible today only
+    /// because every whole-cache walk calls <c>HydrateAll</c> first, which
+    /// detaches the frame and makes <c>HydrateForKey</c> return at its null
+    /// check; it appears the moment a caller stops detaching, which is exactly
+    /// what the bounded window walk does.
+    /// </para>
+    /// <para>
+    /// Equivalent to <c>GetMergeMode</c> for any key a walk is currently
+    /// yielding, because materialising a block restores that block's recorded
+    /// merge modes from the frame (<c>InsertHydratedRow</c>), so a resident row
+    /// always carries its mode alongside it. For a key that is <em>not</em>
+    /// resident this returns <see langword="null"/> rather than hydrating to
+    /// find out, so it is only correct where residency is already established.
+    /// </para>
+    /// </summary>
+    /// <param name="key">The entry key; must be resident.</param>
+    internal LatticeMergeMode? GetMergeModeWithoutHydrating(string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+
+        return _mergeModes is not null && _mergeModes.TryGetValue(key, out var mode)
+            ? mode
+            : null;
+    }
+
+    /// <summary>
     /// The lowest key currently materialised into the backing dictionary, or
     /// <see langword="false"/> when nothing is materialised. Reads the sorted
     /// dictionary directly and never hydrates.

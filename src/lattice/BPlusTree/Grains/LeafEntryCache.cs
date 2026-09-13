@@ -496,9 +496,15 @@ internal sealed partial class LeafEntryCache
     /// <summary>
     /// Returns the recorded per-key <see cref="LatticeMergeMode"/> for
     /// <paramref name="key"/>, or <see langword="null"/> when the key is a plain
-    /// last-writer-wins row (or no mode has been recorded). The
-    /// snapshot-baseline capture path stamps this onto the durable
-    /// <see cref="State.LeafSnapshotRow.MergeMode"/> discriminator.
+    /// last-writer-wins row (or no mode has been recorded). Hydrates the key's
+    /// block first, so it answers for a row a lazily hydrated snapshot still
+    /// owns.
+    /// <para>
+    /// That hydration ends in a trim, which can evict rows, so this must not be
+    /// called from inside an <see cref="EnumerateRange"/> walk - use
+    /// <see cref="GetMergeModeWithoutHydrating"/> there, which reads the
+    /// side-map directly and is equivalent for a row the walk has just yielded.
+    /// </para>
     /// </summary>
     /// <param name="key">The entry key.</param>
     internal LatticeMergeMode? GetMergeMode(string key)
