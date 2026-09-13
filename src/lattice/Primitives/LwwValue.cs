@@ -111,10 +111,23 @@ internal readonly record struct LwwValue<T>
     /// Lattice merge: keep the value with the higher timestamp. On an HLC tie
     /// (two replicas authored at the same <see cref="HybridLogicalClock"/>),
     /// the result is resolved by a stable total order on
-    /// (<see cref="Timestamp"/>, <see cref="OriginClusterId"/>,
-    /// <see cref="IsTombstone"/>, <see cref="ExpiresAtTicks"/>,
-    /// <see cref="Value"/>, <see cref="IsMigrated"/>) so replicas converge
-    /// regardless of the order in which they observe the writes.
+    /// (<see cref="Timestamp"/>, <see cref="IsTombstone"/>,
+    /// <see cref="ExpiresAtTicks"/>, <see cref="Value"/>,
+    /// <see cref="OriginClusterId"/>, <see cref="IsMigrated"/>) so replicas
+    /// converge regardless of the order in which they observe the writes.
+    /// <para>
+    /// The field order is load-bearing, not cosmetic.
+    /// <see cref="OriginClusterId"/> is ranked last of the ordered fields
+    /// because it is the only one that is <em>observer-relative</em>: a site
+    /// stores its own writes with a <see langword="null"/> origin (see
+    /// <c>LatticeOriginContext</c>) while every peer stores that same write
+    /// stamped with the authoring cluster's id. Ranking it above the fields
+    /// that are facts about the write makes each site rank its own write last
+    /// on a bare HLC tie, so the sites apply the same total order to different
+    /// inputs and settle on different winners. Being a commutative,
+    /// associative, idempotent join is necessary for replica convergence but
+    /// not sufficient: the operands must also be replica-invariant.
+    /// </para>
     /// <para>
     /// Idempotent and associative unconditionally: where the order ties, the
     /// leftmost operand of the whole expression wins under either grouping.
@@ -138,31 +151,41 @@ internal readonly record struct LwwValue<T>
         var clockCmp = left.Timestamp.CompareTo(right.Timestamp);
         if (clockCmp != 0) return clockCmp > 0 ? left : right;
 
-        // Secondary: break HLC ties on writer identity. Ordinal string
-        // compare is a total order; null is deterministically ordered
-        // before any non-null id (legacy state without OriginClusterId).
-        var originCmp = string.CompareOrdinal(left.OriginClusterId, right.OriginClusterId);
-        if (originCmp != 0) return originCmp > 0 ? left : right;
+        // Every comparison below the clock must be replica-invariant: it has to
+        // read the same on every site holding the pair, or the merge stops
+        // being a join over shared inputs and two sites settle on different
+        // winners while each applies the total order correctly.
+        // OriginClusterId is the one durable field that is not invariant -
+        // LatticeOriginContext leaves it null on the authoring site and the
+        // replication apply seam stamps the source id on every peer - so it is
+        // ranked below every field that is a fact about the write itself.
 
-        // Tertiary: same writer, same HLC, but the live/tombstone bit
-        // differs. Tombstone wins on tie to preserve delete intent and
-        // keep the result stable across replicas that observed only one
-        // of the two writes.
+        // Secondary: the live/tombstone bit. Tombstone wins on tie to preserve
+        // delete intent and keep the result stable across replicas that
+        // observed only one of the two writes.
         if (left.IsTombstone != right.IsTombstone)
             return left.IsTombstone ? left : right;
 
-        // Quaternary and below: still indistinguishable on causal identity, so
-        // the remaining durable fields extend the order. OriginClusterId is null
-        // for every purely local write and HybridLogicalClock carries no node
-        // id, so a (wall, 0) collision between two leaves that first ticked in
-        // the same wall-clock tick is ordinary - without these the merge is
-        // simply left-biased and two replicas that observed the writes in
-        // different orders keep different values forever.
+        // Tertiary and below: the remaining durable, replica-invariant fields
+        // extend the order. HybridLogicalClock carries no node id, so a
+        // (wall, 0) collision between two leaves that first ticked in the same
+        // wall-clock tick is ordinary - without these the merge is simply
+        // left-biased and two replicas that observed the writes in different
+        // orders keep different values forever.
         var expiryCmp = left.ExpiresAtTicks.CompareTo(right.ExpiresAtTicks);
         if (expiryCmp != 0) return expiryCmp > 0 ? left : right;
 
         var valueCmp = CompareValue(left.Value, right.Value);
         if (valueCmp != 0) return valueCmp > 0 ? left : right;
+
+        // Writer identity, ranked here precisely because it is observer-
+        // relative. Reaching this line means the two entries already agree on
+        // clock, liveness, expiry and payload, so whichever way two sites break
+        // this residual tie they have converged on everything observable.
+        // Ordinal string compare is a total order; null is deterministically
+        // ordered before any non-null id (legacy state without an origin).
+        var originCmp = string.CompareOrdinal(left.OriginClusterId, right.OriginClusterId);
+        if (originCmp != 0) return originCmp > 0 ? left : right;
 
         // Last: provenance. IsMigrated changes the foreground orphan-drain
         // decision in BPlusLeafGrain.ApplyTxCommit, so it must not be left to
