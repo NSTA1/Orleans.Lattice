@@ -1587,10 +1587,36 @@ internal sealed partial class BPlusLeafGrain
     /// into "this host is provisioned below its working set", and it is not
     /// otherwise recoverable from the logs.
     /// </para>
+    /// <para>
+    /// That last inference is only valid when the claim actually exhausted the
+    /// budget, which is why <paramref name="lease"/> is consulted (issue #2844).
+    /// A load that ran out of memory while its claim sat comfortably inside the
+    /// budget did not run out of total memory; it failed to find one unbroken
+    /// run of it. Reporting that case as a provisioning shortfall would be
+    /// precisely wrong, because every byte-denominated limit here is derived
+    /// from the memory grant and admits more concurrent work as it grows, so
+    /// acting on the advice makes the failure more frequent.
+    /// </para>
     /// </summary>
-    private void ObserveSnapshotLoadFailure(Exception error)
+    /// <param name="error">The fault the load raised.</param>
+    /// <param name="lease">
+    /// The hydration lease the failed load held, when it had one. Supplies the
+    /// reservation and contiguous figures that distinguish an aggregate
+    /// shortfall from a contiguity failure.
+    /// </param>
+    private void ObserveSnapshotLoadFailure(
+        Exception error,
+        LeafSnapshotHydrationLease? lease = null)
     {
         var resourceExhaustion = IsResourceExhaustion(error);
+
+        // "The claim fitted and it failed anyway." Evaluated from the gate's own
+        // budget rather than from the exception, because the exception is raised
+        // inside the storage provider and knows nothing about admission.
+        var contiguityExhaustion = resourceExhaustion
+            && lease is not null
+            && lease.HeldBytes <= SnapshotHydrationAdmission.BudgetBytes;
+
         var treeId = state.State.TreeId;
 
         if (treeId is { Length: > 0 })
@@ -1599,7 +1625,9 @@ internal sealed partial class BPlusLeafGrain
                 1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
                 resourceExhaustion
-                    ? LatticeMetrics.SnapshotLoadFailureResourceExhausted
+                    ? contiguityExhaustion
+                        ? LatticeMetrics.SnapshotLoadFailureContiguityExhausted
+                        : LatticeMetrics.SnapshotLoadFailureResourceExhausted
                     : LatticeMetrics.SnapshotLoadFailureFaulted,
                 LatticeTenantLabel.ForTree(treeId));
         }
@@ -1616,6 +1644,40 @@ internal sealed partial class BPlusLeafGrain
         if (resourceExhaustion)
         {
             var memoryInfo = GC.GetGCMemoryInfo();
+
+            if (contiguityExhaustion)
+            {
+                // Deliberately a different message rather than a variant of the
+                // one below, because the one below ends in advice that is wrong
+                // here and the failures are otherwise indistinguishable in a log.
+                logger.LogError(
+                    error,
+                    "Leaf {GrainId} (tree '{TreeId}') could not load its snapshot: it ran out of memory while "
+                    + "materialising a single contiguous {ContiguousBytes} byte buffer, even though its "
+                    + "hydration claim of {ReservedBytes} bytes FITTED the gate's {BudgetBytes} byte budget "
+                    + "with {HeadroomBytes} bytes unused (issue #2844). What ran out is one unbroken run of "
+                    + "memory, NOT this process's total: the managed heap is using {HeapBytes} bytes against a "
+                    + "hard limit of {HeapHardLimitBytes} bytes (0 means unlimited). Do NOT respond by raising "
+                    + "this process's memory limit. Every byte-denominated bound here - this hydration budget, "
+                    + "the resident working-set budget and the replay gate - is derived from that limit and "
+                    + "admits MORE concurrent work as it rises, while the ability to find one unbroken run of "
+                    + "memory does not improve at all, so a larger limit yields the same failure at a higher "
+                    + "footprint. The hydration was already serialised against other hydrations where its "
+                    + "contiguous requirement warranted it, which is the only lever this process has and is "
+                    + "not a guarantee. The durable remedy is to make the snapshot smaller: divide this leaf, "
+                    + "or lower MaxLeafBytes for this tree.",
+                    context.GrainId,
+                    treeId,
+                    lease?.ContiguousBytes ?? 0L,
+                    lease?.HeldBytes ?? 0L,
+                    SnapshotHydrationAdmission.BudgetBytes,
+                    SnapshotHydrationAdmission.BudgetBytes - (lease?.HeldBytes ?? 0L),
+                    GC.GetTotalMemory(forceFullCollection: false),
+                    memoryInfo.TotalAvailableMemoryBytes);
+
+                return;
+            }
+
             logger.LogError(
                 error,
                 "Leaf {GrainId} (tree '{TreeId}') could not load its snapshot because memory was exhausted, so "
@@ -1865,7 +1927,15 @@ internal sealed partial class BPlusLeafGrain
             return null;
         }
 
-        ObserveSnapshotHydrationAdmission(lease.Queued);
+        if (lease.Exclusive)
+        {
+            ObserveSnapshotHydrationSoleOccupancy();
+        }
+        else
+        {
+            ObserveSnapshotHydrationAdmission(lease.Queued);
+        }
+
         return lease;
     }
 
@@ -1897,6 +1967,8 @@ internal sealed partial class BPlusLeafGrain
                 0, treeTag, LatticeMetrics.SnapshotHydrationAdmittedImmediately, tenantTag);
             LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
                 0, treeTag, LatticeMetrics.SnapshotHydrationQueued, tenantTag);
+            LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
+                0, treeTag, LatticeMetrics.SnapshotHydrationSoleOccupancy, tenantTag);
         }
 
         LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
@@ -1906,6 +1978,43 @@ internal sealed partial class BPlusLeafGrain
                 ? LatticeMetrics.SnapshotHydrationQueued
                 : LatticeMetrics.SnapshotHydrationAdmittedImmediately,
             tenantTag);
+    }
+
+    /// <summary>
+    /// Records a hydration that the contiguity rule serialised (issue #2844).
+    /// <para>
+    /// Reported on its own arm rather than as <c>queued</c>, and deliberately
+    /// instead of the queued/immediate pair rather than in addition to it, so
+    /// the three outcomes partition the admitted population and can be summed.
+    /// Whether such a claim also had to wait is the less useful fact: it was
+    /// serialised on a predicate that a larger memory grant does not relax, so
+    /// what an operator needs to see is the count of hydrations too large to
+    /// run alongside anything else.
+    /// </para>
+    /// </summary>
+    private void ObserveSnapshotHydrationSoleOccupancy()
+    {
+        var treeId = state.State.TreeId;
+        if (treeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        if (PrimedAdmissionTrees.TryAdd(treeId, 0))
+        {
+            LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
+                0, treeTag, LatticeMetrics.SnapshotHydrationAdmittedImmediately, tenantTag);
+            LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
+                0, treeTag, LatticeMetrics.SnapshotHydrationQueued, tenantTag);
+            LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
+                0, treeTag, LatticeMetrics.SnapshotHydrationSoleOccupancy, tenantTag);
+        }
+
+        LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
+            1, treeTag, LatticeMetrics.SnapshotHydrationSoleOccupancy, tenantTag);
     }
 
     internal async Task<bool> TryRehydrateFromSnapshotAsync(CancellationToken cancellationToken)
@@ -1998,7 +2107,7 @@ internal sealed partial class BPlusLeafGrain
             // Nothing in that names memory. Worse, it compounds: the forced
             // cold replay allocates more than the load that just failed, so the
             // same few leaves go cold repeatedly and pressure rises.
-            ObserveSnapshotLoadFailure(ex);
+            ObserveSnapshotLoadFailure(ex, lease);
 
             // ... and THAT is the loop this arm now breaks (issue #2765). The
             // compounding described above is not a side effect of the fall-
@@ -2054,6 +2163,7 @@ internal sealed partial class BPlusLeafGrain
                     state.State.TreeId ?? string.Empty,
                     lease.HeldBytes,
                     SnapshotHydrationAdmission.BudgetBytes,
+                    lease.ContiguousBytes,
                     ex);
             }
 

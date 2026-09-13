@@ -45,26 +45,77 @@ internal sealed class LeafSnapshotUnaffordableException : Exception
     /// <summary>Aggregate bytes the admission gate will allow concurrently.</summary>
     [Id(2)] public long BudgetBytes { get; set; }
 
+    /// <summary>
+    /// The largest single <b>contiguous</b> allocation the failed hydration
+    /// required (issue #2844). Carried separately from
+    /// <see cref="ReservedBytes"/> because the two are different predicates and
+    /// only one of them is a budget: a reservation is satisfied out of total
+    /// free bytes, whereas this one has to be met by an unbroken run of memory,
+    /// which no amount of aggregate headroom guarantees.
+    /// </summary>
+    [Id(3)] public long ContiguousBytes { get; set; }
+
     /// <summary>Creates a new <see cref="LeafSnapshotUnaffordableException"/>.</summary>
     public LeafSnapshotUnaffordableException(
         string treeId,
         long reservedBytes,
         long budgetBytes,
+        long contiguousBytes,
         Exception? innerException)
         : base(
-            $"The leaf snapshot for tree '{treeId}' could not be materialised within the memory available to "
-            + $"this process (reserved {reservedBytes} bytes against a {budgetBytes} byte hydration budget). "
-            + "The snapshot is intact and still durable; this activation is unaffordable right now. It is "
-            + "declined deliberately, because replaying the whole write-ahead-log window instead would allocate "
-            + "more than the load that just failed and drive the process into a restart loop. Orleans will retry "
-            + "the activation once the cold-start storm has drained; no operator action is required.",
+            BuildMessage(treeId, reservedBytes, budgetBytes, contiguousBytes),
             innerException)
     {
         TreeId = treeId;
         ReservedBytes = reservedBytes;
         BudgetBytes = budgetBytes;
+        ContiguousBytes = contiguousBytes;
     }
 
     /// <summary>Parameterless constructor for Orleans serialization.</summary>
     public LeafSnapshotUnaffordableException() { }
+
+    // Two messages, because the two failures call for opposite reactions and a
+    // single message that averaged them would mislead on both (issue #2844).
+    //
+    // The message this replaces quoted reserved-against-budget unconditionally.
+    // On the arm where the claim FITTED - 394,270,800 bytes of a 1,207,959,552
+    // byte budget, with 776 MiB never used - that phrasing reads as "the budget
+    // was too small" and sends a reader straight to enlarging the memory grant.
+    // That is the single worst available action: the hydration budget, the
+    // resident working-set budget and the replay gate are all derived from the
+    // grant and every one of them admits MORE concurrent work as it grows, while
+    // the quantity that actually ran out - one unbroken run of memory - does not
+    // improve at all. So the exception has to name which predicate failed, not
+    // merely report the numbers and leave the inference to the reader.
+    private static string BuildMessage(
+        string treeId,
+        long reservedBytes,
+        long budgetBytes,
+        long contiguousBytes)
+    {
+        var prefix =
+            $"The leaf snapshot for tree '{treeId}' could not be materialised within the memory available to "
+            + "this process. ";
+
+        var diagnosis = reservedBytes <= budgetBytes
+            ? $"The hydration claim FITTED the gate's budget (reserved {reservedBytes} bytes of {budgetBytes}, "
+                + $"leaving {budgetBytes - reservedBytes} bytes unused) and the load failed anyway while "
+                + $"materialising a single contiguous {contiguousBytes} byte buffer. This is a CONTIGUITY "
+                + "failure, not a shortage of total memory: raising this process's memory limit will not fix "
+                + "it and will make it more frequent, because the hydration budget, the resident working-set "
+                + "budget and the replay gate are all derived from that limit and each admits more concurrent "
+                + "work as it rises. Divide this leaf, or reduce MaxLeafBytes for this tree, so that no single "
+                + "snapshot has to be read into one buffer this large. "
+            : $"The hydration claim exceeded the gate's budget (reserved {reservedBytes} bytes against a "
+                + $"{budgetBytes} byte hydration budget) and was admitted as sole occupant, requiring a single "
+                + $"contiguous {contiguousBytes} byte buffer. ";
+
+        return prefix
+            + diagnosis
+            + "The snapshot is intact and still durable; this activation is unaffordable right now. It is "
+            + "declined deliberately, because replaying the whole write-ahead-log window instead would allocate "
+            + "more than the load that just failed and drive the process into a restart loop. Orleans will retry "
+            + "the activation once the cold-start storm has drained; no operator action is required.";
+    }
 }
