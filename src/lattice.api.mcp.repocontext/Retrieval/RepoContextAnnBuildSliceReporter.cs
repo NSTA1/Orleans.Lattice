@@ -588,81 +588,80 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
 
             var r = new KeyValuePair<string, object?>(RepositoryTagKey, plane.Repository);
             var s = new KeyValuePair<string, object?>(SpaceTagKey, plane.Space);
-            var t = LatticeTenantLabel.Platform;
 
             // Pre-mint every series with a zero-valued add. An arm that has never
             // been exercised is the arm most likely to be refused by a saturated
             // collector, and it is exactly the arm a reader is invited to read as a
             // measured zero.
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseIngestingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressAdvancedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseIngestingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressStarvedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseIngestingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressIdleTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseIngestingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressChurnedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseIngestingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressFaultedTag));
 
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseTrainingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressAdvancedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseTrainingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressStarvedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseTrainingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressIdleTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseTrainingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressChurnedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseTrainingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressFaultedTag));
 
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhasePersistingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressAdvancedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhasePersistingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressStarvedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhasePersistingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressIdleTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhasePersistingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressChurnedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhasePersistingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressFaultedTag));
 
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseReconcilingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressAdvancedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseReconcilingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressStarvedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseReconcilingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressIdleTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseReconcilingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressChurnedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseReconcilingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressFaultedTag));
 
             // Fault-only phases: no step ran, so no completing arm is reachable.
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseCoordinatingTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressFaultedTag));
-            _slices.Add(0, r, s, t,
+            _slices.Add(0, r, s, LatticeTenantLabel.Platform,
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseOpeningTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressFaultedTag));
 
