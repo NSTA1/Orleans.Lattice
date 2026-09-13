@@ -316,6 +316,20 @@ public sealed class TenantMetricDimensionHygieneTests
         // The state and outcome tags are the dimensions that carry the signal.
         "_partitioning",
         "_repartitions",
+        // repocontext.ann.index.load - attempts to load the durable approximate
+        // index into memory, partitioned by whether the attempt started fresh,
+        // resumed progress banked by an earlier faulted attempt, or faulted itself,
+        // issue #2953. Sentinel for exactly the reason _partitioning is: this is
+        // emitted per PLANE, and a plane has no tenant to attribute it to. The load
+        // walks the identifier key map inside RepoContextTrees.VectorIndex, the
+        // single shared tree every repository's vectors live in, separated only by
+        // key prefix - so LatticeTenantLabel.ForTree would resolve to the same
+        // constant for every plane on the host, producing one undiscriminating
+        // series while falsely implying a tenant attribution for a shared tree. The
+        // outcome tag is the dimension that carries the signal, and all three of its
+        // arms are pre-minted so a zero on the resumed arm is a measured absence
+        // rather than a missing series.
+        "_loads",
         // lattice.repocontext.memory.restore - memory-archive restore attempts
         // partitioned by outcome (restored / partial / nothing_to_restore /
         // not_attempted / failed), issue #2641. The restore runs once per HOST PROCESS

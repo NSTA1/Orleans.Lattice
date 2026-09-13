@@ -40,6 +40,12 @@ public sealed class VectorKeyDictionary
     private long _next;
     private long _reservedTo;
 
+    // Non-null only between a faulted load and the call that finishes it. Its
+    // nullity is therefore the resume state itself, which is why the completion
+    // path below clears it explicitly rather than letting it fall out of scope.
+    private string? _loadCursor;
+    private long _loadHighest = -1L;
+
     /// <summary>
     /// Creates a dictionary over a store. Call <see cref="LoadAsync"/> before use
     /// so it adopts whatever a previous process already assigned.
@@ -76,22 +82,69 @@ public sealed class VectorKeyDictionary
     public long NextKey => _next;
 
     /// <summary>
+    /// Whether a previous <see cref="LoadAsync"/> faulted partway and left banked
+    /// progress that the next call will continue from rather than re-read.
+    /// <para>
+    /// This is the only synchronous, in-process witness that a resume actually
+    /// happened. A resumed load and a restarted one produce the identical final
+    /// mapping, so nothing about the result distinguishes them - which is exactly
+    /// why a test that inspects only the outcome cannot tell whether the resume
+    /// works, and why this is exposed rather than inferred.
+    /// </para>
+    /// </summary>
+    public bool HasBankedLoadProgress => _loadCursor is not null;
+
+    /// <summary>
     /// Loads the persisted mapping, replacing anything held in memory. Safe to
     /// call on an empty store, where it simply yields an empty dictionary.
+    /// <para>
+    /// <b>An interrupted load resumes; a completed one starts again.</b> The walk
+    /// over the key-map prefix is the O(corpus) part of opening an index, and when
+    /// it faults partway its caller retries it - so without banking, every attempt
+    /// reissues the reads the previous attempt already completed and the demand is
+    /// regenerated in full, indefinitely (#2953). This method therefore keeps the
+    /// records it consumed and the cursor it reached when it throws, and the next
+    /// call continues past that cursor. A call that <i>completes</i> clears the
+    /// cursor, so a caller that deliberately reloads still gets a full re-read and
+    /// never silently inherits a stale partial.
+    /// </para>
+    /// <para>
+    /// Resuming is sound here because the walk is a read over an ordinal key range
+    /// and continuing from the successor of the last key consumed re-reads nothing
+    /// and skips nothing - the same argument
+    /// <see cref="LatticeVectorIndexStore"/> already relies on for its in-call
+    /// resume. It is additionally safe against concurrent writers for the specific
+    /// shape of this record: a key is never recycled and a re-embedded identifier
+    /// keeps the key it had, so a record below the cursor cannot change meaning
+    /// under a resumed walk.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the load.</param>
     public async Task LoadAsync(CancellationToken cancellationToken = default)
     {
-        _forward.Clear();
-        _reverse.Clear();
-        _next = 0;
-        _reservedTo = 0;
+        // Cleared only when starting fresh. Clearing on a resumed call would throw
+        // away exactly the progress the resume exists to keep, which is the defect
+        // in its most direct form: the method would still resume the *scan* and
+        // still discard the *records*, so the walk would shorten while the result
+        // silently lost every identifier below the cursor.
+        if (_loadCursor is null)
+        {
+            _forward.Clear();
+            _reverse.Clear();
+            _next = 0;
+            _reservedTo = 0;
+            _loadHighest = -1L;
+        }
 
-        var highest = -1L;
         var mapPrefix = VectorIndexStorageKeys.KeyMapPrefix(_prefix);
-        var scan = _store.ScanAsync(mapPrefix, cancellationToken);
+        var scan = _store.ScanAsync(mapPrefix, _loadCursor, cancellationToken);
         await foreach (var entry in scan.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
+            // Banked before the decode, not after. A record that cannot be decoded
+            // is skipped below, and a cursor advanced only past decodable records
+            // would resume onto the undecodable one forever.
+            _loadCursor = entry.Key;
+
             if (!VectorIndexStorageKeys.TryReadKeyMapId(_prefix, entry.Key, out var id) ||
                 id.Length == 0 ||
                 !TryReadKey(entry.Value, out var key))
@@ -105,9 +158,9 @@ public sealed class VectorKeyDictionary
 
             _forward[id] = key;
             _reverse[key] = id;
-            if (key > highest)
+            if (key > _loadHighest)
             {
-                highest = key;
+                _loadHighest = key;
             }
         }
 
@@ -118,8 +171,13 @@ public sealed class VectorKeyDictionary
         // lost watermark still pins the floor: resuming below an identifier that
         // is demonstrably already in use would reissue it.
         _reservedTo = TryReadKey(watermark, out var reserved) ? reserved : 0;
-        _next = Math.Max(_reservedTo, highest + 1);
+        _next = Math.Max(_reservedTo, _loadHighest + 1);
         _reservedTo = Math.Max(_reservedTo, _next);
+
+        // Reached only on a load that completed, which is what makes the next call
+        // a full reload rather than a no-op resume off the end of the range.
+        _loadCursor = null;
+        _loadHighest = -1L;
     }
 
     /// <summary>
