@@ -30,9 +30,17 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
     /// <summary>
     /// The distinguishing fragment of the unreachable-block escalation. It is
-    /// matched on rather than the per-blocker "cannot reclaim" warning, which
-    /// fires on every change of reported blocker and is therefore abundant in
-    /// exactly the churn fixtures that assert on the escalation.
+    /// matched on rather than the per-blocker "cannot reclaim" warning because
+    /// the two are different conditions - being blocked at all, versus having
+    /// been unable to attempt a remedy for long enough to give up - and a
+    /// fragment common to both would conflate them.
+    /// <para>
+    /// This comment used to justify the choice by saying the cannot-reclaim
+    /// warning "fires on every change of reported blocker and is therefore
+    /// abundant in exactly the churn fixtures". That was true and is no longer:
+    /// issue #2815 throttled it to once per episode, precisely because these
+    /// churn fixtures describe the population it was abundant on.
+    /// </para>
     /// </summary>
     private const string UnreachableBlockWarning = "has not been able to attempt a reactivation";
 

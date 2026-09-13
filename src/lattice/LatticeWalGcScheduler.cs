@@ -406,12 +406,37 @@ internal sealed class LatticeWalGcScheduler(
     /// <param name="AnyAbandoned">Whether some consumer on this tree has spent its budget and been reported.</param>
     /// <param name="Escalated">Whether the unreachable-block escalation has already fired for this episode.</param>
     /// <param name="Budgets">Per-consumer attempt budgets, shared across the episode and mutated in place.</param>
+    /// <param name="WarnedBlocked">
+    /// Whether the cannot-reclaim warning has already fired for this episode. It
+    /// is what throttles that warning per episode rather than per change of
+    /// reported blocker (issue #2815).
+    /// </param>
+    /// <param name="DistinctBlockers">
+    /// How many consumers this episode has admitted to <paramref name="Budgets"/>.
+    /// <para>
+    /// It is a count of <i>admissions</i>, not of distinct identities, and the
+    /// two differ in one direction only: pruning can drop a consumer that has
+    /// not been reported for <see cref="BlockedConsumerRetention"/> and has no
+    /// live attempt state, so an identity that rotates out for over an hour and
+    /// returns is counted twice. Keeping an exact distinct count would need a
+    /// set that is never pruned, which is the unbounded growth pruning exists to
+    /// prevent - so this is deliberately the bounded approximation. It is read
+    /// as a churn width, where an over-count by re-admission is still evidence
+    /// of churn, and never as a leaf inventory.
+    /// </para>
+    /// </param>
+    /// <param name="FirstBlocker">The first consumer admitted in this episode, which is the one the warning named.</param>
+    /// <param name="LatestBlocker">The most recently admitted consumer, which is the one holding the floor now.</param>
     private readonly record struct BlockedConsumerObservation(
         DateTimeOffset EpisodeStarted,
         DateTimeOffset? LastAnyAttempt,
         bool AnyAbandoned,
         bool Escalated,
-        Dictionary<string, ConsumerReactivationBudget> Budgets);
+        Dictionary<string, ConsumerReactivationBudget> Budgets,
+        bool WarnedBlocked = false,
+        int DistinctBlockers = 0,
+        string? FirstBlocker = null,
+        string? LatestBlocker = null);
 
     /// <summary>
     /// One blocking leaf's reactivation budget and rate-limiter state, carried
@@ -1276,8 +1301,40 @@ internal sealed class LatticeWalGcScheduler(
             budgets[consumerId] = new ConsumerReactivationBudget(
                 FirstObserved: now,
                 LastObserved: now);
-            WarnFloorBlocked(treeId, consumerId);
+
+            // Count every admission, but warn only on the first of the episode
+            // (issue #2815). The warning used to fire here unconditionally, so
+            // it was throttled per blocker identity - which is no throttle at
+            // all on the population it matters for. A tree whose blockers churn
+            // faster than ReactivationMinBlockAge admits a new consumer on every
+            // pass, and a blocked tree is deliberately held at the cadence
+            // floor, so the warning ran at the floor rate indefinitely: about
+            // two a minute at stock defaults.
+            //
+            // That population is the same one the escalation below exists for -
+            // no blocker holds still long enough to be touched, so no
+            // attempt-derived budget can report it. It was therefore both
+            // invisible to the give-up budget and the loudest thing in the log,
+            // on exactly the rigs where the log stream is the only diagnosis
+            // available.
+            observation = observation with
+            {
+                DistinctBlockers = observation.DistinctBlockers + 1,
+                FirstBlocker = observation.FirstBlocker ?? consumerId,
+                LatestBlocker = consumerId,
+            };
+
+            if (!observation.WarnedBlocked)
+            {
+                observation = observation with { WarnedBlocked = true };
+                WarnFloorBlocked(treeId, consumerId);
+            }
         }
+
+        // The admission bookkeeping above is on the observation, not on the
+        // budgets map, so it has to be written back. Budgets is a reference and
+        // mutates in place; the observation is a record struct and does not.
+        _blockedConsumers[treeId] = observation;
 
         PruneBlockedConsumerBudgets(budgets, now);
 
@@ -1299,10 +1356,11 @@ internal sealed class LatticeWalGcScheduler(
             _blockedConsumers[treeId] = observation;
 
             logger.LogWarning(
-                "WAL GC has not been able to attempt a reactivation on tree {Tree} for {Elapsed}, while its cursor floor stayed blocked and its WAL stayed retained; the consumers reported as blocking keep changing before any one of them has been blocking long enough to touch, so the per-leaf attempt budget cannot report this tree. Currently reported blocker is {Consumer}. Investigate why this tree has several leaves whose snapshot capture does not complete.",
+                "WAL GC has not been able to attempt a reactivation on tree {Tree} for {Elapsed}, while its cursor floor stayed blocked and its WAL stayed retained; the consumers reported as blocking keep changing before any one of them has been blocking long enough to touch, so the per-leaf attempt budget cannot report this tree. Currently reported blocker is {Consumer}, and the floor has named {DistinctBlockers} blocking consumers since the episode began. Investigate why this tree has several leaves whose snapshot capture does not complete.",
                 treeId,
                 now - (observation.LastAnyAttempt ?? observation.EpisodeStarted),
-                blockingConsumerIds[0]);
+                blockingConsumerIds[0],
+                observation.DistinctBlockers);
         }
 
         List<string>? touching = null;
@@ -1506,16 +1564,63 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
-    /// Warns, once per blocker rather than once per pass, that a tree's cursor
-    /// floor is blocked. A blocked tree deliberately polls at the interval
-    /// floor, so an unthrottled warning would be loudest for exactly the
-    /// population it stays useless longest for.
+    /// Warns, once per blocked episode, that a tree's cursor floor is blocked.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Throttled per episode and not per blocker identity (issue #2815). The
+    /// per-identity form was no throttle at all for the population that needs
+    /// one: a blocked tree is deliberately held at the cadence floor, so a tree
+    /// whose reported blocker changes every pass emitted this at the floor rate
+    /// indefinitely - roughly two a minute at stock defaults, for as long as the
+    /// silo ran.
+    /// </para>
+    /// <para>
+    /// <b>What the throttle gives up, and where it is paid back.</b> The
+    /// warning's diagnostic value is that it names <i>which</i> consumer, so one
+    /// line per episode loses the identity sequence. The sequence is not
+    /// dropped, it is summarised: the episode carries a distinct-blocker count
+    /// and the first and most recent identities, which
+    /// <see cref="ReportBlockerChurn"/> reports when the episode ends and the
+    /// unreachable-block escalation reports when it fires. A count with both
+    /// ends of the sequence answers the three questions the sequence was being
+    /// read for - is it churning, how wide, and which leaf do I open - whereas a
+    /// bounded sample of the first few identities answers only the first and
+    /// re-creates this same unbounded log in miniature as the bound is raised.
+    /// </para>
+    /// </remarks>
     private void WarnFloorBlocked(string treeId, string blockingConsumerId) =>
         logger.LogWarning(
-            "WAL GC for tree {Tree} cannot reclaim: durable materialiser pin {Consumer} carries no usable offset, so the cursor floor is blocked and the WAL is retained without bound. The consumer id embeds the owning leaf's grain id. Other leaves on this tree may also be blocked; a pass reports a bounded number of them, so an unreported leaf is not evidence of an unblocked one.",
+            "WAL GC for tree {Tree} cannot reclaim: durable materialiser pin {Consumer} carries no usable offset, so the cursor floor is blocked and the WAL is retained without bound. The consumer id embeds the owning leaf's grain id. Other leaves on this tree may also be blocked; a pass reports a bounded number of them, so an unreported leaf is not evidence of an unblocked one. This fires once for the whole blocked episode rather than once per reported blocker, so it naming one consumer is not evidence that only one was blocking; the distinct-blocker count and both ends of the sequence are reported when the episode escalates or ends.",
             treeId,
             blockingConsumerId);
+
+    /// <summary>
+    /// Reports the blocker churn an ending episode saw, which is where the
+    /// identity sequence that <see cref="WarnFloorBlocked"/> no longer streams
+    /// is paid back (issue #2815).
+    /// </summary>
+    /// <remarks>
+    /// Silent on a single-blocker episode, because the warning already named
+    /// that consumer and there is nothing the summary would add. Logged at
+    /// information rather than warning: an episode that ends is a tree that
+    /// recovered, and the condition it describes has already been alarmed on.
+    /// </remarks>
+    private void ReportBlockerChurn(string treeId, in BlockedConsumerObservation observation)
+    {
+        if (observation.DistinctBlockers <= 1)
+        {
+            return;
+        }
+
+        logger.LogInformation(
+            "WAL GC tree {Tree} is no longer blocked after {Elapsed}. Its cursor floor named {DistinctBlockers} blocking consumers during the episode, first {FirstConsumer} and most recently {Consumer}; the per-blocker warning is emitted once per episode, so this is where that rotation is reported rather than in the log stream throughout it. The count is of admissions, so a consumer that rotated out for over an hour and returned is counted twice - read it as how widely the blockers churned, never as a leaf inventory.",
+            treeId,
+            _time.GetUtcNow() - observation.EpisodeStarted,
+            observation.DistinctBlockers,
+            observation.FirstBlocker,
+            observation.LatestBlocker);
+    }
 
     /// <summary>
     /// Ends a tree's blocked episode, crediting a heal for every consumer the
@@ -1528,6 +1633,7 @@ internal sealed class LatticeWalGcScheduler(
     {
         if (_blockedConsumers.Remove(treeId, out var observation))
         {
+            ReportBlockerChurn(treeId, observation);
             CreditHealedConsumers(observation, treeTag, tenantTag);
         }
     }
