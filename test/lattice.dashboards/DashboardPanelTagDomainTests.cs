@@ -817,8 +817,23 @@ public sealed class DashboardPanelTagDomainTests
     /// Locates every imperative emission site for an instrument field, returning
     /// the index just past the opening parenthesis of each call.
     /// </summary>
+    /// <remarks>
+    /// Memoized by field name. The scan is a pure function of the source corpus,
+    /// which is itself loaded once and cached, so repeating it is only cost. The
+    /// doc arity gate resolves many (instrument, tag) pairs to answer a single
+    /// generic arity claim, which turns this from a handful of corpus walks into
+    /// several hundred.
+    /// </remarks>
     private static List<(string File, int ArgsStart)> FindEmissionSites(string fieldName)
     {
+        lock (EmissionSiteCache)
+        {
+            if (EmissionSiteCache.TryGetValue(fieldName, out var cached))
+            {
+                return cached;
+            }
+        }
+
         var sites = new List<(string, int)>();
 
         foreach (var (file, text) in Sources())
@@ -838,8 +853,16 @@ public sealed class DashboardPanelTagDomainTests
             }
         }
 
+        lock (EmissionSiteCache)
+        {
+            EmissionSiteCache[fieldName] = sites;
+        }
+
         return sites;
     }
+
+    private static readonly Dictionary<string, List<(string File, int ArgsStart)>> EmissionSiteCache =
+        new(StringComparer.Ordinal);
 
     private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
@@ -1380,5 +1403,43 @@ public sealed class DashboardPanelTagDomainTests
         }
 
         return bodies;
+    }
+
+    // -------------------------------------------- shared with the doc arity gate
+
+    /// <summary>
+    /// The source-derived armed value set for one instrument/tag pair, addressed
+    /// by the instrument's canonical dotted name.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Exposed so that <c>MetricDocArmArityTests</c> can check a documentation
+    /// row's arity claim against the same derivation this guard already runs on,
+    /// rather than against a second resolver written beside it. Sharing one
+    /// derivation is the whole point: two independently written scanners that
+    /// agree are a coincidence that decays, whereas one scanner used twice cannot
+    /// disagree with itself, so the documented arity and the charted domain can
+    /// never drift apart while both still pass.
+    /// </para>
+    /// <para>
+    /// Returns <see langword="null"/> rather than an empty set for an instrument
+    /// this resolver cannot read, so a caller can tell "no value is armed" from
+    /// "no value could be derived". Collapsing those two would let an unreadable
+    /// instrument read as a zero-arm one, which is the silent-absence failure
+    /// mode this whole family of guards exists to remove.
+    /// </para>
+    /// </remarks>
+    /// <param name="dottedName">The instrument's canonical dotted name.</param>
+    /// <param name="tag">The tag key whose armed values are wanted.</param>
+    /// <returns>The armed values, or <see langword="null"/> when undecidable.</returns>
+    internal static IReadOnlySet<string>? ArmedValues(string dottedName, string tag)
+    {
+        if (!InstrumentFields().ContainsKey(dottedName))
+        {
+            return null;
+        }
+
+        var domain = ResolveDomain(dottedName.Replace('.', '_'), tag);
+        return domain is null || domain.Values.Count == 0 ? null : domain.Values;
     }
 }
