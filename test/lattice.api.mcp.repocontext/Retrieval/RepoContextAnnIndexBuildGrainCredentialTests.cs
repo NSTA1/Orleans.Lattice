@@ -166,14 +166,85 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
     }
 
     /// <summary>
+    /// A durable index store whose WRITES can be made to fault on demand, standing
+    /// in for a persist that cannot be served.
+    /// <para>
+    /// This is the counterpart to <see cref="GatedVectorSource.Faults"/> and the two
+    /// exist to be told apart. A faulting SOURCE means the ingest corpus could not
+    /// be read; a faulting STORE means the trained index could not be written. Those
+    /// imply opposite conclusions about the same undifferentiated <c>faulted</c>
+    /// count - the first is an independent failure, the second is a downstream
+    /// symptom of the very tree the build persists into - and issue #2855 exists
+    /// because the instrument could not distinguish them.
+    /// </para>
+    /// <para>
+    /// Reads are left alone deliberately. A store that also failed to read would
+    /// fault the load path before the build ever trained, which is a third
+    /// condition, and modelling it here would blur the two this wrapper exists to
+    /// separate.
+    /// </para>
+    /// </summary>
+    private sealed class FaultingVectorIndexStore(IVectorIndexStore inner) : IVectorIndexStore
+    {
+        /// <summary>Makes every write throw. Armed by a fixture once the build reaches training.</summary>
+        public bool FaultWrites { get; set; }
+
+        /// <summary>How many writes were refused, so a fixture can prove the fault was reached.</summary>
+        public int RefusedWrites { get; private set; }
+
+        /// <inheritdoc />
+        public Task<byte[]?> ReadAsync(string key, CancellationToken cancellationToken = default)
+            => inner.ReadAsync(key, cancellationToken);
+
+        /// <inheritdoc />
+        public Task<IReadOnlyDictionary<string, byte[]>> ReadManyAsync(
+            IReadOnlyList<string> keys, CancellationToken cancellationToken = default)
+            => inner.ReadManyAsync(keys, cancellationToken);
+
+        /// <inheritdoc />
+        public Task WriteAsync(
+            IReadOnlyList<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
+        {
+            if (FaultWrites)
+            {
+                RefusedWrites++;
+                throw new LeafProjectionStaleException(
+                    "Leaf projection for tree 'repo-context-vector-index' partition 1 cannot be rebuilt "
+                    + "from the WAL: the durable projection checkpoint has fallen off the log.");
+            }
+
+            return inner.WriteAsync(entries, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task DeleteAsync(IReadOnlyList<string> keys, CancellationToken cancellationToken = default)
+            => inner.DeleteAsync(keys, cancellationToken);
+
+        /// <inheritdoc />
+        public IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanAsync(
+            string keyPrefix, CancellationToken cancellationToken = default)
+            => inner.ScanAsync(keyPrefix, cancellationToken);
+
+        /// <inheritdoc />
+        public Task DeletePrefixAsync(string keyPrefix, CancellationToken cancellationToken = default)
+            => inner.DeletePrefixAsync(keyPrefix, cancellationToken);
+    }
+
+    /// <summary>
     /// The in-memory backing factory with its store-of-record view wrapped in the
-    /// gate. The durable store is left ungated: this fixture is about the corpus
-    /// the build reads, and gating both would not distinguish the two.
+    /// gate and its durable store wrapped in a fault injector.
+    /// <para>
+    /// The two wrappers are armed independently, and that independence is the whole
+    /// point: a fixture must be able to fault the corpus read WITHOUT faulting the
+    /// index write, and the other way round, or it cannot show that the phase
+    /// dimension tells them apart.
+    /// </para>
     /// </summary>
     private sealed class GatedBackingFactory : IRepoContextAnnBackingFactory
     {
         private readonly InMemoryAnnBackingFactory _inner = new();
         private readonly Dictionary<(string RepoId, EmbeddingSpaceTag Space), GatedVectorSource> _gated = [];
+        private readonly Dictionary<(string RepoId, EmbeddingSpaceTag Space), FaultingVectorIndexStore> _stores = [];
 
         /// <summary>The gated view for one repository and embedding space.</summary>
         public GatedVectorSource Gate(string repoId, EmbeddingSpaceTag space)
@@ -186,6 +257,19 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
             }
 
             return gate;
+        }
+
+        /// <summary>The fault-injecting durable store for one repository and embedding space.</summary>
+        public FaultingVectorIndexStore Store(string repoId, EmbeddingSpaceTag space)
+        {
+            var key = (repoId, space);
+            if (!_stores.TryGetValue(key, out var store))
+            {
+                store = new FaultingVectorIndexStore(_inner.CreateStore(repoId, space));
+                _stores[key] = store;
+            }
+
+            return store;
         }
 
         /// <summary>Seeds a ring of unit vectors into the underlying store of record.</summary>
@@ -208,7 +292,7 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
 
         /// <inheritdoc />
         public IVectorIndexStore CreateStore(string repoId, EmbeddingSpaceTag space)
-            => _inner.CreateStore(repoId, space);
+            => Store(repoId, space);
 
         /// <inheritdoc />
         public Task<int> ReclaimSupersededSpacesAsync(
@@ -470,6 +554,36 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
             }
 
             return faults;
+        }
+
+        /// <summary>
+        /// Ticks until the build's durable phase reaches <paramref name="phase"/>,
+        /// WITHOUT taking the tick that would leave it, and reports whether it got
+        /// there.
+        /// <para>
+        /// This is the seam a fixture needs in order to arm a fault at a chosen
+        /// phase rather than at a chosen tick number. A tick count would be a
+        /// coincidence of the corpus size and the batch options - exactly the shape
+        /// of test that passes for a reason nobody wrote down and stops testing
+        /// anything the moment either is retuned.
+        /// </para>
+        /// </summary>
+        /// <param name="phase">The phase to stop before stepping out of.</param>
+        /// <returns><see langword="true"/> when the phase was reached.</returns>
+        public async Task<bool> PumpUntilPhaseAsync(VectorIndexBuildPhase phase)
+        {
+            await Grain.EnsureBuildingAsync(Space);
+            for (var tick = 1; tick <= MaxTicks; tick++)
+            {
+                if (Registry.TryGetProgress(RepoId, Space, out var progress) && progress.Phase == phase)
+                {
+                    return true;
+                }
+
+                await Grain.ProcessNextPhaseAsync();
+            }
+
+            return Registry.TryGetProgress(RepoId, Space, out var final) && final.Phase == phase;
         }
 
         public void Dispose()

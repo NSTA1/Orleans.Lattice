@@ -463,28 +463,44 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
     }
 
     /// <summary>
-    /// Every arm of the slice counter must exist on the very first scrape, at zero,
-    /// before any build step has been taken.
+    /// Every arm of the slice counter must exist on the very first scrape of a
+    /// plane, at zero, before any build step has been taken.
     /// <para>
     /// This is the fixture that makes the counter's zero mean something. An absent
     /// series and a series reading zero look identical on a dashboard yet are
     /// opposite claims: the first says nothing was measured, the second says the
     /// thing was measured and did not happen. The whole diagnostic value of
     /// <c>progress=starved</c> reading zero beside a rising total depends on it
-    /// being the second, and that only holds if the arm is minted when the reporter
-    /// is constructed rather than when it first fires.
+    /// being the second, and that only holds if the arm is minted before it first
+    /// fires.
     /// </para>
     /// <para>
-    /// The listener must be started BEFORE the reporter is constructed, because the
-    /// zero-prime happens inside the constructor. Matching by meter and instrument
-    /// name is the only way to do that, since there is no instrument to pass by
-    /// reference until the constructor has run.
+    /// <b>Priming is per plane, not per process (issue #2855).</b> The counter now
+    /// carries <c>repository</c>, <c>space</c>, and <c>phase</c>, so "the arms" is a
+    /// grid rather than a list and there is no process-wide set to mint in a
+    /// constructor: a constructor cannot know which repositories and spaces exist,
+    /// and minting a plane that does not exist claims a build nobody asked for. The
+    /// plane is therefore primed by the grain, above every early return, before its
+    /// first step - and that is what this fixture reproduces.
+    /// </para>
+    /// <para>
+    /// Only 22 of the 30 (progress, phase) pairs are minted, and the omission is
+    /// deliberate. <c>coordinating</c> and <c>opening</c> name work that happens
+    /// BEFORE a build step is taken, so they can only ever be reached by a fault;
+    /// minting their advanced/starved/idle/churned arms would put eight
+    /// structurally unreachable series on every plane, and an unreachable zero is
+    /// not evidence of anything.
+    /// </para>
+    /// <para>
+    /// The listener must be started BEFORE the reporter is constructed, because
+    /// there is no instrument to pass by reference until the constructor has run.
+    /// Matching by meter and instrument name is the only way to be attached in time.
     /// </para>
     /// </summary>
     [Test]
-    public void Every_slice_arm_is_minted_at_zero_when_the_reporter_is_constructed()
+    public void Every_slice_arm_is_minted_at_zero_when_a_plane_is_primed()
     {
-        var observed = new List<KeyValuePair<string, long>>();
+        var observed = new List<(string Progress, string Phase, string? Repository, string? Space, long Value)>();
         using var listener = new MeterListener
         {
             InstrumentPublished = (instrument, l) =>
@@ -504,45 +520,78 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
         {
             string? progress = null;
+            string? phase = null;
+            string? repository = null;
+            string? space = null;
             foreach (var tag in tags)
             {
                 if (string.Equals(tag.Key, RepoContextAnnBuildSliceReporter.ProgressTagKey, StringComparison.Ordinal))
                 {
                     progress = tag.Value?.ToString();
                 }
+                else if (string.Equals(tag.Key, RepoContextAnnBuildSliceReporter.PhaseTagKey, StringComparison.Ordinal))
+                {
+                    phase = tag.Value?.ToString();
+                }
+                else if (string.Equals(
+                    tag.Key, RepoContextAnnBuildSliceReporter.RepositoryTagKey, StringComparison.Ordinal))
+                {
+                    repository = tag.Value?.ToString();
+                }
+                else if (string.Equals(tag.Key, RepoContextAnnBuildSliceReporter.SpaceTagKey, StringComparison.Ordinal))
+                {
+                    space = tag.Value?.ToString();
+                }
             }
 
             lock (observed)
             {
-                observed.Add(new KeyValuePair<string, long>(progress ?? "<untagged>", value));
+                observed.Add((progress ?? "<untagged>", phase ?? "<untagged>", repository, space, value));
             }
         });
 
         listener.Start();
 
-        // Construct and immediately dispose. Nothing records a step, so every
-        // measurement seen below can only have come from the constructor.
+        // Prime one plane and immediately dispose. Nothing records a step, so every
+        // measurement seen below can only have come from the priming.
         using (var reporter = new RepoContextAnnBuildSliceReporter())
         {
+            reporter.EnsurePrimed(RepoId, Space);
             _ = reporter.Read();
         }
 
         listener.Dispose();
 
-        List<KeyValuePair<string, long>> minted;
+        List<(string Progress, string Phase, string? Repository, string? Space, long Value)> minted;
         lock (observed)
         {
             minted = [.. observed];
         }
 
-        var arms = minted.Select(m => m.Key).ToArray();
-
-        // Reflected over the enum rather than listed by hand, so an arm added later
-        // cannot be left unminted by a fixture that still passes over the arms that
-        // came before it. The count is asserted first so the reflection can never go
-        // vacuously green.
-        var expectedArms = Enum.GetValues<RepoContextAnnBuildSliceOutcome>()
+        // Reflected over both enums rather than listed by hand, so an arm or a phase
+        // added later cannot be left unminted by a fixture that still passes over
+        // the arms that came before it. The counts are asserted first so the
+        // reflection can never go vacuously green.
+        var outcomes = Enum.GetValues<RepoContextAnnBuildSliceOutcome>()
             .Select(RepoContextAnnBuildSliceReporter.DescribeOutcome)
+            .ToArray();
+        var steppedPhases = new[]
+        {
+            RepoContextAnnBuildStepPhase.Ingesting,
+            RepoContextAnnBuildStepPhase.Training,
+            RepoContextAnnBuildStepPhase.Persisting,
+            RepoContextAnnBuildStepPhase.Reconciling,
+        }.Select(RepoContextAnnBuildSliceReporter.DescribePhase).ToArray();
+        var preStepPhases = new[]
+        {
+            RepoContextAnnBuildStepPhase.Coordinating,
+            RepoContextAnnBuildStepPhase.Opening,
+        }.Select(RepoContextAnnBuildSliceReporter.DescribePhase).ToArray();
+
+        var expected = steppedPhases
+            .SelectMany(phase => outcomes.Select(outcome => (Progress: outcome, Phase: phase)))
+            .Concat(preStepPhases.Select(
+                phase => (Progress: RepoContextAnnBuildSliceReporter.ProgressFaultedTag, Phase: phase)))
             .ToArray();
 
         Assert.Multiple(() =>
@@ -550,18 +599,35 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
             Assert.That(minted, Is.Not.Empty,
                 "positive control: the listener must have observed measurements, or every "
                 + "assertion below passes over an empty set and pins nothing");
-            Assert.That(expectedArms, Is.Not.Empty,
-                "positive control: the reflection must find members, or the arm assertion below "
-                + "passes over an empty set");
+            Assert.That(outcomes, Has.Length.EqualTo(5),
+                "positive control: the outcome reflection must find every arm, or the grid "
+                + "below is asserted against a partial row");
+            Assert.That(expected, Has.Length.EqualTo(22),
+                "positive control on THE DENOMINATOR. The grid is 4 stepped phases x 5 outcomes "
+                + "plus 2 pre-step phases on the faulted arm alone. An enumerated sample is not "
+                + "a population until an independent measure agrees on its size, and this is "
+                + "that measure");
             Assert.That(minted.Select(m => m.Value), Is.All.Zero,
                 "a pre-mint must not move the reading it is minting, or the counter starts "
                 + "life lying about work that never happened");
-            Assert.That(arms, Is.EquivalentTo(expectedArms),
-                "every arm the reporter can ever report must exist, at zero, on the first "
-                + "scrape. The starved arm's zero is what carries the diagnosis, the idle arm "
-                + "distinguishes 'stepping and getting nowhere' from 'not stepping', and the "
-                + "faulted arm distinguishes 'stepping and throwing' from both - claims only a "
-                + "present series can make");
+            Assert.That(
+                minted.Select(m => (m.Progress, m.Phase)), Is.EquivalentTo(expected),
+                "every arm the reporter can ever report on this plane must exist, at zero, on "
+                + "the first scrape - INCLUDING every phase arm. An unprimed phase is exactly "
+                + "the defect #2952 records: absence produced by machinery that never ran is "
+                + "byte-identical to measured absence, so a reader cannot tell 'the build never "
+                + "faulted while persisting' from 'nothing ever looked'");
+            Assert.That(
+                minted.Select(m => m.Repository), Is.All.EqualTo(RepoId),
+                "and every one of them must name the repository it belongs to, or the fifteen "
+                + "failing repositories and the one succeeding repository of issue #2855 are "
+                + "again the same series");
+            Assert.That(
+                minted.Select(m => m.Space),
+                Is.All.EqualTo(RepoContextAnnBuildSliceReporter.DescribeSpace(Space)),
+                "and the embedding space, because a plane re-derived onto a new model is a "
+                + "different build with a different corpus, and merging the two hides a "
+                + "migration mid-flight");
         });
     }
 
@@ -601,7 +667,11 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         var previous = training;
         foreach (var current in oscillation)
         {
-            reporter.RecordSlice(RepoContextAnnBuildSliceReporter.Classify(previous, current));
+            reporter.RecordSlice(
+                RepoContextAnnBuildSliceReporter.Classify(previous, current),
+                RepoId,
+                Space,
+                RepoContextAnnBuildStepPhase.Training);
             previous = current;
         }
 
@@ -613,9 +683,13 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         // build whose tail phases bank no further vector must still read as
         // advancing while it is genuinely moving.
         using var control = new RepoContextAnnBuildSliceReporter();
-        control.RecordSlice(RepoContextAnnBuildSliceReporter.Classify(
-            training,
-            Progress(VectorIndexBuildPhase.Persisting, vectors: 65, deadlined: 0, starved: 0)));
+        control.RecordSlice(
+            RepoContextAnnBuildSliceReporter.Classify(
+                training,
+                Progress(VectorIndexBuildPhase.Persisting, vectors: 65, deadlined: 0, starved: 0)),
+            RepoId,
+            Space,
+            RepoContextAnnBuildStepPhase.Training);
         var banked = control.Read();
 
         Assert.Multiple(() =>
@@ -665,7 +739,11 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         var previous = training;
         foreach (var current in oscillation)
         {
-            reporter.RecordSlice(RepoContextAnnBuildSliceReporter.Classify(previous, current));
+            reporter.RecordSlice(
+                RepoContextAnnBuildSliceReporter.Classify(previous, current),
+                RepoId,
+                Space,
+                RepoContextAnnBuildStepPhase.Training);
             previous = current;
         }
 

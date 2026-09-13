@@ -161,26 +161,87 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     /// <param name="cancellationToken">Cancels the step.</param>
     /// <returns>Progress after the step.</returns>
     /// <exception cref="ObjectDisposedException">The handle has been disposed.</exception>
-    public async Task<VectorIndexBuildProgress> AdvanceAsync(CancellationToken cancellationToken)
+    public Task<VectorIndexBuildProgress> AdvanceAsync(CancellationToken cancellationToken)
+        => AdvanceAsync(phase: null, cancellationToken);
+
+    /// <summary>
+    /// Advances the build by one step, reporting the phase each part of the step
+    /// ran in through <paramref name="phase"/>.
+    /// </summary>
+    /// <param name="phase">
+    /// The caller's phase probe, or <see langword="null"/> when the caller does not
+    /// meter the step. Written only on this call, so it never carries a phase some
+    /// other caller's concurrent step was in.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the step.</param>
+    /// <returns>Progress after the step.</returns>
+    /// <exception cref="ObjectDisposedException">The handle has been disposed.</exception>
+    /// <remarks>
+    /// <para>
+    /// <b>The probe is written twice, and the second write is the load-bearing
+    /// one.</b> Before the step it records the phase the index is ENTERING, which
+    /// is the honest label for a step that completes: it says what the step did. If
+    /// the step throws it is rewritten from the index's own phase AT THE FAULT
+    /// SITE, which is strictly better than the entry reading because a step entered
+    /// at <see cref="VectorIndexBuildPhase.Training"/> trains and then persists in
+    /// the same call - the index moves itself to
+    /// <see cref="VectorIndexBuildPhase.Persisting"/> between the two - so a
+    /// persist fault on a training-entry step is attributed to the persist rather
+    /// than to the training. That distinction is the whole point of the dimension
+    /// (issue #2855): the persist writes into the same tree a corpus-read defect
+    /// would already have named, so mislabelling it as training or ingest is what
+    /// would let one defect be scored as two.
+    /// </para>
+    /// <para>
+    /// The catch-up branch marks <see cref="RepoContextAnnBuildStepPhase.Reconciling"/>
+    /// only from inside its own fault handler, so a step that built AND caught up
+    /// successfully is still reported under the phase it built in rather than
+    /// under the maintenance that followed it.
+    /// </para>
+    /// </remarks>
+    public async Task<VectorIndexBuildProgress> AdvanceAsync(
+        RepoContextAnnBuildPhaseProbe? phase, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         await _turn.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            phase?.Enter(RepoContextAnnBuildStepPhase.Opening);
             var index = await OpenAsync(cancellationToken).ConfigureAwait(false);
             if (index.Progress.Phase != VectorIndexBuildPhase.Ready)
             {
                 var restoredAtOpen = index.Progress.RestoredFromDurableState;
-                _progress = await index.BuildStepAsync(cancellationToken).ConfigureAwait(false);
+                phase?.Enter(MapStepPhase(index.Progress.Phase));
+                try
+                {
+                    _progress = await index.BuildStepAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The index has moved its own phase as far as it got, so this
+                    // reading places the fault inside the step rather than at the
+                    // step's entry. See the remarks above.
+                    phase?.Enter(MapStepPhase(index.Progress.Phase));
+                    throw;
+                }
+
                 if (_progress.Phase == VectorIndexBuildPhase.Ready)
                 {
                     // This process streamed the corpus itself, so it knows what the
                     // index covers - unless the index it resumed was restored
                     // part-built, in which case an earlier process streamed some of
                     // it and only the probe can confirm the join.
-                    await CatchUpAsync(index, restoredAtOpen, cancellationToken).ConfigureAwait(false);
-                    MarkServing(index);
-                    RecordPartitioningState();
+                    try
+                    {
+                        await CatchUpAsync(index, restoredAtOpen, cancellationToken).ConfigureAwait(false);
+                        MarkServing(index);
+                        RecordPartitioningState();
+                    }
+                    catch
+                    {
+                        phase?.Enter(RepoContextAnnBuildStepPhase.Reconciling);
+                        throw;
+                    }
                 }
 
                 return _progress;
@@ -190,6 +251,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             // idempotent and completes in one step. Reaching Ready at OPEN means the
             // index came off durable state, so the probe is the only way to learn
             // whether the store of record has moved on since.
+            phase?.Enter(RepoContextAnnBuildStepPhase.Reconciling);
             await CatchUpAsync(index, probeSource: true, cancellationToken).ConfigureAwait(false);
             MarkServing(index);
             RecordPartitioningState();
@@ -200,6 +262,32 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             _turn.Release();
         }
     }
+
+    /// <summary>
+    /// Projects the index's own build phase onto the phase this plane reports.
+    /// </summary>
+    /// <param name="phase">The phase the durable index is in.</param>
+    /// <returns>The reported phase.</returns>
+    /// <remarks>
+    /// <see cref="VectorIndexBuildPhase.NotStarted"/> maps onto
+    /// <see cref="RepoContextAnnBuildStepPhase.Ingesting"/> because the step taken
+    /// from it counts the source, which is a read of the same corpus by the same
+    /// path - so a fault there is an ingest-read fault however the index labels the
+    /// phase it was in. <see cref="VectorIndexBuildPhase.Ready"/> maps onto
+    /// <see cref="RepoContextAnnBuildStepPhase.Persisting"/> rather than onto
+    /// <see cref="RepoContextAnnBuildStepPhase.Reconciling"/>, because this mapping
+    /// is only ever applied INSIDE a build step: an index reporting Ready there has
+    /// reached it during its own persist and has not finished that persist yet.
+    /// Reconciling is written explicitly by the two catch-up paths, which is the
+    /// only place it is true.
+    /// </remarks>
+    private static RepoContextAnnBuildStepPhase MapStepPhase(VectorIndexBuildPhase phase) => phase switch
+    {
+        VectorIndexBuildPhase.Training => RepoContextAnnBuildStepPhase.Training,
+        VectorIndexBuildPhase.Persisting => RepoContextAnnBuildStepPhase.Persisting,
+        VectorIndexBuildPhase.Ready => RepoContextAnnBuildStepPhase.Persisting,
+        _ => RepoContextAnnBuildStepPhase.Ingesting,
+    };
 
     /// <summary>
     /// Drives <see cref="AdvanceAsync(CancellationToken)"/> until the index is
