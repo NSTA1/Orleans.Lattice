@@ -363,11 +363,16 @@ internal sealed partial class BPlusLeafGrain
         }
         catch (Exception ex)
         {
-            // The recovery path re-enters a division that is already durable,
-            // so a throw here is the same wedge as one on the forward path and
-            // must be as visible (issue #2845). Without it, a leaf whose
-            // recovery fails on every write reports nothing at all on this
-            // counter while re-entering, re-failing, and staying wedged.
+            // The recovery path re-enters a division whose intent is already
+            // durable by construction, so a throw here always leaves the leaf
+            // still holding that half-finished division and must be as visible
+            // as one on the forward path (issue #2845). Without it, a leaf
+            // whose recovery fails on every write reports nothing at all on
+            // this counter while re-entering, re-failing, and staying wedged.
+            // (The forward path carries no such guarantee - a division that
+            // throws before its intent is persisted strands nothing - which is
+            // why the durable reading is `splits - divided` rather than the
+            // fault count. Here alone the two coincide.)
             //
             // Only the fault is recorded here, not a matching `divided` on the
             // success path. A recovery is the continuation of a division this
@@ -453,6 +458,21 @@ internal sealed partial class BPlusLeafGrain
     /// unclassifiable fault is still a fault, and the arm that matters -
     /// <c>outcome=faulted</c> - must never be conditional on recognising the
     /// exception.
+    /// </para>
+    /// <para>
+    /// There is deliberately no <c>cancelled</c> class, because no cancellation
+    /// reaches this seam as an <see cref="OperationCanceledException"/>. The
+    /// split path passes <see cref="CancellationToken.None"/> at every seam
+    /// that accepts a token and parks on an untokened gate; the hydration
+    /// admission gate converts its cancellation arms into a non-exceptional
+    /// return rather than propagating them; and the case that looks most like
+    /// orderly shutdown - the WAL writer's drain releasing an append while the
+    /// silo stops - is converted to a <see cref="TimeoutException"/> at source,
+    /// specifically so a catch site can attribute it without source-walking.
+    /// A <c>cancelled</c> arm would therefore be primed at zero and stay there
+    /// forever, which is the permanently-zero-series failure this file warns
+    /// about elsewhere. Revisit this if a cancellable token is ever threaded
+    /// into the split path.
     /// </para>
     /// </summary>
     private static KeyValuePair<string, object?> ClassifySplitFault(Exception exception) => exception switch

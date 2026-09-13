@@ -2000,10 +2000,13 @@ public static class LatticeMetrics
     /// The fault arm additionally carries <see cref="TagFailureClass"/>,
     /// because the two classes that occur in practice have opposite remedies -
     /// see <see cref="LeafSplitFaultUnaffordable"/> and
-    /// <see cref="LeafSplitFaultTimeout"/>. A non-zero fault count is never
-    /// merely a failed retry: <see cref="LeafSplits"/> increments only after
-    /// the split intent is durable, so every fault counted here left a leaf
-    /// with a half-finished division committed to storage.
+    /// <see cref="LeafSplitFaultTimeout"/>. Read the fault arm against
+    /// <see cref="LeafSplits"/> rather than on its own: that counter increments
+    /// only once the split intent is durable, so <c>splits - divided</c> is the
+    /// number of divisions that stranded a leaf mid-division, while a fault
+    /// with no matching <see cref="LeafSplits"/> increment threw before the
+    /// intent was persisted and stranded nothing. The subtraction is the
+    /// reading; the fault count alone does not distinguish the two.
     /// </para>
     /// </summary>
     public static readonly Counter<long> LeafSplitAttempts =
@@ -2050,14 +2053,22 @@ public static class LatticeMetrics
     /// as it reads on a tree where nothing was ever attempted.
     /// </para>
     /// <para>
-    /// It is also the strongest wedge signal on this counter, and should be
-    /// read as one. <see cref="LeafSplits"/> is incremented only after
-    /// <c>SplitState = SplitInProgress</c> is persisted, so a fault counted
-    /// here is always a leaf left holding a half-finished division - a pivot
-    /// chosen, a sibling grain id allocated, the next-sibling pointer
+    /// It is also the wedge signal on this counter, but only in conjunction
+    /// with <see cref="LeafSplits"/>, and the two must be read together.
+    /// <see cref="LeafSplits"/> is incremented only after
+    /// <c>SplitState = SplitInProgress</c> is persisted, so a fault whose
+    /// division got that far left a leaf holding a half-finished division - a
+    /// pivot chosen, a sibling grain id allocated, the next-sibling pointer
     /// repointed - which the recovery path will re-enter on the next write.
-    /// A sustained non-zero rate is therefore a tree that is not retrying but
-    /// stuck, and it will keep looking healthy from every other angle.
+    /// A fault thrown <em>before</em> that point persisted no intent and
+    /// stranded nothing, and the hydration admission gate is exactly that case:
+    /// it declines in advance, so a
+    /// <see cref="LeafSplitFaultUnaffordable"/> fault is the arm least likely
+    /// to have wedged anything. The count that means "wedged" is therefore
+    /// <c>splits - divided</c>, not the fault count; a non-zero fault arm with
+    /// <see cref="LeafSplits"/> flat is a tree failing to start divisions, not
+    /// one stuck in the middle of them, and reaching for recovery tooling on
+    /// the strength of the fault arm alone will find nothing to recover.
     /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?> LeafSplitFaulted =
