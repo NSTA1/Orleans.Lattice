@@ -9,6 +9,7 @@ src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseC
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_corpusCoverage	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_terminalDenials	none	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_slices	anchored	dimension=cause; total=faulted; assertedBy=The_tally_the_reporter_reads_back_agrees_with_the_causes_recorded
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexLoadReporter.cs#_loads	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexSweepReporter.cs#_annSweeps	anchored	dimension=cause; total=faulted; assertedBy=The_cause_partition_sums_to_the_faulted_arm
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexSweepReporter.cs#_armingAttempts	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnPartitioningReporter.cs#_partitioning	primed	
