@@ -201,6 +201,12 @@ internal sealed partial class BPlusLeafGrain
     /// Resets the memory-adaptive backpressure state. Test-only: the gate and its
     /// withholding are process-wide statics, so a fixture that exercises one must
     /// be able to return the process to its unsized state.
+    /// <para>
+    /// The heap reader is cleared here too (issue #2862). A fixture that simulated
+    /// pressure and left the reader installed would silently pressure every later
+    /// test in the process, and the symptom - permits quietly withheld from an
+    /// unrelated fixture's baseline - reads as a flake rather than as leakage.
+    /// </para>
     /// </summary>
     internal static void ResetReplayConcurrencyGateForTest()
     {
@@ -209,19 +215,31 @@ internal sealed partial class BPlusLeafGrain
             _replayConcurrencyGate = null;
             _replayConcurrencyCeiling = 0;
             Volatile.Write(ref _withheldReplayPermits, 0);
+            Volatile.Write(ref ReplayHeapPressure.ReaderForTest, null);
         }
     }
 
     /// <summary>
     /// Decides whether the caller's replay permit should be <b>withheld</b> rather
-    /// than returned, because the replay failed for memory pressure (issue #2781).
+    /// than returned, because the heap cannot currently afford the concurrency the
+    /// gate is configured for (issues #2781 and #2862).
     /// Returns <see langword="true"/> when the caller must <b>not</b> release.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// Trigger-agnostic on purpose. The caller decides <i>why</i> a permit should
+    /// be withheld - because the replay faulted for memory pressure (#2781), or
+    /// because occupancy has reached the withholding band (#2862) - and this
+    /// method owns only the accounting and the floor. Keeping the two apart is
+    /// what let the proactive trigger be added without touching the invariant
+    /// every existing test pins.
+    /// </para>
+    /// <para>
     /// At least one permit always stays in circulation. Withholding the last one
     /// would convert a memory stall into a total stall, and a gate that admits
     /// nothing can never observe the clean replay that recovers it - the mechanism
     /// would latch, exactly the defect issue #2783 reports elsewhere.
+    /// </para>
     /// </remarks>
     internal static bool TryWithholdReplayPermitOnPressure()
     {
@@ -244,6 +262,34 @@ internal sealed partial class BPlusLeafGrain
                     LatticeTenantLabel.Platform);
                 return true;
             }
+        }
+    }
+
+    /// <summary>
+    /// Reads the process's heap occupancy for the proactive half of the gate's
+    /// backpressure (issue #2862), never throwing.
+    /// </summary>
+    /// <remarks>
+    /// The swallow is load-bearing rather than defensive, because this runs in
+    /// the <c>finally</c> that returns the replay permit. An exception escaping
+    /// from there would <b>replace</b> the activation's real fault with a
+    /// diagnostic one - destroying the failure the caller needs to see, and
+    /// doing so precisely under the memory exhaustion that makes an incidental
+    /// allocation most likely to fail. An unreadable heap degrades to
+    /// <see cref="ReplayHeapReading"/> with an unknown ceiling, which both
+    /// predicates read as "no verdict", leaving the gate behaving exactly as it
+    /// did before this change. The same reasoning already governs
+    /// <see cref="LogResolvedReplayConcurrencyGate"/> on this path (issue #2256).
+    /// </remarks>
+    private static ReplayHeapReading ReadReplayHeapPressure()
+    {
+        try
+        {
+            return ReplayHeapPressure.Read();
+        }
+        catch
+        {
+            return default;
         }
     }
 
@@ -974,7 +1020,7 @@ internal sealed partial class BPlusLeafGrain
         {
             if (replayPermit is not null)
             {
-                // Memory-adaptive backpressure (issue #2781).
+                // Memory-adaptive backpressure (issues #2781 and #2862).
                 //
                 // Withholding is expressed here, at the single release site,
                 // rather than as a resize: the gate is sized once and never
@@ -983,11 +1029,36 @@ internal sealed partial class BPlusLeafGrain
                 // act, which is what makes it incapable of exceeding the
                 // operator's ceiling for any input - see _withheldReplayPermits.
                 //
-                // The condition is deliberately narrower than "the replay
-                // failed". A cancelled or faulted replay is not evidence the
-                // heap is short; only IsReadMemoryPressure is, and withholding
-                // on anything else would shrink the gate for faults that have
-                // nothing to do with memory.
+                // TWO TRIGGERS, and the second is the one that fires (#2862).
+                //
+                // The reactive trigger is the catch above: a replay that escaped
+                // its guarded region with an IsReadMemoryPressure fault. It is
+                // deliberately narrower than "the replay failed" - a cancelled or
+                // faulted replay is not evidence the heap is short - and it is
+                // kept because a fault that does escape is real evidence.
+                //
+                // But it cannot be the ONLY trigger, and acceptance run 10 proved
+                // that by measurement: 625 OutOfMemoryExceptions, 129 fatal
+                // escalations, two process restarts, and this counter's withheld
+                // arm at a zero-primed, measured ZERO. The replay's own
+                // slice-narrowing retry (issue #2742) catches IsReadMemoryPressure
+                // inside the partition loop and retries at a quarter width, so a
+                // recovered read leaves the region CLEAN; and the snapshot
+                // rehydrate faults before a permit is held at all, which the
+                // `replayPermit is not null` guard correctly excludes. The gate
+                // therefore saw healthy replays throughout, and its recovery arm
+                // stood ready to hand permits BACK into an exhausted heap.
+                //
+                // The proactive trigger below closes that. It reads occupancy
+                // against GC.TotalAvailableMemoryBytes - the figure the runtime
+                // actually throws against - on a path every replay reaches
+                // whether it faults, recovers, or succeeds, so the reduction
+                // happens while there is still heap left to reduce into.
+                var heap = ReadReplayHeapPressure();
+
+                if (!withholdReplayPermitOnPressure && ReplayHeapPressure.IsPressured(heap))
+                    withholdReplayPermitOnPressure = TryWithholdReplayPermitOnPressure();
+
                 if (withholdReplayPermitOnPressure)
                 {
                     // Not released, by design: this permit is now withheld, and
@@ -1002,8 +1073,24 @@ internal sealed partial class BPlusLeafGrain
                     // again, so exactly one withheld permit returns per such
                     // replay - gradually, so a single lucky replay cannot undo a
                     // sustained reduction in one step.
-                    if (replayCompletedCleanly && TryRestoreWithheldReplayPermit())
+                    //
+                    // "Without memory pressure" now means BOTH that this replay
+                    // did not fault for it and that occupancy has receded below
+                    // the restore band. A clean replay is not on its own evidence
+                    // the heap recovered - under #2742's narrowing retry it is
+                    // exactly what an OOM-riddled replay looks like from here -
+                    // so restoring on it alone would walk the gate back up to the
+                    // ceiling while the process was still against its limit. The
+                    // restore band sits below the withholding band on purpose: a
+                    // single threshold would flap a permit in and out for as long
+                    // as occupancy sat on it, raising both arms of the counter
+                    // while the effective ceiling never moved.
+                    if (replayCompletedCleanly
+                        && ReplayHeapPressure.IsRelieved(heap)
+                        && TryRestoreWithheldReplayPermit())
+                    {
                         replayPermit.Release();
+                    }
                 }
             }
         }
