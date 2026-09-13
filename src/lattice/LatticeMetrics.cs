@@ -1882,6 +1882,62 @@ public static class LatticeMetrics
             description: "Wall-clock ms an activation spent queued on the per-silo WAL replay concurrency gate, tagged by tree and by outcome (acquired or canceled).");
 
     /// <summary>
+    /// Counter of activation-time replay slice narrowings: the number of times a
+    /// leaf replay could not afford a commit-log read at its current slice width
+    /// and retried the same range at a quarter of it (issue #2867). Tagged with
+    /// <see cref="TagTree"/>, <see cref="TagPartition"/>, and the derived tenant
+    /// dimension.
+    /// <para>
+    /// <b>This is the second of the two factors that set peak replay memory, and
+    /// it is the one an operator cannot configure.</b> Peak memory is the product
+    /// of how many replays run at once and how much each one buffers. The first
+    /// factor is <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>,
+    /// which is an option, is surfaced on the container's tuning overlay, and is
+    /// already measured from both sides by
+    /// <see cref="WalReplayPermitAdaptations"/> and
+    /// <see cref="WalReplayPermitQueueWait"/>. The second is the per-replay slice
+    /// width, which is a private constant with no option behind it, so the only
+    /// thing that ever moves it is this reactive narrowing. Without this counter
+    /// that entire factor is invisible: the narrowing is reported by a warning
+    /// log alone, and a log is not a series.
+    /// </para>
+    /// <para>
+    /// <b>What it discriminates.</b> A managed <c>OutOfMemoryException</c> during
+    /// a mass reactivation is consistent with two different stories, and the
+    /// remedies point in opposite directions. Either the narrowing engaged and
+    /// was not enough - in which case the width is genuinely too coarse for the
+    /// host and the fix is to lower it - or the narrowing never engaged at all,
+    /// because the allocation that failed was not the slice read this clause
+    /// guards, in which case lowering the width would change nothing and the
+    /// cost lies elsewhere. The count separates those two readings; nothing else
+    /// in the surface does. Read it against
+    /// <c>orleans.lattice.leaf.activation.failures</c> on the same tree: failures
+    /// climbing while this stays at zero is the second story.
+    /// </para>
+    /// <para>
+    /// <b>Tagged by tree, deliberately.</b> The width is a per-replay property
+    /// and a replay belongs to the tree whose leaf is activating, so unlike the
+    /// process-wide gate ceiling this genuinely has a per-tree value. That tag is
+    /// what allows one tree to be shown buffering far harder than its siblings
+    /// under identical cycling, which is the observation issue #2867 exists to
+    /// make readable.
+    /// </para>
+    /// <para>
+    /// <b>Zero-primed per (tree, partition)</b> when a partition replay begins,
+    /// alongside <see cref="LeafDeferredTerminalsDroppedAtCap"/>. A counter
+    /// exports no series until its first <c>Add</c>, so without priming "this
+    /// replay never had to narrow" and "this build has no narrowing" would both
+    /// read as an absent series - and the first of those is the healthy steady
+    /// state, so the ambiguity would cover the common case. Priming at the same
+    /// (tree, partition) tag set a later narrowing carries cannot perturb the
+    /// value.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalReplaySliceNarrowings =
+        Meter.CreateCounter<long>("orleans.lattice.wal.replay.slice_narrowings", unit: "{narrowing}",
+            description: "Activation-time replay slice-width narrowings forced by memory pressure on a commit-log read, tagged by tree and WAL partition. Zero-primed per partition replay.");
+
+    /// <summary>
     /// Counter of activation-time leaf replays that re-entered from a persisted
     /// checkpoint which had <b>not advanced</b> since the same leaf partition's
     /// previous replay on this silo, emitted by <c>BPlusLeafGrain</c>'s
