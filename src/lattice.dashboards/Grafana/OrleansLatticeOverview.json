@@ -1109,7 +1109,7 @@
       "targets": [
         {
           "refId": "RATIO",
-          "expr": "1 - sum by (tree) (rate(orleans_lattice_storage_wal_stored_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m])) / sum by (tree) (rate(orleans_lattice_storage_wal_uncompressed_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
+          "expr": "1 - sum by (tree) (rate(orleans_lattice_storage_wal_stored_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m])) / sum by (tree) (rate(orleans_lattice_storage_wal_uncompressed_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
           "legendFormat": "{{tree}} savings"
         }
       ]

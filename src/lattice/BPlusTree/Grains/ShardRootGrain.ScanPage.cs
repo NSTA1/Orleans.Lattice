@@ -267,10 +267,87 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private ScanPageWalk BeginScanPage(string operation)
     {
+        // Above everything this method does, and above every caller's own early
+        // returns, for the reason set out on PrimeScanPageStallPhases. The
+        // activation hook is the primary site; this one keeps the invariant "no
+        // stall is ever recorded on an unprimed phase arm" true on its own for
+        // an activation that somehow reached a page fill without running it. It
+        // is a latched bool read on every subsequent call.
+        PrimeScanPageStallPhases();
+
         var walk = ScanPageWalkPool.Get();
         walk.Begin(optionsResolver.GetScanPageBounds(TreeId), operation);
         return walk;
     }
+
+    private bool _scanPageStallPhasesPrimed;
+
+    /// <summary>
+    /// Publishes all four <see cref="ScanPagePhase"/> arms of
+    /// <see cref="LatticeMetrics.ScanPageStalls"/> at zero, so that an absent
+    /// phase is a measured zero rather than an absent measurement (issue #2952).
+    /// <para>
+    /// Before this, the only write to the counter was the increment on the stall
+    /// path, so exactly the arm that had already fired existed. A live scrape
+    /// carried <c>leaf-walk</c> on 321 series and <b>nothing at all</b> for
+    /// <c>prologue</c>, <c>descent</c> and <c>baseline-fold</c> - and an absent
+    /// arm is byte-identical to an arm that was never reached, which is
+    /// byte-identical to an arm whose call site does not exist. That cost the
+    /// epic a written-down discriminator: a pre-registered acceptance predicate
+    /// claimed a stall surfacing under <c>prologue</c> or <c>descent</c> would
+    /// prove the fault had moved off the leaf read, and the clause had to be
+    /// withdrawn in its two-sided form because the <em>continued absence</em> of
+    /// such a stall proved nothing whatsoever.
+    /// </para>
+    /// <para>
+    /// <b>Why activation, and not the page-fill entry the issue proposed.</b>
+    /// Issue #2952 suggested binding the prime to the point a shard first begins
+    /// a scan page, on the reasoning that it primes only the shards that
+    /// demonstrably scan. That bound is sound on cardinality and is still taken
+    /// as a second call site, but on its own it is strictly weaker than the one
+    /// this grain already established for
+    /// <see cref="LatticeMetrics.ScanPageLeafReadOutcomes"/> under issue #2809: a
+    /// workload-gated prime leaves an absent series meaning either "the build
+    /// does not carry the instrument" <em>or</em> "it does and no page fill ever
+    /// ran", which is the same two-reading ambiguity one layer out. Priming from
+    /// the lifecycle hook collapses it, and costs the same four series per
+    /// <c>(tree, shard)</c> that activates - the identical population that
+    /// already carries three primed leaf-read arms from that earlier fix, so the
+    /// cardinality precedent is set rather than newly taken.
+    /// </para>
+    /// <para>
+    /// <b>Priming is correct here because this is a counter.</b> Adding zero to a
+    /// counter is the identity, so it creates the series and changes no reading
+    /// of it. A zero <em>recorded</em> on a <c>Histogram&lt;T&gt;</c> is a
+    /// fabricated sample, so this pattern must not be carried across to one.
+    /// </para>
+    /// </summary>
+    private void PrimeScanPageStallPhases()
+    {
+        if (_scanPageStallPhasesPrimed)
+        {
+            return;
+        }
+
+        _scanPageStallPhasesPrimed = true;
+        RecordScanPageStall(0, LatticeMetrics.PhaseScanPagePrologueTag);
+        RecordScanPageStall(0, LatticeMetrics.PhaseScanPageDescentTag);
+        RecordScanPageStall(0, LatticeMetrics.PhaseScanPageLeafWalkTag);
+        RecordScanPageStall(0, LatticeMetrics.PhaseScanPageBaselineFoldTag);
+    }
+
+    /// <summary>
+    /// The single write seam for <see cref="LatticeMetrics.ScanPageStalls"/>, so
+    /// that a primed arm and an armed one are the same series by construction
+    /// rather than by two call sites agreeing on a tag list.
+    /// </summary>
+    private void RecordScanPageStall(long delta, KeyValuePair<string, object?> phase) =>
+        LatticeMetrics.ScanPageStalls.Add(
+            delta,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
+            phase,
+            LatticeTenantLabel.ForTree(TreeId));
 
     /// <summary>
     /// Applies the hard end-to-end stall ceiling to a page fill already in
@@ -620,12 +697,7 @@ internal sealed partial class ShardRootGrain
         var phase = walk.Phase;
         var leaves = walk.Budget.LeavesVisited;
         var leafInFlight = walk.LeafInFlight;
-        LatticeMetrics.ScanPageStalls.Add(
-            1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
-            PhaseTag(phase),
-            LatticeTenantLabel.ForTree(TreeId));
+        RecordScanPageStall(1, PhaseTag(phase));
 
         // Deliberately in the message and the typed slot only, never a metric
         // tag: leaf identity is unbounded cardinality, and the counter above is

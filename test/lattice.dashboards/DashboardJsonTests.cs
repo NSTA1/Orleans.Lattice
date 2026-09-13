@@ -146,8 +146,26 @@ public sealed class DashboardJsonTests
 
         // Counter / observable gauge with bytes unit ("By"): the exporter
         // appends "_bytes" (and "_bytes_total" for monotonic counters).
-        map[underscored + "_bytes"] = meterName;
-        map[underscored + "_bytes_total"] = meterName;
+        //
+        // Not when the .NET name already ends in "_bytes" (issue #2941). The
+        // exporter appends a unit suffix only if the name does not already carry
+        // it, so for `...stored_bytes` the emitted series are
+        // `..._stored_bytes` and `..._stored_bytes_total`, both of which this
+        // method already registers above - and `..._stored_bytes_bytes_total` is
+        // emitted by nothing. Registering it anyway is what let a panel read a
+        // permanently empty series and still pass this name check: the token
+        // resolved to a real instrument, so the drift guard vouched for a series
+        // no exporter produces. Measured against
+        // OpenTelemetry.Exporter.Prometheus.AspNetCore 1.15.3-beta.1, the version
+        // every host in this repository pins, with a control instrument whose
+        // name does NOT end in "_bytes" confirming the suffix is appended there -
+        // so the absence of the doubled form is a measurement and not a failed
+        // search.
+        if (!underscored.EndsWith("_bytes", StringComparison.Ordinal))
+        {
+            map[underscored + "_bytes"] = meterName;
+            map[underscored + "_bytes_total"] = meterName;
+        }
 
         // Gauge / observable / un-suffixed reference (some queries use the bare name)
         map[underscored] = meterName;

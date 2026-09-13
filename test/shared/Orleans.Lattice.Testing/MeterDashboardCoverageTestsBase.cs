@@ -227,8 +227,20 @@ public abstract class MeterDashboardCoverageTestsBase
         forms.Add(underscored + "_bucket");
         forms.Add(underscored + "_count");
         forms.Add(underscored + "_sum");
-        forms.Add(underscored + "_bytes");
-        forms.Add(underscored + "_bytes_total");
+
+        // The exporter appends the "bytes" unit suffix only when the name does
+        // not already end in it (issue #2941), so a name already ending "_bytes"
+        // emits `underscored` and `underscored + "_total"` - both registered
+        // above - and never the doubled form. Admitting `_bytes_bytes_total`
+        // here is what let a dashboard panel reference a series no exporter
+        // emits and still satisfy every name check in the repository. Measured
+        // against OpenTelemetry.Exporter.Prometheus.AspNetCore 1.15.3-beta.1
+        // with a positive control.
+        if (!underscored.EndsWith("_bytes", StringComparison.Ordinal))
+        {
+            forms.Add(underscored + "_bytes");
+            forms.Add(underscored + "_bytes_total");
+        }
     }
 
     private static void WalkForExpr(JsonElement element, HashSet<string> tokens)

@@ -3803,6 +3803,8 @@ internal sealed partial class LatticeGrain(
     /// </remarks>
     public async Task OnActivateAsync(CancellationToken cancellationToken)
     {
+        PrimeConfigChangeArms();
+
         try
         {
             await EnsureMonitorAsync();
@@ -3815,6 +3817,64 @@ internal sealed partial class LatticeGrain(
                 TreeId);
         }
     }
+
+    /// <summary>
+    /// Publishes both members of the <see cref="LatticeMetrics.TagConfig"/>
+    /// taxonomy on <see cref="LatticeMetrics.ConfigChanged"/> at zero for this
+    /// tree (issue #2918).
+    /// <para>
+    /// The counter carries a bounded two-member domain and, before this, only the
+    /// member that had already fired existed. A tree that has never had its
+    /// publish-events override touched produced no
+    /// <c>config="publish_events"</c> series at all, which scrapes identically to
+    /// a build in which the call site was deleted - so a flat absence could not
+    /// be read as "no such change was made", which is the only reading an
+    /// operator ever wants from it.
+    /// </para>
+    /// <para>
+    /// Activation is the seam rather than the two setters, because the two arms
+    /// are armed from <em>different</em> methods: priming inside each setter
+    /// would leave each arm's zero reachable only on the path that also arms it,
+    /// which is the defect one layer in. The lifecycle hook is reachable for
+    /// every tree that has activated, so absence means the build does not carry
+    /// the instrument and nothing else.
+    /// </para>
+    /// <para>
+    /// System trees are excluded because both setters reject them outright via
+    /// <see cref="ThrowIfSystemTree"/>: a primed arm on a tree that can never arm
+    /// it would assert a measured zero for a measurement that cannot be taken.
+    /// </para>
+    /// <para>
+    /// The issue filed this as unprimable on the grounds that
+    /// <c>LatticeMetrics</c> is a static class with no silo-startup hook. That
+    /// premise is too pessimistic - the instrument is emitted from a grain, and
+    /// the emitting grain has a lifecycle.
+    /// </para>
+    /// </summary>
+    private void PrimeConfigChangeArms()
+    {
+        if (_configChangeArmsPrimed
+            || TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _configChangeArmsPrimed = true;
+
+        // Written out rather than looped so the priming-enrolment gate, which
+        // reads literal `new KeyValuePair<string, object?>(...)` arguments on a
+        // zero-valued Add, can see both arms.
+        LatticeMetrics.ConfigChanged.Add(0,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "publish_events"),
+            LatticeTenantLabel.ForTree(TreeId));
+        LatticeMetrics.ConfigChanged.Add(0,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "history_retention"),
+            LatticeTenantLabel.ForTree(TreeId));
+    }
+
+    private bool _configChangeArmsPrimed;
 
     private async Task EnsureHotShardMonitorAsync()
     {

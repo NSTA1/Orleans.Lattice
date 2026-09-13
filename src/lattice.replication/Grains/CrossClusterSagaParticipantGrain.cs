@@ -132,6 +132,41 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     /// <inheritdoc />
     public async Task<SagaControlResponse> PrepareAsync(SagaControlRequest request)
     {
+        // Zero-prime both members of the compensation-cause taxonomy before the
+        // idempotent re-attach below can return (issue #2918). Both arms are
+        // reachable only from SagaPhase.Prepared - `vote-abort` from AbortAsync
+        // and `coordinator-loss` from the fence-expiry reminder - so the prepare
+        // entry point is exactly the population that can arm either, and is the
+        // same execution path rather than a constructor that proves only that
+        // the type loaded.
+        //
+        // Before this, only the cause that had already fired existed as a series.
+        // A cluster that has never lost a coordinator produced nothing for
+        // `coordinator-loss`, which scrapes identically to a build where the
+        // fence-expiry path was removed - so a flat absence could not be read as
+        // "no coordinator was ever lost", the single reading the instrument
+        // exists to support. Adding zero to a counter is the identity.
+        //
+        // Above the early return, not below it: a duplicate prepare returns at
+        // the guard below, and a prime underneath it would be unreachable on
+        // exactly the re-attach path whose absence it is meant to make readable.
+        //
+        // Written out rather than looped so the sibling priming-enrolment gate,
+        // which reads literal `new KeyValuePair<string, object?>(...)` arguments
+        // on a zero-valued Add, can see both arms.
+        //
+        // The issue filed this as unprimable because LatticeReplicationMetrics is
+        // a static class with no silo-startup hook. The instrument is emitted
+        // from a grain, and the emitting grain has an entry point.
+        LatticeReplicationMetrics.SagaCompensations.Add(0,
+            new KeyValuePair<string, object?>(
+                LatticeReplicationMetrics.TagCause, LatticeReplicationMetrics.SagaCauseVoteAbort),
+            LatticeTenantLabel.Platform);
+        LatticeReplicationMetrics.SagaCompensations.Add(0,
+            new KeyValuePair<string, object?>(
+                LatticeReplicationMetrics.TagCause, LatticeReplicationMetrics.SagaCauseCoordinatorLoss),
+            LatticeTenantLabel.Platform);
+
         // Idempotent re-attach: a duplicate prepare returns the recorded
         // vote/phase without re-running the participants' prepare work.
         if (_state.State.Phase != SagaPhase.None)

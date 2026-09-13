@@ -114,7 +114,7 @@ src/lattice.replication/LatticeReplicationMetrics.cs#PeerFellOffLogSuppressed	un
 src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentEntriesElided	none	
 src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentHwmAdvances	none	
 src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentManifestExchanges	none	
-src/lattice.replication/LatticeReplicationMetrics.cs#SagaCompensations	unprimed	tracked=#2895; reason=static metrics class has no silo-startup priming hook
+src/lattice.replication/LatticeReplicationMetrics.cs#SagaCompensations	primed	
 src/lattice.replication/LatticeReplicationMetrics.cs#SagaFenceDuration	unresolved	reason=dimension tree: no declaration found for tree
 src/lattice.replication/LatticeReplicationMetrics.cs#SagaParticipantAborts	unresolved	reason=dimension reason: no declaration found for reason
 src/lattice.replication/LatticeReplicationMetrics.cs#SagaParticipantCommits	unresolved	reason=dimension reason: no declaration found for reason
@@ -196,7 +196,7 @@ src/lattice/LatticeMetrics.cs#CompactionShardSkipped	unresolved	reason=dimension
 src/lattice/LatticeMetrics.cs#CompressionDictionaryTrainedBytesIn	none	
 src/lattice/LatticeMetrics.cs#CompressionDictionaryTrainedBytesOut	none	
 src/lattice/LatticeMetrics.cs#CompressionDictionaryTrainingRuns	none	
-src/lattice/LatticeMetrics.cs#ConfigChanged	unprimed	tracked=#2895; reason=static metrics class has no silo-startup priming hook
+src/lattice/LatticeMetrics.cs#ConfigChanged	primed	
 src/lattice/LatticeMetrics.cs#CoordinatorCompleted	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#CoordinatorPhaseTickFailures	none	
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteCompleted	unresolved	reason=dimension outcome: no declaration found for outcomeTag
@@ -301,7 +301,7 @@ src/lattice/LatticeMetrics.cs#ShardRootFlushRetriesSuspended	unresolved	reason=d
 src/lattice/LatticeMetrics.cs#ShardRootReshardCompleted	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ShardRootReshardInFlight	none	
 src/lattice/LatticeMetrics.cs#ShardRootReshardInitiated	none	
-src/lattice/LatticeMetrics.cs#ShardRootReshardRejected	unprimed	tracked=#2895; reason=static metrics class has no silo-startup priming hook
+src/lattice/LatticeMetrics.cs#ShardRootReshardRejected	primed	
 src/lattice/LatticeMetrics.cs#ShardRootSetManyLeafRpcDuration	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ShardRootSetManyLocalApplyDuration	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ShardRootSetManyShadowForwardDuration	unresolved	reason=dimension tree: no declaration found for TreeId
