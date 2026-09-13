@@ -55,6 +55,50 @@ public interface IVectorIndexStore
         string keyPrefix, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Enumerates every record whose key starts with <paramref name="keyPrefix"/>
+    /// and sorts strictly after <paramref name="exclusiveStartKey"/>, in ascending
+    /// ordinal key order. Passing a null start key is exactly
+    /// <see cref="ScanAsync(string, CancellationToken)"/>.
+    /// <para>
+    /// <b>Why this exists.</b> A corpus-sized walk that faults partway is retried
+    /// from the beginning by its caller, so every attempt reissues the reads the
+    /// previous attempt already completed. On a tree whose leaves are themselves
+    /// slow to activate that regenerates the identical demand indefinitely, which
+    /// is the amplification measured on the repository-context planes (#2953).
+    /// Resuming past the last record actually consumed lets each attempt bank the
+    /// progress it made.
+    /// </para>
+    /// <para>
+    /// <b>Resuming is safe on an ordinal key range and only there.</b> Continuing
+    /// from the successor of a key already delivered re-reads nothing and skips
+    /// nothing, which is the same justification
+    /// <see cref="LatticeVectorIndexStore.ScanAsync(string, CancellationToken)"/>
+    /// already relies on for its own in-call resume. It is <b>not</b> a licence to
+    /// skip a deliberate re-read: a caller resumes only a walk that was
+    /// interrupted, never one it chose to start again.
+    /// </para>
+    /// <para>
+    /// <b>The default implementation is correct but not cheap.</b> It walks from
+    /// the prefix and discards what sorts at or below the start key, so an
+    /// implementer inherits the right answer without doing anything - but inherits
+    /// none of the saving, because the discarded records are still read. Any store
+    /// whose underlying range scan accepts a lower bound should override this and
+    /// push the bound down; <see cref="LatticeVectorIndexStore"/> does.
+    /// </para>
+    /// </summary>
+    /// <param name="keyPrefix">The inclusive key prefix.</param>
+    /// <param name="exclusiveStartKey">
+    /// The last key already consumed, which is skipped along with everything
+    /// ordering before it, or null to start at the prefix.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
+    IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanAsync(
+        string keyPrefix, string? exclusiveStartKey, CancellationToken cancellationToken = default)
+        => exclusiveStartKey is null
+            ? ScanAsync(keyPrefix, cancellationToken)
+            : VectorIndexStoreScan.SkipPastAsync(this, keyPrefix, exclusiveStartKey, cancellationToken);
+
+    /// <summary>
     /// Deletes every record whose key starts with <paramref name="keyPrefix"/>.
     /// Used to retire a superseded index generation, never to touch a store of
     /// record.

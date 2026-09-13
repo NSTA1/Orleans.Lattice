@@ -47,6 +47,12 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     private readonly string _repoId;
     private readonly ILogger _logger;
     private readonly RepoContextAnnPartitioningReporter? _partitioning;
+    private readonly RepoContextAnnIndexLoadReporter? _load;
+
+    // Held across a load that FAULTED, which is the entire mechanism: the
+    // partially-built identifier mapping lives on this instance, so discarding it
+    // is what made every retry reissue the whole O(corpus) walk (#2953).
+    private DurableVectorIndex? _loading;
     private readonly SemaphoreSlim _turn = new(1, 1);
 
     private DurableVectorIndex? _index;
@@ -103,6 +109,11 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     /// handle directly; the registry always supplies one, so no deployment runs
     /// without the instrument.
     /// </param>
+    /// <param name="load">
+    /// The reporter durable-load attempts are metered on, or <see langword="null"/>
+    /// to publish nothing. Null is for a test driving the handle directly; the
+    /// registry always supplies one, so no deployment runs without the instrument.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public RepoContextAnnIndexHandle(
         string repoId,
@@ -112,7 +123,8 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         RepoContextAnnOptions options,
         string keyPrefix,
         ILogger logger,
-        RepoContextAnnPartitioningReporter? partitioning = null)
+        RepoContextAnnPartitioningReporter? partitioning = null,
+        RepoContextAnnIndexLoadReporter? load = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(source);
@@ -129,6 +141,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         _durableOptions = options.ToDurableOptions(space, keyPrefix);
         _logger = logger;
         _partitioning = partitioning;
+        _load = load;
     }
 
     /// <summary>
@@ -557,22 +570,53 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             return _index;
         }
 
+        // RETAINED ACROSS A FAULTED LOAD. The factory builds into a local and
+        // returns only on success, so a load that threw used to discard the
+        // partially-built identifier mapping along with the instance holding it -
+        // and the next phase tick reissued the entire O(corpus) key-map walk. On a
+        // tree whose leaves are slow to activate that regenerates the identical
+        // demand on every attempt, which is the amplification half of #2953.
+        // Keeping the instance is what lets the walk bank its progress.
+        //
         // Full rather than lazy: a lazily loaded index is read-only by contract, and
         // this one has to be maintained in place as vectors are written.
-        _index = await DurableVectorIndex
-            .OpenAsync(_store, _source, _durableOptions, VectorIndexLoadMode.Full, cancellationToken)
-            .ConfigureAwait(false);
+        var resuming = _loading is not null && _loading.HasBankedLoadProgress;
+        _loading ??= DurableVectorIndex.CreateUnloaded(
+            _store, _source, _durableOptions, VectorIndexLoadMode.Full);
+
+        try
+        {
+            await _loading.LoadOrResumeAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Recorded before the rethrow so the fault arm cannot be lost to the
+            // propagation, and so faults and resumptions are counted on the same
+            // path. The instance is deliberately NOT cleared: its banked progress
+            // is what the next attempt resumes from.
+            _load?.Record(RepoContextAnnIndexLoadOutcome.Faulted);
+            throw;
+        }
+
+        _load?.Record(resuming
+            ? RepoContextAnnIndexLoadOutcome.Resumed
+            : RepoContextAnnIndexLoadOutcome.Fresh);
+
+        _index = _loading;
+        _loading = null;
         _progress = _index.Progress;
 
         _logger.LogInformation(
             "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} opened in phase "
-            + "{Phase} holding {VectorsIndexed} vectors (restored from durable state: {Restored}).",
+            + "{Phase} holding {VectorsIndexed} vectors (restored from durable state: {Restored}, "
+            + "resumed a previously faulted load: {Resumed}).",
             _repoId,
             _space.ModelId,
             _space.Dimension,
             _progress.Phase,
             _progress.VectorsIndexed,
-            _progress.RestoredFromDurableState);
+            _progress.RestoredFromDurableState,
+            resuming);
 
         return _index;
     }

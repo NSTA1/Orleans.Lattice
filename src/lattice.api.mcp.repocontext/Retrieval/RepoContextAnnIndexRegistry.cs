@@ -40,6 +40,12 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     // built without it.
     private readonly RepoContextAnnPartitioningReporter _partitioning = new();
 
+    // Owned here for the same reason. A load attempt is observable only inside a
+    // handle, and every handle is created here, so this is the one place that can
+    // guarantee the arms are minted in every deployment rather than only in one
+    // that happens to fault.
+    private readonly RepoContextAnnIndexLoadReporter _load = new();
+
     private bool _disposed;
 
     /// <summary>Creates the registry.</summary>
@@ -95,6 +101,12 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     /// test can read the arms without a meter listener.
     /// </summary>
     internal RepoContextAnnPartitioningReporter Partitioning => _partitioning;
+
+    /// <summary>
+    /// The reporter metering durable-load attempts, partitioned by fresh, resumed
+    /// and faulted. Exposed so a test can read the arms without a meter listener.
+    /// </summary>
+    internal RepoContextAnnIndexLoadReporter Load => _load;
 
     /// <inheritdoc />
     public bool TryGetProgress(string repoId, EmbeddingSpaceTag space, out VectorIndexBuildProgress progress)
@@ -259,6 +271,7 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
 
         _entries.Clear();
         _partitioning.Dispose();
+        _load.Dispose();
     }
 
     private RepoContextAnnIndexHandle GetOrCreate(string repoId, EmbeddingSpaceTag space)
@@ -277,7 +290,8 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
             _options,
             LatticeRepoContextAnnBackingFactory.KeyPrefix(repoId, space),
             _logger,
-            _partitioning);
+            _partitioning,
+            _load);
 
         var winner = _entries.GetOrAdd(key, created);
         if (!ReferenceEquals(winner, created))

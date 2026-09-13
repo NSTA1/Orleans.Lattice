@@ -146,8 +146,27 @@ public sealed class LatticeVectorIndexStore(ILattice tree) : IVectorIndexStore
     /// killed by a budget it spent much earlier in the same walk.
     /// </para>
     /// </remarks>
+    public IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanAsync(
+        string keyPrefix, CancellationToken cancellationToken = default)
+        => ScanAsync(keyPrefix, exclusiveStartKey: null, cancellationToken);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Overrides the interface default so the resume bound is pushed into the tree
+    /// scan rather than filtered out after the read. That is the whole saving: the
+    /// default walks the skipped range and discards it, which reissues exactly the
+    /// reads the resume exists to avoid.
+    /// <para>
+    /// The seeded bound is the same one the in-call resume below already computes
+    /// from <c>lastKey</c>, so a cross-call resume and an in-call resume enter the
+    /// loop in an identical state and the safety argument in the remarks above
+    /// carries over unchanged.
+    /// </para>
+    /// </remarks>
     public async IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanAsync(
-        string keyPrefix, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        string keyPrefix,
+        string? exclusiveStartKey,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(keyPrefix);
 
@@ -158,7 +177,12 @@ public sealed class LatticeVectorIndexStore(ILattice tree) : IVectorIndexStore
         // range has no finite upper bound, which the scan primitives take to mean
         // "run to the end of the keyspace".
         var upperBound = LatticeKeyRange.PrefixUpperBound(keyPrefix);
-        string? lastKey = null;
+
+        // Seeding lastKey from the caller's resume point is the only difference
+        // between a fresh walk and a resumed one. Everything below - the bound
+        // arithmetic, the budget, the termination argument - is identical, because
+        // the loop already treats lastKey as "the last record the caller has".
+        string? lastKey = exclusiveStartKey;
         var attempt = 0;
 
         while (true)
