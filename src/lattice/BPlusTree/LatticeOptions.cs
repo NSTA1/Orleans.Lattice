@@ -1789,6 +1789,45 @@ public class LatticeOptions
     public const long DefaultLeafHydrationResidentBytes = 1L * 1024 * 1024;
 
     /// <summary>
+    /// Largest encoded snapshot frame, in bytes, that is persisted as a single
+    /// BLOB column. A capture whose frame exceeds this is split into
+    /// row-aligned segments of at most this size, each persisted in its own
+    /// grain-state row, and hydration then decodes one segment at a time.
+    /// <para>
+    /// This bounds the <b>contiguous</b> allocation on the hydration read path,
+    /// which is a different quantity from the total bytes the leaf ends up
+    /// holding. The storage provider materialises a BLOB column as one
+    /// contiguous array before any lattice code runs, so a snapshot large
+    /// enough to need a Large Object Heap array can fail to load while the heap
+    /// has ample free space - the question is the largest free contiguous
+    /// segment, not the sum. That is the failure issue #2844 observed, and the
+    /// admission gate it added bounds the claim without being able to bound the
+    /// allocation; segmenting is what actually bounds it (issue #2914).
+    /// </para>
+    /// <para>
+    /// The default is 4 MiB: comfortably above the Large Object Heap threshold
+    /// (85 KB) so ordinary leaves are never segmented and keep the inline,
+    /// lazily-attachable frame path unchanged, and far enough below the sizes
+    /// at which contiguous allocation becomes unreliable on a fragmented heap
+    /// that a segment read is not itself the failure. Raising it trades fewer
+    /// grain rows for a larger peak contiguous allocation; lowering it does the
+    /// reverse. Values below 64 KiB are clamped, since a window smaller than a
+    /// few rows would multiply rows across grains for no allocation benefit.
+    /// </para>
+    /// </summary>
+    public long LeafSnapshotSegmentBytes { get; set; } = DefaultLeafSnapshotSegmentBytes;
+
+    /// <summary>Default value for <see cref="LeafSnapshotSegmentBytes"/> (4 MiB).</summary>
+    public const long DefaultLeafSnapshotSegmentBytes = 4L * 1024 * 1024;
+
+    /// <summary>
+    /// Lower clamp for <see cref="LeafSnapshotSegmentBytes"/> (64 KiB). A
+    /// configured value below this is raised to it rather than rejected, so a
+    /// misconfiguration degrades to a small window instead of failing capture.
+    /// </summary>
+    public const long MinimumLeafSnapshotSegmentBytes = 64L * 1024;
+
+    /// <summary>
     /// Selects the recovery strategy a leaf grain takes when one of
     /// the fall-off-log triggers fires at activation time
     /// (WAL trimmed past checkpoint, replay budget exceeded, projection

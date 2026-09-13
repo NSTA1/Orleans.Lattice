@@ -2259,6 +2259,144 @@ public static class LatticeMetrics
     public const string LeafSnapshotHydrationAdmissionsName = "orleans.lattice.leaf.snapshot.hydration_admissions";
 
     /// <summary>
+    /// Counter incremented once per segment read during a segmented
+    /// leaf-snapshot hydration, tagged by tree and <see cref="TagOutcome"/>
+    /// (<c>loaded</c> / <c>missing</c> / <c>failed</c>) (issue #2914).
+    /// <para>
+    /// A segmented snapshot is one whose encoded frame exceeded
+    /// <see cref="LatticeOptions.LeafSnapshotSegmentBytes"/> and was therefore
+    /// spread across one grain-state row per segment, so that hydration reads
+    /// and releases one bounded window at a time instead of demanding a single
+    /// contiguous array for the whole payload.
+    /// </para>
+    /// <para>
+    /// All three arms are primed to zero per tree at the first segmented
+    /// hydration. Without priming, an absent <c>missing</c> series cannot be
+    /// distinguished from a build in which the fail-closed branch does not
+    /// exist - and those have opposite readings, since the first means every
+    /// segment read back and the second means nothing is checking.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotSegmentReads =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.segment_reads", unit: "{read}",
+            description: "Segment reads performed during segmented leaf-snapshot hydration, tagged by tree and outcome (loaded/missing/failed). A non-zero missing or failed rate means a segmented snapshot could not be reproduced in full and the leaf fell back to WAL replay.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotSegmentReads"/>.</summary>
+    public const string LeafSnapshotSegmentReadsName = "orleans.lattice.leaf.snapshot.segment_reads";
+
+    /// <summary>
+    /// Counter incremented once per completed segmented leaf-snapshot
+    /// hydration, tagged by tree (issue #2914). Primed to zero per tree so
+    /// "no snapshot was large enough to segment" is distinguishable from
+    /// "segmentation is not in this build".
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotSegmentedHydrations =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.segmented_hydrations", unit: "{hydration}",
+            description: "Leaf-snapshot hydrations served by reading a segmented snapshot one bounded window at a time, tagged by tree.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotSegmentedHydrations"/>.</summary>
+    public const string LeafSnapshotSegmentedHydrationsName = "orleans.lattice.leaf.snapshot.segmented_hydrations";
+
+    /// <summary>
+    /// Per-tree high-water mark of the largest single segment frame read during
+    /// a segmented hydration. Declared above the gauge that reads it so the
+    /// observation callback can never see it uninitialised.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> SegmentPeakBytesByTree = new();
+
+    /// <summary>
+    /// Monotonic high-water gauge of the largest single <b>contiguous</b>
+    /// segment frame this process has materialised for a tree during segmented
+    /// leaf-snapshot hydration (issue #2914).
+    /// <para>
+    /// A high-water gauge rather than a histogram, deliberately. The Prometheus
+    /// exporter this project is measured through renders a histogram as a
+    /// summary carrying only <c>_sum</c> and <c>_count</c> - no buckets and no
+    /// quantiles - so the only statistic recoverable from one is the mean, and
+    /// a mean over many small segments dilutes the single large allocation that
+    /// is the entire quantity of interest to nothing. The peak is what fails,
+    /// so the peak is what is recorded.
+    /// </para>
+    /// <para>
+    /// This is the series that evidences the bound: it must stay at or below
+    /// the configured <see cref="LatticeOptions.LeafSnapshotSegmentBytes"/>
+    /// window regardless of how large the underlying snapshot is. A value that
+    /// tracks snapshot size instead means segments are being reassembled
+    /// somewhere before being decoded, which would restore the contiguous
+    /// allocation while leaving every other signal looking healthy.
+    /// </para>
+    /// </summary>
+    public static readonly ObservableGauge<long> LeafSnapshotSegmentPeakBytes =
+        Meter.CreateObservableGauge("orleans.lattice.leaf.snapshot.segment_peak_bytes",
+            ObserveSegmentPeakBytes, unit: "By",
+            description: "High-water mark of the largest contiguous segment frame materialised during segmented leaf-snapshot hydration, tagged by tree. Bounded by LeafSnapshotSegmentBytes; a value tracking snapshot size means the payload is being reassembled contiguously.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotSegmentPeakBytes"/>.</summary>
+    public const string LeafSnapshotSegmentPeakBytesName = "orleans.lattice.leaf.snapshot.segment_peak_bytes";
+
+    private static IEnumerable<Measurement<long>> ObserveSegmentPeakBytes()
+    {
+        foreach (var entry in SegmentPeakBytesByTree)
+        {
+            yield return new Measurement<long>(
+                entry.Value,
+                new KeyValuePair<string, object?>(TagTree, entry.Key),
+                LatticeTenantLabel.ForTree(entry.Key));
+        }
+    }
+
+    /// <summary>
+    /// Raises the high-water mark reported by
+    /// <see cref="LeafSnapshotSegmentPeakBytes"/> for <paramref name="treeId"/>
+    /// to <paramref name="bytes"/> when it exceeds the current mark.
+    /// Monotonic: the mark never falls, so a peak that has already happened
+    /// stays visible to a scrape that arrives afterwards.
+    /// </summary>
+    public static void RecordSegmentPeakBytes(string treeId, long bytes)
+    {
+        if (treeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        // Priming at zero so the series exists for a tree that has segmented a
+        // snapshot but whose peak has not yet been observed by a scrape.
+        SegmentPeakBytesByTree.AddOrUpdate(treeId, bytes, (_, current) => Math.Max(current, bytes));
+    }
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>loaded</c> on
+    /// <see cref="LeafSnapshotSegmentReads"/>: the segment read back and
+    /// validated, and its rows were folded into the leaf's entry cache.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotSegmentLoaded =
+        new(TagOutcome, "loaded");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>missing</c> on
+    /// <see cref="LeafSnapshotSegmentReads"/>: the segment was absent or did
+    /// not validate, so the hydration failed closed, emptied the cache, and
+    /// fell back to WAL replay.
+    /// <para>
+    /// Distinct from <see cref="SnapshotSegmentFailed"/> because the two have
+    /// different causes: <c>missing</c> is a durable-state problem (a torn or
+    /// retired segment), whereas <c>failed</c> is a transient storage fault.
+    /// Folding them together would let a persistent corruption hide inside a
+    /// rate that an operator reads as flaky I/O.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotSegmentMissing =
+        new(TagOutcome, "missing");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>failed</c> on
+    /// <see cref="LeafSnapshotSegmentReads"/>: the segment read threw, so the
+    /// hydration failed closed and fell back to WAL replay.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SnapshotSegmentFailed =
+        new(TagOutcome, "failed");
+
+    /// <summary>
     /// Counter incremented once per leaf division that could not take a split
     /// pivot from the snapshot frame alone and fell back to the ordered view,
     /// tagged by tree, <see cref="TagReason"/> and <see cref="TagDetachSeam"/>.

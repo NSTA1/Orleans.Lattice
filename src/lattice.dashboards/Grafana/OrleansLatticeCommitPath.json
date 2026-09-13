@@ -1017,6 +1017,42 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_capture_concurrent_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} contended entries/s" }
       ]
+    },
+    {
+      "id": 153,
+      "title": "Leaf snapshot segment reads (rate) by tree/outcome - issue #2914",
+      "description": "Individual leaf-snapshot SEGMENT frames read during a segmented hydration, split by outcome (orleans.lattice.leaf.snapshot.segment_reads) - issue #2914. A snapshot whose encoded frame exceeds LeafSnapshotSegmentBytes is no longer stored in one BLOB column: the payload is split into row-aligned segments, each a standalone frame in its own grain-state row, and hydration folds them one at a time. That split is the whole bound. The contiguous allocation that failed in issue #2844 is materialised by the storage provider COLUMN READ, before any lattice code runs and before deserialization, so bounding it requires bounding the column, and the only way to bound a column is to stop putting the whole payload in one. CHART missing AND failed SEPARATELY AND ALERT ON EITHER, because they are different questions with different answers: missing means the manifest references a segment that is not there, which is a DURABILITY signal, while failed means the read threw, which is an I/O signal. Both fail the hydration CLOSED - the cache is emptied and the rehydrate declines, so the leaf replays its whole readable WAL rather than activating with a snapshot silently holding fewer rows than its coverage claims, which is the one shape that would let coverage-gated WAL GC trim the last durable copy of a prefix. THE TARGET DELIBERATELY OMITS or vector(0). All three arms are pre-minted at zero, but priming runs INSIDE the segmented fold, so the series exists only once a segmented hydration has actually run on this silo. That makes presence itself the signal, and substituting a literal zero would draw the segmentation-has-never-run-here case and the segmentation-ran-and-read-nothing case identically. Read an ABSENT series as either the build not landing or no snapshot yet exceeding the window; read a FLAT ZERO as the fold having been entered for that tree.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 321 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_snapshot_segment_reads_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{outcome}}/s" }
+      ]
+    },
+    {
+      "id": 154,
+      "title": "Leaf snapshot segmented hydrations completed (rate) by tree - issue #2914",
+      "description": "Activation-time leaf-snapshot hydrations that folded a SEGMENTED snapshot to completion (orleans.lattice.leaf.snapshot.segmented_hydrations) - issue #2914. This is the population for which the contiguity bound was actually exercised: an ordinary leaf whose snapshot fits inside LeafSnapshotSegmentBytes is stored and hydrated inline and is never counted here, so this series names exactly the leaves that would previously have demanded a single contiguous array of the whole payload. READ IT AGAINST THE sole_occupancy ARM OF orleans_lattice_leaf_snapshot_hydration_admissions, WHICH SHOULD FALL AS THIS RISES: the admission gate added for issue #2844 refuses an oversized contiguous claim, and this change stops the claim being oversized in the first place, so the two are complementary rather than redundant and the gate is deliberately retained. It is counted only on a COMPLETE fold, so it is NOT an attempt count and must not be read as one: a hydration that declined partway appears on the missing or failed arms of orleans_lattice_leaf_snapshot_segment_reads and never here, which keeps the how-many-segmented-snapshots-hydrated-successfully question and the how-many-segment-reads-went-wrong question from sharing a population they do not share. THE TARGET DELIBERATELY OMITS or vector(0), for the reason given on the segment-reads panel above: priming runs inside the fold, so an absent series and a measured zero are different readings and a literal zero would draw them the same.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 328 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_segmented_hydrations_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} segmented hydrations/s" }
+      ]
+    },
+    {
+      "id": 155,
+      "title": "Leaf snapshot segment peak bytes (high-water) by tree - issue #2914",
+      "description": "HIGH-WATER mark of the largest single contiguous segment frame this process has materialised while hydrating a segmented snapshot, per tree (orleans.lattice.leaf.snapshot.segment_peak_bytes) - issue #2914. THIS IS THE PANEL THAT ANSWERS WHETHER THE BOUND HELD. It must stay at or below the configured LeafSnapshotSegmentBytes window however large the underlying snapshot grows, so a value above that window is the direct signal that segmentation is not bounding what it claims to bound, and is the correct thing to alert on. READ IT AS A LEVEL, NOT A RATE, AND DO NOT EXPECT IT TO FALL: the series is monotone non-decreasing within a process lifetime, which is what makes it immune to scrape timing rather than merely unlikely to be missed by it, and a restart is what clears it. It is a high-water gauge and DELIBERATELY NOT A HISTOGRAM: this container renders every histogram as _sum and _count with no buckets and no quantiles, so the only reading available would be a mean, and a mean dilutes the single large allocation the instrument exists to catch into an average of many small ones. THE TARGET DELIBERATELY OMITS or vector(0). Unlike the silo-wide capture-concurrency peak, this gauge is NOT registered at host build - it is keyed by tree and primed on the first segmented hydration for that tree, so an ABSENT series means either the build did not land OR no snapshot has yet exceeded the segment window on this silo. Those two are not distinguished here, and substituting a literal zero would additionally collapse them into the measured-zero case.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 335 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (tree) (orleans_lattice_leaf_snapshot_segment_peak_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "{{tree}} peak segment bytes" }
+      ]
     }
   ]
 }

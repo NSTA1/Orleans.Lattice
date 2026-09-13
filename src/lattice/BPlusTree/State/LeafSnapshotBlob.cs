@@ -251,6 +251,55 @@ internal sealed class LeafSnapshotBlob : ILatticeBinaryPersistedState
     [Id(5)][Immutable] public byte[]? EncodedRows { get; set; }
 
     /// <summary>
+    /// Number of <see cref="LeafSnapshotSegment"/> rows this snapshot's payload
+    /// is spread across, or <c>0</c> when the payload is carried inline by
+    /// <see cref="EncodedRows"/> or <see cref="Rows"/>.
+    /// <para>
+    /// A non-zero value makes this blob a <b>manifest</b>: it carries the
+    /// snapshot's coverage metadata but none of its rows, which live in
+    /// <c>{leafGuid:N}/{index}</c>-keyed segment grains. The split exists
+    /// because the storage provider materialises a BLOB column as one
+    /// contiguous array before lattice code sees it, so bounding that
+    /// allocation requires bounding the column, and a column belongs to a row
+    /// which belongs to a grain (issue #2914, following the admission gate of
+    /// issue #2844).
+    /// </para>
+    /// <para>
+    /// Writing this slot is the <b>commit point</b> of a segmented capture.
+    /// Segments are persisted first and the manifest last, so a capture torn
+    /// part-way through leaves the previous manifest in place and the previous
+    /// snapshot authoritative. A manifest is never written referencing a
+    /// segment that has not durably landed, which is what keeps the
+    /// coverage-gated WAL GC from trimming a prefix no snapshot can reproduce.
+    /// </para>
+    /// <para>
+    /// Zero on every blob persisted before segmentation existed, so a legacy
+    /// blob decodes as unsegmented and takes the inline path unchanged.
+    /// </para>
+    /// </summary>
+    [Id(6)] public int SegmentCount { get; set; }
+
+    /// <summary>
+    /// Summed length of every segment frame when <see cref="SegmentCount"/> is
+    /// non-zero; <c>0</c> otherwise. Recorded on the manifest so the hydration
+    /// admission gate and the storage-usage aggregator can size a segmented
+    /// snapshot without reading any segment - the alternative being a read of
+    /// exactly the payload the segmentation exists to avoid reading whole.
+    /// </summary>
+    [Id(7)] public long SegmentFrameBytes { get; set; }
+
+    /// <summary>
+    /// <see langword="true"/> when this blob is a segmented manifest whose rows
+    /// live in separate segment grains rather than inline.
+    /// <para>
+    /// Declared as a method rather than a property for the same reason as
+    /// <see cref="HasBinaryRowPayload"/>: a computed property would be
+    /// serialised into every persisted row by the grain-storage serializer.
+    /// </para>
+    /// </summary>
+    internal bool IsSegmented() => SegmentCount > 0;
+
+    /// <summary>
     /// <see langword="true"/> when this blob claims to carry its rows as a
     /// <see cref="LeafSnapshotCodec"/> binary frame. Claiming is not the same
     /// as being valid - see <see cref="ValidateRowPayload"/>.
