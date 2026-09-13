@@ -204,17 +204,42 @@ internal sealed partial class BPlusLeafGrain
     /// split sums to <c>Cache.Count</c> (the value already published as
     /// <see cref="ChildDigestSnapshot.EntryCount"/>): tombstoned rows are
     /// counted as tombstones and every other resident row as live.
+    /// <para>
+    /// Both figures are read from the cache's O(1) counters rather than
+    /// streamed out of the whole-cache row view. The substitution is exact,
+    /// not approximate: <c>LiveCount</c> derives liveness from the stored
+    /// row's tombstone flag, the identical predicate the enumeration
+    /// applied, and both counters carry residual terms for rows a lazily
+    /// hydrated snapshot still owns, so a partially hydrated leaf reports
+    /// the same split a fully hydrated one does.
+    /// </para>
+    /// <para>
+    /// What the enumeration cost was not the walk but the hydration: it
+    /// routed through <c>HydrateAll</c>, which ends in <c>DetachSnapshot</c>
+    /// and is irreversible - every row resident for the life of the
+    /// activation, and no later eviction able to recover the footprint.
+    /// This method sits on the digest path of <em>every</em> mutation
+    /// (<see cref="PublishDigestUpwardAsync"/>) and on the adoption path an
+    /// internal node drives at child seeding
+    /// (<see cref="SetParentAsync"/> followed immediately by
+    /// <see cref="GetChildDigestSnapshotAsync"/>), so it forfeited the
+    /// leaf's cheap division before the leaf had taken a single write
+    /// (issue #2852).
+    /// </para>
     /// </summary>
     private (long Live, long Tombstones) ComputeStructuralLeafCounts()
     {
-        long tombstones = 0;
-        foreach (var (_, lww) in Cache.EnumerateRows())
-        {
-            if (lww.IsTombstone) tombstones++;
-        }
-        var live = Cache.Count - tombstones;
-        if (live < 0) live = 0;
-        return (live, tombstones);
+        var total = (long)Cache.Count;
+        var tombstones = total - Cache.LiveCount;
+
+        // Clamped rather than trusted. The counters are maintained
+        // incrementally where the enumeration recomputed from the rows on
+        // every call, so a drifted counter must not invert the split or
+        // report more tombstones than the leaf holds. The clamp also keeps
+        // the documented invariant that the two sum to Cache.Count.
+        if (tombstones < 0) tombstones = 0;
+        if (tombstones > total) tombstones = total;
+        return (total - tombstones, tombstones);
     }
 
     /// <inheritdoc />

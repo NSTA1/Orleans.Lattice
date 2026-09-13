@@ -244,43 +244,50 @@ internal sealed partial class BPlusLeafGrain
         var hash = new byte[ProjectionHashSize];
         long count = 0;
 
-        // Fast path: an unbounded range is the whole leaf, so fold the
-        // pre-walked rows without per-row bound comparisons.
-        if (startInclusive is null && endExclusive is null)
-        {
-            Span<byte> wholeContribution = stackalloc byte[ProjectionHashSize];
-            foreach (var (key, lww) in Cache.EnumerateRows())
-            {
-                ComputeEntryContribution(key, in lww, wholeContribution);
-                for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= wholeContribution[i];
-                count++;
-            }
-
-            return Task.FromResult(new ChildDigestSnapshot
-            {
-                Hash = hash,
-                EntryCount = count,
-                CheckpointOffset = state.State.ProjectionCheckpointOffset,
-            });
-        }
-
+        // Walked in bounded key windows rather than over the whole-cache row
+        // view, the same shape ComputeFullProjectionHashFromState uses. The
+        // fold is an XOR, so it is order-independent, and the windows are
+        // disjoint and exhaustive, so clipping each to the requested range
+        // yields a disjoint, exhaustive cover of exactly the in-range rows -
+        // making the result bit-for-bit identical to the one-pass walk this
+        // replaced, count included.
+        //
+        // What changes is the frame. The whole-cache view calls HydrateAll,
+        // which ends in DetachSnapshot and is irreversible: every row resident
+        // for the life of the activation and no later eviction able to recover
+        // the footprint. It also made a *bounded* digest read cost the whole
+        // leaf, which is precisely the cost the range argument exists to
+        // avoid. EnumerateRange materialises only the blocks spanning the
+        // window and trims the previous window's blocks against the resident
+        // budget, so the walk is bounded by the window rather than by the leaf
+        // (issue #2852).
+        //
+        // A window granularity of one is the form-only failure mode here: a
+        // fold that took the whole range as a single window would pin every
+        // block and never evict. The windows come from
+        // GetFullScanWindowsWithoutHydrating, which sizes them against the
+        // cache's own resident budget and returns more than one whenever the
+        // leaf exceeds it, so this call cannot collapse to a single window
+        // except in the cases where streaming buys nothing (no attached frame,
+        // or a leaf already inside the budget).
         Span<byte> contribution = stackalloc byte[ProjectionHashSize];
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            if (startInclusive is not null && string.CompareOrdinal(key, startInclusive) < 0)
+            var start = LaterLowerBound(windowStart, startInclusive);
+            var end = EarlierUpperBound(windowEnd, endExclusive);
+            if (start is not null && end is not null && string.CompareOrdinal(start, end) >= 0)
             {
+                // The window lies wholly outside the requested range. Skipping
+                // it costs two ordinal comparisons and hydrates nothing.
                 continue;
             }
-            if (endExclusive is not null && string.CompareOrdinal(key, endExclusive) >= 0)
+
+            foreach (var (key, lww) in Cache.EnumerateRange(start, end))
             {
-                // Rows enumerate in ascending ordinal order, so once a key
-                // reaches the exclusive upper bound every subsequent key is
-                // also out of range and the fold can stop early.
-                break;
+                ComputeEntryContribution(key, in lww, contribution);
+                for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= contribution[i];
+                count++;
             }
-            ComputeEntryContribution(key, in lww, contribution);
-            for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= contribution[i];
-            count++;
         }
 
         return Task.FromResult(new ChildDigestSnapshot
@@ -289,6 +296,28 @@ internal sealed partial class BPlusLeafGrain
             EntryCount = count,
             CheckpointOffset = state.State.ProjectionCheckpointOffset,
         });
+    }
+
+    /// <summary>
+    /// Intersects two inclusive lower bounds, where <see langword="null"/>
+    /// denotes negative infinity: the tighter of the two is the larger key.
+    /// </summary>
+    private static string? LaterLowerBound(string? a, string? b)
+    {
+        if (a is null) return b;
+        if (b is null) return a;
+        return string.CompareOrdinal(a, b) >= 0 ? a : b;
+    }
+
+    /// <summary>
+    /// Intersects two exclusive upper bounds, where <see langword="null"/>
+    /// denotes positive infinity: the tighter of the two is the smaller key.
+    /// </summary>
+    private static string? EarlierUpperBound(string? a, string? b)
+    {
+        if (a is null) return b;
+        if (b is null) return a;
+        return string.CompareOrdinal(a, b) <= 0 ? a : b;
     }
 
     /// <summary>
