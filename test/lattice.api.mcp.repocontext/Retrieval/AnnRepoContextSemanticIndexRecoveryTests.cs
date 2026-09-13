@@ -198,7 +198,11 @@ public sealed class AnnRepoContextSemanticIndexRecoveryTests
         var afterTooSoon = exact.Searches;
 
         clock.Advance(ProbeDelay + TimeSpan.FromSeconds(1));
-        await index.SearchAsync(RepoId, Query, Space, 5, Ct);
+        Assert.That(
+            async () => await index.SearchAsync(RepoId, Query, Space, 5, Ct),
+            Throws.InstanceOf<ScanPageStalledException>(),
+            "The third consecutive stall crosses issue #2948's deterministic threshold and is reported "
+            + "rather than absorbed. The probe still ran, which is what this test measures.");
 
         Assert.Multiple(() =>
         {
@@ -252,7 +256,13 @@ public sealed class AnnRepoContextSemanticIndexRecoveryTests
         clock.Advance(ProbeDelay + TimeSpan.FromSeconds(1));
         await index.SearchAsync(RepoId, Query, Space, 5, Ct);
         clock.Advance((ProbeDelay * 2) + TimeSpan.FromSeconds(1));
-        await index.SearchAsync(RepoId, Query, Space, 5, Ct);
+        Assert.That(
+            async () => await index.SearchAsync(RepoId, Query, Space, 5, Ct),
+            Throws.InstanceOf<ScanPageStalledException>(),
+            "The third stall is also issue #2948's deterministic threshold, and the two verdicts are the "
+            + "same judgement reached from the same count: this repository is wedged. The warning below "
+            + "must still be emitted exactly once on the query that reports the fault, or the escalation "
+            + "would have silenced the diagnosis it agrees with.");
 
         var wedged = logs.Entries
             .Where(e => e.Level == LogLevel.Warning)

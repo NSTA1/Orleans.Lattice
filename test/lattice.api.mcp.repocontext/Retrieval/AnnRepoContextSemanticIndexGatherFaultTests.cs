@@ -46,7 +46,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class AnnRepoContextSemanticIndexGatherFaultTests
+public sealed partial class AnnRepoContextSemanticIndexGatherFaultTests
 {
     private const string RepoId = "acme";
 
@@ -179,6 +179,13 @@ public sealed class AnnRepoContextSemanticIndexGatherFaultTests
     /// never reached it. Each figure below is predicted exactly rather than
     /// asserted to be merely larger, because "larger" would also pass against a
     /// backoff that grew by one second.
+    /// <para>
+    /// The third fault also crosses issue #2948's deterministic threshold and is
+    /// reported rather than absorbed, so it escapes. That the delay still doubles
+    /// through it is not incidental: reporting a fault must not cost the backoff,
+    /// or a repository would be told its index is degraded and then hammered at the
+    /// initial probe rate for as long as it stayed that way.
+    /// </para>
     /// </summary>
     [Test]
     public async Task Repeated_timeouts_double_the_probe_delay_rather_than_pinning_it()
@@ -196,7 +203,9 @@ public sealed class AnnRepoContextSemanticIndexGatherFaultTests
         var afterSecond = breaker.ProbeDueIn(RepoId);
 
         clock.Advance((ProbeDelay * 2) + TimeSpan.FromSeconds(1));
-        await index.SearchAsync(RepoId, Query, Space, 5, Ct);
+        Assert.That(
+            async () => await index.SearchAsync(RepoId, Query, Space, 5, Ct),
+            Throws.InstanceOf<TimeoutException>());
         var afterThird = breaker.ProbeDueIn(RepoId);
 
         Assert.Multiple(() =>
@@ -337,12 +346,19 @@ public sealed class AnnRepoContextSemanticIndexGatherFaultTests
     }
 
     /// <summary>
-    /// The zero-priming rule. Four of the five arms are meant to read zero on a
+    /// The zero-priming rule. Five of the six arms are meant to read zero on a
     /// healthy deployment, so an arm that only appeared on its first occurrence
     /// would make the healthy case and the never-wired case identical - which is
     /// the ambiguity the whole epic exists to remove. The listener is started
     /// <i>before</i> the reporter is constructed, so it observes the priming itself
     /// rather than a later measurement.
+    /// <para>
+    /// The list is exhaustive on purpose and is the one place a new arm has to be
+    /// added. Issue #2948's <c>deterministic</c> arm is the case in point: it exists
+    /// precisely so that "this deployment has never seen a deterministic fault" is
+    /// readable, and an unprimed arm would have made that reading impossible from
+    /// the day it shipped.
+    /// </para>
     /// </summary>
     [Test]
     public void Every_fault_arm_is_minted_at_zero_when_the_reporter_is_constructed()
@@ -360,6 +376,7 @@ public sealed class AnnRepoContextSemanticIndexGatherFaultTests
                 RepoContextExactGatherFault.ExhaustedTag,
                 RepoContextExactGatherFault.AbandonedTag,
                 RepoContextExactGatherFault.PropagatedTag,
+                RepoContextExactGatherFault.DeterministicTag,
             })
             {
                 Assert.That(faults.Seen(arm), Is.True,

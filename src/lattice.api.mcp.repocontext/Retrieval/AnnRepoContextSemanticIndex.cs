@@ -107,6 +107,34 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     /// </summary>
     private const int WedgedStallThreshold = 3;
 
+    /// <summary>
+    /// Consecutive gather faults, with no intervening success, past which a
+    /// capacity-shaped fault stops being read as capacity and is reported as a
+    /// degraded index.
+    /// <para>
+    /// <b>Why a count of faults is the discriminator.</b>
+    /// <see cref="RepoContextExactGatherFault.Classify(Exception)"/> decides one
+    /// exception at a time and is right to: a timeout genuinely is a capacity
+    /// fault, and the same gather over the same bytes succeeds once the load goes
+    /// away. That reasoning is sound per event and says nothing at all about a
+    /// sequence of them. Load is intermittent - it produces successes between the
+    /// faults - so a fault rate that stays at one hundred percent is the one shape
+    /// load cannot make. Issue #2948 recorded twenty-five consecutive faults over
+    /// six hours, every one absorbed as capacity, nothing escalated, and the
+    /// container reporting healthy throughout.
+    /// </para>
+    /// <para>
+    /// <b>Deliberately defined as <see cref="WedgedStallThreshold"/> rather than
+    /// repeating its value.</b> That threshold already decides when this ladder
+    /// tells an operator in words that the repository is wedged. The machine-
+    /// readable classification and the human-readable warning are statements about
+    /// the same condition, so they must not be able to drift apart into a run where
+    /// the log says wedged and the instrument says load. Deriving one from the
+    /// other makes that drift unexpressible instead of merely unlikely.
+    /// </para>
+    /// </summary>
+    private const int DeterministicFaultThreshold = WedgedStallThreshold;
+
     private readonly IRepoContextAnnIndex _plane;
     private readonly IRepoContextSemanticIndex _exact;
     private readonly RepoContextExactScanBudget _exactScanBudget;
@@ -467,6 +495,12 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             // ceiling per query.
             var first = _exactScanBreaker.Trip(repoId);
             _guards.RecordBreakerTrip(repoId);
+            if (IsDeterministic(repoId))
+            {
+                ReportDeterministicFault(repoId, querySpace, RepoContextExactGatherFault.StalledTag, ex);
+                throw;
+            }
+
             _guards.RecordExactGatherFault(repoId, RepoContextExactGatherFault.StalledTag);
             _logger.Log(
                 first ? LogLevel.Warning : LogLevel.Debug,
@@ -525,6 +559,12 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             var fault = RepoContextExactGatherFault.Classify(ex);
             var first = _exactScanBreaker.Trip(repoId);
             _guards.RecordBreakerTrip(repoId);
+            if (IsDeterministic(repoId))
+            {
+                ReportDeterministicFault(repoId, querySpace, fault, ex);
+                throw;
+            }
+
             _guards.RecordExactGatherFault(repoId, fault);
             _logger.Log(
                 first ? LogLevel.Warning : LogLevel.Debug,
@@ -555,6 +595,90 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             _guards.RecordExactGatherFault(repoId, RepoContextExactGatherFault.PropagatedTag);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Whether the gather faults over this repository have stopped being
+    /// intermittent: <see cref="DeterministicFaultThreshold"/> or more consecutive
+    /// faults with no success between them.
+    /// <para>
+    /// Read from the breaker rather than from a counter of this ladder's own,
+    /// because the breaker is already the thing that knows. Its episode is reset by
+    /// exactly the two events that would falsify the claim - a gather completing on
+    /// a half-open probe, and the plane answering for itself - so the count it
+    /// holds is consecutive by construction rather than by a rule maintained
+    /// alongside it. Call it after <see cref="RepoContextExactScanBreaker.Trip"/>,
+    /// so the fault being classified is included in the count it is classified by.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository the gather faulted for.</param>
+    /// <returns><see langword="true"/> when the fault must be reported rather than absorbed.</returns>
+    private bool IsDeterministic(string repoId)
+        => _exactScanBreaker.ConsecutiveStalls(repoId) >= DeterministicFaultThreshold;
+
+    /// <summary>
+    /// Counts a capacity-shaped fault that has proved deterministic onto the
+    /// reported half of the census, and says so at warning level.
+    /// <para>
+    /// <b>The fault is still rethrown by the caller, and that is the point.</b>
+    /// <see cref="RepoContextSearchService"/> catches it and answers
+    /// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/>, so the caller
+    /// receives the same keyword recall it received while the fault was being
+    /// absorbed - the served answer does not change, only the claim made about why.
+    /// What changes is that the claim becomes true: "waiting will fix this" is what
+    /// backing off asserts, and after this many consecutive faults it is false.
+    /// </para>
+    /// <para>
+    /// <b>The cause arm is replaced, not supplemented.</b> The snapshot's absorbed
+    /// and propagated counts must sum to the fault count or the reading rule the
+    /// summary states has no denominator, so one fault records one arm. The cause
+    /// is not lost: the first
+    /// <see cref="DeterministicFaultThreshold"/>-1 faults of the episode are
+    /// already recorded under it, so a real episode reads as a short run of
+    /// <c>timed_out</c> followed by a long run of <c>deterministic</c> - which is a
+    /// better account of what happened than either arm alone - and this line
+    /// carries the cause in full.
+    /// </para>
+    /// <para>
+    /// <b>The threshold is safe to set low because the readiness verdict does not
+    /// move.</b> <see cref="RepoContextRetrievalReadinessState.Observe"/> folds
+    /// <see cref="RepoContextRetrievalPath.KeywordExactFallbackSuppressed"/> and
+    /// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/> into the same
+    /// unavailable arm, so a repository in this state was already unready and stays
+    /// exactly as unready; only the cause string it carries changes, from one that
+    /// claims a suppression that will clear to one that does not. A false positive
+    /// here therefore costs a more alarming cause on a deployment that was already
+    /// reporting unavailable, and costs a caller nothing at all - which is why the
+    /// count can be small enough to catch the episode early rather than large
+    /// enough to be unarguable.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository the gather faulted for.</param>
+    /// <param name="space">The embedding space the query was produced in.</param>
+    /// <param name="cause">The event-local classification the fault would have been absorbed under.</param>
+    /// <param name="error">The fault, logged for its stack.</param>
+    private void ReportDeterministicFault(
+        string repoId, EmbeddingSpaceTag space, string cause, Exception error)
+    {
+        _guards.RecordExactGatherFault(repoId, RepoContextExactGatherFault.DeterministicTag);
+        _logger.LogWarning(
+            error,
+            "Repository-context exact gather for {RepoId} in space {ModelId}/{Dimension} has now faulted "
+            + "{Faults} time(s) consecutively over {OpenFor} without one intervening success, most recently with "
+            + "a {Cause} fault. A fault rate that does not come down is not capacity: load is intermittent, and "
+            + "this is not, so it is reported as a degraded index rather than absorbed into the breaker's "
+            + "backoff. Retrieval answers as {RetrievalPath}. The breaker keeps its backoff and keeps probing, so "
+            + "this still clears on its own if the dependency recovers; if it does not, the fault is downstream "
+            + "of this ladder and more waiting will not reach it.",
+            repoId,
+            space.ModelId,
+            space.Dimension,
+            _exactScanBreaker.ConsecutiveStalls(repoId),
+            _exactScanBreaker.OpenFor(repoId),
+            cause,
+            RepoContextRetrievalPath.KeywordIndexDegraded);
+
+        ReportBreakerWedgedIfDue(repoId);
     }
 
     /// <summary>
@@ -639,10 +763,15 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             + "while open, {BreakerProbes} half-open probe(s) of which {BreakerProbeRecoveries} closed the breaker "
             + "with no help from the plane, {BreakerResets} closure(s) by a serving plane. Gather faults: "
             + "{GatherFaultsAbsorbed} absorbed as capacity and backed off, {GatherFaultsPropagated} propagated as "
-            + "a degraded index. Read those two against each other rather than alone - a propagated count climbing "
-            + "beside a flat absorbed count is a real index defect, and the reverse is load. Zero evaluations means "
-            + "the guard was never reached; evaluations with zero skips means it was reached and let the gather "
-            + "run.",
+            + "a degraded index. Read those two against each other rather than alone, and do NOT read a flat "
+            + "propagated count beside a climbing absorbed one as load: a deterministic defect and sustained load "
+            + "produce the same per-event classification, and reading it as load is what ran issue #2948's "
+            + "six-hour total retrieval outage as capacity pressure. What separates them is the fault RATE, which "
+            + "load cannot hold at one hundred percent - so a gather that faults repeatedly with no success "
+            + "between is counted as propagated on the 'deterministic' arm of "
+            + "'repocontext.retrieval.exact_gather.faults', which also names which capacity fault it was. Zero "
+            + "evaluations means the guard was never reached; evaluations with zero skips means it was reached "
+            + "and let the gather run.",
             repoId,
             guards.Searches,
             guards.PlaneServed,
@@ -654,7 +783,9 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             guards.BudgetCorpusUnknown,
             guards.BudgetWithinBudget,
             guards.BudgetExceeded,
-            guards.LastCorpus,
+            guards.LastCorpus is var lastCorpus && lastCorpus > 0
+                ? lastCorpus.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : DescribeUncountedCorpus(guards),
             DescribeAffordable(guards.LastAffordable),
             DescribeBreakerState(repoId),
             guards.BreakerTrips,
@@ -761,6 +892,38 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         => affordable == RepoContextExactScanBudget.Unbounded
             ? "unbounded"
             : affordable.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Renders a non-positive last-read corpus for the summary, so an unknown is
+    /// never printed as a measured zero.
+    /// <para>
+    /// <b>Why this is not cosmetic.</b> The number the summary carried was
+    /// literally <c>0</c>, and a reader of "last read corpus 0" concludes the
+    /// repository holds no vectors - which in issue #2948 was false, on a rig
+    /// demonstrably holding them, for all 174 samples of a six-hour run. The only
+    /// thing that disambiguated it was the aggregate clause several lines earlier
+    /// saying "read an uncounted corpus", which is a different sentence about a
+    /// different quantity. An absence presented as a measurement is the failure
+    /// this epic exists to remove; the value is uncounted, so it must say so.
+    /// </para>
+    /// <para>
+    /// <b>Two distinct uncounted states, kept apart.</b> A corpus of zero cannot
+    /// mean "counted and empty":
+    /// <see cref="EvaluateExactScanBudget(string, EmbeddingSpaceTag, out int, out int)"/>
+    /// returns <see cref="RepoContextExactScanBudgetDecision.CorpusUnknown"/> at
+    /// <c>corpus &lt;= 0</c> before any comparison, so every counted corpus that
+    /// reaches the affordability test is positive. What a zero cannot distinguish
+    /// on its own is a budget that was asked and could not count, from one that was
+    /// never asked at all - so the evaluation count decides which of the two is
+    /// reported.
+    /// </para>
+    /// </summary>
+    /// <param name="guards">The snapshot being rendered.</param>
+    /// <returns>The rendered value, never a bare number.</returns>
+    private static string DescribeUncountedCorpus(in RepoContextRetrievalGuardSnapshot guards)
+        => guards.BudgetEvaluations == 0
+            ? "not read (the budget was never reached)"
+            : "uncounted";
 
     /// <summary>
     /// What the exact-scan budget concludes about a gather over this repository and

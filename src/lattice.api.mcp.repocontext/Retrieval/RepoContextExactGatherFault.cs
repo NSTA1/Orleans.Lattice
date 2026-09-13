@@ -100,6 +100,39 @@ internal static class RepoContextExactGatherFault
     internal const string PropagatedTag = "propagated";
 
     /// <summary>
+    /// A capacity-shaped fault that has now recurred without a single intervening
+    /// success, so it is not intermittent. Propagated as a degraded index rather
+    /// than absorbed.
+    /// <para>
+    /// <b>This arm is an episode verdict, and <see cref="Classify(Exception)"/>
+    /// never returns it.</b> Every other arm on this type is a statement about one
+    /// exception, decidable from that exception alone, and the classifier is
+    /// correct as such: a single timeout really is capacity. What one exception
+    /// cannot carry is the sequence it sits in. Issue #2948 recorded twenty-five
+    /// consecutive gather faults over six hours with zero successes between them,
+    /// each individually a textbook timeout and so each individually absorbed - and
+    /// the aggregate read as sustained load, which is the one thing a hundred
+    /// percent fault rate cannot be. The count that settles it was already held by
+    /// <see cref="RepoContextExactScanBreaker.ConsecutiveStalls(string)"/>, and
+    /// nothing consulted it. So the ladder assigns this arm, from the episode; the
+    /// classifier keeps deciding events. Collapsing the two would make
+    /// <see cref="Classify(Exception)"/> depend on state it cannot see and is not
+    /// given.
+    /// </para>
+    /// <para>
+    /// <b>What it asserts is non-intermittence, not corruption.</b> A deterministic
+    /// timeout still does not say the stored bytes are wrong; it says waiting will
+    /// not fix it, which is precisely the claim
+    /// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/> makes to a
+    /// caller and precisely the claim backing off makes falsely. Keeping it apart
+    /// from <see cref="PropagatedTag"/> is what stops a deterministic capacity
+    /// fault and a genuine integrity fault becoming the same observation - the
+    /// collapse this whole class of defect keeps being made of.
+    /// </para>
+    /// </summary>
+    internal const string DeterministicTag = "deterministic";
+
+    /// <summary>
     /// How deep the cause chain is walked. Bounded because a hand-constructed
     /// exception graph can be cyclic.
     /// </summary>
@@ -119,9 +152,17 @@ internal static class RepoContextExactGatherFault
     /// propagates, exactly as it did before.
     /// </para>
     /// </summary>
+    /// <para>
+    /// <b>It answers about the event, so it is necessary and no longer
+    /// sufficient.</b> A caller that absorbs on this predicate alone absorbs a
+    /// fault that has recurred without a single intervening success, which is not
+    /// load however transient each occurrence looks. The ladder therefore consults
+    /// the breaker's consecutive-fault count as well, and escalates to
+    /// <see cref="DeterministicTag"/>; see the remarks there.
+    /// </para>
     /// <param name="error">The fault the gather raised. Must not be <see langword="null"/>.</param>
     /// <param name="callerCancellation">The token the caller supplied.</param>
-    /// <returns><see langword="true"/> when the fault is transient and should be absorbed.</returns>
+    /// <returns><see langword="true"/> when the fault is a capacity fault rather than an index fault.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="error"/> is null.</exception>
     internal static bool IsTransient(Exception error, CancellationToken callerCancellation)
     {

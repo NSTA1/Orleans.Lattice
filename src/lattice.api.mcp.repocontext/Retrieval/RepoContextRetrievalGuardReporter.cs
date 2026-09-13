@@ -302,17 +302,21 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
                 "Exact k-nearest-neighbour gathers that faulted, partitioned by the class of fault: 'stalled' "
                 + "(the tree aborted its own page fill), 'timed_out' (a call the gather issued never answered), "
                 + "'exhausted' (the gather could not allocate), 'abandoned' (a deadline this process owns "
-                + "cancelled it), or 'propagated' (the fault said something about the index rather than about "
-                + "capacity, so it was reported as a degraded index instead of being absorbed). The first four "
-                + "arm the exact-scan breaker's backoff; the last deliberately does not. Read 'propagated' "
-                + "against the other four rather than alone: a rising 'propagated' is a real index defect, "
-                + "whereas the other four are load. All five arms are pre-minted at zero when this reporter is "
-                + "constructed, so a zero on any one of them is a measured absence rather than an absent "
-                + "measurement - which is the specific reading issue #2749 could not make, because before it "
-                + "the only record of which fault had occurred was an exception type name in a log line.");
+                + "cancelled it), 'deterministic' (a capacity-shaped fault that has recurred with no intervening "
+                + "success, so it is not intermittent), or 'propagated' (the fault said something about the index "
+                + "rather than about capacity). The first four arm the exact-scan breaker's backoff and are "
+                + "absorbed; the last two are reported as a degraded index instead. Do NOT read a flat "
+                + "'propagated' beside a rising absorbed arm as load on its own - that reading is what let issue "
+                + "#2948 run a six-hour total retrieval outage as capacity pressure, because a deterministic "
+                + "defect and sustained load produce the same per-event classification. 'deterministic' is the "
+                + "arm that separates them, and it rises only at a fault rate no load produces. All six arms are "
+                + "pre-minted at zero when this reporter is constructed, so a zero on any one of them is a "
+                + "measured absence rather than an absent measurement - which is the specific reading issue "
+                + "#2749 could not make, because before it the only record of which fault had occurred was an "
+                + "exception type name in a log line.");
 
         // Pre-mint every arm, for the reason given on the ANN-search instrument above
-        // and for one more that is specific to this counter: four of these five arms
+        // and for one more that is specific to this counter: five of these six arms
         // are meant to be READ AS ZERO on a healthy deployment, so an arm that only
         // appeared on its first occurrence would make the healthy case and the
         // never-wired case identical (issue #2749).
@@ -320,6 +324,7 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
         _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.TimedOutTag), LatticeTenantLabel.Platform);
         _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.ExhaustedTag), LatticeTenantLabel.Platform);
         _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.AbandonedTag), LatticeTenantLabel.Platform);
+        _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.DeterministicTag), LatticeTenantLabel.Platform);
         _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.PropagatedTag), LatticeTenantLabel.Platform);
     }
 
@@ -629,7 +634,14 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
 
         public void ExactGatherFault(string fault)
         {
-            if (string.Equals(fault, RepoContextExactGatherFault.PropagatedTag, StringComparison.Ordinal))
+            // Both reported arms count as propagated, because both reached the
+            // caller as a degraded index and neither was absorbed into the
+            // breaker's backoff as capacity. The pair is kept separate on the
+            // instrument, not here: the snapshot's absorbed + propagated must
+            // equal the fault count, so a third bucket would break the
+            // denominator the whole line is read against.
+            if (string.Equals(fault, RepoContextExactGatherFault.PropagatedTag, StringComparison.Ordinal)
+                || string.Equals(fault, RepoContextExactGatherFault.DeterministicTag, StringComparison.Ordinal))
             {
                 Interlocked.Increment(ref _gatherFaultsPropagated);
             }
