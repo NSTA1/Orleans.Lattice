@@ -709,7 +709,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(primed, Is.EquivalentTo(new[] { "attempted", "healed", "abandoned", "rearmed" }),
+            Assert.That(primed, Is.EquivalentTo(new[] { "attempted", "healed", "abandoned", "rearmed", "undelivered" }),
                 "every outcome must be minted, so a reader can tell a measured zero from a missing build.");
             Assert.That(recorder.Measurements.Select(m => m.Value), Is.All.Zero,
                 "a prime must mint the series without claiming an event occurred.");

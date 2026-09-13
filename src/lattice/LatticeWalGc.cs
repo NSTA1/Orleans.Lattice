@@ -84,6 +84,20 @@ public sealed class LatticeWalGc(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     TimeProvider? timeProvider = null) : ILatticeWalGc
 {
+    /// <summary>
+    /// How many blocking materialiser-pin consumer ids a single pass carries out
+    /// alongside <see cref="LatticeWalGcReport.BlockingConsumerId"/>.
+    /// </summary>
+    /// <remarks>
+    /// A blast-radius bound, not a tuning knob: the blocked-leaf population is
+    /// unbounded, so the report must be bounded, and the scheduler acts on a
+    /// bounded number of blockers per pass regardless. It is deliberately no
+    /// smaller than the scheduler's per-pass touch budget, so the bound that
+    /// decides how much healing a pass can do is the scheduler's and not an
+    /// accident of how many ids the GC happened to carry.
+    /// </remarks>
+    internal const int MaxReportedBlockingConsumers = 8;
+
     /// <summary>Page size for reading the head of each shard during the scan.</summary>
     private const int ScanPageSize = 256;
 
@@ -214,6 +228,7 @@ public sealed class LatticeWalGc(
         var floorResult = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, partitions, cancellationToken).ConfigureAwait(false);
         var cursorBlocked = floorResult.Blocked;
         var blockingConsumerId = floorResult.BlockingConsumerId;
+        var blockingConsumerIds = floorResult.BlockingConsumerIds;
         // The report keeps the pre-#2849 shape: a tree with ANY blocked
         // partition reports a null cursor and BlockedByUnusablePin, so the
         // scheduler's blocked-leaf remedy and its cadence floor are driven by
@@ -347,7 +362,8 @@ public sealed class LatticeWalGc(
             var over0 = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedBefore);
             return new LatticeWalGcReport(
                 treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0,
-                ceiling, retainedBefore, retainedBefore, triggered, over0, cursorFloorState, blockingConsumerId);
+                ceiling, retainedBefore, retainedBefore, triggered, over0, cursorFloorState, blockingConsumerId,
+                blockingConsumerIds);
         }
 
         long totalTrimmed = 0;
@@ -378,7 +394,8 @@ public sealed class LatticeWalGc(
 
         return new LatticeWalGcReport(
             treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed,
-            ceiling, retainedBefore, retainedAfter, triggered, overThreshold, cursorFloorState, blockingConsumerId);
+            ceiling, retainedBefore, retainedAfter, triggered, overThreshold, cursorFloorState, blockingConsumerId,
+            blockingConsumerIds);
     }
 
     /// <summary>
@@ -489,6 +506,7 @@ public sealed class LatticeWalGc(
         bool[]? blockedPartitions = null;
         var blockedCount = 0;
         string? blockingConsumerId = null;
+        List<string>? blockingConsumerIds = null;
 
         foreach (var (consumerId, pin) in pins)
         {
@@ -520,12 +538,32 @@ public sealed class LatticeWalGc(
                 // the leaf population is unbounded, so the id is an unbounded
                 // metric dimension and belongs on the log line instead.
                 //
-                // This still names ONE blocker, not all of them, and the first
-                // one wins so a tree's reported blocker is stable while it
+                // This names ONE blocker in <c>BlockingConsumerId</c>, and the
+                // first one wins so a tree's reported blocker is stable while it
                 // drains. A later pass naming a different consumer is expected
                 // and is progress rather than a regression.
+                //
+                // A BOUNDED SET of further blockers is carried alongside it
+                // (issue #2768). Naming only the first made the scheduler's
+                // blocked-leaf remedy structurally incapable of converging on a
+                // tree with many blocked leaves: its attempt budget, minimum
+                // block age and retry cooldown are all reasoned about and
+                // documented PER BLOCKING CONSUMER, but a report that can only
+                // ever name one consumer collapses them into a PER TREE rate
+                // limit of roughly one leaf per cooldown. On a tree with
+                // thousands of blocked leaves that never converges, and the
+                // measured consequence is a sweep that attempted 2 touches
+                // across 46 blocked passes and healed none. Reporting a bounded
+                // set costs nothing here - the pin dictionary is already fully
+                // in hand - and restores the per-consumer limits to the scope
+                // they were written for.
                 blockedPartitions ??= new bool[partitions];
                 blockingConsumerId ??= consumerId;
+                blockingConsumerIds ??= new List<string>(MaxReportedBlockingConsumers);
+                if (blockingConsumerIds.Count < MaxReportedBlockingConsumers)
+                {
+                    blockingConsumerIds.Add(consumerId);
+                }
 
                 if (TryResolvePinPartition(consumerId, partitions) is { } blockedPartition)
                 {
@@ -549,13 +587,18 @@ public sealed class LatticeWalGc(
                     }
                 }
 
-                // Every partition is blocked, so no further pin can change the
-                // outcome: the floor that remains is unusable everywhere. This
-                // preserves the cheap short-circuit for the case that used to
-                // take it unconditionally.
-                if (blockedCount >= partitions)
+                // Every partition is blocked AND the reported-blocker set is
+                // full, so no further pin can change the outcome: the floor
+                // that remains is unusable everywhere and no further id would
+                // be carried. This preserves the cheap short-circuit for the
+                // case that used to take it unconditionally; the residual scan
+                // when the set is not yet full walks a dictionary already held
+                // in memory and issues no I/O.
+                if (blockedCount >= partitions
+                    && blockingConsumerIds.Count >= MaxReportedBlockingConsumers)
                 {
-                    return new DurableMaterialiserFloor(null, blockedPartitions, true, blockingConsumerId);
+                    return new DurableMaterialiserFloor(
+                        null, blockedPartitions, true, blockingConsumerId, blockingConsumerIds);
                 }
 
                 // A blocking pin contributes no usable frontier, so it is not
@@ -571,7 +614,11 @@ public sealed class LatticeWalGc(
         }
 
         return new DurableMaterialiserFloor(
-            floor, blockedPartitions, blockedPartitions is not null, blockingConsumerId);
+            floor,
+            blockedPartitions,
+            blockedPartitions is not null,
+            blockingConsumerId,
+            blockingConsumerIds);
     }
 
     /// <summary>
@@ -660,18 +707,26 @@ public sealed class LatticeWalGc(
     /// The consumer id of the first blocking pin encountered, or
     /// <see langword="null"/> when nothing is blocked.
     /// </param>
+    /// <param name="BlockingConsumerIds">
+    /// Up to <see cref="MaxReportedBlockingConsumers"/> blocking consumer ids in
+    /// encounter order, or <see langword="null"/> when nothing is blocked. The
+    /// first element is always <see cref="BlockingConsumerId"/>. Bounded rather
+    /// than complete: the blocked-leaf population is unbounded, and the consumer
+    /// of this list acts on a bounded number of them per pass anyway.
+    /// </param>
     private readonly record struct DurableMaterialiserFloor(
         HybridLogicalClock? Floor,
         bool[]? BlockedPartitions,
         bool Blocked,
-        string? BlockingConsumerId)
+        string? BlockingConsumerId,
+        IReadOnlyList<string>? BlockingConsumerIds = null)
     {
         /// <summary>
         /// A floor with nothing blocked: every partition trims against
         /// <paramref name="floor"/>.
         /// </summary>
         public static DurableMaterialiserFloor Unblocked(HybridLogicalClock? floor)
-            => new(floor, null, false, null);
+            => new(floor, null, false, null, null);
 
         /// <summary>
         /// Whether an unusable durable pin has disabled the cursor branch for

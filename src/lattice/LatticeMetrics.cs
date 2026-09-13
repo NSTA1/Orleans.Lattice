@@ -2742,7 +2742,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcBlockedLeafReactivations =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
-            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome (attempted/healed/abandoned/rearmed). All outcomes share one instrument and every one is zero-primed per tree per pass, so a zero on 'healed' is a measured zero and not an unpublished series.");
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome (attempted/healed/abandoned/rearmed/undelivered). All outcomes share one instrument and every one is zero-primed per tree per pass, so a zero on 'healed' is a measured zero and not an unpublished series.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
@@ -2787,6 +2787,32 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> BlockedLeafReactivationRearmed =
         new(TagOutcome, "rearmed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a touch whose probe call
+    /// did not return before the cluster response timeout (issue #2768).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the arm that separates <i>the sweep could not deliver its
+    /// touch</i> from <i>the sweep delivered its touch and the leaf still did
+    /// not heal</i>. Without it both land on <c>attempted</c> with no
+    /// <c>healed</c>, which reads as "reactivation does not work" when the truth
+    /// may be that the leaf was never reached - and those call for opposite
+    /// responses.
+    /// </para>
+    /// <para>
+    /// It is emitted alongside <c>attempted</c>, never instead of it, so the
+    /// cost series stays complete. A timeout is <b>not</b> evidence that the
+    /// touch was wasted: the probe is a request whose only job is to cause
+    /// activation, and a caller-side timeout does not cancel the activation the
+    /// message already started. It says the sweep stopped waiting, not that
+    /// nothing happened.
+    /// </para>
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationUndelivered =
+        new(TagOutcome, "undelivered");
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a
