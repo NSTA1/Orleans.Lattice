@@ -4107,6 +4107,18 @@ internal sealed partial class BPlusLeafGrain
             new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
             LatticeTenantLabel.ForTree(treeId));
 
+        // Issue #2867. Same priming argument, for the slice-narrowing counter
+        // the loop below increments. The healthy steady state for a partition is
+        // never to narrow at all, so an unprimed counter would leave the COMMON
+        // case indistinguishable from a build that cannot narrow - and the whole
+        // value of the instrument is telling those two apart after an
+        // out-of-memory activation failure.
+        LatticeMetrics.WalReplaySliceNarrowings.Add(
+            0,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+            LatticeTenantLabel.ForTree(treeId));
+
         // Reuse the head the sweep-order pre-pass already probed when it has
         // one, so ordering the sweep costs no extra grain call. A head probed
         // moments ago can only be behind the true head, which simply leaves
@@ -4410,6 +4422,18 @@ internal sealed partial class BPlusLeafGrain
                 // the retry resumes rather than repeats.
                 var narrowed = sliceBudget / 4;
                 sliceBudget = narrowed < 1 ? 1 : narrowed;
+
+                // Issue #2867. The narrowing is the only thing in the process
+                // that ever moves the per-replay buffering factor, so counting
+                // it is what makes that factor observable at all. Recorded
+                // before the log, because the log is throttled by the sink's
+                // own configuration and this must be the exact census.
+                LatticeMetrics.WalReplaySliceNarrowings.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+                    LatticeTenantLabel.ForTree(treeId));
+
                 ReplayLogger(context)?.LogWarning(
                     ex,
                     "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford a commit-log "

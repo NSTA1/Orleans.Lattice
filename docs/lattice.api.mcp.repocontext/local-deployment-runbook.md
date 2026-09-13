@@ -50,6 +50,67 @@ fraction of host memory grants far too much on a large machine and far too littl
 small one for the identical corpus. Re-run the script after a substantial change in
 corpus size, or when moving the deployment to a different host.
 
+#### `${VAR:?...}` checks presence, not meaning (#2863)
+
+The refusal described above is narrower than it reads. `${VAR:?...}` errors when the
+variable is unset or empty; it **cannot inspect the value**, because compose
+interpolation has no value predicate. It establishes that something was supplied,
+never that what was supplied means what the supplier intended.
+
+Every one of these knobs has a falsy value inside its own valid syntax that means
+"ignore me" to whichever consumer finally reads it. `0` is non-empty, so it satisfies
+every guard on the overlay and then selects no CPU limit and no memory limit at all
+from Docker, the host core count from ONNX Runtime and from the CLR's garbage
+collector, and the runtime-derived WAL replay ceiling that these variables exist to
+pin. An operator who forgot to export a variable and one who deliberately pinned it to
+`0` produce byte-identical deployments, and the guard reports both as satisfied. That
+is worse than an unguarded knob, because this one is trusted.
+
+The remedy is not a stricter check. The information was destroyed before any check
+ran, when one spelling was given two meanings, and no guard can recover it. So `0` is
+retired as a spelling and the deliberate case gets its own:
+
+```bash
+REPOCONTEXT_MAX_CONCURRENT_REPLAYS=auto   # run the library's derivation on purpose
+EMBEDDER_INTRA_THREADS=auto               # derive from the enforced container CPU grant
+```
+
+`auto` is accepted on exactly those two knobs and on none of the other five. That
+split is a constraint, not a judgement about which knobs deserve the convenience: a
+token has to be interpreted by somebody, and compose cannot rewrite a value in
+transit. Those two are read by code in this repository - `ResolveMaxConcurrentReplays`
+and `ResolveIntraOpThreads` - so `auto` has somewhere to be translated into the
+behaviour it names. The remaining five are read finally by Docker or by the CLR, whose
+vocabularies are not ours to extend, and inventing a token for them would hand a
+foreign string to a parser that will shrug and carry on. The rule generalises: **you
+may only introduce a sentinel where you own the code that interprets it.**
+
+Both directions are adjudicated before anything is deployed:
+
+```bash
+pwsh -File ./scripts/Assert-TuningEnv.ps1
+```
+
+`New-TuningEnv.ps1` runs it over the `.env` it has just written, so the ordinary path
+is already covered; run it by hand after editing `.env` yourself. It refuses a retired
+`0` and a genuinely unset variable with **different** messages, because the remedies
+differ: the first is a migration, the second is a value you never supplied. It exits
+`0` when every knob carries a meaningful value, `2` when any does not, and `4` when
+the file cannot be read.
+
+If you are migrating an existing `.env` that carries `REPOCONTEXT_MAX_CONCURRENT_REPLAYS=0`
+or `EMBEDDER_INTRA_THREADS=0`, note that the deployed image must contain this change
+for `auto` to be understood. An older image throws on the replay knob, which is loud
+and safe, but **derives silently** on the embedder knob, which is indistinguishable
+from success. Confirm from the running container rather than from a clean boot:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tuning.yml logs embedder | grep 'intra-op threads'
+```
+
+The provenance bracket on that line names who chose the value, so `DECLARED 'auto'`
+distinguishes a migrated deployment from one that merely started.
+
 ### What this runbook does not establish
 
 **Agreement between this runbook and the tracked compose files says nothing
