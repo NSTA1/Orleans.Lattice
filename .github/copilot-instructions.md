@@ -225,6 +225,38 @@ fixtures prefer the `Orleans.Lattice.Testing.MeterListening` helpers
 parameter, so the owning initialiser has necessarily completed before the
 listener exists and the unsafe ordering is not expressible.
 
+### The rule generalises to all state the callback reads
+
+The rule above is stated about one field, `Meter`, because that is the field
+every metrics class has. The hazard is not about that field. Publication runs
+the static initialiser **re-entrantly and part-way through**, and static field
+initialisers run in declaration order, so *any* field declared below the
+instrument being published is still `null` at that moment. Nothing in that
+mechanism is specific to `Meter`.
+
+The invariant is therefore larger than the section above states: **an instrument
+field must be declared below every piece of static state its own callback
+reads.**
+
+This matters most for an `ObservableGauge` / `ObservableCounter`, whose callback
+runs on every observation as well as on publication, and whose failure mode is
+the quiet one - a callback that throws inside a `MeterListener` surfaces as a
+missing series, not as an exception at the offending line. That is the same
+silent shape as the cross-type `Meter` case, reached by a different route.
+
+`CoordinatorPhaseTickCensus` is the worked example. Its gauge callback reads
+`LiveEnrolments`, so `Gauge` is declared **below** it. That class declares no
+`Meter` field of its own - it builds from `LatticeMetrics.Meter`, the
+documented-safe cross-type form - so `MeterFieldDeclarationOrderTests` does not
+scan it at all. That silence is **correct**: there is no `Meter` field to match
+and nothing to be null. But it also means **no guard catches this ordering**,
+which is why it is written down here rather than delegated to a fixture.
+
+The practical form, and the version nobody can get wrong by adding a field
+later: **declare an observable instrument last in its class**, below every
+collection, token, counter, and options field its callback touches. That
+satisfies both this generalisation and the narrower `Meter` rule above.
+
 ## Documentation
 
 Documentation rules - where docs live and the `csharp verify` snippet requirement - live in the **documentation** skill (`.github/skills/documentation/SKILL.md`).
