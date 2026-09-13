@@ -151,6 +151,20 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     private VectorIndexBuildProgress _previousProgress;
 
     /// <summary>
+    /// Whether the tick currently executing has already recorded its step on the
+    /// slice counter. Reset at the top of every tick and set the moment the step is
+    /// classified, so the outer fault seam can tell a tick that threw BEFORE it was
+    /// counted - which must be counted as faulted, since nothing else will count it
+    /// at all - from one that threw AFTER, which has already been counted on the arm
+    /// its progress earned and must not be counted twice.
+    /// <para>
+    /// A plain field is sufficient because a grain activation processes one turn at
+    /// a time, so no two ticks are ever in flight together.
+    /// </para>
+    /// </summary>
+    private bool _sliceRecordedThisTick;
+
+    /// <summary>
     /// The repository this coordinator builds for, parsed once from the grain key.
     /// The key is immutable for the life of the activation, so re-splitting it on
     /// every phase tick would allocate three strings a tick for the whole build and
@@ -263,6 +277,124 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     /// <inheritdoc />
     protected internal override async Task ProcessNextPhaseAsync()
     {
+        // THE FAULT SEAM IS THE WHOLE TICK, NOT ONE CALL INSIDE IT.
+        //
+        // It used to wrap the build step alone, which counted the one fault path
+        // somebody had thought of and left every sibling site on the same tick
+        // silent: resolving the run credential, completing the coordinator on the
+        // not-in-progress path, probing the range-read gate, banking durable state,
+        // and standing the coordinator down. All of those are grain or storage
+        // calls, which is to say all of them are exactly the calls the run-12 census
+        // found timing out. A counter that covers one of six throw sites reports a
+        // clean zero for the other five, and a clean zero is read as "that did not
+        // happen" (issue #2880).
+        //
+        // The flag is what keeps the partition total. A tick that throws BEFORE its
+        // step is classified has no other record anywhere, so it is counted here; a
+        // tick that throws AFTER has already been counted on the arm its progress
+        // earned, and counting it again would put one tick on two arms and break the
+        // denominator every other reading is taken against. So the seam covers every
+        // site, and records at most once.
+        //
+        // The catch still does nothing except count. It does not log (the base class
+        // already logs the exception it receives), does not swallow, does not back
+        // off, and does not set _advancedThisActivation - a step that banked nothing
+        // must not be able to satisfy the once-per-activation check that lets a
+        // converged coordinator stand down. Rethrowing unchanged is what keeps the
+        // timer's behaviour, the checkpoint-resume path, and the reminder lifetime
+        // exactly as they were.
+        _sliceRecordedThisTick = false;
+        try
+        {
+            await ProcessNextPhaseCoreAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (!_sliceRecordedThisTick)
+            {
+                // Classified HERE, at the site, rather than inside the reporter. The
+                // reporter sees a cause; only this frame sees what the tick was
+                // doing when it threw.
+                sliceReporter.RecordFaulted(ClassifyBuildFault(ex));
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Which cause a faulted build step belongs to, resolved by walking the
+    /// inner-exception chain outward-in.
+    /// </summary>
+    /// <param name="exception">The fault the tick raised.</param>
+    /// <returns>The cause to record.</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>The order of the arms is load-bearing and two of them are subtypes of a
+    /// later one.</b> <see cref="ScanPageStalledException"/> derives from
+    /// <see cref="TimeoutException"/>, so testing the timeout arm first would
+    /// silently swallow every leaf-chain stall into
+    /// <see cref="RepoContextAnnBuildFaultCause.DependencyUnavailable"/> - and those
+    /// have opposite remedies, one being a tree whose leaf cannot be materialised in
+    /// a single grain call and the other a cluster that has not settled.
+    /// <see cref="LeafProjectionStaleException"/> and
+    /// <see cref="EmbeddingSpaceMismatchException"/> both derive from
+    /// <see cref="InvalidOperationException"/>, which is why no arm matches that base
+    /// type: an arm that did would capture whichever of the two is tested after it.
+    /// </para>
+    /// <para>
+    /// Silo churn is matched by type name rather than by type, because one of the two
+    /// runtime exception types is internal to Orleans. This is the same match
+    /// <see cref="RepoContextAnnIndexSweepService"/> already uses for the same reason.
+    /// </para>
+    /// <para>
+    /// An unrecognised type falls through every arm and lands on
+    /// <see cref="RepoContextAnnBuildFaultCause.Unexpected"/>, which is the value
+    /// that pages. Failing open onto a benign-looking arm would let a fault nobody
+    /// has classified present as one that is already understood.
+    /// </para>
+    /// </remarks>
+    internal static RepoContextAnnBuildFaultCause ClassifyBuildFault(Exception exception)
+    {
+        for (var e = exception; e is not null; e = e.InnerException)
+        {
+            if (e is ScanPageStalledException)
+            {
+                return RepoContextAnnBuildFaultCause.ScanPageStalled;
+            }
+
+            if (e is LeafProjectionStaleException)
+            {
+                return RepoContextAnnBuildFaultCause.ProjectionStale;
+            }
+
+            if (e is EmbeddingSpaceMismatchException or ArgumentException or NotSupportedException)
+            {
+                return RepoContextAnnBuildFaultCause.PlaneRejected;
+            }
+
+            if (e is TimeoutException or System.IO.IOException)
+            {
+                return RepoContextAnnBuildFaultCause.DependencyUnavailable;
+            }
+
+            var typeName = e.GetType().Name;
+            if (typeName.Contains("SiloUnavailableException", StringComparison.Ordinal)
+                || typeName.Contains("OrleansMessageRejectionException", StringComparison.Ordinal))
+            {
+                return RepoContextAnnBuildFaultCause.DependencyUnavailable;
+            }
+        }
+
+        return RepoContextAnnBuildFaultCause.Unexpected;
+    }
+
+    /// <summary>
+    /// One phase tick, under the fault seam <see cref="ProcessNextPhaseAsync"/>
+    /// wraps round it.
+    /// </summary>
+    private async Task ProcessNextPhaseCoreAsync()
+    {
         // Stamp the run authority's fixed identity onto the whole tick, so the
         // corpus stream the build step drives - and the store writes and prefix
         // reclamation that follow it - carry a subject the access gate can
@@ -323,15 +455,17 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         var repoId = RepoId;
         var space = state.State.Space;
 
-        // Exactly one bounded slice. An exception propagates to the base class,
+        // Exactly one bounded slice. An exception propagates to the fault seam in
+        // ProcessNextPhaseAsync, which counts it and rethrows to the base class,
         // which logs it and leaves the timer running - and the keep-alive reminder
         // survives a process death - so a transient store fault costs one slice and
         // the build resumes from its checkpoint rather than being abandoned until
         // some query happens to re-arm it.
         //
-        // THE FAULT IS COUNTED AND RETHROWN, NOT HANDLED. A step that throws is
-        // still a step this coordinator took, and leaving it uncounted reintroduces
-        // the precise ambiguity the slice counter exists to remove - one layer down.
+        // THE FAULT IS COUNTED AND RETHROWN, NOT HANDLED, and the counting now
+        // happens in the seam above rather than here. A step that throws is still a
+        // step this coordinator took, and leaving it uncounted reintroduces the
+        // precise ambiguity the slice counter exists to remove - one layer down.
         // A corpus read that CANNOT BE SERVED is a different condition from one that
         // is served and returns nothing: the empty read completes, so it reaches the
         // record below and lands on 'idle', whereas the faulting read never reaches
@@ -343,26 +477,9 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         // checkpoint had fallen off the write-ahead log threw on every read, and the
         // designed self-heal that would have cleared it was refused by the access
         // gate, so the fault was permanent rather than transient.
-        //
-        // The catch deliberately does nothing except count. It does not log (the
-        // base class already logs the exception it receives), does not swallow, does
-        // not back off, and does not set _advancedThisActivation - a step that banked
-        // nothing must not be able to satisfy the once-per-activation check that lets
-        // a converged coordinator stand down. Rethrowing unchanged is what keeps the
-        // timer's own behaviour, the checkpoint-resume path, and the reminder
-        // lifetime exactly as they were.
-        VectorIndexBuildProgress progress;
-        try
-        {
-            progress = await registry
-                .BuildStepAsync(repoId, space, CancellationToken.None)
-                .ConfigureAwait(true);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            sliceReporter.RecordSlice(RepoContextAnnBuildSliceOutcome.Faulted);
-            throw;
-        }
+        var progress = await registry
+            .BuildStepAsync(repoId, space, CancellationToken.None)
+            .ConfigureAwait(true);
 
         _advancedThisActivation = true;
 
@@ -382,6 +499,7 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         // blindness it was added to remove.
         sliceReporter.RecordSlice(
             RepoContextAnnBuildSliceReporter.Classify(_previousProgress, progress));
+        _sliceRecordedThisTick = true;
         _previousProgress = progress;
 
         // The discriminator this build is otherwise missing. A tick that banks
