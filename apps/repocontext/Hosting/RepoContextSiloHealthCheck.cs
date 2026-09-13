@@ -65,6 +65,21 @@ public sealed class RepoContextSiloHealthCheck : IHealthCheck
     public const string Name = "silo";
 
     /// <summary>
+    /// The key under which every result carries its
+    /// <see cref="RepoContextSiloProbeFaultCause"/>, so a consumer reads a bounded
+    /// value rather than parsing the human-readable description.
+    /// </summary>
+    /// <remarks>
+    /// The cause is attached to <b>every</b> result, healthy ones included (as
+    /// <see cref="RepoContextSiloProbeFaultCause.None"/>), so that a missing key can
+    /// only mean a result produced by something other than this check - which
+    /// <see cref="RepoContextHealthSignal.ReadCause"/> treats as
+    /// <see cref="RepoContextSiloProbeFaultCause.Unexpected"/> rather than as no
+    /// fault.
+    /// </remarks>
+    public const string CauseDataKey = "cause";
+
+    /// <summary>
     /// The default bound on a single grain-liveness call. A wedged silo answers by
     /// hanging rather than throwing, so the probe must impose its own deadline; this
     /// is comfortably under the Docker healthcheck's own <c>timeout</c> so a hang
@@ -185,24 +200,26 @@ public sealed class RepoContextSiloHealthCheck : IHealthCheck
                 var elapsed = _timeProvider.GetUtcNow() - drainStart;
                 if (elapsed > _drainGraceWindow)
                 {
-                    return HealthCheckResult.Unhealthy(
+                    return Unhealthy(
                         $"Draining: graceful shutdown has run {elapsed.TotalSeconds:F0}s, beyond the "
                         + $"{_drainGraceWindow.TotalSeconds:F0}s stop-grace window, and has not completed - "
-                        + "the drain has hung.");
+                        + "the drain has hung.",
+                        RepoContextSiloProbeFaultCause.DrainHung);
                 }
             }
 
-            return HealthCheckResult.Healthy(
+            return Healthy(
                 "Draining: graceful shutdown in progress; the silo is stopping on purpose.");
         }
 
         string failure;
+        RepoContextSiloProbeFaultCause cause;
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(_timeout);
             await _probe.ProbeAsync(timeoutCts.Token).ConfigureAwait(false);
-            return HealthCheckResult.Healthy(
+            return Healthy(
                 "Silo membership active and the grain layer answered a trivial call.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -213,24 +230,75 @@ public sealed class RepoContextSiloHealthCheck : IHealthCheck
         }
         catch (OperationCanceledException)
         {
+            // Our own deadline fired: the grain call neither returned nor threw. This
+            // is the wedge shape of issue #2868 - the authorization tree stops
+            // answering and calls hang - and it is the one cause for which a restart
+            // is the only remedy observed to work.
+            cause = RepoContextSiloProbeFaultCause.ProbeDeadline;
             failure = string.Create(
                 CultureInfo.InvariantCulture,
                 $"the grain call did not complete within {_timeout.TotalSeconds:F0}s, so the silo is wedged or unreachable");
         }
         catch (Exception ex)
         {
+            cause = ClassifyProbeFault(ex);
             failure = ex.Message;
         }
 
         // The grain call did not succeed. Whether that is a fault turns entirely on
         // whether the host was ever ready: a silo that has not yet joined is still
         // starting, and only a silo that HAD joined and no longer answers is broken.
+        //
+        // The CAUSE is carried on both arms, deliberately. The verdict grades the
+        // failure; the cause says what the failure was, and a silo that is failing
+        // every probe while still joining is a different box from one that is merely
+        // joining quietly. Grading alone cannot tell those apart.
         return phase == RepoContextLifecyclePhase.Starting
-            ? HealthCheckResult.Degraded(
-                $"Starting: the silo has not yet answered a grain call ({failure}).")
-            : HealthCheckResult.Unhealthy(
-                $"The silo is not answering grain calls ({failure}).");
+            ? Degraded($"Starting: the silo has not yet answered a grain call ({failure}).", cause)
+            : Unhealthy($"The silo is not answering grain calls ({failure}).", cause);
     }
+
+    /// <summary>
+    /// Maps a probe exception onto the bounded cause taxonomy, failing open onto
+    /// <see cref="RepoContextSiloProbeFaultCause.Unexpected"/> so a failure this
+    /// taxonomy does not name is still counted.
+    /// </summary>
+    /// <param name="exception">The exception the grain call threw.</param>
+    /// <remarks>
+    /// <see cref="LatticeTenantAccessDeniedException"/> derives directly from
+    /// <see cref="Exception"/>, so no arm here shadows another and the order of the
+    /// arms is not load-bearing. Keep it that way: an arm matching a shared base type
+    /// would silently capture its siblings.
+    /// </remarks>
+    internal static RepoContextSiloProbeFaultCause ClassifyProbeFault(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        return exception switch
+        {
+            // The tree answered and refused the grant. A restart does not clear this,
+            // which is why it must not be collapsed into the wedge causes.
+            LatticeTenantAccessDeniedException => RepoContextSiloProbeFaultCause.AccessDenied,
+            UnauthorizedAccessException => RepoContextSiloProbeFaultCause.AccessDenied,
+
+            // A downstream deadline expired before the probe's own did.
+            TimeoutException => RepoContextSiloProbeFaultCause.GrainTimeout,
+
+            _ => RepoContextSiloProbeFaultCause.Unexpected,
+        };
+    }
+
+    private static HealthCheckResult Healthy(string description) =>
+        HealthCheckResult.Healthy(description, Data(RepoContextSiloProbeFaultCause.None));
+
+    private static HealthCheckResult Degraded(string description, RepoContextSiloProbeFaultCause cause) =>
+        HealthCheckResult.Degraded(description, exception: null, data: Data(cause));
+
+    private static HealthCheckResult Unhealthy(string description, RepoContextSiloProbeFaultCause cause) =>
+        HealthCheckResult.Unhealthy(description, exception: null, data: Data(cause));
+
+    private static IReadOnlyDictionary<string, object> Data(RepoContextSiloProbeFaultCause cause) =>
+        new Dictionary<string, object>(StringComparer.Ordinal) { [CauseDataKey] = cause };
 }
 
 /// <summary>
