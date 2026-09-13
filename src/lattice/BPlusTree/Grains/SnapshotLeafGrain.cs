@@ -27,10 +27,29 @@ internal sealed class SnapshotLeafGrain(
     ILogger<SnapshotLeafGrain> logger) : Grain, ISnapshotLeafGrain
 {
     /// <summary>
-    /// Per-slice WAL read budget. Mirrors the activation-time
-    /// materialiser's <c>ReplaySliceBudget</c> so a snapshot rebuild
-    /// imposes the same coordinator-RPC granularity as a live leaf's
-    /// fall-off-log recovery.
+    /// Per-slice WAL read budget, so a snapshot rebuild imposes the same
+    /// coordinator-RPC granularity as a live leaf's fall-off-log recovery.
+    /// <para>
+    /// <b>This no longer mirrors the activation-time materialiser's constant of
+    /// the same name, despite being the same number</b> (issue #2867). Both
+    /// started at 256 and the comment here used to claim they mirrored each
+    /// other. Issue #2742 then made the activation-time replay's width a
+    /// <em>local</em> that narrows to a quarter and retries whenever a read
+    /// fails for memory pressure, because the read that fills a slice was the
+    /// allocation a constrained deployment could no longer afford. This site
+    /// took no such change: it passes the constant straight to
+    /// <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync"/>, so a snapshot
+    /// rebuild that cannot afford its slice has no narrower attempt to make and
+    /// the failure propagates.
+    /// </para>
+    /// <para>
+    /// That asymmetry is recorded rather than repaired here because it is a
+    /// behaviour change on the recovery path and issue #2867 is scoped to the
+    /// operator-facing surface. It is worth stating plainly because the
+    /// direction is unfortunate: the snapshot path is the one a leaf falls back
+    /// to when it <em>cannot</em> replay, so the recovery route is currently the
+    /// one without the resilience.
+    /// </para>
     /// </summary>
     private const int ReplaySliceBudget = 256;
 

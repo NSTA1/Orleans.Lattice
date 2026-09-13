@@ -82,6 +82,17 @@ public partial class BPlusLeafGrainTests
         /// <summary>Entries served before pressure becomes total, or <c>null</c>.</summary>
         internal int? StarveAfterEntries { get; set; }
 
+        /// <summary>
+        /// How many reads were refused for pressure. This is the ground truth
+        /// the slice-narrowing counter is checked against in
+        /// <c>BPlusLeafGrainTests.ReplaySliceNarrowingCensus.cs</c>: counting
+        /// refusals here and narrowings there, then asserting the two are
+        /// equal, is what makes that an exact census rather than a "it went up"
+        /// assertion that would survive an off-by-one or a per-activation
+        /// increment.
+        /// </summary>
+        internal int Refusals { get; private set; }
+
         private Task<IReadOnlyList<CommitLogSliceEntry>> Serve(long fromExclusive, long toInclusive, int budget)
         {
             RequestedBudgets.Add(budget);
@@ -93,6 +104,7 @@ public partial class BPlusLeafGrainTests
 
             if (budget > AffordableBudget)
             {
+                Refusals++;
                 throw new WalReadUnderPressureException(
                     ResumableTreeId, 0, fromExclusive, 64L * 1024 * 1024,
                     new OutOfMemoryException("scripted: the page could not be allocated."));
