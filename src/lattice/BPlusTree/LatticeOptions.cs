@@ -2087,6 +2087,55 @@ public class LatticeOptions
     public const int DefaultWalReplayMaxRecordsPerTurn = 256;
 
     /// <summary>
+    /// Number of WAL entries a single activation-time replay requests per
+    /// commit-log slice read, and the width it widens back towards after a
+    /// memory-pressure narrowing. Defaults to
+    /// <see cref="DefaultWalReplaySliceBudget"/> (256).
+    /// <para>
+    /// <b>This is the second of the two factors that set peak replay memory,
+    /// and until now it was the only one that could not be configured (issue
+    /// #2898).</b> Peak draw is the <i>product</i> of how many replays run at
+    /// once and how much each one buffers. The first factor is
+    /// <see cref="WalMaterialiserMaxConcurrentReplays"/>; this is the second.
+    /// Lowering it trades round trips for a smaller resident slice on a host
+    /// that cannot afford the default width.
+    /// </para>
+    /// <para>
+    /// <b>Distinct from <see cref="WalReplayMaxRecordsPerTurn"/>, which is
+    /// easily confused with it.</b> That option bounds how many records a
+    /// replay applies <i>within</i> one scheduler turn before yielding
+    /// cooperatively, and so governs silo responsiveness. This one bounds how
+    /// many entries a single cross-RPC slice read <i>returns</i>, and so
+    /// governs allocation. They default to the same number and mean different
+    /// things; changing one does not change the other.
+    /// </para>
+    /// <para>
+    /// The value is the <i>starting</i> width, not a floor. A read refused for
+    /// memory pressure is retried at a quarter of the current width, floored at
+    /// a single entry, and widens back towards this value on success - so
+    /// configuring it lowers the ceiling the replay works down from rather than
+    /// disabling the adaptation. A width of one is the narrowest legal read,
+    /// which is why zero is rejected: it would request nothing and the replay
+    /// could never advance.
+    /// </para>
+    /// </summary>
+    public int WalReplaySliceBudget { get; set; } = DefaultWalReplaySliceBudget;
+
+    /// <summary>
+    /// Default value for <see cref="WalReplaySliceBudget"/> (256).
+    /// <para>
+    /// This constant is the <b>single</b> declaration of the per-replay slice
+    /// width in the library. The internal reader that owns the narrow-and-retry
+    /// mechanism binds its own default to this field rather than repeating the
+    /// literal, so the two cannot drift apart by construction rather than by a
+    /// test that compares them - and a comparison of values is precisely the
+    /// detector that failed between issues #2742 and #2899, when three sites
+    /// held the same number while their behaviour had diverged.
+    /// </para>
+    /// </summary>
+    public const int DefaultWalReplaySliceBudget = 256;
+
+    /// <summary>
     /// Maximum number of entries the WAL grain will batch into a single
     /// storage flush. Defaults to <see cref="DefaultWalMaxBatchEntries"/>
     /// (100). Lower values reduce flush latency at the cost of throughput.

@@ -136,7 +136,7 @@ public sealed class LatticeFallOffLogDetectorTests
         // there is no projection state to recover, so the budget
         // semantically does not apply. The classifier returns
         // TailReplay and the materialiser handles bounding itself via
-        // ReplaySliceBudget on the read side.
+        // WalReplaySliceBudget on the read side.
         var (detector, _) = CreateDetector(head: 50_000, tail: 0);
         var options = await BuildOptionsAsync(new LatticeOptions
         {

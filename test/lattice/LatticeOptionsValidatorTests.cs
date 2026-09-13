@@ -344,6 +344,43 @@ public class LatticeOptionsValidatorTests
         Assert.That(LatticeOptions.DefaultWalReplayMaxRecordsPerTurn, Is.EqualTo(256));
     }
 
+    // Issue #2898. A width below one cannot be served at all: a zero-width read
+    // returns nothing and the replay loop never advances, so the floor is a
+    // real servability boundary rather than a tidiness convention. There is
+    // deliberately no upper bound - every positive width IS servable, because
+    // the width is a request the provider may refuse and a refusal for memory
+    // pressure is what the narrow-and-retry already handles. An invented
+    // ceiling would be a constant with no derivation, which is the defect class
+    // this epic is about.
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    [TestCase(-256)]
+    public void WalReplaySliceBudget_below_one_fails(int value)
+    {
+        var result = Validate(o => o.WalReplaySliceBudget = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage,
+            Does.Contain(nameof(LatticeOptions.WalReplaySliceBudget)));
+    }
+
+    [TestCase(1)]
+    [TestCase(64)]
+    [TestCase(256)]
+    [TestCase(int.MaxValue)]
+    public void WalReplaySliceBudget_positive_passes(int value)
+    {
+        var result = Validate(o => o.WalReplaySliceBudget = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalReplaySliceBudget_default_is_256()
+    {
+        Assert.That(new LatticeOptions().WalReplaySliceBudget, Is.EqualTo(256));
+        Assert.That(LatticeOptions.DefaultWalReplaySliceBudget, Is.EqualTo(256));
+    }
+
     [TestCase(-1)]
     [TestCase(-100)]
     public void LeafSnapshotReClassifyEveryNCheckpoints_must_be_non_negative(int value)
