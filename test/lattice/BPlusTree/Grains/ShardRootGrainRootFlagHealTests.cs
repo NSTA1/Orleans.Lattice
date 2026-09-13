@@ -57,7 +57,7 @@ public sealed class ShardRootGrainRootFlagHealTests
         /// </summary>
         public required List<bool> PersistedRootIsLeaf { get; init; }
 
-        public Task ActivateAsync() => ((IGrainBase)Grain).OnActivateAsync(CancellationToken.None);
+        public Task ActivateAsync() => LeafActivationHarness.ActivateAsync(Grain, CancellationToken.None);
     }
 
     /// <summary>
@@ -417,15 +417,15 @@ public sealed class ShardRootGrainRootFlagHealTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                ReferenceEquals(((IGrainBase)internalRooted.Grain).OnActivateAsync(CancellationToken.None), Task.CompletedTask),
+                ReferenceEquals(LeafActivationHarness.ActivateAsync(internalRooted.Grain, CancellationToken.None), Task.CompletedTask),
                 Is.True,
                 "A healthy internal-rooted shard must return the cached completed task, not a fresh one.");
             Assert.That(
-                ReferenceEquals(((IGrainBase)leafRooted.Grain).OnActivateAsync(CancellationToken.None), Task.CompletedTask),
+                ReferenceEquals(LeafActivationHarness.ActivateAsync(leafRooted.Grain, CancellationToken.None), Task.CompletedTask),
                 Is.True,
                 "A healthy leaf-rooted shard must return the cached completed task, not a fresh one.");
             Assert.That(
-                ReferenceEquals(((IGrainBase)noRoot.Grain).OnActivateAsync(CancellationToken.None), Task.CompletedTask),
+                ReferenceEquals(LeafActivationHarness.ActivateAsync(noRoot.Grain, CancellationToken.None), Task.CompletedTask),
                 Is.True,
                 "A shard with no root yet must return the cached completed task, not a fresh one.");
         });
@@ -437,7 +437,7 @@ public sealed class ShardRootGrainRootFlagHealTests
         var baked = CreateBakedHarness();
         baked.State.SimulateEtagChecks = true;
 
-        var repairing = ((IGrainBase)baked.Grain).OnActivateAsync(CancellationToken.None);
+        var repairing = LeafActivationHarness.ActivateAsync(baked.Grain, CancellationToken.None);
 
         Assert.That(ReferenceEquals(repairing, Task.CompletedTask), Is.False,
             "A repairing activation that suspends on its storage write must not return the cached completed task; if "

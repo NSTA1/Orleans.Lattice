@@ -228,6 +228,7 @@ src/lattice/LatticeMetrics.cs#LeafCompactionDuration	none
 src/lattice/LatticeMetrics.cs#LeafDeactivationCheckpointDelta	unresolved	reason=unrecognised value expression: reason.ReasonCode.ToString()
 src/lattice/LatticeMetrics.cs#LeafDeferredTerminalsDroppedAtCap	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#LeafDigestPublishes	none	
+src/lattice/LatticeMetrics.cs#LeafReplayBarrierOutcomes	primed	
 src/lattice/LatticeMetrics.cs#LeafReplayDuration	none	
 src/lattice/LatticeMetrics.cs#LeafReplayEntries	none	
 src/lattice/LatticeMetrics.cs#LeafResidencySheds	unresolved	reason=dimension tree: no declaration found for TreeId

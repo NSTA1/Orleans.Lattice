@@ -178,6 +178,8 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task<LeafProjectionDigest> GetProjectionDigestAsync()
     {
+        await AwaitReplayBarrierAsync();
+
         // Read-path entry must observe the resolved opt-out, even on a
         // freshly-activated grain that has not yet seen a mutation. The
         // cached field defaults to the option's compile-time default;
@@ -224,8 +226,10 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
-    public Task<ChildDigestSnapshot> GetProjectionDigestForRangeAsync(string? startInclusive, string? endExclusive)
+    public async Task<ChildDigestSnapshot> GetProjectionDigestForRangeAsync(string? startInclusive, string? endExclusive)
     {
+        await AwaitReplayBarrierAsync();
+
         // Content-only range fold over the in-range subset of this leaf's
         // entry cache. Mirrors GetChildDigestSnapshotAsync (raw 16-byte XOR
         // hash + entry count + checkpoint offset) but restricts the XOR fold
@@ -290,12 +294,12 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        return Task.FromResult(new ChildDigestSnapshot
+        return new ChildDigestSnapshot
         {
             Hash = hash,
             EntryCount = count,
             CheckpointOffset = state.State.ProjectionCheckpointOffset,
-        });
+        };
     }
 
     /// <summary>

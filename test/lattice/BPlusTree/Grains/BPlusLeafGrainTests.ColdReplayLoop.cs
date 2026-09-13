@@ -90,7 +90,7 @@ public partial class BPlusLeafGrainTests
 
         try
         {
-            await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+            await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         }
         catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException)
         {

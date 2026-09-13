@@ -147,6 +147,15 @@ internal sealed partial class BPlusLeafGrain(
             // no live leaf is using, and drives the silo to shed leaves that are
             // actually in use.
             ReleaseResidentFootprint();
+
+            // Cancel any replay still in flight behind the gate (issue #2871).
+            // The replay now outlives the activation hook, so nothing else would
+            // stop it: without this it would carry on hydrating the cache of an
+            // activation that is being torn down, holding a per-silo replay
+            // permit the live leaves are queued for. In the finally with the rest
+            // of the teardown bookkeeping, for the same reason as the footprint
+            // release above - a storage failure in the try must not leak it.
+            CancelReplayBarrier();
         }
     }
 
@@ -373,10 +382,16 @@ internal sealed partial class BPlusLeafGrain(
     }
 
     /// <inheritdoc />
-    public Task<HybridLogicalClock> GetClockAsync() => Task.FromResult(state.State.Clock);
-
-    public Task<byte[]?> GetAsync(string key)
+    public async Task<HybridLogicalClock> GetClockAsync()
     {
+        await AwaitReplayBarrierAsync();
+        return state.State.Clock;
+    }
+
+    public async Task<byte[]?> GetAsync(string key)
+    {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Read);
         // Moved-away seal: a slot recorded on this leaf as having
         // migrated to a sibling shard is invisible to every read
@@ -387,7 +402,7 @@ internal sealed partial class BPlusLeafGrain(
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG read1-moved-away] gid={context.GrainId} key={key}");
 #endif
-            return Task.FromResult<byte[]?>(null);
+            return null;
         }
 
         // Strict atomic-visibility: a key with a pending-tx entry
@@ -398,7 +413,7 @@ internal sealed partial class BPlusLeafGrain(
         // entry on this leaf) avoids the RPC entirely.
         if (TryFindPendingForKey(key, out var txid, out var pendingValue))
         {
-            return GetWithPendingAsync(key, txid, pendingValue);
+            return await GetWithPendingAsync(key, txid, pendingValue);
         }
 
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
@@ -417,21 +432,21 @@ internal sealed partial class BPlusLeafGrain(
             // loop re-fans under a fresh snapshot.
             if (lww.IsMigrated && TryGetShadowedSagas(key, out var sagas))
             {
-                return GetWithShadowedMigratedAsync(key, lww.Value, sagas);
+                return await GetWithShadowedMigratedAsync(key, lww.Value, sagas);
             }
 #if LATTICE_DIAG
             // DIAG: single-key read-return path.
             DiagSink.Write($"[DIAG read1] gid={context.GrainId} key={key} valRound={DiagDecodeRound(lww.Value)} " +
                 $"hlc={lww.Timestamp} isMig={lww.IsMigrated} origin={lww.OriginClusterId ?? "(local)"}");
 #endif
-            return Task.FromResult<byte[]?>(lww.Value);
+            return lww.Value;
         }
 
 #if LATTICE_DIAG
         // DIAG: single-key returning null.
         DiagSink.Write($"[DIAG read1-null] gid={context.GrainId} key={key}");
 #endif
-        return Task.FromResult<byte[]?>(null);
+        return null;
     }
 
     /// <summary>
@@ -485,27 +500,35 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
-    public Task<VersionedValue> GetWithVersionAsync(string key)
+    public async Task<VersionedValue> GetWithVersionAsync(string key)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Read);
         // Moved-away seal. See GetAsync for the rationale.
         if (IsKeyMovedAway(key))
         {
-            return Task.FromResult(new VersionedValue());
+            return new VersionedValue();
         }
 
         if (TryFindPendingForKey(key, out var txid, out var pendingValue))
         {
-            return GetWithVersionWithPendingAsync(key, txid, pendingValue);
+            return await GetWithVersionWithPendingAsync(key, txid, pendingValue);
         }
 
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
         {
-            return Task.FromResult(new VersionedValue { Value = lww.Value, Version = lww.Timestamp, ExpiresAtTicks = lww.ExpiresAtTicks, MergeMode = Cache.GetMergeMode(key) });
+            return new VersionedValue
+            {
+                Value = lww.Value,
+                Version = lww.Timestamp,
+                ExpiresAtTicks = lww.ExpiresAtTicks,
+                MergeMode = Cache.GetMergeMode(key),
+            };
         }
 
-        return Task.FromResult(new VersionedValue());
+        return new VersionedValue();
     }
 
     private async Task<VersionedValue> GetWithVersionWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
@@ -516,34 +539,47 @@ internal sealed partial class BPlusLeafGrain(
         switch (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(txid), pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks)))
         {
             case PendingReadOutcome.SurfacePrepared:
-                return new VersionedValue { Value = pendingValue.Value, Version = pendingValue.Timestamp, ExpiresAtTicks = pendingValue.ExpiresAtTicks, MergeMode = Cache.GetMergeMode(key) };
+                return new VersionedValue
+                {
+                    Value = pendingValue.Value,
+                    Version = pendingValue.Timestamp,
+                    ExpiresAtTicks = pendingValue.ExpiresAtTicks,
+                    MergeMode = Cache.GetMergeMode(key),
+                };
             case PendingReadOutcome.Hidden:
                 return new VersionedValue();
             default:
                 // FallThroughToPreSaga: InFlight, Aborted, or already-terminal orphan.
                 if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
-                    return new VersionedValue { Value = lww.Value, Version = lww.Timestamp, ExpiresAtTicks = lww.ExpiresAtTicks, MergeMode = Cache.GetMergeMode(key) };
+                    return new VersionedValue
+                    {
+                        Value = lww.Value,
+                        Version = lww.Timestamp,
+                        ExpiresAtTicks = lww.ExpiresAtTicks,
+                        MergeMode = Cache.GetMergeMode(key),
+                    };
                 return new VersionedValue();
         }
     }
 
-    public Task<bool> ExistsAsync(string key)
+    public async Task<bool> ExistsAsync(string key)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Read);
         // Moved-away seal. See GetAsync for the rationale.
         if (IsKeyMovedAway(key))
         {
-            return Task.FromResult(false);
+            return false;
         }
 
         if (TryFindPendingForKey(key, out var txid, out var pendingValue))
         {
-            return ExistsWithPendingAsync(key, txid, pendingValue);
+            return await ExistsWithPendingAsync(key, txid, pendingValue);
         }
 
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        return Task.FromResult(
-            Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks));
+        return Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks);
     }
 
     private async Task<bool> ExistsWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
@@ -563,8 +599,10 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
-    public Task<GetOrSetResult> GetOrSetAsync(string key, byte[] value)
+    public async Task<GetOrSetResult> GetOrSetAsync(string key, byte[] value)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Write);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         // Short-circuit: if the key already exists and is live (and not expired)
@@ -576,11 +614,11 @@ internal sealed partial class BPlusLeafGrain(
             && !existing.IsTombstone
             && !existing.IsExpired(nowTicks))
         {
-            return Task.FromResult(new GetOrSetResult { ExistingValue = existing.Value });
+            return new GetOrSetResult { ExistingValue = existing.Value };
         }
 
         // Key is absent, tombstoned, expired, or pending - delegate to the write path and wrap the result.
-        return GetOrSetWriteAsync(key, value);
+        return await GetOrSetWriteAsync(key, value);
     }
 
     private async Task<GetOrSetResult> GetOrSetWriteAsync(string key, byte[] value)
@@ -589,8 +627,10 @@ internal sealed partial class BPlusLeafGrain(
         return new GetOrSetResult { Split = splitResult };
     }
 
-    public Task<CasResult> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
+    public async Task<CasResult> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Write);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         // Pending-tx isolation: a key with an in-flight saga prepare is
@@ -609,11 +649,7 @@ internal sealed partial class BPlusLeafGrain(
         {
             if (existing.Timestamp != expectedVersion)
             {
-                return Task.FromResult(new CasResult
-                {
-                    Success = false,
-                    CurrentVersion = existing.Timestamp
-                });
+                return new CasResult { Success = false, CurrentVersion = existing.Timestamp };
             }
         }
         else
@@ -621,16 +657,12 @@ internal sealed partial class BPlusLeafGrain(
             // Key is absent, tombstoned, or pending - expectedVersion must be Zero.
             if (expectedVersion != HybridLogicalClock.Zero)
             {
-                return Task.FromResult(new CasResult
-                {
-                    Success = false,
-                    CurrentVersion = HybridLogicalClock.Zero
-                });
+                return new CasResult { Success = false, CurrentVersion = HybridLogicalClock.Zero };
             }
         }
 
         // Version matches - delegate to the async write path.
-        return SetIfVersionWriteAsync(key, value);
+        return await SetIfVersionWriteAsync(key, value);
     }
 
     private async Task<CasResult> SetIfVersionWriteAsync(string key, byte[] value)
@@ -648,6 +680,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Read);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var predicate = LatticePredicateContext.Current;
@@ -741,24 +775,34 @@ internal sealed partial class BPlusLeafGrain(
         return result;
     }
 
-    public Task<SplitResult?> SetAsync(string key, byte[] value) =>
-        SetCoreAsync(key, value, 0L);
-
-    /// <inheritdoc />
-    public Task<SplitResult?> SetAsync(string key, byte[] value, long expiresAtTicks) =>
-        SetCoreAsync(key, value, expiresAtTicks);
-
-    public Task<LwwEntry?> GetRawEntryAsync(string key)
+    public async Task<SplitResult?> SetAsync(string key, byte[] value)
     {
-        EnsureInternalOrigin(LatticeOperation.Read);
-        if (Cache.TryGetRow(key, out var lww))
-            return Task.FromResult<LwwEntry?>(new LwwEntry(key, lww, Cache.GetMergeMode(key)));
-        return Task.FromResult<LwwEntry?>(null);
+        await AwaitReplayBarrierAsync();
+        return await SetCoreAsync(key, value, 0L);
     }
 
     /// <inheritdoc />
-    public Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
+    public async Task<SplitResult?> SetAsync(string key, byte[] value, long expiresAtTicks)
     {
+        await AwaitReplayBarrierAsync();
+        return await SetCoreAsync(key, value, expiresAtTicks);
+    }
+
+    public async Task<LwwEntry?> GetRawEntryAsync(string key)
+    {
+        await AwaitReplayBarrierAsync();
+
+        EnsureInternalOrigin(LatticeOperation.Read);
+        if (Cache.TryGetRow(key, out var lww))
+            return new LwwEntry(key, lww, Cache.GetMergeMode(key));
+        return null;
+    }
+
+    /// <inheritdoc />
+    public async Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
+    {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Read);
         // Pure in-memory dictionary lookup loop; no I/O, no allocation
         // beyond the result list itself. The Orleans grain-call boundary
@@ -775,7 +819,7 @@ internal sealed partial class BPlusLeafGrain(
             else
                 result.Add(null);
         }
-        return Task.FromResult(result);
+        return result;
     }
 
     private async Task<SplitResult?> SetCoreAsync(string key, byte[] value, long expiresAtTicks)
@@ -1011,6 +1055,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Write);
         using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(entries);
@@ -1092,6 +1138,8 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<ConditionalSetManyResult> SetManyWherePredicateAsync(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Write);
         using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(entries);
@@ -1547,6 +1595,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<bool> DeleteAsync(string key)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Delete);
         using var _mutationScope = EnterMutationScope();
         var isPrepared = LatticePreparedContext.Current;
@@ -1676,6 +1726,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
         using var _mutationScope = EnterMutationScope();
         // Collect matching keys. Entries is a SortedDictionary so we can
@@ -1838,10 +1890,16 @@ internal sealed partial class BPlusLeafGrain(
         };
     }
 
-    public Task<int> CountAsync() => CountAsync(null, null);
+    public async Task<int> CountAsync()
+    {
+        await AwaitReplayBarrierAsync();
+        return await CountAsync(null, null);
+    }
 
     public async Task<int> CountAsync(string? startInclusive, string? endExclusive)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
@@ -1965,6 +2023,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<LeafStats> GetStatsAsync()
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
@@ -2094,6 +2154,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetTreeIdAsync(string treeId)
     {
+        await AwaitReplayBarrierAsync();
+
         // See SetNextSiblingAsync above for the gate rationale.
         var treeIdJustSet = false;
         await _splitGate.WaitAsync().ConfigureAwait(true);
@@ -2136,11 +2198,34 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
-    public Task<string?> GetTreeIdAsync() =>
-        Task.FromResult(state.State.TreeId);
+    /// <summary>
+    /// Returns this leaf's tree id. <b>Metadata, deliberately NOT gated on the
+    /// replay</b> (issue #2871 acceptance criterion 2): the tree id is persisted
+    /// grain state that the replay neither reads nor writes, so waiting on the
+    /// replay would buy no correctness and would recreate the wedge this issue
+    /// removes - this is the probe the WAL GC blocked-leaf reactivation sweep
+    /// (issues #2768 / #2870) uses to reach a leaf whose replay cannot complete.
+    /// </summary>
+    /// <remarks>
+    /// The <see cref="EnsureReplayStarted"/> call is a deliberate side effect on a
+    /// getter and is the point of the call from the sweep's perspective. The
+    /// sweep's remedy is that the leaf REPAIRS ITSELF; the probe merely causes it.
+    /// Rearming here is what makes a touch work on a leaf whose previous replay
+    /// faulted or was cancelled, without which the sweep would deliver its probe
+    /// successfully - flipping <c>undelivered</c> to <c>completed</c> - while
+    /// <c>healed</c> stayed at zero forever. It is non-blocking and non-throwing,
+    /// so it cannot make this getter slow or fail.
+    /// </remarks>
+    public Task<string?> GetTreeIdAsync()
+    {
+        EnsureReplayStarted();
+        return Task.FromResult(state.State.TreeId);
+    }
 
     public async Task SetShardIndexAsync(int shardIndex)
     {
+        await AwaitReplayBarrierAsync();
+
         // See SetNextSiblingAsync above for the gate rationale.
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
@@ -2180,6 +2265,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive)
     {
+        await AwaitReplayBarrierAsync();
+
         // See SetNextSiblingAsync above for the gate rationale.
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
@@ -2227,6 +2314,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetCheckpointOffsetHintsAsync(long[] offsetsByPartition)
     {
+        await AwaitReplayBarrierAsync();
+
         ArgumentNullException.ThrowIfNull(offsetsByPartition);
 
         // Apply one hint per WAL partition under that partition's apply-offset
@@ -2259,6 +2348,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task InitializeSiblingAsync(SiblingInitialization init)
     {
+        await AwaitReplayBarrierAsync();
+
         // Batched birth-time seeding for a freshly created split sibling.
         // Collapses the five separate gated setter RPCs (tree id, shard
         // index, key range, next/prev sibling pointers) the donor used to
@@ -2366,6 +2457,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<int> CompactTombstonesAsync(TimeSpan gracePeriod)
     {
+        await AwaitReplayBarrierAsync();
+
         // Skip scan if nothing has changed since last compaction.
         if (state.State.LastCompactionVersion.DominatesOrEquals(state.State.Version))
         {
@@ -2641,8 +2734,10 @@ internal sealed partial class BPlusLeafGrain(
         return toRemove.Count;
     }
 
-    public Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion)
+    public async Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         // NOTE: Replication paths intentionally propagate expired entries.
         // Readers filter them via LwwValue.IsExpired; shipping them to peers
@@ -2661,7 +2756,7 @@ internal sealed partial class BPlusLeafGrain(
             if (state.State.SplitKey is null
                 && (state.State.MovedAwaySlots is null || state.State.MovedAwaySlots.Length == 0))
             {
-                return EmptyDeltaTask;
+                return await EmptyDeltaTask;
             }
 
             // SplitKey or MovedAwaySlots is set: the caller needs the
@@ -2669,14 +2764,14 @@ internal sealed partial class BPlusLeafGrain(
             // per-call envelope so the signal is observed; this branch
             // is rare (only fires between a split / moved-away commit
             // and the next compaction sweep).
-            return Task.FromResult(new StateDelta
+            return new StateDelta
             {
                 Entries = EmptyEntries,
                 Version = state.State.Version.Clone(),
                 SplitKey = state.State.SplitKey,
                 MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } ms ? ms : null,
                 MovedAwayVsc = state.State.MovedAwayVirtualShardCount,
-            });
+            };
         }
 
         // Return all entries whose timestamp is newer than what the caller has seen.
@@ -2702,25 +2797,27 @@ internal sealed partial class BPlusLeafGrain(
             }
         }
 
-        return Task.FromResult(new StateDelta
+        return new StateDelta
         {
             Entries = changed,
             Version = state.State.Version.Clone(),
             SplitKey = state.State.SplitKey,
             MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } ms2 ? ms2 : null,
             MovedAwayVsc = state.State.MovedAwayVirtualShardCount,
-        });
+        };
     }
 
-    public Task<StateDelta> GetDeltaSinceForSlotsAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount)
+    public async Task<StateDelta> GetDeltaSinceForSlotsAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         ArgumentNullException.ThrowIfNull(sinceVersion);
         ArgumentNullException.ThrowIfNull(sortedMovedSlots);
 
         if (sortedMovedSlots.Length == 0 || sinceVersion.DominatesOrEquals(state.State.Version))
         {
-            return EmptyDeltaTask;
+            return await EmptyDeltaTask;
         }
 
         var callerClock = sinceVersion.GetClock(ReplicaId);
@@ -2741,18 +2838,20 @@ internal sealed partial class BPlusLeafGrain(
             }
         }
 
-        return Task.FromResult(new StateDelta
+        return new StateDelta
         {
             Entries = changed,
             Version = state.State.Version.Clone(),
             SplitKey = state.State.SplitKey,
             MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } ms3 ? ms3 : null,
             MovedAwayVsc = state.State.MovedAwayVirtualShardCount,
-        });
+        };
     }
 
     public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Write);
         using var _mutationScope = EnterMutationScope();
 #if LATTICE_DIAG
@@ -2909,6 +3008,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
@@ -3036,6 +3137,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
@@ -3144,6 +3247,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<Dictionary<string, byte[]>> GetLiveEntriesAsync()
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
@@ -3193,6 +3298,8 @@ internal sealed partial class BPlusLeafGrain(
     /// <inheritdoc />
     public async Task<List<LwwEntry>> GetLiveRawEntriesAsync()
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
@@ -3290,6 +3397,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.Write);
         using var _mutationScope = EnterMutationScope();
         // Recovery: if a previous split was interrupted, complete it first.
@@ -3588,6 +3697,13 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task ClearGrainStateAsync()
     {
+        // Retire the replay BEFORE the clear (issue #2871). The replay now runs
+        // concurrently with requests, so an in-flight one would otherwise
+        // re-hydrate the cache from the WAL immediately after this clear -
+        // resurrecting, in memory, exactly the state the purge was asked to
+        // remove, in the window before the deactivation below takes effect.
+        RetireReplayBarrier();
+
         await state.ClearStateAsync();
         context.Deactivate(new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "Tree purged"));
     }

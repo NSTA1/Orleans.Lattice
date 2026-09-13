@@ -41,7 +41,7 @@ public partial class BPlusLeafGrainTests
         state.State.TreeId = tree;
 
         using var recorder = new ActivationTemperatureRecorder(tree);
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -72,7 +72,7 @@ public partial class BPlusLeafGrainTests
         state.State.TreeId = tree;
 
         using var recorder = new ActivationTemperatureRecorder(tree);
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -98,7 +98,7 @@ public partial class BPlusLeafGrainTests
         state.State.TreeId = tree;
 
         using var recorder = new ActivationTemperatureRecorder(tree);
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // The cold:warm ratio is only a property of a single scrape while every
         // increment lands on exactly one arm: an untagged or double-tagged
@@ -133,7 +133,7 @@ public partial class BPlusLeafGrainTests
         state.State.TreeId = tree;
 
         using var recorder = new ActivationTemperatureRecorder(tree);
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -175,7 +175,7 @@ public partial class BPlusLeafGrainTests
         });
 
         using var recorder = new ActivationTemperatureRecorder(tree);
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.Multiple(() =>
         {

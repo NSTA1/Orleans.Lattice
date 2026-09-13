@@ -54,7 +54,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 0,
             walHead: 0);
         warmState.State.TreeId = UniqueReplayPermitTree();
-        await ((IGrainBase)warmGrain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(warmGrain, CancellationToken.None);
 
         var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest;
         Assert.That(gate, Is.Not.Null,
@@ -196,7 +196,7 @@ public partial class BPlusLeafGrainTests
         state.State.TreeId = UniqueReplayPermitTree();
 
         Assert.ThrowsAsync<OutOfMemoryException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None),
+            async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None),
             "the injected memory fault must still propagate - backpressure observes the failure, it "
             + "does not absorb it");
 
@@ -234,7 +234,7 @@ public partial class BPlusLeafGrainTests
         state.State.TreeId = UniqueReplayPermitTree();
 
         Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None));
+            async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None));
 
         Assert.Multiple(() =>
         {
@@ -267,7 +267,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 0,
             walHead: 0);
         state.State.TreeId = UniqueReplayPermitTree();
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -301,7 +301,7 @@ public partial class BPlusLeafGrainTests
         state.State.TreeId = UniqueReplayPermitTree();
 
         Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None));
+            async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None));
 
         try
         {
@@ -344,7 +344,7 @@ public partial class BPlusLeafGrainTests
                 persistedCheckpoint: 0,
                 walHead: 0);
             state.State.TreeId = UniqueReplayPermitTree();
-            await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+            await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         }
 
         var outcomes = records

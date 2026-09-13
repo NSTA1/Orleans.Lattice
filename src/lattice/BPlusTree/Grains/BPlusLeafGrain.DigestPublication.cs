@@ -109,6 +109,8 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task SetParentAsync(GrainId? parentId)
     {
+        await AwaitReplayBarrierAsync();
+
         // U9p step c2-iv-redux: serialise the public state-write
         // surface through the per-activation _splitGate. The internal
         // grain's seeding path calls this RPC concurrently with the
@@ -164,8 +166,11 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
-    public Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync()
-        => Task.FromResult(BuildOwnChildDigestSnapshot());
+    public async Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync()
+    {
+        await AwaitReplayBarrierAsync();
+        return BuildOwnChildDigestSnapshot();
+    }
 
     /// <summary>
     /// Builds the snapshot this leaf publishes to its parent's per-child
@@ -243,10 +248,12 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
-    public Task<ShardTopologyNode> GetTopologyNodeAsync()
+    public async Task<ShardTopologyNode> GetTopologyNodeAsync()
     {
+        await AwaitReplayBarrierAsync();
+
         var (live, tombstones) = ComputeStructuralLeafCounts();
-        return Task.FromResult(new ShardTopologyNode
+        return new ShardTopologyNode
         {
             NodeId = context.GrainId.ToString(),
             IsLeaf = true,
@@ -258,7 +265,7 @@ internal sealed partial class BPlusLeafGrain
             LiveCount = live,
             TombstoneCount = tombstones,
             ChildFanout = 0,
-        });
+        };
     }
 
     /// <summary>

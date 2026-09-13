@@ -119,7 +119,7 @@ public class BPlusLeafGrainResidentWorkingSetTests
             persistedCheckpoint: 5L,
             walHead: 5L);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(
             workingSet.RegisteredCount,
@@ -138,7 +138,7 @@ public class BPlusLeafGrainResidentWorkingSetTests
             persistedCheckpoint: 10L,
             walHead: 50L);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -161,7 +161,7 @@ public class BPlusLeafGrainResidentWorkingSetTests
             persistedCheckpoint: 10L,
             walHead: 50L);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         Assert.That(workingSet.RegisteredCount, Is.EqualTo(1), "precondition");
 
         await ((IGrainBase)grain).OnDeactivateAsync(
@@ -188,13 +188,13 @@ public class BPlusLeafGrainResidentWorkingSetTests
 
         var (first, firstContext, _) = CreateLeaf(
             workingSet, tree, NewBlob(offset: 50L), persistedCheckpoint: 10L, walHead: 50L);
-        await ((IGrainBase)first).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(first, CancellationToken.None);
 
         firstContext.DidNotReceive().Deactivate(Arg.Any<DeactivationReason>(), Arg.Any<CancellationToken>());
 
         var (second, _, _) = CreateLeaf(
             workingSet, tree, NewBlob(offset: 50L), persistedCheckpoint: 10L, walHead: 50L);
-        await ((IGrainBase)second).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(second, CancellationToken.None);
 
         firstContext.Received(1).Deactivate(
             Arg.Is<DeactivationReason>(r => r.ReasonCode == DeactivationReasonCode.ApplicationRequested),
@@ -214,14 +214,14 @@ public class BPlusLeafGrainResidentWorkingSetTests
 
         var (first, firstContext, firstState) = CreateLeaf(
             workingSet, tree, NewBlob(offset: 50L), persistedCheckpoint: 10L, walHead: 50L);
-        await ((IGrainBase)first).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(first, CancellationToken.None);
 
         firstState.State.SplitState = SplitState.SplitInProgress;
         firstState.State.SplitKey = "k";
 
         var (second, _, _) = CreateLeaf(
             workingSet, tree, NewBlob(offset: 50L), persistedCheckpoint: 10L, walHead: 50L);
-        await ((IGrainBase)second).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(second, CancellationToken.None);
 
         firstContext.DidNotReceive().Deactivate(
             Arg.Any<DeactivationReason>(),
@@ -239,7 +239,7 @@ public class BPlusLeafGrainResidentWorkingSetTests
             persistedCheckpoint: 0L,
             walHead: 0L);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(
             workingSet.RegisteredCount,

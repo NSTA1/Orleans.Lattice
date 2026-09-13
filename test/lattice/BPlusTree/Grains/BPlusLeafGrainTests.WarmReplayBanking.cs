@@ -181,7 +181,7 @@ public partial class BPlusLeafGrainTests
         };
 
         Assert.ThrowsAsync<OperationCanceledException>(
-            async () => await ((IGrainBase)leaf.Grain).OnActivateAsync(cts.Token),
+            async () => await LeafActivationHarness.ActivateAsync(leaf.Grain, cts.Token),
             "precondition: the warm activation is torn down by a cancellation, which is the shape the " +
             "field reports for 100% of this leaf's activation failures");
 

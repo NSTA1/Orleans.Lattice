@@ -198,7 +198,7 @@ public partial class BPlusLeafGrainTests
         Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False,
             "precondition: nothing published before activation");
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var revision), Is.True,
             "activation must publish a cookie: the snapshot rehydrate and WAL replay rebuild the "
@@ -367,7 +367,7 @@ public partial class BPlusLeafGrainTests
             + "floor advance must happen together.");
 
         var second = CreateGrain(replicaId: unique);
-        await ((IGrainBase)second).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(second, CancellationToken.None);
 
         Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var republished), Is.True);
         Assert.That(

@@ -677,8 +677,30 @@ internal sealed partial class BPlusLeafGrain
         for (var i = 0; i < perPartition.Length; i++)
             current[i] = Math.Max(current[i], perPartition[i]);
     }
+
     /// <inheritdoc />
-    public Task CaptureSnapshotAsync() => CaptureSnapshotCoreAsync(CancellationToken.None);
+    /// <remarks>
+    /// <b>Deliberately does NOT await the replay barrier (issue #2871).</b> Capture
+    /// persists whatever the projection currently holds and claims coverage only
+    /// for offsets actually applied, so it is correct at any point during a replay
+    /// - and running during one is the point. Banking partial progress mid-replay
+    /// is the whole remedy of issue #2280: a replay cancelled before it reaches the
+    /// WAL head must leave its prefix durable, or the next activation re-reads the
+    /// same window and reproduces the cancellation. Waiting for the replay to
+    /// finish would make that unreachable, because the case it exists for is the
+    /// replay that never finishes.
+    /// <para>
+    /// It also deadlocks. The replay banks through
+    /// <see cref="CaptureSnapshotCoreAsync"/> and that path holds the single-flight
+    /// capture slot while its store write is outstanding; a caller that had to wait
+    /// for the replay first could never be the contending second capture the guard
+    /// is written to decline.
+    /// </para>
+    /// </remarks>
+    public async Task CaptureSnapshotAsync()
+    {
+        await CaptureSnapshotCoreAsync(CancellationToken.None);
+    }
 
     /// <summary>
     /// Cancellable core of the snapshot-capture seam. The grain-interface

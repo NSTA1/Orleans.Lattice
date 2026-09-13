@@ -79,7 +79,7 @@ public partial class BPlusLeafGrainTests
         var grain = BuildFlushCeilingLeaf(state, [coldP0, coldP1], store.Stub, reclassifyEveryN: 1);
 
         Assert.ThrowsAsync<OperationCanceledException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(cts.Token));
+            async () => await LeafActivationHarness.ActivateAsync(grain, cts.Token));
 
         state.OnWriteState = null;
 
@@ -112,7 +112,7 @@ public partial class BPlusLeafGrainTests
 
         var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub, reclassifyEveryN: 1);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // The rehydrate must have happened: the replay resumed strictly past
         // the durable offset instead of restarting from the oldest readable
@@ -170,7 +170,7 @@ public partial class BPlusLeafGrainTests
             Timestamp = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
         });
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         await Assert.MultipleAsync(async () =>
         {
@@ -248,7 +248,7 @@ public partial class BPlusLeafGrainTests
             Timestamp = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
         });
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // The discriminating assertion: the live cache row survived, which is
         // only possible if the snapshot was declined rather than loaded (the

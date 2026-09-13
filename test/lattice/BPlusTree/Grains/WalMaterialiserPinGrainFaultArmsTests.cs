@@ -114,7 +114,7 @@ public sealed class WalMaterialiserPinGrainFaultArmsTests
         var logs = new RecordingLoggerFactory();
         var grain = new WalMaterialiserPinGrain(
             context, legacy, options, logs.CreateLogger<WalMaterialiserPinGrain>(), store);
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         return new Harness(grain, legacy, store, logs, tick);
     }

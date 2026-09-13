@@ -783,15 +783,130 @@ internal sealed partial class BPlusLeafGrain
     private ReplayAdmissionPhase _replayAdmissionPhase = ReplayAdmissionPhase.NotStarted;
 
     /// <summary>
-    /// Activation hook. Runs the WAL materialiser to bring the
-    /// in-memory projection (the per-activation runtime entry cache
-    /// plus the per-leaf saga pending-tx map) up to the WAL head, then
-    /// publishes the leaf's projection cursor so the per-shard WAL
-    /// GC observes the leaf eagerly. No-op when the leaf has not been
-    /// seeded with a tree id.
+    /// Test seam: the admission phase this activation's replay has reached.
     /// </summary>
-    async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+    /// <remarks>
+    /// Since issue #2871 the replay runs as a background task and the activation
+    /// call returns immediately by design, so a fixture that needs to act at a
+    /// specific admission phase can no longer infer "parked on the permit gate"
+    /// from "the activation call has not completed yet" - that inference was only
+    /// ever sound because the replay occupied the activation turn. It exposes the
+    /// phase directly so such a fixture can wait for the state it actually means
+    /// rather than for a proxy that no longer implies it.
+    /// </remarks>
+    internal ReplayAdmissionPhase ReplayAdmissionPhaseForTest => _replayAdmissionPhase;
+
+    /// <summary>
+    /// Activation hook. Arms the deferred WAL replay and returns <b>immediately</b>
+    /// (issue #2871); it does not wait for the replay, and cannot fail because of
+    /// one. The replay itself runs as
+    /// <see cref="ExecuteActivationReplayAsync"/> behind the barrier that every
+    /// data-path entry point awaits, so the projection is never read before it has
+    /// been brought up to the WAL head, while metadata getters -
+    /// <see cref="GetTreeIdAsync"/> above all - answer straight away.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why the replay may not own this hook.</b> Replay runs behind a per-silo
+    /// concurrency permit, so losing the race for one used to destroy the entire
+    /// activation. A cancelled activation banks no snapshot, so its durable
+    /// materialiser pin stays at Zero and blocks its tree's WAL cursor floor; the
+    /// remedy for a blocked pin - the WAL GC reactivation sweep of issues #2768
+    /// and #2870 - has to make a grain call into the very activation that cannot
+    /// complete, so its <c>GetTreeIdAsync()</c> probe times out and the sweep
+    /// records <c>undelivered</c> without healing anything. Acceptance run 12
+    /// measured that closed loop exactly: reactivations attempted at their full
+    /// structural ceiling, <c>undelivered/attempted</c> at 100%, <c>healed</c> and
+    /// <c>reclaimed</c> both zero. No setting of the permit ceiling escapes it,
+    /// because too many permits exhausts the heap and too few queues past the
+    /// activation timeout, and both ends of the dial cancel activations.
+    /// </para>
+    /// <para>
+    /// <b>The replay is STARTED here rather than lazily by the first data
+    /// operation, and the difference is load-bearing.</b> The sweep's remedy works
+    /// by causing the leaf to activate and repair itself; the probe is only the
+    /// trigger. A lazy barrier would let the probe return instantly - flipping the
+    /// sweep's <c>undelivered</c> arm to <c>completed</c> - while no repair ran
+    /// and <c>healed</c> stayed at zero, so the metric would read fixed while
+    /// nothing was reclaimed. That is the main case and not an edge case: a
+    /// quiesced tree (issue #2692) is precisely one where the data operation that
+    /// would trigger a lazy replay never arrives.
+    /// </para>
+    /// <para>
+    /// Nothing in this hook awaits, so no exception it could raise exists to
+    /// swallow; a replay failure is reported on
+    /// <see cref="LatticeMetrics.LeafReplayBarrierOutcomes"/> and re-thrown to
+    /// whichever request awaits the barrier.
+    /// </para>
+    /// </remarks>
+    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
+        // Publish this activation's same-silo revision cookie HERE, before the
+        // replay is even armed, and note that the replay still bumps it again at
+        // step 1.4 once the projection is rebuilt. Both are needed, for different
+        // readers.
+        //
+        // Publishing here restores what step 1.4 alone used to guarantee and no
+        // longer can: that a leaf which is activated has a registry entry. The
+        // entry's PRESENCE is what lets LeafCacheGrain.RefreshAsync take its
+        // revision branch at all; with no entry it falls through to the TTL gate,
+        // which can return early and keep serving a snapshot taken before this
+        // activation - silent read loss for every row the leaf gained while cold.
+        // Since #2871 the replay is a background task, so between activation and
+        // its step 1.4 there is a window in which the leaf answers calls with no
+        // entry published. That window is reachable by any caller: the WAL GC
+        // touch, a sibling walk, any metadata getter. Tying the entry to the
+        // activation - which is what the step 1.4 comment says it is doing - now
+        // requires publishing from the activation.
+        //
+        // The second bump at step 1.4 is what keeps a reader that SAMPLED the
+        // cookie mid-replay correct. Neither ILeafProjection.Apply nor the
+        // rehydrate bumps, so without it the projection would change under a
+        // sampled cookie and a paged scan comparing the cookie for equality would
+        // read "nothing advanced" across a replay that rebuilt the leaf.
+        //
+        // Safe only because activations are seeded from disjoint cookie ranges
+        // (see BumpLocalRevision): two bumps in one activation stay inside this
+        // activation's range and cannot collide with any value another activation
+        // published.
+        BumpLocalRevision();
+
+        // Deliberately NOT passing the activation's own cancellation token down.
+        // Orleans may dispose that token once the activation completes - which is
+        // now immediately - whereas the replay outlives this call and is bounded
+        // instead by the per-activation source cancelled in the deactivation hook.
+        EnsureReplayStarted();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The WAL replay that used to be the body of the activation hook. Runs the
+    /// WAL materialiser to bring the in-memory projection (the per-activation
+    /// runtime entry cache plus the per-leaf saga pending-tx map) up to the WAL
+    /// head, then publishes the leaf's projection cursor so the per-shard WAL GC
+    /// observes the leaf eagerly. No-op when the leaf has not been seeded with a
+    /// tree id.
+    /// </summary>
+    private async Task ExecuteActivationReplayAsync(CancellationToken cancellationToken)
+    {
+        // Sampled BEFORE the first await and used for the Step 1.5b guard far
+        // below, INSTEAD of re-reading state.State.TreeId there.
+        //
+        // This is not a micro-optimisation; it is what stops issue #2871 from
+        // deadlocking the silo. Step 1.5b's guard is documented as making its
+        // GetOptionsAsync() provably a cache hit, on the grounds that a non-empty
+        // TreeId means AcquireReplayPermitAsync already warmed the cache. That
+        // held only because the replay owned the activation turn, so nothing
+        // could seed the tree id underneath it. Now that the replay runs
+        // concurrently with requests, SetTreeIdAsync (or InitializeSiblingAsync)
+        // can land on a leaf that started unseeded, and a live re-read would then
+        // see a non-empty id whose options were never warmed - turning that await
+        // into a live ILatticeRegistry RPC and re-entering the two-hop cycle
+        // documented at LatticeRegistryGrain.cs:286, which wedges the silo on
+        // first use of ANY tree. The captured value keeps the guard answering the
+        // question it was written to answer: did THIS replay warm the cache.
+        var replaySeededAtEntry = !string.IsNullOrEmpty(state.State.TreeId);
+
         // Step 0 - try to rehydrate the in-memory entry cache from a
         // persisted leaf snapshot. The snapshot is the safety net for
         // WAL retention fall-off: if a previous maintenance tick wrote
@@ -1310,7 +1425,14 @@ internal sealed partial class BPlusLeafGrain
         // this step issues no grain call at all. It forfeits no repair: a leaf
         // with no tree id has no WAL, no checkpoint and no coverage, so the
         // predicate would be false anyway.
-        if (!string.IsNullOrEmpty(state.State.TreeId))
+        //
+        // It reads the value CAPTURED at the top of this method rather than
+        // state.State.TreeId live - see the capture site for why. In short: a
+        // birth seam can now seed the tree id while this replay is in flight
+        // (issue #2871), and a live read would then satisfy the guard for a cache
+        // that was never warmed, which is the deadlock the guard exists to
+        // prevent rather than a stale-read nicety.
+        if (replaySeededAtEntry)
         {
             var coverageRepairOptions = await GetOptionsAsync();
             await TryRepairZeroCoverageAsync(

@@ -264,7 +264,7 @@ public partial class BPlusLeafGrainTests
         Exception? fault = null;
         try
         {
-            await ((IGrainBase)grain).OnActivateAsync(cts.Token);
+            await LeafActivationHarness.ActivateAsync(grain, cts.Token);
         }
         catch (Exception ex)
         {
@@ -550,7 +550,7 @@ public partial class BPlusLeafGrainTests
         Exception? fault = null;
         try
         {
-            await ((IGrainBase)grain).OnActivateAsync(cts.Token);
+            await LeafActivationHarness.ActivateAsync(grain, cts.Token);
         }
         catch (Exception ex)
         {

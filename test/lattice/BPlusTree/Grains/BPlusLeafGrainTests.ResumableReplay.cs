@@ -200,7 +200,7 @@ public partial class BPlusLeafGrainTests
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 1);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(persistedOffsets, Is.EqualTo(new long[] { 4, 8, 12 }),
             "Checkpoint must be flushed incrementally at each slice boundary, not once at completion.");
@@ -235,7 +235,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 1);
 
         Assert.ThrowsAsync<OperationCanceledException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(cts.Token));
+            async () => await LeafActivationHarness.ActivateAsync(grain, cts.Token));
 
         // Partial progress is durable: exactly the first slice's contiguous
         // prefix was checkpointed.
@@ -246,8 +246,15 @@ public partial class BPlusLeafGrainTests
         Assert.That(store.SaveCount, Is.GreaterThanOrEqualTo(1));
         Assert.That(store.Latest, Is.Not.Null);
         Assert.That(store.Latest!.SnapshotOffset, Is.EqualTo(4L));
-        // The still-un-replayed suffix made no progress.
-        Assert.That(await grain.GetAsync("k12"), Is.Null);
+        // The still-un-replayed suffix made no progress. Read through the cache
+        // seam rather than GetAsync: since #2871 a data operation deliberately
+        // RE-ARMS a disarmed barrier (acceptance criterion 3 - a cancelled replay
+        // fails its request and leaves the activation usable), so GetAsync here
+        // would start a second replay, complete it, and then correctly report k12
+        // as present. That is the new behaviour working, not the suffix having
+        // been applied by the cancelled replay, and the two must not be conflated.
+        Assert.That(grain.CacheForTest.TryGetRow("k12", out _), Is.False,
+            "Mid-replay teardown must leave the suffix beyond the flushed prefix unapplied.");
     }
 
     [Test]
@@ -272,7 +279,7 @@ public partial class BPlusLeafGrainTests
             };
             var (grain1, _) = BuildResumableLeaf(state, coord1, store.Stub, reclassifyEveryN: 1);
             Assert.ThrowsAsync<OperationCanceledException>(
-                async () => await ((IGrainBase)grain1).OnActivateAsync(cts.Token));
+                async () => await LeafActivationHarness.ActivateAsync(grain1, cts.Token));
         }
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(4L));
@@ -291,7 +298,7 @@ public partial class BPlusLeafGrainTests
         var coord2 = BuildChunkingCoordinator(head: 12, sliceSize: 4, tail: 5, suffixEntries);
         var (grain2, _) = BuildResumableLeaf(state, coord2, store.Stub, reclassifyEveryN: 1);
 
-        await ((IGrainBase)grain2).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain2, CancellationToken.None);
 
         // Resumed strictly past the durable offset, never from zero.
         await coord2.Received().ReadSliceAsync(4L, 12L, Arg.Any<int>(), Arg.Any<CancellationToken>());
@@ -331,7 +338,7 @@ public partial class BPlusLeafGrainTests
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 0);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(persistedOffsets, Is.EqualTo(new long[] { 2, 4, 5 }),
             "A range delete drained in place must not pin the incremental flush ceiling.");
@@ -371,7 +378,7 @@ public partial class BPlusLeafGrainTests
             // recorded durably, which is what this configuration pins.
             maxDurableUnresolvedReplayWork: 0);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(grain.PendingTransactionCount, Is.EqualTo(1));
         Assert.That(persistedOffsets, Is.All.LessThanOrEqualTo(1L),

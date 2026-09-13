@@ -3014,6 +3014,99 @@ public static class LatticeMetrics
         new(TagOutcome, "undelivered");
 
     /// <summary>
+    /// Terminal states of a leaf's deferred WAL replay (issue #2871), tagged by
+    /// tree and outcome (<c>completed</c>/<c>faulted</c>/<c>canceled</c>).
+    /// <para>
+    /// This instrument exists because issue #2871 moved WAL replay off the leaf
+    /// activation critical path, and that move <b>traded a loud failure for a
+    /// quiet one</b>. Before it, a replay that could not complete destroyed the
+    /// activation: the caller got an error, Orleans logged it, and the failure
+    /// was impossible to miss. After it, the activation succeeds regardless -
+    /// which is the entire point, because a leaf that answers
+    /// <c>GetTreeIdAsync()</c> is a leaf the WAL GC reactivation sweep can reach
+    /// - so a replay that fails leaves behind a live, healthy-looking grain whose
+    /// data operations fail one at a time. Without this series, the only trace of
+    /// a systematically failing replay would be scattered per-request errors
+    /// attributed to whatever unlucky caller happened to arrive.
+    /// </para>
+    /// <para>
+    /// All outcomes share one instrument and every outcome is zero-primed per
+    /// tree when a barrier is armed, so a zero on <c>faulted</c> is a measured zero
+    /// rather than an unpublished series - the same reasoning as
+    /// <see cref="WalGcBlockedLeafReactivations"/>, and for the same reason: an
+    /// absent series cannot be told from a working one, and here the two mean
+    /// opposite things.
+    /// </para>
+    /// <para>
+    /// <c>faulted</c> is the alarm arm. <c>canceled</c> is normal in bounded
+    /// quantity - a deactivation cancels an in-flight replay, and a leaf that
+    /// activates and deactivates under memory pressure will show it - and is the
+    /// arm to read against <c>completed</c> rather than on its own. Neither is
+    /// terminal for the grain: a barrier that faults or cancels disarms itself, so
+    /// the next data operation or the next WAL GC touch re-arms a fresh replay.
+    /// A sustained <c>faulted</c> rate with a flat <c>completed</c> therefore
+    /// means a leaf is retrying a replay it can never finish, which is the
+    /// condition that used to present as an activation failure.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafReplayBarrierOutcomes =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.replay_barrier_outcomes", unit: "{replay}",
+            description: "Terminal states of a leaf's deferred WAL replay (issue #2871), tagged by tree and outcome (completed/faulted/canceled). All outcomes share one instrument and each is zero-primed per tree when a barrier is armed, so a zero on 'faulted' is a measured zero and not an unpublished series. Since replay no longer runs on the activation path, a failure here does NOT surface as an activation failure - this series is the signal that replaces it.");
+
+    /// <summary>Canonical name of <see cref="LeafReplayBarrierOutcomes"/>.</summary>
+    public const string LeafReplayBarrierOutcomesName = "orleans.lattice.leaf.replay_barrier_outcomes";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="LeafReplayBarrierOutcomes"/> for
+    /// a replay that applied fully. The barrier is satisfied for the remainder of
+    /// the activation and every subsequent data operation passes it for free.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReplayBarrierCompleted =
+        new(TagOutcome, "completed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="LeafReplayBarrierOutcomes"/> for
+    /// a replay that threw. Any request waiting on the barrier fails with that
+    /// exception; the activation stays usable and the barrier re-arms on the next
+    /// data operation or WAL GC touch.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReplayBarrierFaulted =
+        new(TagOutcome, "faulted");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="LeafReplayBarrierOutcomes"/> for
+    /// a replay cancelled before it completed - by deactivation, or by an
+    /// operation that discards the state the replay was rebuilding
+    /// (<c>ClearGrainStateAsync</c>, <c>RebuildProjectionFromWalAsync</c>).
+    /// Expected in bounded quantity and not on its own a defect.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReplayBarrierCanceled =
+        new(TagOutcome, "canceled");
+
+    /// <summary>
+    /// Zero-primes every arm of <see cref="LeafReplayBarrierOutcomes"/> for
+    /// <paramref name="treeId"/>, at the moment a barrier is armed and so before any
+    /// outcome is known.
+    /// </summary>
+    /// <remarks>
+    /// Priming at the arming site rather than at each terminal site is what makes
+    /// the absence of a series meaningful: after this call, a flat zero on
+    /// <c>faulted</c> means replays were armed on this tree and none failed,
+    /// whereas no series at all means no leaf on this tree ever armed a replay.
+    /// Those are different facts and the arming site is the only place that can
+    /// distinguish them.
+    /// </remarks>
+    public static void PrimeReplayBarrierOutcomes(string? treeId)
+    {
+        var treeTag = new KeyValuePair<string, object?>(TagTree, treeId ?? string.Empty);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId ?? string.Empty);
+
+        LeafReplayBarrierOutcomes.Add(0, treeTag, ReplayBarrierCompleted, tenantTag);
+        LeafReplayBarrierOutcomes.Add(0, treeTag, ReplayBarrierFaulted, tenantTag);
+        LeafReplayBarrierOutcomes.Add(0, treeTag, ReplayBarrierCanceled, tenantTag);
+    }
+
+    /// <summary>
     /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a
     /// leaf that was over the byte bound and was divided back under it.
     /// </summary>

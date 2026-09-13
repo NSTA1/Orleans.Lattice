@@ -101,7 +101,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 10,
             walHead: 50);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(50L));
         Assert.That(grain.EntriesForTest.Keys, Is.EquivalentTo(new[] { "a", "b" }));
@@ -118,7 +118,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 20,
             walHead: 20);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // Issue #2278. The cache is empty on a fresh activation, so there is no
         // live cache for the decline to protect. Declining here would not avoid
@@ -152,7 +152,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 30,
             walHead: 30);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -185,7 +185,7 @@ public partial class BPlusLeafGrainTests
             Timestamp = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
         });
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -204,7 +204,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 5,
             walHead: 5);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // No snapshot rehydrate and empty cache - the activation-time
         // coherence override drives the WAL replay from -1 locally,
@@ -231,7 +231,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 10,
             walHead: 25);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // Checkpoint still advances to the snapshot offset; the cache
         // is empty (no rows were carried) and the digest is invalidated
@@ -286,7 +286,7 @@ public partial class BPlusLeafGrainTests
         // the leaf falls through to the WAL tail-replay path. The
         // activation coherence override drives the replay from -1
         // locally without mutating the persisted checkpoint slot.
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5L));
         await coord.Received().GetHeadOffsetAsync(Arg.Any<CancellationToken>());
@@ -328,7 +328,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 42,
             walHead: 42);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // The persisted slot is NOT mutated by activation - only the
         // local replay-start is overridden. External observers of the
@@ -367,7 +367,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 10,
             walHead: 80);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // The snapshot anchored the checkpoint at 50; the coherence
         // reset must respect that anchor rather than wiping it back

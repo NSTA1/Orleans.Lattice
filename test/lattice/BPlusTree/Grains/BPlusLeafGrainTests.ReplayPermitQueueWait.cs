@@ -121,7 +121,7 @@ public partial class BPlusLeafGrainTests
 
         using (ListenForQueueWaitSamples(samples))
         {
-            await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+            await LeafActivationHarness.ActivateAsync((IGrainBase)grain, CancellationToken.None);
         }
 
         var sample = SingleSampleWithOutcome(samples, "acquired");
@@ -231,7 +231,7 @@ public partial class BPlusLeafGrainTests
 
             using (ListenForQueueWaitSamples(samples))
             {
-                var activation = ((IGrainBase)grain).OnActivateAsync(cts.Token);
+                var activation = LeafActivationHarness.ActivateAsync((IGrainBase)grain, cts.Token);
 
                 // Let it reach the queue, then cancel it there.
                 await Task.Delay(TimeSpan.FromMilliseconds(150));

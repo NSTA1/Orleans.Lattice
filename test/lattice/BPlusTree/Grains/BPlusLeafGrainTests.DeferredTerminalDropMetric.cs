@@ -116,7 +116,7 @@ public partial class BPlusLeafGrainTests
 
         try
         {
-            await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+            await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
             return null;
         }
         catch (Exception ex)

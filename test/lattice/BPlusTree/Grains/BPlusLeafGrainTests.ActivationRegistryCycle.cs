@@ -110,7 +110,7 @@ public partial class BPlusLeafGrainTests
         var (grain, registry) = CreateLeafObservingRegistry(string.Empty);
         registry.ClearReceivedCalls();
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         await registry.DidNotReceive().GetEntryAsync(Arg.Any<string>());
     }
@@ -128,7 +128,7 @@ public partial class BPlusLeafGrainTests
         var (grain, registry) = CreateLeafObservingRegistry(ActivationCycleTreeId);
         registry.ClearReceivedCalls();
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         await registry.Received().GetEntryAsync(ActivationCycleTreeId);
     }

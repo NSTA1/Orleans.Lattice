@@ -93,7 +93,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 0,
             walHead: 0);
         state.State.TreeId = UniqueReplayPermitTree();
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
     }
 
     /// <summary>
