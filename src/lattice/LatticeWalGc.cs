@@ -211,8 +211,16 @@ public sealed class LatticeWalGc(
         // cursor eagerly, but dormant leaves re-register only lazily, so
         // without this floor the GC would trim past a leaf's durable
         // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
-        var (flooredCursor, cursorBlocked, blockingConsumerId) = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, cancellationToken).ConfigureAwait(false);
-        minCursor = flooredCursor;
+        var floorResult = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, partitions, cancellationToken).ConfigureAwait(false);
+        var cursorBlocked = floorResult.Blocked;
+        var blockingConsumerId = floorResult.BlockingConsumerId;
+        // The report keeps the pre-#2849 shape: a tree with ANY blocked
+        // partition reports a null cursor and BlockedByUnusablePin, so the
+        // scheduler's blocked-leaf remedy and its cadence floor are driven by
+        // exactly the condition they were driven by before. Only what the pass
+        // is allowed to TRIM is decomposed, and only for partitions no unusable
+        // pin covers.
+        minCursor = cursorBlocked ? null : floorResult.Floor;
         // Offset-space retention floor. The HLC floor above cannot protect a
         // low-HLC / high-offset WAL entry (a tombstone-compaction reap re-emits
         // an old timestamp at a new offset, so the WAL is not HLC-monotonic in
@@ -258,6 +266,42 @@ public sealed class LatticeWalGc(
         var hasCursorPredicate = minCursor is { } mc && mc > HybridLogicalClock.Zero;
         var hasTtlPredicate = ttlCeiling is not null;
 
+        // The cursor floor a given WAL partition trims against. It is the
+        // tree-wide floor for every partition no unusable pin covers, and null
+        // for the rest (issue #2849).
+        //
+        // Before this, ONE unusable pin disabled the cursor branch for the WHOLE
+        // tree, so a single quiet leaf that had never reached a durable
+        // projection checkpoint stranded every other leaf's WAL indefinitely -
+        // and, because the in-memory cursor registry is per-activation, a restart
+        // re-established the condition from cold rather than clearing it.
+        //
+        // Note what is decomposed and what is NOT. The floor stays a tree-wide
+        // MINIMUM over every usable pin: a minimum over leaves is not in general
+        // safely recomputed over a subset of them, so this change never narrows
+        // the population the floor is minimised over. What IS attributed per
+        // partition is the block, and only the block. That attribution is sound
+        // by construction rather than by argument: a WAL entry is routed to
+        // exactly one partition by WalPartitionHash over its key, a leaf reports
+        // one materialiser pin per WAL partition under that same hash, and the
+        // GC already trims each partition separately. So an unusable pin for
+        // partition p says nothing about the entries in partition q, and
+        // retaining q's head on its account retains WAL no consumer needs.
+        //
+        // Unattributable pins fail closed - see ApplyDurableMaterialiserFloorAsync.
+        HybridLogicalClock? PartitionCursor(int partition) =>
+            floorResult.IsPartitionBlocked(partition) ? null : floorResult.Floor;
+
+        var anyPartitionHasCursorPredicate = false;
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            if (PartitionCursor(partition) is { } pc && pc > HybridLogicalClock.Zero)
+            {
+                anyPartitionHasCursorPredicate = true;
+                break;
+            }
+        }
+
         // Why the cursor branch is in the state it is. A null minCursor is
         // ambiguous between "nobody is consuming this tree" (benign, and the
         // scheduler should back off) and "an unusable durable pin short-circuited
@@ -286,9 +330,9 @@ public sealed class LatticeWalGc(
                 LatticeTenantLabel.ForTree(treeName));
         }
 
-        if (!hasCursorPredicate && !hasTtlPredicate)
+        if (!anyPartitionHasCursorPredicate && !hasTtlPredicate)
         {
-            // Nothing to do: no consumer has reported a cursor and no
+            // Nothing to do: no partition has a usable cursor floor and no
             // TTL is configured. Return early so the run is observably
             // a no-op (counter is zero, ShipDuration is unaffected).
             // Neither the causal-stable frontier nor the
@@ -317,7 +361,7 @@ public sealed class LatticeWalGc(
                 // skip trimming it here.
                 continue;
             }
-            totalTrimmed += await TrimShardAsync(partitionProvider, treeName, partition, minCursor, ttlCeiling, causalStable, blockedFloor, offsetFloor, cancellationToken).ConfigureAwait(false);
+            totalTrimmed += await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, offsetFloor, cancellationToken).ConfigureAwait(false);
         }
 
         if (totalTrimmed > 0)
@@ -352,39 +396,67 @@ public sealed class LatticeWalGc(
     /// <see cref="HybridLogicalClock.Zero"/> - a leaf whose durable pin carries
     /// no usable offset, most often because it is fully checkpointed but holds
     /// no durable snapshot, and otherwise because it has no usable checkpoint -
-    /// returns a
-    /// <see langword="null"/> floor <b>with
-    /// <c>Blocked</c> set</b>, disabling the cursor
-    /// branch of the GC predicate entirely so the WAL head is retained for
-    /// that leaf (the TTL ceiling still bounds growth). When the grain factory
-    /// is unavailable (a bare-IServiceProvider unit-test construction) or no
-    /// durable pins exist, the registry minimum is returned unchanged.
+    /// <b>blocks the cursor branch for the WAL partition that pin belongs to</b>,
+    /// so that partition's WAL head is retained for that leaf (the TTL ceiling
+    /// still bounds growth). When the grain factory is unavailable (a
+    /// bare-IServiceProvider unit-test construction) or no durable pins exist,
+    /// the registry minimum is returned unchanged with nothing blocked.
+    /// </para>
+    /// <para>
+    /// <b>The block is per partition; the floor is not (issue #2849).</b> An
+    /// unusable pin used to disable the cursor branch for the entire tree, so a
+    /// single quiet, data-bearing, never-checkpointed leaf stranded every other
+    /// leaf's WAL indefinitely - and because the in-memory registry is
+    /// per-activation, a restart rebuilt the condition from cold instead of
+    /// clearing it. Attributing the block to one partition is sound by
+    /// construction: a WAL entry routes to exactly one partition under
+    /// <c>WalPartitionHash</c> over its key, a leaf publishes one pin per WAL
+    /// partition under that same hash, and the GC already trims each partition
+    /// separately, so an unusable pin for partition <c>p</c> constrains nothing
+    /// in partition <c>q</c>.
+    /// </para>
+    /// <para>
+    /// The <c>Floor</c> itself is deliberately <b>not</b> decomposed. It stays a
+    /// minimum over every usable pin on the tree, because a minimum over leaves
+    /// is not in general safely recomputed over a subset of them; narrowing that
+    /// population would change what the pass may trim, where this change only
+    /// changes which partitions may trim at all. An unblocked partition
+    /// therefore trims against exactly the floor the whole tree would have used
+    /// had nothing been blocked - never a higher one.
+    /// </para>
+    /// <para>
+    /// <b>Unattributable pins fail closed.</b> A pin whose consumer id carries
+    /// no partition suffix (the single-partition shape, a legacy pin, or a
+    /// consumer id this build cannot parse) is applied to <i>every</i> partition,
+    /// which reproduces the pre-#2849 whole-tree block exactly. Guessing a
+    /// partition for an id that does not state one would trim WAL a leaf still
+    /// needs, so an unrecognised id is treated as covering everything.
     /// </para>
     /// <para>
     /// The <c>Blocked</c> flag exists because a <see langword="null"/> floor is
-    /// otherwise ambiguous: it is also what an unconsumed tree yields. Only the
-    /// short-circuit above is a defect state, and only the caller that can tell
-    /// them apart can schedule them differently (issue #2702). The flag is
+    /// otherwise ambiguous: it is also what an unconsumed tree yields. Only a
+    /// blocking pin is a defect state, and only the caller that can tell them
+    /// apart can schedule them differently (issue #2702). The flag is
     /// diagnostic; it does not participate in the trim predicate.
     /// </para>
     /// <para>
-    /// <c>BlockingConsumerId</c> names the consumer whose pin caused that
-    /// short-circuit, and is <see langword="null"/> on every other path
-    /// (issue #2464). It is what turns "this tree cannot reclaim" into a
-    /// actionable statement, because the id embeds the owning leaf's grain id.
-    /// Like <c>Blocked</c> it is diagnostic only and never widens what a pass
-    /// is allowed to trim.
+    /// <c>BlockingConsumerId</c> names a consumer whose pin blocked a partition,
+    /// and is <see langword="null"/> on every other path (issue #2464). It is
+    /// what turns "this tree cannot reclaim" into an actionable statement,
+    /// because the id embeds the owning leaf's grain id. Like <c>Blocked</c> it
+    /// is diagnostic only and never widens what a pass is allowed to trim.
     /// </para>
     /// </summary>
-    private async Task<(HybridLogicalClock? Floor, bool Blocked, string? BlockingConsumerId)> ApplyDurableMaterialiserFloorAsync(
+    private async Task<DurableMaterialiserFloor> ApplyDurableMaterialiserFloorAsync(
         string treeName,
         HybridLogicalClock? registryMin,
+        int partitions,
         CancellationToken cancellationToken)
     {
         var factory = GrainFactory;
         if (factory is null)
         {
-            return (registryMin, false, null);
+            return DurableMaterialiserFloor.Unblocked(registryMin);
         }
 
         IReadOnlyDictionary<string, HybridLogicalClock> pins;
@@ -398,12 +470,12 @@ public sealed class LatticeWalGc(
             // the in-memory floor rather than failing the whole GC run. The
             // next pass retries; a missed floor never trims unsafely because
             // the present in-memory consumers still constrain the trim point.
-            return (registryMin, false, null);
+            return DurableMaterialiserFloor.Unblocked(registryMin);
         }
 
         if (pins.Count == 0)
         {
-            return (registryMin, false, null);
+            return DurableMaterialiserFloor.Unblocked(registryMin);
         }
 
         var snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
@@ -414,6 +486,10 @@ public sealed class LatticeWalGc(
         }
 
         var floor = registryMin;
+        bool[]? blockedPartitions = null;
+        var blockedCount = 0;
+        string? blockingConsumerId = null;
+
         foreach (var (consumerId, pin) in pins)
         {
             // A consumer present in the in-memory registry has a fresher
@@ -426,12 +502,11 @@ public sealed class LatticeWalGc(
 
             if (pin <= HybridLogicalClock.Zero)
             {
-                // Pin carries no usable offset: block the cursor branch
-                // entirely so nothing is trimmed by cursor for this tree.
-                // Zero is the strongest possible floor, so short-circuit.
-                // Both a never-checkpointed leaf and a fully-checkpointed leaf
-                // with no durable snapshot land here; the caller reports this
-                // as blocked without asserting which.
+                // Pin carries no usable offset: block the cursor branch for the
+                // partition this pin belongs to, so nothing in that partition is
+                // trimmed by cursor. Both a never-checkpointed leaf and a
+                // fully-checkpointed leaf with no durable snapshot land here;
+                // the caller reports this as blocked without asserting which.
                 //
                 // The consumer id IS carried out (issue #2464). Reporting that
                 // a tree is blocked without naming the consumer leaves an
@@ -445,12 +520,49 @@ public sealed class LatticeWalGc(
                 // the leaf population is unbounded, so the id is an unbounded
                 // metric dimension and belongs on the log line instead.
                 //
-                // This names ONE blocker, not all of them: the short-circuit is
-                // what makes the pass cheap, and enumerating every unusable pin
-                // would mean abandoning it. A later pass naming a different
-                // consumer is therefore expected while a tree drains, and is
-                // progress rather than a regression.
-                return (null, true, consumerId);
+                // This still names ONE blocker, not all of them, and the first
+                // one wins so a tree's reported blocker is stable while it
+                // drains. A later pass naming a different consumer is expected
+                // and is progress rather than a regression.
+                blockedPartitions ??= new bool[partitions];
+                blockingConsumerId ??= consumerId;
+
+                if (TryResolvePinPartition(consumerId, partitions) is { } blockedPartition)
+                {
+                    if (!blockedPartitions[blockedPartition])
+                    {
+                        blockedPartitions[blockedPartition] = true;
+                        blockedCount++;
+                    }
+                }
+                else
+                {
+                    // Unattributable: fail closed onto every partition, which is
+                    // the pre-#2849 whole-tree block.
+                    for (var p = 0; p < partitions; p++)
+                    {
+                        if (!blockedPartitions[p])
+                        {
+                            blockedPartitions[p] = true;
+                            blockedCount++;
+                        }
+                    }
+                }
+
+                // Every partition is blocked, so no further pin can change the
+                // outcome: the floor that remains is unusable everywhere. This
+                // preserves the cheap short-circuit for the case that used to
+                // take it unconditionally.
+                if (blockedCount >= partitions)
+                {
+                    return new DurableMaterialiserFloor(null, blockedPartitions, true, blockingConsumerId);
+                }
+
+                // A blocking pin contributes no usable frontier, so it is not
+                // folded into the floor. The enumeration continues rather than
+                // short-circuiting, because the partitions this pin does not
+                // cover still need the tree-wide minimum computed over the rest.
+                continue;
             }
 
             floor = floor is { } current
@@ -458,7 +570,117 @@ public sealed class LatticeWalGc(
                 : pin;
         }
 
-        return (floor, false, null);
+        return new DurableMaterialiserFloor(
+            floor, blockedPartitions, blockedPartitions is not null, blockingConsumerId);
+    }
+
+    /// <summary>
+    /// Resolves the WAL partition a leaf-materialiser pin belongs to from its
+    /// consumer id, or <see langword="null"/> when the id does not state one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A leaf builds its consumer id as
+    /// <c>{prefix}{treeId}_{grainId}</c> on a single-partition tree and
+    /// <c>{prefix}{treeId}_{grainId}_{partition}</c> when
+    /// <see cref="LatticeOptions.WalPartitions"/> is greater than one, so the
+    /// suffix is the only place the partition is recorded and it is absent by
+    /// design on the legacy shape.
+    /// </para>
+    /// <para>
+    /// Fail-closed, and deliberately stricter than a bare "parse the trailing
+    /// number": the suffix is read only when the tree is actually partitioned,
+    /// and only when it names a partition in range. A grain id that legitimately
+    /// ends in <c>_&lt;digits&gt;</c> on a single-partition tree is therefore not
+    /// truncated, and an out-of-range or unparsable suffix yields
+    /// <see langword="null"/> rather than a guess. The caller applies a
+    /// <see langword="null"/> to every partition, so the cost of any ambiguity is
+    /// retained WAL, never a trim past a leaf that still needs the entries.
+    /// </para>
+    /// <para>
+    /// A residual ambiguity is unavoidable and is resolved the same way: on a
+    /// partitioned tree a grain id ending in <c>_3</c> is indistinguishable from
+    /// a partition-3 suffix. Mis-reading it as partition 3 would under-block, so
+    /// the population of ids that can reach here is worth stating - they are
+    /// produced by <c>BPlusLeafGrain</c> from its own <c>GrainId</c>, which ends
+    /// in the leaf's key string, and the suffix is appended by the same code
+    /// path that this one mirrors. The pre-existing
+    /// <c>LatticeWalGcScheduler.TryResolveLeafGrainId</c> makes the identical
+    /// trade for the identical reason.
+    /// </para>
+    /// </remarks>
+    private static int? TryResolvePinPartition(string consumerId, int partitions)
+    {
+        if (partitions <= 1)
+        {
+            return null;
+        }
+
+        var separator = consumerId.LastIndexOf('_');
+        if (separator <= 0 || separator == consumerId.Length - 1)
+        {
+            return null;
+        }
+
+        return int.TryParse(
+                consumerId.AsSpan(separator + 1),
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var partition)
+            && partition >= 0
+            && partition < partitions
+            ? partition
+            : null;
+    }
+
+    /// <summary>
+    /// The outcome of folding the durable leaf-materialiser pins into a pass's
+    /// cursor floor: the tree-wide floor, which WAL partitions (if any) an
+    /// unusable pin has blocked, and the consumer id of a blocking pin.
+    /// </summary>
+    /// <param name="Floor">
+    /// The trim floor for every partition that is not blocked - a minimum over
+    /// the registry cursor and every <i>usable</i> durable pin on the tree. It is
+    /// deliberately tree-wide rather than per partition: narrowing the population
+    /// a minimum is taken over is not safe in general, and this change is about
+    /// which partitions may trim, not about how far they may trim.
+    /// </param>
+    /// <param name="BlockedPartitions">
+    /// One flag per WAL partition, or <see langword="null"/> when nothing is
+    /// blocked (the common case, which allocates no array).
+    /// </param>
+    /// <param name="Blocked">
+    /// Whether any partition is blocked. The report's
+    /// <see cref="WalGcCursorFloorState"/> is derived from this, so a tree with
+    /// one blocked partition still reports
+    /// <see cref="WalGcCursorFloorState.BlockedByUnusablePin"/> and still drives
+    /// the scheduler's blocked-leaf remedy at its cadence floor.
+    /// </param>
+    /// <param name="BlockingConsumerId">
+    /// The consumer id of the first blocking pin encountered, or
+    /// <see langword="null"/> when nothing is blocked.
+    /// </param>
+    private readonly record struct DurableMaterialiserFloor(
+        HybridLogicalClock? Floor,
+        bool[]? BlockedPartitions,
+        bool Blocked,
+        string? BlockingConsumerId)
+    {
+        /// <summary>
+        /// A floor with nothing blocked: every partition trims against
+        /// <paramref name="floor"/>.
+        /// </summary>
+        public static DurableMaterialiserFloor Unblocked(HybridLogicalClock? floor)
+            => new(floor, null, false, null);
+
+        /// <summary>
+        /// Whether an unusable durable pin has disabled the cursor branch for
+        /// <paramref name="partition"/>.
+        /// </summary>
+        public bool IsPartitionBlocked(int partition)
+            => BlockedPartitions is { } blocked
+                && (uint)partition < (uint)blocked.Length
+                && blocked[partition];
     }
 
     /// <summary>

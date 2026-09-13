@@ -705,20 +705,21 @@ internal sealed class LatticeWalGcScheduler(
             // narrows that predicate.
             var reclaimed = report.EntriesTrimmed > 0;
 
-            // A pass that reclaimed nothing did so for one of two opposite
-            // reasons, and until now both were labelled "idle". Either the tree
-            // was quiet - nothing above the trim floor, which is the healthy
-            // steady state - or the cursor branch was disabled outright by an
-            // unusable durable materialiser pin, in which case the tree cannot
-            // reclaim at all and its WAL is growing without bound (issue #2702).
+            // A pass that reclaimed nothing did so for one of several distinct
+            // reasons, and until now all but one were labelled "idle". The tree
+            // may have been quiet - nothing above the trim floor, which is the
+            // healthy steady state - or the cursor branch may have been disabled
+            // outright by an unusable durable materialiser pin, in which case the
+            // tree cannot reclaim at all and its WAL is growing without bound
+            // (issue #2702), or no consumer may have reported a cursor at all, in
+            // which case the pass evaluated nothing and says nothing about the
+            // tree's backlog (issue #2850).
             var blocked = !reclaimed
                 && report.CursorFloorState == WalGcCursorFloorState.BlockedByUnusablePin;
 
             RecordPass(
                 1,
-                reclaimed
-                    ? LatticeMetrics.OutcomeReclaimed
-                    : blocked ? LatticeMetrics.OutcomeBlocked : LatticeMetrics.OutcomeIdle,
+                reclaimed ? LatticeMetrics.OutcomeReclaimed : ClassifyUnreclaimed(report.CursorFloorState),
                 treeTag,
                 tenantTag);
 
@@ -747,8 +748,9 @@ internal sealed class LatticeWalGcScheduler(
             // reclaim, so an incidental age-based trim neither resets the budget
             // nor suspends the remedy.
             //
-            // `blocked` is unchanged and still drives the pass outcome label and
-            // the cadence floor; only the episode reads the state directly.
+            // `blocked` still drives the cadence floor, and the pass outcome
+            // label is derived from the same floor state through
+            // ClassifyUnreclaimed; only the episode reads the state directly.
             var floorBlocked = report.CursorFloorState == WalGcCursorFloorState.BlockedByUnusablePin;
 
             if (floorBlocked)
@@ -900,7 +902,7 @@ internal sealed class LatticeWalGcScheduler(
         // identical at exactly the moment a reader needs to tell them apart,
         // which is when confirming a fix held.
         //
-        // The other three are primed so an absent arm cannot be read as a
+        // The remaining arms are primed so an absent arm cannot be read as a
         // verdict. The reclaimed arm is the acute case, because it backs an
         // acceptance criterion: unprimed, "reclamation never happened" and
         // "the instrument is unwired" are the same reading, so a system that
@@ -908,15 +910,15 @@ internal sealed class LatticeWalGcScheduler(
         // success misread as a failure, which is the most expensive wrong
         // answer a predicate can give.
         //
-        // There is a second, subtler property this replaces. The three
-        // non-failed arms are selected by a ternary inside a single Add call,
-        // so today the presence of any one of them proves the site executed
+        // There is a second, subtler property this replaces. The non-failed
+        // arms are selected by a single classifier feeding one Add call, so
+        // today the presence of any one of them proves the site executed
         // for this tree - which is why a scrape carrying only blocked and idle
         // was still readable as evidence. That inference is incidental to how
-        // the expression happens to be written: splitting the ternary into
-        // three calls would destroy it silently, with no test failing. Priming
-        // each arm makes the guarantee structural, so a reader no longer has
-        // to know the shape of the emission to interpret an absence.
+        // the expression happens to be written: splitting the classifier into
+        // separate calls would destroy it silently, with no test failing.
+        // Priming each arm makes the guarantee structural, so a reader no longer
+        // has to know the shape of the emission to interpret an absence.
         //
         // Priming per tree also keeps a single re-stranded tree visible rather
         // than averaged away across the fleet.
@@ -924,6 +926,24 @@ internal sealed class LatticeWalGcScheduler(
         RecordPass(0, LatticeMetrics.OutcomeIdle, treeTag, tenantTag);
         RecordPass(0, LatticeMetrics.OutcomeBlocked, treeTag, tenantTag);
         RecordPass(0, LatticeMetrics.OutcomeFailed, treeTag, tenantTag);
+
+        // The two arms split out of the former catch-all are primed on exactly
+        // the same terms (issue #2850). `no_consumer` needs it for the reason
+        // above - unprimed, "no consumer has ever reported" would be
+        // indistinguishable from "this silo is not reporting", which is the
+        // ambiguity the arm was created to remove, so leaving it unprimed would
+        // reproduce the defect one level down.
+        //
+        // `unclassified` needs it for a different reason, and needs it more.
+        // No pass can reach that arm against today's enum, so it will never
+        // emit on its own: unprimed it would have no series at all, and a
+        // reader asking "did any pass land in a state this build cannot name?"
+        // would get silence - the one answer that is equally consistent with
+        // "no" and with "the classifier is not running here". Primed, the arm
+        // reads a measured zero for as long as the partition stays total, which
+        // is precisely the assertion it exists to make.
+        RecordPass(0, LatticeMetrics.OutcomeNoConsumer, treeTag, tenantTag);
+        RecordPass(0, LatticeMetrics.OutcomeUnclassified, treeTag, tenantTag);
 
         // Zero-prime every blocked-leaf reactivation outcome (issue #2783).
         // Absence on this instrument has already been read as evidence twice on
@@ -966,6 +986,39 @@ internal sealed class LatticeWalGcScheduler(
         in KeyValuePair<string, object?> treeTag,
         in KeyValuePair<string, object?> tenantTag)
         => LatticeMetrics.WalGcPasses.Add(delta, treeTag, outcome, tenantTag);
+
+    /// <summary>
+    /// Maps the cursor-floor state of a pass that trimmed nothing onto the
+    /// outcome arm that names <i>why</i> it trimmed nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The classification this replaced was
+    /// <c>blocked ? blocked : idle</c>, so <c>idle</c> was a catch-all that
+    /// absorbed <see cref="WalGcCursorFloorState.NoCursorReported"/> - a pass
+    /// that could not evaluate the cursor branch at all - alongside the
+    /// genuinely quiet case. That made <c>blocked = 0</c> read as evidence of
+    /// health when it was only evidence that one named predicate had not fired
+    /// (issue #2850). Only <see cref="LatticeMetrics.OutcomeReclaimed"/> is an
+    /// affirmative reading; every arm below means nothing was trimmed.
+    /// </para>
+    /// <para>
+    /// The switch is total over the enum and its fallback is its own arm rather
+    /// than <see cref="LatticeMetrics.OutcomeIdle"/>. That is the whole point: a
+    /// floor state added later must land somewhere a reader can see it, not be
+    /// absorbed by the arm that means "healthy and quiet". Reaching
+    /// <see cref="LatticeMetrics.OutcomeUnclassified"/> is impossible against
+    /// today's enum, so a permanent zero there is the expected reading.
+    /// </para>
+    /// </remarks>
+    private static KeyValuePair<string, object?> ClassifyUnreclaimed(WalGcCursorFloorState floorState)
+        => floorState switch
+        {
+            WalGcCursorFloorState.BlockedByUnusablePin => LatticeMetrics.OutcomeBlocked,
+            WalGcCursorFloorState.NoCursorReported => LatticeMetrics.OutcomeNoConsumer,
+            WalGcCursorFloorState.Available => LatticeMetrics.OutcomeIdle,
+            _ => LatticeMetrics.OutcomeUnclassified,
+        };
 
     /// <summary>
     /// Adds <paramref name="addTicks"/> to <paramref name="nowTicks"/>,

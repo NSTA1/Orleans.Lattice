@@ -16,20 +16,28 @@ namespace Orleans.Lattice.Tests;
 /// </para>
 /// <para>
 /// A second, subtler property is being replaced here rather than merely added
-/// to. The three non-<c>failed</c> arms are selected by a ternary inside a
-/// single <c>Add</c> call, so the presence of <i>any</i> one of them proves the
+/// to. The non-<c>failed</c> arms are selected by a single classifier feeding
+/// one <c>Add</c> call, so the presence of <i>any</i> one of them proves the
 /// site executed for that tree - which is why a scrape carrying only
 /// <c>blocked</c> and <c>idle</c> was still readable as evidence that the
 /// instrument was wired. That inference is incidental to how the expression
-/// happens to be written today: splitting the ternary into three calls would
-/// destroy it silently, with no test failing. These fixtures make the guarantee
-/// structural, so a reader never has to know the shape of the emission in order
-/// to interpret an absence.
+/// happens to be written today: splitting the classifier into separate calls
+/// would destroy it silently, with no test failing. These fixtures make the
+/// guarantee structural, so a reader never has to know the shape of the
+/// emission in order to interpret an absence.
+/// </para>
+/// <para>
+/// Issue #2850 widened the partition these fixtures cover from four arms to
+/// six. <c>no_consumer</c> and <c>unclassified</c> were previously absorbed by
+/// <c>idle</c>, which made <c>idle</c> a catch-all and therefore made
+/// <c>blocked = 0</c> read as evidence of reclamation when it was only evidence
+/// that one named predicate had not fired.
 /// </para>
 /// </summary>
 public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
-    private static readonly string[] EveryOutcome = ["reclaimed", "idle", "blocked", "failed"];
+    private static readonly string[] EveryOutcome =
+        ["reclaimed", "idle", "blocked", "no_consumer", "unclassified", "failed"];
 
     /// <summary>
     /// Configures the collaborator so a single pass lands on <paramref name="outcome"/>.
@@ -51,6 +59,22 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                     .Returns(_ => Task.FromResult(BlockedReport()));
                 break;
+            case "no_consumer":
+                gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                    .Returns(_ => Task.FromResult(Report(
+                        entriesTrimmed: 0,
+                        cursorFloorState: WalGcCursorFloorState.NoCursorReported)));
+                break;
+            case "unclassified":
+                // A floor state this build does not name. The cast is the whole
+                // point of the case: it stands in for the enum member a future
+                // change adds, and asserts that such a pass lands somewhere a
+                // reader can see rather than being absorbed into `idle`.
+                gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                    .Returns(_ => Task.FromResult(Report(
+                        entriesTrimmed: 0,
+                        cursorFloorState: (WalGcCursorFloorState)99)));
+                break;
             default:
                 gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                     .Returns<Task<LatticeWalGcReport>>(_ => throw new InvalidOperationException("wal wedged"));
@@ -65,6 +89,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     [TestCase("reclaimed")]
     [TestCase("idle")]
     [TestCase("blocked")]
+    [TestCase("no_consumer")]
+    [TestCase("unclassified")]
     [TestCase("failed")]
     public async Task Every_pass_outcome_is_primed_so_an_absent_arm_is_never_a_healthy_reading(string reached)
     {
@@ -81,11 +107,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Distinct()
             .ToArray();
 
-        // Whichever single outcome this pass reached, the other three must
-        // still be exported at zero. Asserting it on all four cases is what
-        // makes the claim "primed unconditionally" rather than "primed on the
-        // paths we happened to exercise" - in particular the failed case,
-        // whose priming happens before the try and so must survive a throw.
+        // Whichever single outcome this pass reached, the others must still be
+        // exported at zero. Asserting it on every case is what makes the claim
+        // "primed unconditionally" rather than "primed on the paths we happened
+        // to exercise" - in particular the failed case, whose priming happens
+        // before the try and so must survive a throw, and the unclassified
+        // case, which no pass can reach against today's enum and so would
+        // otherwise have no series at all.
         Assert.That(arms, Is.EquivalentTo(EveryOutcome),
             "every outcome arm must exist for a collected tree, so an absent arm means "
             + "'this silo is not reporting' rather than 'measured, never happened'.");
@@ -163,6 +191,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     [TestCase("reclaimed")]
     [TestCase("idle")]
     [TestCase("blocked")]
+    [TestCase("no_consumer")]
+    [TestCase("unclassified")]
     [TestCase("failed")]
     public async Task A_completed_pass_advances_exactly_one_outcome_arm_by_one(string expected)
     {
