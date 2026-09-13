@@ -105,6 +105,13 @@ public partial class BPlusLeafGrainTests
     /// budget is bounded and that exhaustion becomes a visible state rather than
     /// silence.
     /// </param>
+    /// <param name="treeId">
+    /// The tree the leaf reports. Defaults to the shared id. The instrumentation
+    /// fixtures pass a UNIQUE id per test because the zero-prime is keyed by tree
+    /// in a process-wide dictionary, so a shared id would let whichever test ran
+    /// first consume the prime and leave the others asserting against a tree that
+    /// was already primed - an order-dependent green.
+    /// </param>
     private static (BPlusLeafGrain Grain,
         FakePersistentState<LeafNodeState> State,
         ILeafSnapshotStorageGrain SnapshotStub,
@@ -114,7 +121,8 @@ public partial class BPlusLeafGrainTests
             int reClassifyEveryN = 1000,
             long[]? existingCoverage = null,
             Exception? saveFailure = null,
-            int walPartitions = 1)
+            int walPartitions = 1,
+            string? treeId = null)
     {
         var saved = new List<LeafSnapshotBlob>();
 
@@ -187,7 +195,7 @@ public partial class BPlusLeafGrainTests
         context.ActivationServices.Returns(services);
 
         var state = new FakePersistentState<LeafNodeState>();
-        state.State.TreeId = CoverageRepairTreeId;
+        state.State.TreeId = treeId ?? CoverageRepairTreeId;
         state.State.ProjectionCheckpointOffset = persistedCheckpoint;
 
         var optionsResolver = TestOptionsResolver.Create(
