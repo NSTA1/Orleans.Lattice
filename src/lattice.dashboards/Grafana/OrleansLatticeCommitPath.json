@@ -751,8 +751,8 @@
       "gridPos": { "h": 7, "w": 8, "x": 12, "y": 143 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
-        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
       ]
     },
     {
@@ -790,8 +790,8 @@
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 164 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_pin_durable_write_latency_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
-        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_materialiser_pin_durable_write_latency_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_pin_durable_write_latency_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_materialiser_pin_durable_write_latency_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
       ]
     },
     {

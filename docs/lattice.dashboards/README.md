@@ -79,6 +79,41 @@ var grainIndex   = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKin
 
 Either import each JSON via Grafana's *Dashboards -> New -> Import* UI, or write the strings to a provisioning directory referenced by `Provisioning/dashboards.yaml`.
 
+## What these dashboards assume about the exposition
+
+The bundled panels are written against a host exporting through
+`.AddPrometheusExporter()`, as in the Quick Start above. Two properties of that
+exporter are load-bearing, and a scrape that lacks either renders the affected
+panels empty rather than wrong, which is the harder failure to notice.
+
+**Unit suffixes are part of the series name.** The exporter derives a suffix from
+the instrument's declared unit and appends it to the family name, so a histogram
+declared `unit: "ms"` is exported as `<name>_milliseconds`, and one declared
+`unit: "s"` as `<name>_seconds`. That is why the panels read, for example,
+`orleans_lattice_atomic_write_duration_milliseconds_bucket` and not
+`orleans_lattice_atomic_write_duration_bucket`. A panel that omits the suffix
+names a series no exporter emits; it does not fall back to the unsuffixed family.
+An annotation unit such as `{entry}` is documentation rather than a dimension and
+contributes no suffix. `DashboardBucketUnitSuffixTests` in `test/lattice.dashboards`
+asserts every bundled panel against this rule, so a panel and its instrument
+cannot drift apart silently.
+
+**Quantile panels need a real histogram exporter.** Roughly 185 bundled panels
+call `histogram_quantile` over `_bucket` series, which only an exporter that
+publishes bucket boundaries can satisfy.
+
+Not every Lattice endpoint is such an exporter, and the difference is easy to miss
+because both return `200`. The repository-context container serves its own
+hand-rolled Prometheus exposition built over a `MeterListener`, which reports each
+measurement as a raw value and never surfaces the bucket boundaries an exporter
+would need to publish. Having no honest bounds to publish, it renders every
+`Histogram<T>` as a Prometheus `summary` carrying only `_sum` and `_count`, and it
+appends no unit suffix at all. Against that endpoint every quantile panel here is
+**unavailable, not zero** - and a panel carrying the common `or vector(0)` repair
+displays a literal zero that is indistinguishable from a genuine sustained-zero
+fault. Chart those series as `rate(_sum) / rate(_count)` instead. The full account
+is in [the container guide](../lattice.api.mcp.repocontext/container.md).
+
 ## Reference
 
 For day-to-day use:
