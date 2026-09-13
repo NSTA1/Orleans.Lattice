@@ -98,6 +98,15 @@ public static class LatticeMetrics
     public const string TagReason = "reason";
 
     /// <summary>
+    /// Tag key for the cache surface that released a leaf's lazily hydrated
+    /// snapshot frame. Paired with <see cref="TagReason"/> on
+    /// <see cref="LeafBisectRefusals"/>, where it is what separates a leaf that
+    /// never attached a frame from one whose frame an unrelated whole-leaf
+    /// operation consumed.
+    /// </summary>
+    public const string TagDetachSeam = "detach_seam";
+
+    /// <summary>
     /// Tag key for the decision a control loop reached on one observation
     /// pass (e.g. <c>admitted</c>, <c>not_over_split</c>, <c>backpressure</c>
     /// on <see cref="ShardHealingDecisions"/>). Distinct from
@@ -1910,6 +1919,35 @@ public static class LatticeMetrics
 
     /// <summary>Canonical name of <see cref="LeafSnapshotHydrationAdmissions"/>.</summary>
     public const string LeafSnapshotHydrationAdmissionsName = "orleans.lattice.leaf.snapshot.hydration_admissions";
+
+    /// <summary>
+    /// Counter incremented once per leaf division that could not take a split
+    /// pivot from the snapshot frame alone and fell back to the ordered view,
+    /// tagged by tree, <see cref="TagReason"/> and <see cref="TagDetachSeam"/>.
+    /// <para>
+    /// The fallback materialises the whole leaf and ends in a detach, so every
+    /// row is resident for the life of the activation and no later eviction can
+    /// recover the footprint. On an oversized leaf that is the allocation the
+    /// division can least afford, which makes dividing it require an allocation
+    /// proportional to its size - so a leaf that cannot afford it stays over
+    /// threshold and keeps growing.
+    /// </para>
+    /// <para>
+    /// The two tags are only useful together. <see cref="TagReason"/> =
+    /// <c>no_snapshot_attached</c> with <see cref="TagDetachSeam"/> = <c>none</c>
+    /// is benign: the leaf was replayed from the write-ahead log, never attached
+    /// a frame, and its rows were already resident, so the fallback costs
+    /// nothing extra. The same reason with any other seam is a forfeiture, and
+    /// the seam names the surface that caused it. Reading the reason alone
+    /// conflates the two, and they have opposite costs.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafBisectRefusals =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.bisect_refusals", unit: "{refusal}",
+            description: "Leaf divisions that fell back to the whole-cache ordered view because no split pivot could be taken from the snapshot frame, tagged by tree, reason and the cache surface that detached the frame.");
+
+    /// <summary>Canonical name of <see cref="LeafBisectRefusals"/>.</summary>
+    public const string LeafBisectRefusalsName = "orleans.lattice.leaf.bisect_refusals";
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>immediate</c> on

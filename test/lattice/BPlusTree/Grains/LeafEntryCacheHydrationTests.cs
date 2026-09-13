@@ -592,7 +592,7 @@ public sealed class LeafEntryCacheHydrationTests
                 cache.TryAttachSnapshot(LeafSnapshotCodec.Encode(Corpus(rowCount, payloadBytes: 64)), 0L);
                 return cache;
             },
-            static (cache, _) => cache.HydrateAll(),
+            static (cache, _) => cache.HydrateAll(LeafSnapshotDetachSeam.EnumerateRowsAccessor),
             smallSize: 128,
             largeSize: 256);
 
