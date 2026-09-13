@@ -227,12 +227,12 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Trigger-agnostic on purpose. The caller decides <i>why</i> a permit should
-    /// be withheld - because the replay faulted for memory pressure (#2781), or
-    /// because occupancy has reached the withholding band (#2862) - and this
-    /// method owns only the accounting and the floor. Keeping the two apart is
-    /// what let the proactive trigger be added without touching the invariant
-    /// every existing test pins.
+    /// The trigger is a <b>required</b> parameter rather than a defaulted one, and
+    /// that is deliberate (issue #2883). This method owns the accounting and the
+    /// floor; the caller owns the reason. Making the reason mandatory turns the
+    /// compiler into the guard against a future withholding site that records an
+    /// unattributable increment - the precise defect #2883 exists to correct, and
+    /// the failure mode a default value would quietly reintroduce.
     /// </para>
     /// <para>
     /// At least one permit always stays in circulation. Withholding the last one
@@ -241,7 +241,14 @@ internal sealed partial class BPlusLeafGrain
     /// would latch, exactly the defect issue #2783 reports elsewhere.
     /// </para>
     /// </remarks>
-    internal static bool TryWithholdReplayPermitOnPressure()
+    /// <param name="trigger">
+    /// Which mechanism decided to withhold:
+    /// <see cref="LatticeMetrics.PermitAdaptationTriggerFault"/> when the replay
+    /// escaped with a memory verdict (#2781), or
+    /// <see cref="LatticeMetrics.PermitAdaptationTriggerOccupancy"/> when heap
+    /// occupancy had reached the withholding band (#2862).
+    /// </param>
+    internal static bool TryWithholdReplayPermitOnPressure(KeyValuePair<string, object?> trigger)
     {
         var ceiling = Volatile.Read(ref _replayConcurrencyCeiling);
         while (true)
@@ -259,6 +266,7 @@ internal sealed partial class BPlusLeafGrain
                 LatticeMetrics.WalReplayPermitAdaptations.Add(
                     1,
                     LatticeMetrics.PermitAdaptationWithheld,
+                    trigger,
                     LatticeTenantLabel.Platform);
                 return true;
             }
@@ -300,6 +308,17 @@ internal sealed partial class BPlusLeafGrain
     /// acquired.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// <b>Records no trigger tag, unlike its withholding counterpart</b> (issue
+    /// #2883). Withheld permits are fungible: the accounting below is a single
+    /// count, not a per-trigger ledger, so this method cannot know whether the
+    /// permit it is handing back was withheld by the fault trigger or the
+    /// occupancy one. Tagging it would fabricate an attribution that does not
+    /// exist, and would invite the invalid reading
+    /// <c>withheld{trigger="fault"} - restored</c>. The only meaningful level is
+    /// the total, summed over triggers.
+    /// </para>
+    /// <para>
     /// The guard is <c>withheld &gt; 0</c>, and it is the invariant rather than a
     /// nicety. Each withheld permit is one the gate never got back, so the gate's
     /// count is at most <c>ceiling - withheld</c> and returning exactly
@@ -309,6 +328,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="SemaphoreFullException"/> rather than silently over-admitting -
     /// the failure mode is loud, which is why the ceiling is passed to the
     /// constructor at all.
+    /// </para>
     /// </remarks>
     internal static bool TryRestoreWithheldReplayPermit()
     {
@@ -458,14 +478,27 @@ internal sealed partial class BPlusLeafGrain
             LogResolvedReplayConcurrencyGate(
                 max, options.WalMaterialiserMaxConcurrentReplays, containerCpuGrant, loggerAccessor);
 
-            // Zero-prime both arms of the backpressure counter (issue #2781,
-            // discipline of #2764). This is the one site that proves the gate was
-            // created, so priming here - and nowhere earlier - distinguishes
-            // "backpressure is present and has never engaged" from "this build
-            // has no backpressure", which an absent series cannot.
+            // Zero-prime every arm of the backpressure counter (issue #2781,
+            // discipline of #2764, trigger split of #2883). This is the one site
+            // that proves the gate was created, so priming here - and nowhere
+            // earlier - distinguishes "backpressure is present and has never
+            // engaged" from "this build has no backpressure", which an absent
+            // series cannot.
+            //
+            // BOTH trigger arms are primed, not just the counter as a whole. An
+            // unprimed trigger arm would make "this trigger never fired" and
+            // "this build predates the trigger split" identical on a scrape -
+            // which is #2883's own defect reproduced one level down, and would
+            // defeat the entire point of adding the dimension.
             LatticeMetrics.WalReplayPermitAdaptations.Add(
                 0,
                 LatticeMetrics.PermitAdaptationWithheld,
+                LatticeMetrics.PermitAdaptationTriggerFault,
+                LatticeTenantLabel.Platform);
+            LatticeMetrics.WalReplayPermitAdaptations.Add(
+                0,
+                LatticeMetrics.PermitAdaptationWithheld,
+                LatticeMetrics.PermitAdaptationTriggerOccupancy,
                 LatticeTenantLabel.Platform);
             LatticeMetrics.WalReplayPermitAdaptations.Add(
                 0,
@@ -987,7 +1020,8 @@ internal sealed partial class BPlusLeafGrain
             // reduction - and, on recovery, return a permit the gate never lost,
             // which SemaphoreSlim would raise as SemaphoreFullException.
             if (replayPermit is not null && IsReadMemoryPressure(ex))
-                withholdReplayPermitOnPressure = TryWithholdReplayPermitOnPressure();
+                withholdReplayPermitOnPressure = TryWithholdReplayPermitOnPressure(
+                    LatticeMetrics.PermitAdaptationTriggerFault);
 
             // Activation-failure observation (issue #2280). OBSERVE AND
             // RETHROW - never swallow. "Failures propagate" above is
@@ -1129,7 +1163,8 @@ internal sealed partial class BPlusLeafGrain
                 var heap = ReadReplayHeapPressure();
 
                 if (!withholdReplayPermitOnPressure && ReplayHeapPressure.IsPressured(heap))
-                    withholdReplayPermitOnPressure = TryWithholdReplayPermitOnPressure();
+                    withholdReplayPermitOnPressure = TryWithholdReplayPermitOnPressure(
+                        LatticeMetrics.PermitAdaptationTriggerOccupancy);
 
                 if (withholdReplayPermitOnPressure)
                 {

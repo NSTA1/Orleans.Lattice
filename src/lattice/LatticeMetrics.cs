@@ -166,6 +166,16 @@ public static class LatticeMetrics
     /// <c>MaxLeafEntriesBeforeForcedCompaction</c>) is non-default; when
     /// every policy knob holds its default the tag is omitted so existing
     /// dashboards that filter on <c>trigger=""</c> keep matching.
+    /// <para>
+    /// <b>Also the trigger that withheld a WAL replay permit</b> on
+    /// <see cref="WalReplayPermitAdaptations"/>
+    /// (<see cref="PermitAdaptationTriggerFault"/> or
+    /// <see cref="PermitAdaptationTriggerOccupancy"/>), issue #2883. The two uses
+    /// share only the key: the value vocabularies are disjoint, and no query
+    /// spans both instruments. Note that the <c>restored</c> arm of that counter
+    /// carries no trigger at all and so matches <c>trigger=""</c> - deliberately,
+    /// for the reason given on that instrument.
+    /// </para>
     /// </summary>
     public const string TagTrigger = "trigger";
 
@@ -1773,24 +1783,81 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Tag marking a permit <b>withheld</b> from the replay concurrency gate on
-    /// <see cref="WalReplayPermitAdaptations"/>, because a replay failed for
-    /// memory pressure.
+    /// <see cref="WalReplayPermitAdaptations"/>, because the heap cannot afford
+    /// the concurrency the gate is configured for. Always accompanied by
+    /// <see cref="TagTrigger"/> naming <i>which</i> of the two mechanisms
+    /// withheld it (issue #2883).
     /// </summary>
     public static readonly KeyValuePair<string, object?> PermitAdaptationWithheld = new(TagOutcome, "withheld");
 
     /// <summary>
     /// Tag marking a previously withheld permit <b>restored</b> to the replay
     /// concurrency gate on <see cref="WalReplayPermitAdaptations"/>, because a
-    /// replay completed without memory pressure.
+    /// replay completed cleanly and occupancy has receded. Carries <b>no</b>
+    /// <see cref="TagTrigger"/> - see the instrument's own remarks for why that
+    /// asymmetry is correct rather than an oversight.
     /// </summary>
     public static readonly KeyValuePair<string, object?> PermitAdaptationRestored = new(TagOutcome, "restored");
 
     /// <summary>
+    /// <see cref="TagTrigger"/> = <c>fault</c>: the permit was withheld because the
+    /// replay <b>escaped its guarded region</b> with an exception carrying a memory
+    /// verdict (the reactive trigger, issue #2781).
+    /// </summary>
+    /// <remarks>
+    /// This is the arm that read zero through acceptance run 10's 625
+    /// <see cref="OutOfMemoryException"/>s, because the slice-narrowing retry of
+    /// issue #2742 absorbs the very fault it watches for. It is retained as a
+    /// backstop rather than replaced: a fault that does escape is still evidence,
+    /// and the two triggers fail independently.
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> PermitAdaptationTriggerFault = new(TagTrigger, "fault");
+
+    /// <summary>
+    /// <see cref="TagTrigger"/> = <c>occupancy</c>: the permit was withheld because
+    /// managed heap occupancy had reached the withholding band when the replay
+    /// returned it, whether or not the replay faulted (the proactive trigger,
+    /// issue #2862).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PermitAdaptationTriggerOccupancy = new(TagTrigger, "occupancy");
+
+    /// <summary>
     /// Counter of adaptations to the per-silo WAL replay concurrency gate, tagged
     /// with <see cref="TagOutcome"/> (<see cref="PermitAdaptationWithheld"/> when a
-    /// permit was withheld from circulation after a replay failed for memory
-    /// pressure, <see cref="PermitAdaptationRestored"/> when one was returned after
-    /// a replay completed cleanly). Issue #2781.
+    /// permit was withheld from circulation, <see cref="PermitAdaptationRestored"/>
+    /// when one was returned after a replay completed cleanly). Issues #2781 and
+    /// #2883.
+    /// <para>
+    /// <b>The withheld arm carries <see cref="TagTrigger"/>, and that dimension is
+    /// the whole of issue #2883.</b> Two independent mechanisms withhold:
+    /// <see cref="PermitAdaptationTriggerFault"/> (a replay escaped its guarded
+    /// region with a memory verdict, #2781) and
+    /// <see cref="PermitAdaptationTriggerOccupancy"/> (occupancy had reached the
+    /// withholding band when the permit came back, #2862). Before the tag existed
+    /// both wrote the same untagged series, so <c>withheld = N</c> was a
+    /// <i>sum</i> that no scrape could attribute - and that ambiguity already
+    /// produced a wrong published conclusion, when run 12's <c>withheld = 6</c>
+    /// was read as evidence that the fault trigger works. It is equally
+    /// consistent with the fault trigger firing zero times.
+    /// </para>
+    /// <para>
+    /// <b>Continuity is preserved:</b> summing over <see cref="TagTrigger"/>
+    /// recovers the historical untagged total, so every comparison against runs
+    /// that predate the tag stays valid. Adding a dimension is the non-destructive
+    /// fix; minting a second counter would not have been.
+    /// </para>
+    /// <para>
+    /// <b>The restored arm is deliberately untagged, and a per-trigger level is
+    /// therefore NOT derivable.</b> Withheld permits are <i>fungible</i> - the
+    /// accounting is a single process-wide count, not a per-trigger ledger - so a
+    /// restore cannot know which trigger withheld the permit it is handing back,
+    /// and tagging it would only manufacture a number that looks attributable and
+    /// is not. Consequently
+    /// <c>withheld{trigger="fault"} - restored</c> is <b>meaningless</b>: the only
+    /// valid level is the total <c>withheld - restored</c>, summed over triggers.
+    /// Read the trigger split as <i>which mechanism is doing the work</i>, never
+    /// as <i>how much each mechanism is currently holding</i>.
+    /// </para>
     /// <para>
     /// <b>Deliberately not tagged by tree.</b> The gate is process-wide, so a
     /// per-tree tag would imply a per-tree ceiling that does not exist and would
@@ -1799,15 +1866,16 @@ public static class LatticeMetrics
     /// <para>
     /// The difference <c>withheld - restored</c> is the number of permits currently
     /// withheld, so the effective ceiling is
-    /// <c>configured - (withheld - restored)</c>. Both arms are <b>zero-primed</b>
-    /// when the gate is sized, which is the one site that proves the gate was
-    /// actually created: without priming, "backpressure never engaged" and "this
-    /// build does not have backpressure" would both read as an absent series.
+    /// <c>configured - (withheld - restored)</c>. <b>All three arms</b> - withheld
+    /// under each trigger, and restored - are <b>zero-primed</b> when the gate is
+    /// sized, which is the one site that proves the gate was actually created:
+    /// without priming, "this trigger never engaged" and "this build does not have
+    /// that trigger" would both read as an absent series.
     /// </para>
     /// </summary>
     public static readonly Counter<long> WalReplayPermitAdaptations =
         Meter.CreateCounter<long>("orleans.lattice.wal.replay.permit_adaptations", unit: "{permit}",
-            description: "Adaptations to the per-silo WAL replay concurrency gate under memory pressure, tagged by outcome. Zero-primed on both arms when the gate is sized.");
+            description: "Adaptations to the per-silo WAL replay concurrency gate under memory pressure, tagged by outcome, and on the withheld arm by the trigger (fault or occupancy) that withheld. Zero-primed on all three arms when the gate is sized. The restored arm carries no trigger because withheld permits are fungible, so a per-trigger level is not derivable.");
 
     /// <summary>
     /// Tag marking a replay permit queue wait that ended in the permit being
