@@ -1682,6 +1682,25 @@ internal sealed partial class BPlusLeafGrain(
         // break early once we pass endExclusive - but we must still report
         // whether we observed a key >= endExclusive so the shard
         // coordinator can terminate the chain walk deterministically.
+        //
+        // NOT converted to a bounded Cache.EnumerateRange(...) walk, unlike the
+        // sibling read seams on this surface (issue #2368). The work itself is
+        // ranged and retains only keys, so it looks like the easiest
+        // conversion here - but `pastRange` is derived from observing a key at
+        // or above endExclusive, and a ranged walk yields no such key by
+        // construction. A conversion that simply drops the observation reports
+        // PastRange=false forever, and ShardRootGrain's range-delete chain walk
+        // then visits every remaining leaf in the shard instead of stopping.
+        //
+        // A frame-index lower-bound probe is the obvious substitute and is
+        // UNSOUND: Cache.Remove hydrates and pins the key's block before
+        // removing the row, so a removed key stays in the frame's ordinal index
+        // while being absent from the projection. Such a probe therefore
+        // over-reports, and an over-reported PastRange truncates the walk and
+        // silently leaves part of the range undeleted - trading a performance
+        // fault for a correctness one. A sound probe has to ask for a resident
+        // key at or above the bound, or an UNHYDRATED frame block at or above
+        // it, which is new cache surface rather than a call-site change.
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         List<string>? keysToDelete = null;
         var pastRange = false;
@@ -1826,36 +1845,79 @@ internal sealed partial class BPlusLeafGrain(
         // aggregation-view group-value count over [ReservedFloor, null))
         // matches an equivalent ranged key enumeration exactly, without
         // materialising any keys across the wire.
+        //
+        // Bounded, windowed hydration. Two things are needed and only the pair
+        // works (issue #2368):
+        //
+        //   * WINDOWS. The whole-cache view calls HydrateAll, which ends in
+        //     DetachSnapshot and leaves every row resident for the life of the
+        //     activation, forfeiting the cheap frame-only division for good.
+        //
+        //   * A CLIP. A single Cache.EnumerateRange over the caller's bounds is
+        //     NOT enough, and for the dominant caller it does nothing at all.
+        //     CountAsync() passes (null, null), so that range spans every block;
+        //     HydrateRange then protects the whole span in its TrimToBudget
+        //     call, so nothing is evictable, every block ends up resident at
+        //     once, and HydrateBlock's IsFullyHydrated check detaches exactly as
+        //     HydrateAll would. Converted in form, unchanged in effect. Walking
+        //     budget-sized windows keeps the trim able to evict behind us, which
+        //     is what stops the frame ever being fully hydrated.
+        //
+        // Clipping each window to the caller's [start, end) is what keeps a
+        // genuinely ranged count cheap rather than whole-leaf. Windows ascend
+        // and are disjoint, and the fold is a counter, so the total is identical
+        // to the one-pass walk this replaced.
+        //
+        // This matters here more than anywhere else on this surface, because
+        // CountAsync is reached from ShardRootGrain's warm-up probe on the root
+        // leaf and from the no-split-yet fast path in LatticeGrain.CountAsync -
+        // both of which describe it in comments as "cheap", and both of which
+        // therefore ran before any division could.
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
+        var scanStart = startInclusive;
+        var scanEnd = MinOrdinal(endExclusive, splitInProgress ? splitKey : null);
         var count = 0;
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            if (endExclusive is not null &&
-                string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+            if (scanEnd is not null && windowStart is not null &&
+                string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            if (splitInProgress && splitKey is not null &&
-                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
-                break;
-
-            if (startInclusive is not null &&
-                string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
+            var from = MaxOrdinal(windowStart, scanStart);
+            var to = MinOrdinal(windowEnd, scanEnd);
+            if (from is not null && to is not null &&
+                string.CompareOrdinal(from, to) >= 0)
                 continue;
 
-            if (pendingKeys.TryGetValue(key, out var pending))
+            foreach (var (key, lww) in Cache.EnumerateRange(from, to))
             {
-                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
-                if (status == TxStatus.Committed)
-                {
-                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)) count++;
+                if (endExclusive is not null &&
+                    string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+                    break;
+
+                if (splitInProgress && splitKey is not null &&
+                    string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                    break;
+
+                if (startInclusive is not null &&
+                    string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
                     continue;
+
+                if (pendingKeys.TryGetValue(key, out var pending))
+                {
+                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    if (status == TxStatus.Committed)
+                    {
+                        if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)) count++;
+                        continue;
+                    }
+                    // InFlight or Aborted - fall through to Entries
+                    // (pre-saga visibility). See GetWithPendingAsync.
                 }
-                // InFlight or Aborted - fall through to Entries
-                // (pre-saga visibility). See GetWithPendingAsync.
+                if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
+                count++;
             }
-            if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
-            count++;
         }
 
         // Fresh committed pending keys that are NOT in Entries
@@ -1892,33 +1954,49 @@ internal sealed partial class BPlusLeafGrain(
         // secondary-silo restart) reports stats for only the keys it still
         // owns rather than double-counting the right half that already lives
         // on the new sibling.
+        //
+        // Walks in bounded key windows rather than over the whole-cache view,
+        // for the reason ComputeFullProjectionHashFromState does: all three
+        // accumulators are order-independent counters and the windows are
+        // disjoint and exhaustive, so the totals are identical to the one-pass
+        // walk this replaced. What changes is peak footprint - the whole-cache
+        // view calls HydrateAll, which ends in DetachSnapshot and makes every
+        // row resident for the life of the activation (issue #2368).
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
+        var scanEnd = splitInProgress ? splitKey : null;
         var live = 0;
         var tombstones = 0;
         var stateBytes = 0L;
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            if (splitInProgress && splitKey is not null &&
-                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+            if (scanEnd is not null && windowStart is not null &&
+                string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            if (pendingKeys.TryGetValue(key, out var pending))
+            foreach (var (key, lww) in Cache.EnumerateRange(windowStart, MinOrdinal(windowEnd, scanEnd)))
             {
-                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
-                if (status == TxStatus.Committed)
+                if (splitInProgress && splitKey is not null &&
+                    string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                    break;
+
+                if (pendingKeys.TryGetValue(key, out var pending))
                 {
-                    if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
-                    else live++;
-                    stateBytes += EntryStateBytes(key, pending.value.Value);
-                    continue;
+                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    if (status == TxStatus.Committed)
+                    {
+                        if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
+                        else live++;
+                        stateBytes += EntryStateBytes(key, pending.value.Value);
+                        continue;
+                    }
+                    // InFlight or Aborted - fall through to Entries
+                    // (pre-saga visibility). See GetWithPendingAsync.
                 }
-                // InFlight or Aborted - fall through to Entries
-                // (pre-saga visibility). See GetWithPendingAsync.
+                if (lww.IsTombstone || lww.IsExpired(nowTicks)) tombstones++;
+                else live++;
+                stateBytes += EntryStateBytes(key, lww.Value);
             }
-            if (lww.IsTombstone || lww.IsExpired(nowTicks)) tombstones++;
-            else live++;
-            stateBytes += EntryStateBytes(key, lww.Value);
         }
 
         // Fresh committed pending keys not yet in Entries.
@@ -2347,38 +2425,50 @@ internal sealed partial class BPlusLeafGrain(
         var tombstonesRemoved = 0;
         var expiredRemoved = 0;
 
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            if (lww.IsTombstone)
+            // Bounded windows rather than the whole-cache view: the scan
+            // retains only the key and reap stamp of each condemned row, never
+            // its payload, so it needs to VISIT every row and not to hold one.
+            // The whole-cache view calls HydrateAll, which ends in
+            // DetachSnapshot and holds all of them for the life of the
+            // activation - on precisely the oversized, tombstone-heavy leaf a
+            // reap is trying to shrink (issue #2368). The windows are disjoint,
+            // exhaustive and ascending, so the condemned set and its order are
+            // identical to the one-pass walk this replaced.
+            foreach (var (key, lww) in Cache.EnumerateRange(windowStart, windowEnd))
             {
-                if (lww.Timestamp.WallClockTicks <= cutoff)
+                if (lww.IsTombstone)
                 {
-                    toRemove.Add((key, lww.Timestamp));
-                    tombstonesRemoved++;
+                    if (lww.Timestamp.WallClockTicks <= cutoff)
+                    {
+                        toRemove.Add((key, lww.Timestamp));
+                        tombstonesRemoved++;
+                    }
+                    else
+                    {
+                        // Tombstone is still within the grace window - a future pass
+                        // must re-scan it once the grace has elapsed.
+                        anyInGraceRemaining = true;
+                    }
+                    continue;
                 }
-                else
-                {
-                    // Tombstone is still within the grace window - a future pass
-                    // must re-scan it once the grace has elapsed.
-                    anyInGraceRemaining = true;
-                }
-                continue;
-            }
 
-            // Reap expired live entries past the same grace period.
-            // Reads already hide them; a short retention after expiry protects
-            // against a stale merge resurrecting the entry (another replica
-            // whose clock is behind could re-send the pre-expiry LwwValue).
-            if (lww.ExpiresAtTicks != 0 && lww.ExpiresAtTicks <= nowTicks)
-            {
-                if (lww.ExpiresAtTicks <= cutoff)
+                // Reap expired live entries past the same grace period.
+                // Reads already hide them; a short retention after expiry protects
+                // against a stale merge resurrecting the entry (another replica
+                // whose clock is behind could re-send the pre-expiry LwwValue).
+                if (lww.ExpiresAtTicks != 0 && lww.ExpiresAtTicks <= nowTicks)
                 {
-                    toRemove.Add((key, lww.Timestamp));
-                    expiredRemoved++;
-                }
-                else
-                {
-                    anyInGraceRemaining = true;
+                    if (lww.ExpiresAtTicks <= cutoff)
+                    {
+                        toRemove.Add((key, lww.Timestamp));
+                        expiredRemoved++;
+                    }
+                    else
+                    {
+                        anyInGraceRemaining = true;
+                    }
                 }
             }
         }
@@ -2574,11 +2664,21 @@ internal sealed partial class BPlusLeafGrain(
         var callerClock = sinceVersion.GetClock(ReplicaId);
         var changed = new Dictionary<string, LwwValue<byte[]>>();
 
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        // Bounded windows rather than the whole-cache view. The delta retains
+        // only the rows that beat the caller's clock, which on a caught-up
+        // caller is none at all - yet the whole-cache view calls HydrateAll
+        // regardless, making every row resident for the life of the activation
+        // and forfeiting the cheap frame-only division (issue #2368). The
+        // result is a key-addressed map built from disjoint, exhaustive
+        // windows, so it is identical to the one-pass walk this replaced.
+        foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            if (lww.Timestamp > callerClock)
+            foreach (var (key, lww) in Cache.EnumerateRange(windowStart, windowEnd))
             {
-                changed[key] = lww;
+                if (lww.Timestamp > callerClock)
+                {
+                    changed[key] = lww;
+                }
             }
         }
 
@@ -2606,12 +2706,19 @@ internal sealed partial class BPlusLeafGrain(
         var callerClock = sinceVersion.GetClock(ReplicaId);
         var changed = new Dictionary<string, LwwValue<byte[]>>();
 
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        // Bounded windows, as GetDeltaSinceAsync uses. The slot filter makes
+        // the retained set narrower still - only rows hashing into a moved
+        // slot survive it - so paying HydrateAll for the whole leaf to answer
+        // it was the worst ratio on this surface.
+        foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            if (lww.Timestamp <= callerClock) continue;
-            var slot = ShardMap.GetVirtualSlot(key, virtualShardCount);
-            if (Array.BinarySearch(sortedMovedSlots, slot) < 0) continue;
-            changed[key] = lww;
+            foreach (var (key, lww) in Cache.EnumerateRange(windowStart, windowEnd))
+            {
+                if (lww.Timestamp <= callerClock) continue;
+                var slot = ShardMap.GetVirtualSlot(key, virtualShardCount);
+                if (Array.BinarySearch(sortedMovedSlots, slot) < 0) continue;
+                changed[key] = lww;
+            }
         }
 
         return Task.FromResult(new StateDelta
@@ -2804,56 +2911,78 @@ internal sealed partial class BPlusLeafGrain(
         // per leaf per page) so it sized the initial array to the
         // expected emission, not the worst-case.
         var keys = new List<string>(capacity: Math.Min(Cache.Count, 256));
-        foreach (var (key, lww) in Cache.EnumerateRange(
-            MaxOrdinal(startInclusive, afterExclusive),
-            MinOrdinal(MinOrdinal(endExclusive, beforeExclusive), splitInProgress ? splitKey : null)))
+        // Windowed and clipped, for the reason CountAsync documents at length
+        // (issue #2368). A single Cache.EnumerateRange over the caller's bounds
+        // reads as already-bounded, but GetKeysAsync's parameters all default to
+        // null: an unbounded call resolves to EnumerateRange(null, null), whose
+        // HydrateRange protects the entire span in its own TrimToBudget call, so
+        // every block ends up resident at once and HydrateBlock's
+        // IsFullyHydrated check detaches the frame exactly as HydrateAll would.
+        // That makes this a detaching site that the HydrateAll / Keys /
+        // EnumerateRows / UnderlyingRows signature does not match.
+        var scanStart = MaxOrdinal(startInclusive, afterExclusive);
+        var scanEnd = MinOrdinal(MinOrdinal(endExclusive, beforeExclusive), splitInProgress ? splitKey : null);
+        foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+            if (scanEnd is not null && windowStart is not null &&
+                string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0)
-                break;
-
-            if (splitInProgress && splitKey is not null &&
-                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
-                break;
-
-            if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
+            var from = MaxOrdinal(windowStart, scanStart);
+            var to = MinOrdinal(windowEnd, scanEnd);
+            if (from is not null && to is not null &&
+                string.CompareOrdinal(from, to) >= 0)
                 continue;
 
-            if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0)
-                continue;
-
-            if (pendingKeys.TryGetValue(key, out var pending))
+            foreach (var (key, lww) in Cache.EnumerateRange(from, to))
             {
-                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
-                if (status == TxStatus.Committed)
-                {
-                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
-                        && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
-                    {
-                        TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
-                        keys.Add(key);
-                    }
+                if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+                    break;
+
+                if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0)
+                    break;
+
+                if (splitInProgress && splitKey is not null &&
+                    string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                    break;
+
+                if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
                     continue;
+
+                if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0)
+                    continue;
+
+                if (pendingKeys.TryGetValue(key, out var pending))
+                {
+                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    if (status == TxStatus.Committed)
+                    {
+                        if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
+                            && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
+                        {
+                            TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
+                            keys.Add(key);
+                        }
+                        continue;
+                    }
+                    // InFlight, Aborted, or orphan-pending (committed bucket whose
+                    // saga terminal has already landed on this leaf) - fall through
+                    // to Entries. See GetWithPendingAsync for the orphan-pending
+                    // rationale: a late-arriving shadow-forward of a prepare can
+                    // bucket a saga whose terminal has already drained into Entries,
+                    // and surfacing the orphan would shadow the authoritative
+                    // Entries value (or a strictly-later saga's value).
                 }
-                // InFlight, Aborted, or orphan-pending (committed bucket whose
-                // saga terminal has already landed on this leaf) - fall through
-                // to Entries. See GetWithPendingAsync for the orphan-pending
-                // rationale: a late-arriving shadow-forward of a prepare can
-                // bucket a saga whose terminal has already drained into Entries,
-                // and surfacing the orphan would shadow the authoritative
-                // Entries value (or a strictly-later saga's value).
+
+                if (lww.IsTombstone || lww.IsExpired(nowTicks))
+                    continue;
+
+                if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
+                    continue;
+
+                TrackEarliestExpiry(ref earliestExpiry, lww.ExpiresAtTicks);
+                keys.Add(key);
             }
-
-            if (lww.IsTombstone || lww.IsExpired(nowTicks))
-                continue;
-
-            if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
-                continue;
-
-            TrackEarliestExpiry(ref earliestExpiry, lww.ExpiresAtTicks);
-            keys.Add(key);
         }
 
         // Fresh committed pending keys not yet in Entries, respecting range filters.
@@ -2901,51 +3030,67 @@ internal sealed partial class BPlusLeafGrain(
         // over-allocation a bare Cache.Count would cause when the range filter or
         // split-key bound truncates iteration well below the leaf's entry count.
         var entries = new List<KeyValuePair<string, byte[]>>(capacity: Math.Min(Cache.Count, 256));
-        foreach (var (key, lww) in Cache.EnumerateRange(
-            MaxOrdinal(startInclusive, afterExclusive),
-            MinOrdinal(MinOrdinal(endExclusive, beforeExclusive), splitInProgress ? splitKey : null)))
+        // Windowed and clipped, exactly as the sibling GetKeysAsync above; an
+        // unbounded call here resolves to EnumerateRange(null, null) and
+        // detaches the frame (issue #2368).
+        var scanStart = MaxOrdinal(startInclusive, afterExclusive);
+        var scanEnd = MinOrdinal(MinOrdinal(endExclusive, beforeExclusive), splitInProgress ? splitKey : null);
+        foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+            if (scanEnd is not null && windowStart is not null &&
+                string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0)
-                break;
-
-            if (splitInProgress && splitKey is not null &&
-                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
-                break;
-
-            if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
+            var from = MaxOrdinal(windowStart, scanStart);
+            var to = MinOrdinal(windowEnd, scanEnd);
+            if (from is not null && to is not null &&
+                string.CompareOrdinal(from, to) >= 0)
                 continue;
 
-            if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0)
-                continue;
-
-            if (pendingKeys.TryGetValue(key, out var pending))
+            foreach (var (key, lww) in Cache.EnumerateRange(from, to))
             {
-                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
-                if (status == TxStatus.Committed)
-                {
-                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
-                        && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
-                    {
-                        TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
-                        entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
-                    }
+                if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+                    break;
+
+                if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0)
+                    break;
+
+                if (splitInProgress && splitKey is not null &&
+                    string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                    break;
+
+                if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
                     continue;
+
+                if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0)
+                    continue;
+
+                if (pendingKeys.TryGetValue(key, out var pending))
+                {
+                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    if (status == TxStatus.Committed)
+                    {
+                        if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
+                            && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
+                        {
+                            TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
+                            entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
+                        }
+                        continue;
+                    }
+                    // InFlight or Aborted - fall through to Entries
+                    // (pre-saga visibility). See GetWithPendingAsync.
                 }
-                // InFlight or Aborted - fall through to Entries
-                // (pre-saga visibility). See GetWithPendingAsync.
+
+                if (lww.IsTombstone || lww.IsExpired(nowTicks))
+                    continue;
+
+                if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
+                    continue;
+
+                TrackEarliestExpiry(ref earliestExpiry, lww.ExpiresAtTicks);
+                entries.Add(new KeyValuePair<string, byte[]>(key, lww.Value!));
             }
-
-            if (lww.IsTombstone || lww.IsExpired(nowTicks))
-                continue;
-
-            if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
-                continue;
-
-            TrackEarliestExpiry(ref earliestExpiry, lww.ExpiresAtTicks);
-            entries.Add(new KeyValuePair<string, byte[]>(key, lww.Value!));
         }
 
         // Fresh committed pending keys not yet in Entries, respecting range filters.
@@ -2984,22 +3129,33 @@ internal sealed partial class BPlusLeafGrain(
         // the sibling GetLiveRawEntriesAsync; the prior grow-from-empty map rehashed
         // its bucket and entry arrays repeatedly on a full-leaf read.
         var result = new Dictionary<string, byte[]>(Cache.Count);
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        // Bounded windows rather than the whole-cache view. This read does
+        // retain every live value, so its peak is inherently the live set -
+        // but that set is released when the call returns, whereas HydrateAll
+        // ends in DetachSnapshot and keeps the whole leaf resident and
+        // unsheddable for the rest of the activation, which is what forfeits
+        // the cheap frame-only division (issue #2368). The result is a
+        // key-addressed map built from disjoint, exhaustive windows, so it is
+        // identical to the one-pass walk this replaced.
+        foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            if (pendingKeys.TryGetValue(key, out var pending))
+            foreach (var (key, lww) in Cache.EnumerateRange(windowStart, windowEnd))
             {
-                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
-                if (status == TxStatus.Committed)
+                if (pendingKeys.TryGetValue(key, out var pending))
                 {
-                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
-                        result[key] = pending.value.Value!;
-                    continue;
+                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    if (status == TxStatus.Committed)
+                    {
+                        if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                            result[key] = pending.value.Value!;
+                        continue;
+                    }
+                    // InFlight or Aborted - fall through to Entries
+                    // (pre-saga visibility). See GetWithPendingAsync.
                 }
-                // InFlight or Aborted - fall through to Entries
-                // (pre-saga visibility). See GetWithPendingAsync.
+                if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
+                result[key] = lww.Value!;
             }
-            if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
-            result[key] = lww.Value!;
         }
         foreach (var (key, pending) in pendingKeys)
         {
@@ -3019,6 +3175,21 @@ internal sealed partial class BPlusLeafGrain(
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var result = new List<LwwEntry>(Cache.Count);
+        // NOT converted to a bounded windowed walk, unlike the sibling
+        // GetLiveEntriesAsync directly above (issue #2368). The difference is
+        // the Cache.GetMergeMode(key) call in the loop body: it is a
+        // key-addressed accessor, and a key-addressed accessor trims the
+        // resident footprint protecting only the ONE block it touched. Under a
+        // windowed walk that block is not the window, so the trim can evict a
+        // block of the window currently being enumerated - structurally
+        // modifying the dictionary under the enumerator.
+        //
+        // Buffering the window and looking the merge modes up afterwards does
+        // not rescue it either: EvictBlock drops the evicted rows' entries from
+        // the merge-mode map, so a post-eviction lookup returns null where a
+        // mode exists and the answer changes rather than merely costing more.
+        // Converting this seam needs a ranged merge-mode accessor, or a window
+        // pin, on the cache - not a call-site change.
         foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (pendingKeys.TryGetValue(key, out var pending))
@@ -3052,11 +3223,27 @@ internal sealed partial class BPlusLeafGrain(
     /// preserving the original <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> timestamps.
     /// Internal method for unit testing - not exposed on the grain interface
     /// to avoid Orleans generic type serialization issues.
+    /// <para>
+    /// Walks budget-sized windows rather than the whole-cache view (issue
+    /// #2368). It does hand back a copy of every row, so its own peak is the
+    /// whole leaf either way - but that copy is the caller's and is released
+    /// with it, whereas the whole-cache view additionally ends in
+    /// DetachSnapshot and leaves the CACHE fully resident for the rest of the
+    /// activation. Residency is incidental to this operation, not required by
+    /// it, so there is nothing here to keep resident afterwards.
+    /// </para>
     /// </summary>
     internal Task<Dictionary<string, LwwValue<byte[]>>> GetAllRawEntriesAsync()
     {
-        return Task.FromResult(
-            new Dictionary<string, LwwValue<byte[]>>(Cache.UnderlyingRows));
+        var result = new Dictionary<string, LwwValue<byte[]>>(Cache.Count);
+        foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
+        {
+            foreach (var (key, lww) in Cache.EnumerateRange(windowStart, windowEnd))
+            {
+                result[key] = lww;
+            }
+        }
+        return Task.FromResult(result);
     }
 
     public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)

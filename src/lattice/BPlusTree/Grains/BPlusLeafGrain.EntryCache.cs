@@ -36,6 +36,14 @@ internal sealed partial class BPlusLeafGrain
     /// than on a downstream outcome, and seed through
     /// <c>TryAttachSnapshot</c> when frame attachment is what is under test.
     /// </para>
+    /// <para>
+    /// Unlike the leaf's other whole-cache readers, this one cannot be
+    /// converted to a bounded window (issue #2368). The contract is a LIVE
+    /// view that tests seed through, so a bounded copy would silently swallow
+    /// those seeds. The detach is therefore inherent to the seam rather than
+    /// an oversight, which is why the mitigation is to steer residency
+    /// assertions to <see cref="CacheForTest"/> instead of to remove it.
+    /// </para>
     /// </summary>
     internal SortedDictionary<string, LwwValue<byte[]>> EntriesForTest => Cache.UnderlyingRows;
 
