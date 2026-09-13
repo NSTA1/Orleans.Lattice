@@ -2719,6 +2719,67 @@ public static class LatticeMetrics
     public const string LeafSnapshotCaptureDurationName = "orleans.lattice.leaf.snapshot.capture.duration";
 
     /// <summary>
+    /// Canonical name of the observable gauge published by
+    /// <c>LeafSnapshotCaptureConcurrencyCensus</c>, reporting the greatest number
+    /// of leaf-snapshot captures seen executing at once on this silo since
+    /// process start.
+    /// <para>
+    /// The gauge is <b>monotone non-decreasing</b> and that is the whole design.
+    /// The quantity worth measuring here is a transient fan-out spike, which an
+    /// instantaneous gauge samples only at scrape time and therefore usually
+    /// misses - the objection on which PR #2723 deferred this metric. A
+    /// high-water mark is reported by the scrape that follows the spike and by
+    /// every scrape after it, so scrape timing stops mattering rather than merely
+    /// being unlikely to matter. Read it as "the worst this silo has ever been",
+    /// not as a current depth; a restart is what resets it.
+    /// </para>
+    /// <para>
+    /// The instrument lives on its own census class rather than here because an
+    /// observable instrument's callback must be declared below every piece of
+    /// static state it reads, and this file declares none of that state.
+    /// </para>
+    /// </summary>
+    public const string LeafSnapshotCaptureConcurrencyPeakGaugeName = "orleans.lattice.leaf.snapshot.capture.concurrency_peak";
+
+    /// <summary>
+    /// Counter of leaf-snapshot capture attempts that crossed the attempt
+    /// boundary while at least one <b>other</b> capture was already in flight
+    /// somewhere on the same silo, tagged <see cref="TagTree"/>.
+    /// <para>
+    /// It exists because a peak alone cannot separate the two readings that the
+    /// decision rests on. A recorded peak of 3 is produced both by a single
+    /// three-deep burst during silo start and by a silo that has sat three-deep
+    /// continuously for hours, and those call for opposite responses. The peak
+    /// answers <i>how bad it got</i>; this counter answers <i>how often it
+    /// happens</i>, and the pair is readable where either alone is not.
+    /// </para>
+    /// <para>
+    /// <b>Zero-primed at the same site it is incremented.</b> Every capture that
+    /// crosses the attempt boundary adds to this counter - <c>1</c> when it
+    /// entered into company, <c>0</c> when it entered alone - so the series
+    /// exists for every tree that has ever captured, whether or not that tree has
+    /// ever contended. Without the zero-add, a tree that never contends would
+    /// have no series at all, and its absence would be indistinguishable from an
+    /// instrument that was never reached. That distinction is the entire
+    /// evidential value of the measurement, so the extra add is deliberate and
+    /// must not be optimised away.
+    /// </para>
+    /// <para>
+    /// Tree-tagged, unlike the silo-wide peak gauge, because the capture that
+    /// entered into contention does belong to one tree, so the counter answers
+    /// which trees are producing the fan-out. The peak cannot be split that way:
+    /// it is a maximum across trees, and per-tree maxima would each be smaller
+    /// than the depth the shared storage provider actually saw.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotCaptureConcurrentEntries =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.capture.concurrent_entries", unit: "{capture}",
+            description: "Leaf-snapshot capture attempts that crossed the attempt boundary while another capture was already in flight on the same silo, tagged by tree. Incremented by zero when a capture enters alone, so every capturing tree has a series and a reported zero means measured-none rather than no-detector.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotCaptureConcurrentEntries"/>.</summary>
+    public const string LeafSnapshotCaptureConcurrentEntriesName = "orleans.lattice.leaf.snapshot.capture.concurrent_entries";
+
+    /// <summary>
     /// Counter of leaf-snapshot capture invocations that <b>declined</b> before
     /// reaching the attempt boundary, tagged <see cref="TagTree"/> and
     /// <see cref="TagReason"/>.

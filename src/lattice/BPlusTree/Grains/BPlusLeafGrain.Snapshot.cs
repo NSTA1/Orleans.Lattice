@@ -924,8 +924,22 @@ internal sealed partial class BPlusLeafGrain
         // count and report "captures are fast" precisely when none happen.
         var captureStartedAt = Stopwatch.GetTimestamp();
         var captureSucceeded = false;
+        // Cross-leaf capture depth (issue #2696). The single-flight bool above
+        // is per activation, so it is blind to how many OTHER leaves on this
+        // silo are capturing against the one shared snapshot storage provider at
+        // the same instant - which is the fan-out the issue is about. Entered
+        // here rather than at method entry for the same reason the timer is: a
+        // decline is not a capture and must not contribute depth.
+        //
+        // Nothing may be placed between this call and the `try`. The matching
+        // release lives in the finally below, so a throw in between would leak
+        // depth permanently and ratchet the peak on a capture that is no longer
+        // running.
+        var captureConcurrency = SnapshotCaptureConcurrency.Enter(out var capturesAlreadyInFlight);
         try
         {
+            ObserveSnapshotCaptureConcurrency(capturesAlreadyInFlight);
+
             // Divide an oversized leaf BEFORE materialising its payload, on
             // EVERY route into capture rather than on one of them.
             //
@@ -1101,6 +1115,10 @@ internal sealed partial class BPlusLeafGrain
         finally
         {
             _snapshotCaptureInFlight = false;
+            // Released unconditionally, including on the throwing paths. The
+            // peak is a high-water mark and is never lowered by this; only the
+            // live depth falls.
+            captureConcurrency.Dispose();
             // Recorded in the finally so that the swallowed-exception paths are
             // counted too. That is the whole point of issue #2696: the advisory
             // handler catches every exception and only logs, so before this a
@@ -1159,6 +1177,34 @@ internal sealed partial class BPlusLeafGrain
             treeTag,
             outcome,
             tenantTag);
+    }
+
+    /// <summary>
+    /// Records whether this capture crossed the attempt boundary alone or into
+    /// company, given the number of captures <paramref name="alreadyInFlight"/>
+    /// elsewhere on this silo at the moment it entered.
+    /// <para>
+    /// The counter is added to on <b>every</b> attempt - by one when the capture
+    /// entered into company and by zero when it entered alone. The zero-add is
+    /// the point, not an inefficiency: it creates the series for every tree that
+    /// has ever captured, so a tree reporting zero has been measured and found
+    /// not to contend, rather than merely never having been reached. Dropping
+    /// the zero-add would make those two states identical at the scrape, which
+    /// is the ambiguity this whole family of instruments exists to remove.
+    /// </para>
+    /// </summary>
+    private void ObserveSnapshotCaptureConcurrency(int alreadyInFlight)
+    {
+        var treeId = state.State.TreeId;
+        if (treeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        LatticeMetrics.LeafSnapshotCaptureConcurrentEntries.Add(
+            alreadyInFlight > 0 ? 1 : 0,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            LatticeTenantLabel.ForTree(treeId));
     }
 
     /// <summary>
@@ -1790,6 +1836,21 @@ internal sealed partial class BPlusLeafGrain
     private LeafSnapshotHydrationAdmission SnapshotHydrationAdmission
         => context.ActivationServices?.GetService<LeafSnapshotHydrationAdmission>()
             ?? LeafSnapshotHydrationAdmission.Shared;
+
+    /// <summary>
+    /// The silo-wide capture-concurrency census this activation contributes to.
+    /// <para>
+    /// A process-wide static rather than a DI resolution, unlike the hydration
+    /// budget above. The reasoning is opposite in the two cases: a hydration
+    /// budget is per-host configuration that fixtures must be able to vary
+    /// independently, whereas this census reports a maximum across every leaf on
+    /// the silo. Splitting it per host would give each instance only a partial
+    /// maximum, and a high-water mark that under-reports licenses exactly the
+    /// wrong conclusion.
+    /// </para>
+    /// </summary>
+    private static LeafSnapshotCaptureConcurrencyCensus SnapshotCaptureConcurrency
+        => LeafSnapshotCaptureConcurrencyCensus.Shared;
 
     // Trees whose admission series has been primed to zero in this process.
     private static readonly ConcurrentDictionary<string, byte> PrimedAdmissionTrees = new();
