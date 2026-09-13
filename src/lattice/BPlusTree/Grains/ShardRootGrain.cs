@@ -32,9 +32,10 @@ internal sealed partial class ShardRootGrain(
     /// which after the population has drained is every shard. See
     /// <c>ShardRootGrain.RootFlagHeal.cs</c> for why activation is the seam.
     /// <para>
-    /// <b>The prime is the first statement and that is load-bearing</b> (issue
-    /// #2809). Priming from activation rather than from the read path is what makes
-    /// the series workload-independent: it exists for every <c>(tree, shard)</c>
+    /// <b>The primes are the first statements and that is load-bearing</b> (issue
+    /// #2809, extended to the stall phase arms by issue #2952). Priming from
+    /// activation rather than from the read path is what makes the series
+    /// workload-independent: it exists for every <c>(tree, shard)</c>
     /// that has activated, whether or not a scan has ever run against it, so an
     /// absent series means the build does not carry the instrument and nothing
     /// else. Priming from a traffic-gated site cannot say that - see
@@ -42,7 +43,7 @@ internal sealed partial class ShardRootGrain(
     /// why the read path still primes as well.
     /// </para>
     /// <para>
-    /// It sits above <see cref="HealBakedRootIsLeafFlagAsync"/> rather than inside
+    /// They sit above <see cref="HealBakedRootIsLeafFlagAsync"/> rather than inside
     /// it because that method returns early on three separate branches, and a prime
     /// below any of them would be exactly the defect this moved away from. It does
     /// not disturb the allocation pin that
@@ -54,6 +55,7 @@ internal sealed partial class ShardRootGrain(
     Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
         PrimeScanPageLeafReadOutcomes();
+        PrimeScanPageStallPhases();
         return HealBakedRootIsLeafFlagAsync();
     }
 
