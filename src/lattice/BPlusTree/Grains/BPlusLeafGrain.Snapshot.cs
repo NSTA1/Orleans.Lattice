@@ -1939,6 +1939,13 @@ internal sealed partial class BPlusLeafGrain
     // Trees whose admission series has been primed to zero in this process.
     private static readonly ConcurrentDictionary<string, byte> PrimedAdmissionTrees = new();
 
+    // Trees whose segment series have been primed to zero in this process.
+    // Deliberately separate from PrimedAdmissionTrees: a tree that admitted
+    // hydrations but never segmented one must still publish a zero segment
+    // series, because an uninstrumented branch and a never-taken branch are
+    // otherwise byte-identical to a scrape.
+    private static readonly ConcurrentDictionary<string, byte> PrimedSegmentTrees = new();
+
     /// <summary>
     /// Bytes a loaded blob costs to materialise. The binary frame is the figure
     /// that matters: it is the array the provider read, the serializer copied,
@@ -2202,6 +2209,95 @@ internal sealed partial class BPlusLeafGrain
 
         LatticeMetrics.LeafSnapshotHydrationAdmissions.Add(
             1, treeTag, LatticeMetrics.SnapshotHydrationSoleOccupancy, tenantTag);
+    }
+
+    /// <summary>
+    /// Resolves the metric tags for the segment series and primes every one of
+    /// them to zero the first time this process sees the tree. Priming is not
+    /// cosmetic: metadata presence proves registration only, so an
+    /// uninstrumented branch and a never-taken branch scrape identically
+    /// unless the zero series exists.
+    /// </summary>
+    private bool TryResolveSegmentTreeTags(
+        out KeyValuePair<string, object?> treeTag,
+        out KeyValuePair<string, object?> tenantTag,
+        out string treeId)
+    {
+        treeId = state.State.TreeId ?? string.Empty;
+        if (treeId.Length == 0)
+        {
+            treeTag = default;
+            tenantTag = default;
+            return false;
+        }
+
+        treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        if (PrimedSegmentTrees.TryAdd(treeId, 0))
+        {
+            LatticeMetrics.LeafSnapshotSegmentReads.Add(0, treeTag, LatticeMetrics.SnapshotSegmentLoaded, tenantTag);
+            LatticeMetrics.LeafSnapshotSegmentReads.Add(0, treeTag, LatticeMetrics.SnapshotSegmentMissing, tenantTag);
+            LatticeMetrics.LeafSnapshotSegmentReads.Add(0, treeTag, LatticeMetrics.SnapshotSegmentFailed, tenantTag);
+            LatticeMetrics.LeafSnapshotSegmentedHydrations.Add(0, treeTag, tenantTag);
+            LatticeMetrics.RecordSegmentPeakBytes(treeId, 0);
+        }
+
+        return true;
+    }
+
+    /// <summary>Records a segment that read back and validated.</summary>
+    private void ObserveSnapshotSegmentLoaded(long frameBytes)
+    {
+        if (TryResolveSegmentTreeTags(out var treeTag, out var tenantTag, out var treeId))
+        {
+            LatticeMetrics.LeafSnapshotSegmentReads.Add(1, treeTag, LatticeMetrics.SnapshotSegmentLoaded, tenantTag);
+            LatticeMetrics.RecordSegmentPeakBytes(treeId, frameBytes);
+        }
+    }
+
+    /// <summary>
+    /// Records a segment that was absent or did not validate. The hydration
+    /// that observes this has already failed closed and emptied the cache.
+    /// </summary>
+    private void ObserveSnapshotSegmentMissing()
+    {
+        if (TryResolveSegmentTreeTags(out var treeTag, out var tenantTag, out _))
+        {
+            LatticeMetrics.LeafSnapshotSegmentReads.Add(1, treeTag, LatticeMetrics.SnapshotSegmentMissing, tenantTag);
+        }
+    }
+
+    /// <summary>
+    /// Records a segment read that threw. Counted separately from a missing
+    /// segment because a transient storage fault and a torn durable snapshot
+    /// call for different responses.
+    /// </summary>
+    private void ObserveSnapshotSegmentLoadFailure(Exception error)
+    {
+        _ = error;
+        if (TryResolveSegmentTreeTags(out var treeTag, out var tenantTag, out _))
+        {
+            LatticeMetrics.LeafSnapshotSegmentReads.Add(1, treeTag, LatticeMetrics.SnapshotSegmentFailed, tenantTag);
+        }
+    }
+
+    /// <summary>
+    /// Records a segmented hydration that folded every segment successfully.
+    /// <paramref name="peakSegmentBytes"/> is the evidence the bound held: it
+    /// is the largest single contiguous frame the hydration materialised, and
+    /// must stay at or below the configured segment window however large the
+    /// snapshot was.
+    /// </summary>
+    private void ObserveSegmentedHydrationCompleted(int segmentCount, long foldedRows, long peakSegmentBytes)
+    {
+        _ = segmentCount;
+        _ = foldedRows;
+        if (TryResolveSegmentTreeTags(out var treeTag, out var tenantTag, out var treeId))
+        {
+            LatticeMetrics.LeafSnapshotSegmentedHydrations.Add(1, treeTag, tenantTag);
+            LatticeMetrics.RecordSegmentPeakBytes(treeId, peakSegmentBytes);
+        }
     }
 
     internal async Task<bool> TryRehydrateFromSnapshotAsync(CancellationToken cancellationToken)
@@ -2512,6 +2608,90 @@ internal sealed partial class BPlusLeafGrain
             && blob.EncodedRows is { Length: > 0 } frame)
         {
             attached = Cache.TryAttachSnapshot(frame, hydrationOptions.LeafHydrationResidentBytes);
+        }
+
+        // Segmented snapshots (issue #2914). A snapshot whose encoded frame
+        // exceeded the segment window was written as N row-aligned segments,
+        // each a standalone LeafSnapshotCodec frame in its own grain-state row,
+        // and the manifest carries no inline rows at all. Fold them one at a
+        // time: the peak contiguous allocation this path ever requires is the
+        // largest single segment frame, not the whole snapshot, which is the
+        // entire point - the provider's column read is where the contiguous
+        // byte[] is materialised, so bounding it requires bounding the column,
+        // and the only way to bound a column is to split across rows.
+        //
+        // Do not "optimise" this by concatenating the segments and decoding
+        // once. That moves the peak from the provider into this method and
+        // leaves it exactly where it was: a fake fix that passes every
+        // black-box assertion while restoring the defect.
+        //
+        // Lazy attach (#1839) and segmentation are mutually exclusive by
+        // construction - attaching needs one seekable frame - so this runs only
+        // when the attach above did not, and only snapshots above the window
+        // are segmented. An ordinary leaf's path is unchanged byte for byte.
+        if (!attached && blob.IsSegmented())
+        {
+            Cache.Clear();
+            var segmentGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(leafKey);
+            long foldedRows = 0;
+            long peakSegmentBytes = 0;
+
+            for (var segmentIndex = 0; segmentIndex < blob.SegmentCount; segmentIndex++)
+            {
+                byte[]? segmentFrame;
+                try
+                {
+                    segmentFrame = await segmentGrain.LoadSegmentFrameAsync(segmentIndex, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    Cache.Clear();
+                    return false;
+                }
+                catch (Exception error)
+                {
+                    ObserveSnapshotSegmentLoadFailure(error);
+                    Cache.Clear();
+                    return false;
+                }
+
+                // Fail closed on a missing or invalid segment. Returning true
+                // with a partially folded cache would present as a snapshot
+                // that simply had fewer rows, and the coverage stamped above
+                // would then outrun the rows actually held - which is the one
+                // shape that lets coverage-gated WAL GC trim the last durable
+                // copy of a prefix. Declining instead leaves OnActivateAsync
+                // with !rehydrated and an empty cache, so it takes the -1
+                // replay-start override and replays the whole readable WAL.
+                if (segmentFrame is not { Length: > 0 })
+                {
+                    ObserveSnapshotSegmentMissing();
+                    Cache.Clear();
+                    return false;
+                }
+
+                if (segmentFrame.LongLength > peakSegmentBytes)
+                {
+                    peakSegmentBytes = segmentFrame.LongLength;
+                }
+
+                var segmentRows = new LeafSnapshotBlob { EncodedRows = segmentFrame };
+                foreach (var row in segmentRows.EnumerateRows())
+                {
+                    Cache.StoreRow(row.Key, row.Value);
+                    if (row.MergeMode is { } segmentMode)
+                    {
+                        Cache.SetMergeMode(row.Key, segmentMode);
+                    }
+
+                    foldedRows++;
+                }
+
+                ObserveSnapshotSegmentLoaded(segmentFrame.LongLength);
+            }
+
+            ObserveSegmentedHydrationCompleted(blob.SegmentCount, foldedRows, peakSegmentBytes);
+            attached = true;
         }
 
         if (!attached)
