@@ -79,6 +79,32 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// answer. Every such case resolves to <see cref="Enrolment.Unresolved"/> here.
 /// </para>
 /// <para>
+/// <b>Quantifier, stated so the next reader does not have to infer it.</b> This gate
+/// iterates <b>instrument declarations</b> - the syntactic <c>Create*</c> call sites
+/// under <c>src/</c> - and asserts a universal over that population: every declaration
+/// resolves to exactly one enrolment, and no enrolment is contradicted by the parser.
+/// It is therefore <b>silent</b> about three adjacent populations that a reader may
+/// mistake it for covering:
+/// <list type="bullet">
+/// <item><description><b>Tag values.</b> An enrolment is a claim about an instrument,
+/// not about each arm of its taxonomy. <see cref="Enrolment.Primed"/> asserts a zero
+/// sample exists per value at the sites the parser can see; it does not enumerate the
+/// value set a running silo can actually emit.</description></item>
+/// <item><description><b>Panels.</b> Nothing here observes whether any dashboard
+/// references the instrument. That existential lives in
+/// <c>DashboardJsonTests.Every_live_instrument_is_referenced_by_at_least_one_dashboard_panel</c>,
+/// in the <c>lattice.dashboards</c> test project - a different assembly, unreachable
+/// by any filter scoped to <c>test/lattice/</c>.</description></item>
+/// <item><description><b>Runtime instruments with no declaration site.</b> An
+/// instrument created somewhere this parser does not read is outside the iterated
+/// population entirely. The reflection cross-check narrows that gap for the core
+/// package only, and is not a general guarantee.</description></item>
+/// </list>
+/// A gate over one of these populations looks like a stronger version of a gate over
+/// another, and is not. Quantifier confusion between them is the single most repeated
+/// defect on this epic.
+/// </para>
+/// <para>
 /// To regenerate the enrolment file after adding instruments, set
 /// <c>LATTICE_REWRITE_PRIMING_ENROLMENT=1</c> and run this fixture. The rewritten file
 /// records the parser's current view; the <c>none</c> rows it emits are a checked-in
