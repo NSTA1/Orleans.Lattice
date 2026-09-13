@@ -231,12 +231,18 @@ internal sealed partial class ShardRootGrain
         Func<Task<TList>> issue,
         Func<TList, TList> copy)
     {
+        // Primed above every early return, not below one (issue #2809). The
+        // activation hook is the primary site and makes the series exist
+        // independent of workload; this call is what keeps the invariant "no
+        // leaf-read outcome is ever recorded on an unprimed series" true on its
+        // own, for an activation that reached this path without running the
+        // hook. It is a latched bool read on every subsequent call.
+        PrimeScanPageLeafReadOutcomes();
+
         if (!scan.IsStallGuarded)
         {
             return await issue().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         }
-
-        PrimeScanPageLeafReadOutcomes();
 
         if (TryAttachScanPageLeafRead<TList>(key, out var attached, out var servedFromSettled))
         {
@@ -602,6 +608,49 @@ internal sealed partial class ShardRootGrain
     /// <c>joined</c> and <c>served</c> are unreadable in exactly the case that
     /// matters most - a deployment where coalescing never fires looks identical
     /// to one where the counter was never wired.
+    /// <para>
+    /// <b>Every call site must sit above every early return on its path, and
+    /// the primary one is the activation hook</b> (issue #2809). This is not
+    /// style. The property the prime exists to buy is that an ABSENT series
+    /// means one thing - the build does not carry the instrument - and a call
+    /// site below a condition predicate destroys it, because absence then also
+    /// means "the build carries it and the predicate was false". This counter
+    /// shipped that way: the prime sat below
+    /// <c>if (!scan.IsStallGuarded) return</c>, a predicate that is false for a
+    /// whole process lifetime whenever the silo's response timeout is infinite,
+    /// so the prime could simply never run and its absence proved nothing.
+    /// </para>
+    /// <para>
+    /// <b>Hoisting inside the read path would not have been enough, and the
+    /// distinction is the whole fix.</b> A prime at the top of
+    /// <see cref="ReadLeafAsync"/> is still workload-gated: it needs some
+    /// scan-page leaf read to have happened. The invariant that makes absence
+    /// evidence is stronger than "above the return" - the prime must be
+    /// reachable on a path that ANY deployment carrying the build executes,
+    /// independent of workload. Only a lifecycle site satisfies that, so the
+    /// primary call is the first statement of
+    /// <c>ShardRootGrain.OnActivateAsync</c> and the series exists for every
+    /// <c>(tree, shard)</c> that has activated, with no scan traffic at all.
+    /// </para>
+    /// <para>
+    /// <b>Both sites are kept deliberately.</b> The activation call is what the
+    /// readability claim rests on; the read-path call is what keeps "no outcome
+    /// is ever recorded on an unprimed series" true of the read path in
+    /// isolation, so the two are not redundant and neither is a fallback for
+    /// the other. They are pinned by separate named arms in
+    /// <c>ShardRootGrainScanPageLeafReadCoalescingTests.Priming.cs</c> so that
+    /// reverting either one reddens exactly one test and names which site was
+    /// lost.
+    /// </para>
+    /// <para>
+    /// <b>Priming is correct here because this is a counter, and it would be
+    /// wrong on a histogram.</b> A zero added to a counter is the identity, so
+    /// it creates the series and changes no reading of it. A zero recorded on a
+    /// <c>Histogram&lt;T&gt;</c> is a fabricated sample asserting the operation
+    /// took no time, which is one of the answers such an instrument exists to
+    /// choose between - so priming one destroys the measurement it was added to
+    /// take. Do not carry this pattern across to a histogram.
+    /// </para>
     /// </summary>
     private void PrimeScanPageLeafReadOutcomes()
     {

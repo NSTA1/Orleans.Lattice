@@ -25,13 +25,37 @@ internal sealed partial class ShardRootGrain(
     IGrainContext IGrainBase.GrainContext => context;
 
     /// <summary>
-    /// Runs the one-time activation repair for a persisted <c>RootIsLeaf</c> flag
-    /// baked <c>true</c> over an internal root (issue 899 / issue 1883). Returns a
+    /// Publishes the scan-page leaf-read outcome arms at zero, then runs the
+    /// one-time activation repair for a persisted <c>RootIsLeaf</c> flag baked
+    /// <c>true</c> over an internal root (issue 899 / issue 1883). Returns a
     /// completed task without allocating on every shard that has nothing to repair,
     /// which after the population has drained is every shard. See
     /// <c>ShardRootGrain.RootFlagHeal.cs</c> for why activation is the seam.
+    /// <para>
+    /// <b>The prime is the first statement and that is load-bearing</b> (issue
+    /// #2809). Priming from activation rather than from the read path is what makes
+    /// the series workload-independent: it exists for every <c>(tree, shard)</c>
+    /// that has activated, whether or not a scan has ever run against it, so an
+    /// absent series means the build does not carry the instrument and nothing
+    /// else. Priming from a traffic-gated site cannot say that - see
+    /// <see cref="PrimeScanPageLeafReadOutcomes"/> for the full argument and for
+    /// why the read path still primes as well.
+    /// </para>
+    /// <para>
+    /// It sits above <see cref="HealBakedRootIsLeafFlagAsync"/> rather than inside
+    /// it because that method returns early on three separate branches, and a prime
+    /// below any of them would be exactly the defect this moved away from. It does
+    /// not disturb the allocation pin that
+    /// <c>ShardRootGrainRootFlagHealTests.Activation_allocates_no_task_when_there_is_nothing_to_repair</c>
+    /// holds: that pin is a reference-identity check on the returned task, and
+    /// priming is synchronous and returns nothing.
+    /// </para>
     /// </summary>
-    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken) => HealBakedRootIsLeafFlagAsync();
+    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+    {
+        PrimeScanPageLeafReadOutcomes();
+        return HealBakedRootIsLeafFlagAsync();
+    }
 
     async Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
