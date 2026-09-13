@@ -63,6 +63,90 @@ internal enum RepoContextAnnBuildSliceOutcome
 }
 
 /// <summary>
+/// Why an approximate-index build step threw. Resolved at the fault site rather
+/// than inferred by the reporter, because the site is the only place that knows
+/// what the step was doing when it failed.
+/// <para>
+/// <b>What this vocabulary is for, and what it deliberately is not.</b> It says
+/// <i>why</i> a step threw, and therefore who owns the remedy. It does not say
+/// <i>which tree</i> could not be read, and reading it as though it did is the
+/// specific misattribution issue #2880 records: during run 12 of epic #2368 a
+/// scorer was about to blame <c>repo-context-vector-index</c> on circumstantial
+/// grounds while the exception named a different tree, and only the container log
+/// separated them. The fault location is a cardinality question of its own and
+/// rides the accompanying log line, exactly as the repository id does.
+/// </para>
+/// </summary>
+internal enum RepoContextAnnBuildFaultCause
+{
+    /// <summary>
+    /// Something outside the four classified causes. The only value that should
+    /// page: it means a step faulted in a way nobody has classified, so the
+    /// vocabulary itself is behind the code. Every unrecognised type fails open
+    /// onto this arm rather than onto one with a benign explanation.
+    /// </summary>
+    Unexpected = 0,
+
+    /// <summary>
+    /// A <see cref="ScanPageStalledException"/>: the leaf chain behind the corpus
+    /// could not be walked inside the per-call stall ceiling. The remedy is the
+    /// tree's leaf geometry - an oversized leaf that cannot be materialised in one
+    /// grain call - and NOT the slice budget, which no larger value repairs.
+    /// Classified ahead of <see cref="DependencyUnavailable"/> because the
+    /// exception derives from <see cref="TimeoutException"/> and would otherwise be
+    /// swallowed into it, losing exactly the distinction that makes it actionable.
+    /// </summary>
+    ScanPageStalled = 1,
+
+    /// <summary>
+    /// A <see cref="LeafProjectionStaleException"/>: a durable projection
+    /// checkpoint has fallen off the write-ahead log with no covering snapshot, so
+    /// the read cannot be served at all and will not clear on retry. This is the
+    /// condition issue #2737 measured on the acceptance rig, where the designed
+    /// self-heal was itself refused by the access gate, and it needs an
+    /// operator-driven rebuild rather than patience.
+    /// </summary>
+    ProjectionStale = 2,
+
+    /// <summary>
+    /// A dependency could not be reached: a grain call timed out, the transport
+    /// failed, or the cluster rejected the message. Expected to clear once the
+    /// cluster settles, which is what separates it from
+    /// <see cref="PlaneRejected"/>. This is the arm the run-12 census landed on -
+    /// 39 of 39 faults were a <see cref="TimeoutException"/> on a leaf read - so a
+    /// deployment seeing it rise is looking at reachability, not at the build.
+    /// </summary>
+    DependencyUnavailable = 3,
+
+    /// <summary>
+    /// The plane refused the work: the embedding space did not match, or an
+    /// argument the build supplied was not acceptable. Deterministic, so it will
+    /// not clear on retry and the build is wrongly configured rather than unlucky.
+    /// </summary>
+    PlaneRejected = 4,
+}
+
+/// <summary>
+/// The faulted step total decomposed by cause, cumulative since process start.
+/// </summary>
+/// <param name="Unexpected">Faults nobody has classified. The arm that pages.</param>
+/// <param name="ScanPageStalled">Faults whose leaf chain could not be walked in time.</param>
+/// <param name="ProjectionStale">Faults whose projection checkpoint is unrecoverable.</param>
+/// <param name="DependencyUnavailable">Faults that could not reach a dependency.</param>
+/// <param name="PlaneRejected">Faults the plane refused deterministically.</param>
+internal readonly record struct RepoContextAnnBuildFaultTally(
+    long Unexpected,
+    long ScanPageStalled,
+    long ProjectionStale,
+    long DependencyUnavailable,
+    long PlaneRejected)
+{
+    /// <summary>Every fault counted, across all five causes.</summary>
+    public long Total
+        => Unexpected + ScanPageStalled + ProjectionStale + DependencyUnavailable + PlaneRejected;
+}
+
+/// <summary>
 /// A point-in-time reading of the build-slice counters, cumulative since process
 /// start.
 /// </summary>
@@ -71,17 +155,30 @@ internal enum RepoContextAnnBuildSliceOutcome
 /// <param name="Idle">Steps that changed nothing the build reports.</param>
 /// <param name="Faulted">Steps that threw rather than completing.</param>
 /// <param name="Churned">Steps that moved the phase while banking nothing.</param>
+/// <param name="FaultedByCause">
+/// The faulted total decomposed by cause. Sums to <paramref name="Faulted"/>.
+/// </param>
 internal readonly record struct RepoContextAnnBuildSliceSnapshot(
     long Advanced,
     long Starved,
     long Idle,
     long Faulted,
-    long Churned)
+    long Churned,
+    RepoContextAnnBuildFaultTally FaultedByCause)
 {
     /// <summary>
     /// Every step counted, across all five arms. Non-zero exactly when the build
     /// coordinator has taken at least one step in this process, which is the fact
     /// no other series in the approximate-index family can report.
+    /// <para>
+    /// Read <i>step</i> here as <i>tick that did work or threw</i>, not as
+    /// <i>build step that started</i>. Since the fault seam was widened to the
+    /// whole tick, <see cref="Faulted"/> counts a tick that threw anywhere on it,
+    /// including at the three call sites that run before the build step is reached
+    /// at all. That is deliberate: a tick that dies before stepping is exactly as
+    /// much a stalled build as one that dies inside the step, and metering only
+    /// the latter left the former silent in every series.
+    /// </para>
     /// </summary>
     public long Total => Advanced + Starved + Idle + Faulted + Churned;
 }
@@ -184,6 +281,29 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     /// <summary>The tag value for a step that moved the phase while banking nothing.</summary>
     internal const string ProgressChurnedTag = "churned";
 
+    /// <summary>
+    /// The tag key carrying the fault cause. Emitted on the faulted arm only, so
+    /// the four completing arms keep exactly the cardinality they had before this
+    /// dimension existed and a query selecting <c>progress=faulted</c> still
+    /// aggregates across every cause.
+    /// </summary>
+    internal const string CauseTagKey = "cause";
+
+    /// <summary>The tag value for a fault with no recognised cause.</summary>
+    internal const string CauseUnexpectedTag = "unexpected";
+
+    /// <summary>The tag value for a leaf chain that could not be walked in time.</summary>
+    internal const string CauseScanPageStalledTag = "scan-page-stalled";
+
+    /// <summary>The tag value for an unrecoverable durable projection checkpoint.</summary>
+    internal const string CauseProjectionStaleTag = "projection-stale";
+
+    /// <summary>The tag value for a dependency that could not be reached.</summary>
+    internal const string CauseDependencyUnavailableTag = "dependency-unavailable";
+
+    /// <summary>The tag value for work the plane refused deterministically.</summary>
+    internal const string CausePlaneRejectedTag = "plane-rejected";
+
     // Declared above the instrument it constructs, and the instrument is built from
     // this field, so reordering throws at type-initialisation rather than publishing
     // an instrument against a null meter. See the metrics conventions in
@@ -197,6 +317,11 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     private long _idle;
     private long _faulted;
     private long _churned;
+    private long _faultedUnexpected;
+    private long _faultedScanPageStalled;
+    private long _faultedProjectionStale;
+    private long _faultedDependencyUnavailable;
+    private long _faultedPlaneRejected;
 
     /// <summary>Creates the reporter, its instrument, and every one of its series.</summary>
     public RepoContextAnnBuildSliceReporter()
@@ -227,7 +352,21 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                 + "figure that separates them: zero beside a non-zero 'ann.sweep{outcome=armed}' means the "
                 + "coordinator is not stepping, while a rising 'starved' arm means it is stepping and getting "
                 + "nowhere, a rising 'churned' arm means it is stepping, moving, and banking nothing, and a rising "
-                + "'faulted' arm means it is stepping and throwing.");
+                + "'faulted' arm means it is stepping and throwing. The 'faulted' arm ALONE carries a second tag, "
+                + "'cause', drawn from a closed set resolved where the fault is raised: 'scan-page-stalled' (the "
+                + "leaf chain behind the corpus could not be walked inside the per-call stall ceiling, which is a "
+                + "leaf-geometry problem and which no larger slice budget repairs), 'projection-stale' (a durable "
+                + "projection checkpoint has fallen off the write-ahead log with no covering snapshot, so the read "
+                + "will not clear on retry and needs an operator-driven rebuild), 'dependency-unavailable' (a grain "
+                + "call timed out, the transport failed, or the cluster rejected the message, which is expected to "
+                + "clear once the cluster settles), 'plane-rejected' (the embedding space did not match or an "
+                + "argument was refused, which is deterministic and will not clear on retry), or 'unexpected' "
+                + "(unclassified - the only value that should page). The cause values are deliberately NOT "
+                + "pre-minted: they partition 'faulted' rather than the whole population, so a zero on a cause is "
+                + "uninterpretable until 'faulted' is itself non-zero, at which point the faults have minted their "
+                + "own causes. The cause says WHY a step threw and therefore who owns the remedy; it deliberately "
+                + "does NOT say WHICH TREE could not be read, which rides the accompanying log line - do not infer "
+                + "a tree from it (issue #2880).");
 
         // Pre-mint every series with a zero-valued add, so a correctly configured
         // host reports progress=starved at 0 rather than omitting it. An absent
@@ -238,6 +377,17 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
         _slices.Add(0, new KeyValuePair<string, object?>(ProgressTagKey, ProgressIdleTag), LatticeTenantLabel.Platform);
         _slices.Add(0, new KeyValuePair<string, object?>(ProgressTagKey, ProgressFaultedTag), LatticeTenantLabel.Platform);
         _slices.Add(0, new KeyValuePair<string, object?>(ProgressTagKey, ProgressChurnedTag), LatticeTenantLabel.Platform);
+
+        // The five 'cause' values are deliberately NOT pre-minted, and that is the
+        // one place this reporter departs from "prime everything". They partition
+        // 'faulted' rather than the whole population, so a zero on a cause is only
+        // interpretable once 'faulted' is itself non-zero - at which point the
+        // faults have minted the causes themselves. Priming them would mint five
+        // series per host that can never be read as measurements, and would spend
+        // the collector's series budget on arms whose zero says nothing. This is
+        // the same reasoning RepoContextAnnIndexSweepReporter records for its own
+        // cause dimension, and the 'faulted' arm primed above remains the
+        // zero-anchor that makes the family falsifiable.
     }
 
     /// <summary>
@@ -322,9 +472,35 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     }
 
     /// <summary>Records one completed approximate-index build step.</summary>
-    /// <param name="outcome">What the step did to the build.</param>
+    /// <param name="outcome">
+    /// What the step did to the build. Must not be
+    /// <see cref="RepoContextAnnBuildSliceOutcome.Faulted"/>, which is recorded
+    /// through <see cref="RecordFaulted"/> so that it carries a cause.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="outcome"/> is <see cref="RepoContextAnnBuildSliceOutcome.Faulted"/>.
+    /// </exception>
+    /// <remarks>
+    /// The split into two entry points is what makes "no fault path may emit a
+    /// default or empty cause" structural rather than a matter of discipline. A
+    /// single <c>RecordSlice(outcome, cause = default)</c> would let a new fault
+    /// path compile while emitting the default value, and a default is precisely
+    /// how the next reader is handed a benign-looking number again. Here a fault
+    /// cannot be counted without a cause because there is no overload that accepts
+    /// one without. Borrowed unchanged from
+    /// <see cref="RepoContextAnnIndexSweepReporter.RecordCompleted"/>, which
+    /// settled the same question for the sweep on issue #2578.
+    /// </remarks>
     public void RecordSlice(RepoContextAnnBuildSliceOutcome outcome)
     {
+        if (outcome == RepoContextAnnBuildSliceOutcome.Faulted)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(outcome),
+                outcome,
+                "A faulted build step must be recorded through RecordFaulted so that it carries a cause.");
+        }
+
         _slices.Add(
             1,
             new KeyValuePair<string, object?>(ProgressTagKey, DescribeOutcome(outcome)),
@@ -340,14 +516,56 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                 case RepoContextAnnBuildSliceOutcome.Starved:
                     _starved++;
                     break;
-                case RepoContextAnnBuildSliceOutcome.Faulted:
-                    _faulted++;
-                    break;
                 case RepoContextAnnBuildSliceOutcome.Churned:
                     _churned++;
                     break;
                 default:
                     _idle++;
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records one approximate-index build step that threw, under the cause its
+    /// fault site resolved.
+    /// </summary>
+    /// <param name="cause">
+    /// Why the step threw. Required, and resolved where the fault was raised rather
+    /// than inferred here, because the site is the only place that knows what the
+    /// step was doing.
+    /// </param>
+    public void RecordFaulted(RepoContextAnnBuildFaultCause cause)
+    {
+        _slices.Add(
+            1,
+            new KeyValuePair<string, object?>(ProgressTagKey, ProgressFaultedTag),
+            new KeyValuePair<string, object?>(CauseTagKey, DescribeCause(cause)),
+            LatticeTenantLabel.Platform);
+
+        lock (_gate)
+        {
+            _faulted++;
+            switch (cause)
+            {
+                case RepoContextAnnBuildFaultCause.ScanPageStalled:
+                    _faultedScanPageStalled++;
+                    break;
+                case RepoContextAnnBuildFaultCause.ProjectionStale:
+                    _faultedProjectionStale++;
+                    break;
+                case RepoContextAnnBuildFaultCause.DependencyUnavailable:
+                    _faultedDependencyUnavailable++;
+                    break;
+                case RepoContextAnnBuildFaultCause.PlaneRejected:
+                    _faultedPlaneRejected++;
+                    break;
+                default:
+                    // Fails open onto the arm that pages, matching the tag
+                    // DescribeCause resolves for the same value, so the tally can
+                    // never disagree with the meter about which arm an out-of-range
+                    // cast landed on.
+                    _faultedUnexpected++;
                     break;
             }
         }
@@ -359,7 +577,18 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     {
         lock (_gate)
         {
-            return new RepoContextAnnBuildSliceSnapshot(_advanced, _starved, _idle, _faulted, _churned);
+            return new RepoContextAnnBuildSliceSnapshot(
+                _advanced,
+                _starved,
+                _idle,
+                _faulted,
+                _churned,
+                new RepoContextAnnBuildFaultTally(
+                    _faultedUnexpected,
+                    _faultedScanPageStalled,
+                    _faultedProjectionStale,
+                    _faultedDependencyUnavailable,
+                    _faultedPlaneRejected));
         }
     }
 
@@ -378,6 +607,25 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
         RepoContextAnnBuildSliceOutcome.Faulted => ProgressFaultedTag,
         RepoContextAnnBuildSliceOutcome.Churned => ProgressChurnedTag,
         _ => ProgressIdleTag,
+    };
+
+    /// <summary>
+    /// The bounded tag value for a fault cause. Resolved against a closed set so an
+    /// unrecognised value can never reach the meter as unbounded-cardinality text,
+    /// and fails open onto <see cref="RepoContextAnnBuildFaultCause.Unexpected"/> -
+    /// the arm that pages - rather than onto one with a benign explanation. A cause
+    /// nobody mapped is closer to a fault nobody understands than to one that is
+    /// already diagnosed.
+    /// </summary>
+    /// <param name="cause">The cause to describe.</param>
+    /// <returns>The tag value.</returns>
+    internal static string DescribeCause(RepoContextAnnBuildFaultCause cause) => cause switch
+    {
+        RepoContextAnnBuildFaultCause.ScanPageStalled => CauseScanPageStalledTag,
+        RepoContextAnnBuildFaultCause.ProjectionStale => CauseProjectionStaleTag,
+        RepoContextAnnBuildFaultCause.DependencyUnavailable => CauseDependencyUnavailableTag,
+        RepoContextAnnBuildFaultCause.PlaneRejected => CausePlaneRejectedTag,
+        _ => CauseUnexpectedTag,
     };
 
     /// <summary>Disposes the underlying meter.</summary>

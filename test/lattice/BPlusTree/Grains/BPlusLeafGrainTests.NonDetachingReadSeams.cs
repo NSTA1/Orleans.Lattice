@@ -26,7 +26,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <para>
 /// The assertions use <c>LastDetachSeam</c> rather than a bare
 /// <c>HasPendingHydration</c> boolean, because the seam names WHICH surface
-/// released the frame. Only the four whole-cache accessors detach; a bounded or
+/// released the frame. Only the three whole-cache accessors detach; a bounded or
 /// ranged walk retains the frame even when it completes the source (issue
 /// #2843), so its seam stays <see cref="LeafSnapshotDetachSeam.None"/>.
 /// Asserting the seam rather than the boolean keeps each arm's verdict on

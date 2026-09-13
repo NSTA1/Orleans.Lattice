@@ -96,11 +96,21 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         /// </summary>
         public bool Faults { get; set; }
 
+        /// <summary>
+        /// The exception a faulting read raises, when a fixture needs one other than
+        /// the default. Left <c>null</c> by every fixture that only cares THAT the
+        /// read faults; set by the fixtures that assert which cause a given fault
+        /// type is attributed to, since the attribution is the observable under test
+        /// and a harness that can only raise one type could not tell a real
+        /// classifier from one that returns a constant (issue #2880).
+        /// </summary>
+        public Func<Exception>? FaultFactory { get; set; }
+
         private void ThrowIfFaulted()
         {
             if (Faults)
             {
-                throw new LeafProjectionStaleException(
+                throw FaultFactory?.Invoke() ?? new LeafProjectionStaleException(
                     "Leaf projection for tree 'repo-context-vector-membership' partition 3 cannot be rebuilt "
                     + "from the WAL: the durable projection checkpoint (offset 3548) has fallen off the log "
                     + "(oldest readable offset 4361) and no covering snapshot.");
@@ -427,6 +437,39 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
             }
 
             return faulted;
+        }
+
+        /// <summary>
+        /// As <see cref="PumpAbsorbingFaultsAsync"/>, but absorbing a fault of ANY
+        /// type rather than only the projection-stale one.
+        /// <para>
+        /// Needed by the cause-attribution fixtures, which deliberately raise a
+        /// different exception type per arm. Kept as a second method rather than
+        /// widening the catch on the first, because the narrow catch there is itself
+        /// load-bearing: it asserts that the fault reaching the timer is the one the
+        /// fixture injected, so a step failing for some unrelated reason reddens
+        /// rather than being counted as the modelled fault.
+        /// </para>
+        /// </summary>
+        /// <param name="ticks">The number of timer ticks to deliver.</param>
+        /// <returns>The exceptions the ticks threw, in order.</returns>
+        public async Task<List<Exception>> PumpCollectingFaultsAsync(int ticks)
+        {
+            await Grain.EnsureBuildingAsync(Space);
+            var faults = new List<Exception>();
+            for (var tick = 1; tick <= ticks; tick++)
+            {
+                try
+                {
+                    await Grain.ProcessNextPhaseAsync();
+                }
+                catch (Exception ex)
+                {
+                    faults.Add(ex);
+                }
+            }
+
+            return faults;
         }
 
         public void Dispose()

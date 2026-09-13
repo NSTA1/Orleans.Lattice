@@ -155,10 +155,11 @@ public partial class ShardRootGrainScanPageLeafReadCoalescingTests
     private static ParkableLeaf CreateParkableLeaf(
         TimeSpan stallDuration,
         int rows = 2,
-        string leafKey = "leaf0")
+        string leafKey = "leaf0",
+        string shardKey = ShardKey)
     {
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("shard", ShardKey));
+        context.GrainId.Returns(GrainId.Create("shard", shardKey));
 
         var state = new FakePersistentState<ShardRootState>();
         var leafId = GrainId.Create("leaf", leafKey);

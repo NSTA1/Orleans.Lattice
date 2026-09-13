@@ -187,13 +187,13 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
     /// Asserts that no whole-cache accessor released the frame.
     /// </summary>
     /// <remarks>
-    /// Deliberately an exclusion of the four accessor seams rather than an
+    /// Deliberately an exclusion of the three accessor seams rather than an
     /// equality against <see cref="LeafSnapshotDetachSeam.None"/>. Since issue
     /// #2843 a ranged fold reports <c>None</c> whether or not it completes the
     /// source - completing a bounded walk retains the frame rather than
     /// releasing it - so an equality against <c>None</c> would also pass. The
     /// exclusion is kept because it states the property that matters directly:
-    /// no whole-cache accessor consumed the frame. Those four seams are the
+    /// no whole-cache accessor consumed the frame. Those three seams are the
     /// defect; the other members are not.
     /// </remarks>
     private static void AssertNoWholeCacheSeam(BPlusLeafGrain grain) =>
@@ -201,8 +201,7 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
             grain.CacheForTest.LastDetachSeam,
             Is.Not.EqualTo(LeafSnapshotDetachSeam.KeysAccessor)
                 .And.Not.EqualTo(LeafSnapshotDetachSeam.EnumerateRowsAccessor)
-                .And.Not.EqualTo(LeafSnapshotDetachSeam.UnderlyingRowsAccessor)
-                .And.Not.EqualTo(LeafSnapshotDetachSeam.StateBytesBackfill),
+                .And.Not.EqualTo(LeafSnapshotDetachSeam.UnderlyingRowsAccessor),
             "a whole-cache accessor consumed the frame - this is the forfeiture the "
             + "conversion exists to prevent, and it is invisible to row-level assertions");
 
@@ -435,7 +434,7 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
     /// </para>
     /// <para>
     /// The frame stays evictable while attached, so retention costs the frame
-    /// overhead, not a pinned decoded leaf; the four whole-cache accessors are
+    /// overhead, not a pinned decoded leaf; the three whole-cache accessors are
     /// still the only surfaces that detach.
     /// </para>
     /// </summary>

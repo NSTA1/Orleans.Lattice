@@ -1,5 +1,5 @@
 ---
-applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.telemetry/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.membership.oidc/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**"
+applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.repocontext/**,src/lattice.api.mcp.repocontext.replication/**,src/lattice.api.mcp.telemetry/**,src/lattice.api.mcp.telemetry.azure/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.explorer.entra.web/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.membership.oidc/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**"
 ---
 
 # Security Boundaries and Invariants
@@ -9,6 +9,23 @@ telemetry, MCP, and Explorer surfaces. They were established by the v8 security
 hardening epic (#1270, sub-issues #1264-#1269). Do not regress them, and apply the
 cross-cutting principles below to any new code on these surfaces. When you touch a
 seam named here, re-read the invariant before changing it.
+
+## Which packages this file governs
+
+The `applyTo` list in the front matter names **one entry per package directory**,
+because the glob matches path segments: `src/lattice.api.mcp/**` descends into
+`src/lattice.api.mcp/`, and does **not** match the sibling directory
+`src/lattice.api.mcp.repocontext/`. The dots read as nesting to a human and as an
+ordinary character to the matcher, so every member of a governed family has to be
+listed by name.
+
+**The list is therefore not self-maintaining.** A package added to a governed
+family tomorrow is ungoverned the moment it is created, and the failure is silent:
+nothing is red, the instructions simply never attach. `SecurityInstructionsCoverageTests`
+(in `test/lattice/Hygiene/`) is what makes that loud - it enumerates `src/`, and
+fails the build for any directory whose name extends a listed package name by a dot
+suffix without itself being listed. When you add such a package, add it here; the
+gate will tell you if you forget.
 
 ## Cross-cutting principles
 

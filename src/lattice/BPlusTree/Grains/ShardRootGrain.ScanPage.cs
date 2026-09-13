@@ -184,6 +184,24 @@ internal sealed partial class ShardRootGrain
             MovedAwaySlots = null;
             if (!bounds.IsStallGuarded)
             {
+                // Drop any source inherited from a previous call on this POOLED
+                // instance, or this call reports a ceiling it does not have
+                // (issue #2809). TryReset disarms the timer but deliberately
+                // keeps the source for reuse, and IsStallGuarded is defined as
+                // "_deadline is not null", so an unguarded call renting an
+                // instance that last served a guarded one would answer true -
+                // and be sent down the coalescing path that the ceiling is what
+                // justifies. It also made the unguarded early return in
+                // ReadLeafAsync unreachable after the first guarded walk in the
+                // process, which is why the priming defect below it could not
+                // be pinned by a test until this was corrected.
+                //
+                // Disposing is safe and is the same disposal TryReset already
+                // performs on its own failure path: the previous call has stood
+                // down, and a successful TryReset has already invalidated every
+                // token it handed out.
+                _deadline?.Dispose();
+                _deadline = null;
                 return;
             }
 
