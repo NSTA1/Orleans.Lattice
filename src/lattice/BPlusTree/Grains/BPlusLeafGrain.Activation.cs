@@ -635,10 +635,82 @@ internal sealed partial class BPlusLeafGrain
         var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
 
         _replayAdmissionPhase = ReplayAdmissionPhase.QueuedForPermit;
-        await gate.WaitAsync(cancellationToken);
+
+        // Issue #2873. The queue wait is the discriminator for
+        // `canceled_awaiting_permit`, which is honest about WHERE an activation
+        // was cancelled and silent about WHY: the Orleans request deadline spans
+        // the whole grain call, so an activation that burned its budget upstream
+        // arrives here already doomed and is cancelled within seconds. The count
+        // is identical whether the gate was saturated or idle; only the duration
+        // separates them.
+        //
+        // Measured with Stopwatch timestamps rather than DateTime: this is the
+        // mass-reactivation path, and the ticks are a struct pair with no
+        // allocation and no clock-adjustment sensitivity.
+        var queuedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            await gate.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitCanceled);
+            throw;
+        }
+
+        RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitAcquired);
 
         _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
         return gate;
+    }
+
+    /// <summary>
+    /// Records one <see cref="LatticeMetrics.WalReplayPermitQueueWait"/> sample
+    /// for this activation's wait on the replay concurrency gate (issue #2873).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This fires on every replay admission</b> - the mass-reactivation path
+    /// the replay gate exists to relieve - so it must allocate nothing per call,
+    /// or the instrument degrades the very thing it measures in the one regime
+    /// where that is least affordable.
+    /// </para>
+    /// <para>
+    /// The constraint is on the tag <b>values</b>, not on how many tags there
+    /// are. <c>Record</c>'s tag parameter is a <c>params ReadOnlySpan</c> that the
+    /// compiler stack-allocates at every arity, so adding a fourth or fifth tag
+    /// costs nothing by itself. What costs is a tag value built per call: a boxed
+    /// value type (24 bytes), an interpolated or computed string (32), or a
+    /// materialised array handed in place of the span (88). All three tags here
+    /// are string-valued, and two of them are frozen statics - the outcome tag and
+    /// the tenant tag, the latter served from
+    /// <see cref="LatticeTenantLabel.ForTree(string)"/>'s cache. If a value-typed
+    /// dimension is ever wanted here, hoist the pair into a static field so the
+    /// box is created once rather than per admission.
+    /// </para>
+    /// <para>
+    /// Pinned by
+    /// <c>Recording_a_queue_wait_sample_allocates_nothing_per_call</c>, which
+    /// measures bytes directly rather than trusting either rule above, and
+    /// validates its own detector against two known-allocating shapes first. That
+    /// test measures the emission <i>shape</i>, so it cannot see a boxed value
+    /// added here;
+    /// <c>No_queue_wait_tag_emitted_by_an_activation_carries_a_boxed_value</c>
+    /// covers this call site from the other end by reading the tags a real
+    /// activation emitted. Both are needed - a boxed tag added here was confirmed
+    /// to leave the first green.
+    /// </para>
+    /// </remarks>
+    /// <param name="queuedAt">The <see cref="Stopwatch.GetTimestamp"/> reading taken as the wait began.</param>
+    /// <param name="outcome">Whether the wait ended in acquisition or cancellation.</param>
+    private void RecordReplayPermitQueueWait(long queuedAt, KeyValuePair<string, object?> outcome)
+    {
+        var treeId = state.State.TreeId;
+        LatticeMetrics.WalReplayPermitQueueWait.Record(
+            Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            outcome,
+            LatticeTenantLabel.ForTree(treeId));
     }
 
     /// <summary>

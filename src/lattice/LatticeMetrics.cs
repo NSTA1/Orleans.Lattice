@@ -1807,6 +1807,78 @@ public static class LatticeMetrics
             description: "Adaptations to the per-silo WAL replay concurrency gate under memory pressure, tagged by outcome. Zero-primed on both arms when the gate is sized.");
 
     /// <summary>
+    /// Tag marking a replay permit queue wait that ended in the permit being
+    /// <b>acquired</b>, on <see cref="WalReplayPermitQueueWait"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PermitQueueWaitAcquired = new(TagOutcome, "acquired");
+
+    /// <summary>
+    /// Tag marking a replay permit queue wait that ended in the activation being
+    /// <b>canceled</b> while still queued, on
+    /// <see cref="WalReplayPermitQueueWait"/>. This is the same population that
+    /// increments <see cref="LeafActivationFailures"/> with
+    /// <see cref="ActivationFailureCanceledAwaitingPermit"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PermitQueueWaitCanceled = new(TagOutcome, "canceled");
+
+    /// <summary>
+    /// Wall-clock ms an activation spent queued on the per-silo WAL replay
+    /// concurrency gate, tagged with <see cref="TagTree"/>,
+    /// <see cref="TagOutcome"/> (<see cref="PermitQueueWaitAcquired"/> or
+    /// <see cref="PermitQueueWaitCanceled"/>), and the derived tenant dimension.
+    /// Issue #2873.
+    /// <para>
+    /// <b>This is the discriminator for
+    /// <see cref="ActivationFailureCanceledAwaitingPermit"/>, which cannot
+    /// discriminate on its own.</b> That reason tag is assigned from the
+    /// admission phase, so it is honest about <em>where</em> an activation was
+    /// canceled and silent about <em>why</em>. The Orleans request deadline spans
+    /// the whole grain call, so an activation that burned most of its budget
+    /// upstream - in the snapshot rehydrate, in options resolution, or on the
+    /// shared storage file - arrives at the gate already doomed and is canceled
+    /// there within seconds. The count is therefore identical whether the gate
+    /// was saturated for the full budget or idle the entire time. The duration is
+    /// what separates them:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>a <c>canceled</c> distribution sitting near the request budget is
+    ///   <b>real permit starvation</b> - the activation genuinely waited;</item>
+    ///   <item>a <c>canceled</c> distribution of a fraction of a second is the
+    ///   gate being <b>blamed for an upstream cost</b> - it was already out of
+    ///   budget when it arrived.</item>
+    /// </list>
+    /// <para>
+    /// <b>Tagged by tree, deliberately, unlike its sibling
+    /// <see cref="WalReplayPermitAdaptations"/>.</b> The gate's <em>ceiling</em>
+    /// is a process-wide property and a per-tree tag on it would imply a per-tree
+    /// ceiling that does not exist. A <em>wait</em> is the opposite: it is one
+    /// activation's own experience, and it is attributable to the tree whose leaf
+    /// was activating. The tag is what lets a reading be scoped to a single tree
+    /// rather than taken corpus-wide, which is not a convenience - a corpus-wide
+    /// aggregate read as if it were tree-scoped is exactly how an acceptance run
+    /// scored a pass whose true tree-scoped value was a fail.
+    /// </para>
+    /// <para>
+    /// <b>Deliberately NOT zero-primed, and an absent series is therefore
+    /// UNINTERPRETABLE rather than a measured zero.</b> Priming a histogram means
+    /// recording a fabricated <c>0 ms</c> sample, which would bias the very
+    /// distribution the instrument exists to read - and bias it toward
+    /// "the gate is innocent", one of the two conclusions it is meant to
+    /// discriminate between. Under a low-traffic tree a single synthetic sample
+    /// can move the median outright. The discrimination that priming would have
+    /// bought is instead available by corroboration: the <c>acquired</c> arm
+    /// records on <b>every</b> admission, so if any replay was admitted this
+    /// series exists, and whether any replay was admitted is independently
+    /// visible in the zero-primed <see cref="WalReplayPermitAdaptations"/> and in
+    /// the activation counters. Read an absent series as a prompt to diagnose,
+    /// never as evidence that no activation waited.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> WalReplayPermitQueueWait =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.replay.permit_queue_wait", unit: "ms",
+            description: "Wall-clock ms an activation spent queued on the per-silo WAL replay concurrency gate, tagged by tree and by outcome (acquired or canceled).");
+
+    /// <summary>
     /// Counter of activation-time leaf replays that re-entered from a persisted
     /// checkpoint which had <b>not advanced</b> since the same leaf partition's
     /// previous replay on this silo, emitted by <c>BPlusLeafGrain</c>'s
