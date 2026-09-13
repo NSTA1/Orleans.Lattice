@@ -183,6 +183,31 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
         return tombstoned;
     }
 
+    /// <summary>
+    /// Asserts that no whole-cache accessor released the frame.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately an exclusion of the four accessor seams rather than an
+    /// equality against <see cref="LeafSnapshotDetachSeam.None"/>. A correct
+    /// conversion reports <c>None</c> when eviction kept the hydration source
+    /// incomplete, and <see cref="LeafSnapshotDetachSeam.RangeHydrationCompleted"/>
+    /// when the fold covered every block within budget - which of the two you
+    /// get is decided by the budget-versus-leaf ratio, a quantity a caller
+    /// does not control. Pinning to <c>None</c> would therefore make the
+    /// verdict depend on something the test cannot govern, and would fail on a
+    /// leaf that fits inside the resident budget even though nothing is wrong.
+    /// The four accessor seams are the defect; the other members are not.
+    /// </remarks>
+    private static void AssertNoWholeCacheSeam(BPlusLeafGrain grain) =>
+        Assert.That(
+            grain.CacheForTest.LastDetachSeam,
+            Is.Not.EqualTo(LeafSnapshotDetachSeam.KeysAccessor)
+                .And.Not.EqualTo(LeafSnapshotDetachSeam.EnumerateRowsAccessor)
+                .And.Not.EqualTo(LeafSnapshotDetachSeam.UnderlyingRowsAccessor)
+                .And.Not.EqualTo(LeafSnapshotDetachSeam.StateBytesBackfill),
+            "a whole-cache accessor consumed the frame - this is the forfeiture the "
+            + "conversion exists to prevent, and it is invisible to row-level assertions");
+
     // ---------------------------------------------------------------------
     // FreezeProjectionAsync (BPlusLeafGrain.FrozenBaseline.cs)
     // ---------------------------------------------------------------------
@@ -209,6 +234,13 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
             grain.CacheForTest.TryGetBisectingKeyWithoutHydrating(out _),
             Is.True,
             "a leaf that could divide cheaply before the freeze must still divide cheaply after it");
+
+        // Attribution, which the two assertions above cannot supply. They
+        // establish that the frame survived; this establishes that no
+        // whole-cache accessor ran at all, so a detaching call inserted below
+        // the conversion later cannot redden this test while pointing at the
+        // conversion.
+        AssertNoWholeCacheSeam(grain);
     }
 
     [Test]
@@ -292,6 +324,7 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
             Is.True,
             "a range delete over part of the leaf must not materialise - and strand - the rest of it");
         Assert.That(grain.CacheForTest.TryGetBisectingKeyWithoutHydrating(out _), Is.True);
+        AssertNoWholeCacheSeam(grain);
     }
 
     [Test]
@@ -363,6 +396,7 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
         // left behind rather than the state the mutation left behind.
         Assert.That(grain.CacheForTest.HasPendingHydration, Is.True);
         Assert.That(grain.CacheForTest.TryGetBisectingKeyWithoutHydrating(out _), Is.True);
+        AssertNoWholeCacheSeam(grain);
 
         Assert.That(TombstonedKeys(grain, corpus), Is.EqualTo(
             corpus.Where(r => r.Value.IsTombstone).Select(r => r.Key).ToArray()).AsCollection);
@@ -436,6 +470,18 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
         // The detachment is harmless here because the leaf is orders of
         // magnitude below the size at which it would need to divide.
         Assert.That(leafBytes, Is.LessThan(LatticeOptions.DefaultLeafHydrationResidentBytes));
+
+        // The load-bearing half, and the reason this arm asserts a seam rather
+        // than being exempted from the seam rule. "Detaching here is benign"
+        // is only true if the release came from the bounded path completing
+        // the source. Had a whole-cache accessor consumed the frame instead,
+        // HasPendingHydration would read exactly the same false, and this test
+        // would be asserting the defect and calling it benign.
+        Assert.That(
+            grain.CacheForTest.LastDetachSeam,
+            Is.EqualTo(LeafSnapshotDetachSeam.RangeHydrationCompleted),
+            "the release must be attributable to ranged hydration completing the final block, "
+            + "not to a whole-cache accessor - the two are indistinguishable by frame state alone");
     }
 
     /// <summary>
@@ -458,6 +504,11 @@ public sealed class BPlusLeafGrainBoundedWholeCacheWalkTests
         Assert.That(freeze.Rows, Has.Count.EqualTo(corpus.Length));
         Assert.That(grain.CacheForTest.HasPendingHydration, Is.True);
         Assert.That(grain.CacheForTest.TryGetBisectingKeyWithoutHydrating(out _), Is.True);
+        Assert.That(
+            grain.CacheForTest.LastDetachSeam,
+            Is.EqualTo(LeafSnapshotDetachSeam.None),
+            "this arm pins the budget below the leaf, so eviction keeps the source incomplete "
+            + "and nothing should have been released at all");
     }
 
     // ---------------------------------------------------------------------
