@@ -226,7 +226,16 @@ public sealed class LeafEntryCacheHydrationTests
         }
 
         Assert.That(seen, Is.EqualTo(rows.Select(r => r.Key).ToArray()).AsCollection);
-        Assert.That(cache.HasPendingHydration, Is.False, "an unbounded scan is a full walk");
+
+        // The unbounded scan still materialises every row, but completing the
+        // ranged hydration no longer releases the frame (issue #2843): the frame
+        // is what a subsequent leaf division bisects from, so it is retained
+        // even though every row is now resident. Only the detach was removed;
+        // the walk is still a full walk.
+        Assert.That(cache.HydratedRowCount, Is.EqualTo(rows.Length),
+            "an unbounded scan still materialises every row");
+        Assert.That(cache.HasPendingHydration, Is.True,
+            "a completed ranged hydration retains the frame so a division can still bisect");
     }
 
     [Test]

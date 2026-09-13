@@ -1857,11 +1857,15 @@ internal sealed partial class BPlusLeafGrain(
         //     NOT enough, and for the dominant caller it does nothing at all.
         //     CountAsync() passes (null, null), so that range spans every block;
         //     HydrateRange then protects the whole span in its TrimToBudget
-        //     call, so nothing is evictable, every block ends up resident at
-        //     once, and HydrateBlock's IsFullyHydrated check detaches exactly as
-        //     HydrateAll would. Converted in form, unchanged in effect. Walking
+        //     call, so nothing is evictable and every block ends up resident at
+        //     once. Since issue #2843 that no longer detaches the frame - a
+        //     completed ranged hydration retains it so a division can still
+        //     bisect - but a whole-span single window still pins the entire leaf
+        //     resident for the life of the operation, defeating the residency
+        //     bound exactly as before (the transient whole-leaf buffer of issue
+        //     #2842). Converted in form, unchanged in resident cost. Walking
         //     budget-sized windows keeps the trim able to evict behind us, which
-        //     is what stops the frame ever being fully hydrated.
+        //     is what stops the whole leaf ever being resident at once.
         //
         // Clipping each window to the caller's [start, end) is what keeps a
         // genuinely ranged count cheap rather than whole-leaf. Windows ascend
@@ -2916,9 +2920,11 @@ internal sealed partial class BPlusLeafGrain(
         // reads as already-bounded, but GetKeysAsync's parameters all default to
         // null: an unbounded call resolves to EnumerateRange(null, null), whose
         // HydrateRange protects the entire span in its own TrimToBudget call, so
-        // every block ends up resident at once and HydrateBlock's
-        // IsFullyHydrated check detaches the frame exactly as HydrateAll would.
-        // That makes this a detaching site that the HydrateAll / Keys /
+        // every block ends up resident at once. Since issue #2843 that no longer
+        // detaches the frame (a completed ranged hydration retains it so a
+        // division can still bisect), but it still pins the whole leaf resident
+        // for the life of the operation, defeating the residency bound. That
+        // makes this a residency-pinning site that the HydrateAll / Keys /
         // EnumerateRows / UnderlyingRows signature does not match.
         var scanStart = MaxOrdinal(startInclusive, afterExclusive);
         var scanEnd = MinOrdinal(MinOrdinal(endExclusive, beforeExclusive), splitInProgress ? splitKey : null);

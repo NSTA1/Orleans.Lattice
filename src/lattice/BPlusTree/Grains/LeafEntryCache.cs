@@ -879,6 +879,19 @@ internal sealed partial class LeafEntryCache
     // the calling surface, not the mechanism: a whole-cache accessor reaches
     // the same line a ranged hydration does, and only the seam distinguishes a
     // forfeited division fast path from a bounded read that finished the leaf.
+    //
+    // #2843: completing a ranged/keyed hydration (seam
+    // RangeHydrationCompleted) must NOT detach the frame. Every leaf division
+    // was forfeiting its bisect because the windowed conversions correctly
+    // avoid the whole-cache accessors, yet the frame was still released the
+    // moment ranged hydration completed - so the split path could no longer
+    // take a pivot from the frame's ordinal index. Guarding the completion
+    // detach on the ranged seam keeps the frame attached (and still evictable
+    // via TrimToBudget) so TryGetBisectingKeyWithoutHydrating succeeds. Whole-
+    // cache accessors (KeysAccessor / EnumerateRowsAccessor /
+    // UnderlyingRowsAccessor / StateBytesBackfill) are unaffected: their seam
+    // is never RangeHydrationCompleted, so they still detach here, and
+    // HydrateAll additionally detaches on its own trailing path.
     private void HydrateBlock(LeafSnapshotHydrationSource source, int block, LeafSnapshotDetachSeam seam)
     {
         if (source.IsHydrated(block))
@@ -908,7 +921,17 @@ internal sealed partial class LeafEntryCache
         }
 
         source.CommitHydrated(block);
-        if (source.IsFullyHydrated)
+
+        // The `IsFullyHydrated` conjunct is the pre-existing completion gate and
+        // must stay: the frame is the ONLY source for blocks not yet
+        // materialised, so detaching before every block is resident would lose
+        // the un-hydrated rows. It is load-bearing, not a redundant guard a
+        // future maintainer can drop - and note MarkEvicted decrements the
+        // hydrated-block count, so `IsFullyHydrated` is only ever reached by a
+        // walk that completed WITHOUT eviction (a budget generous enough to hold
+        // the whole leaf). The `seam !=` conjunct is the #2843 refinement: even
+        // at that completion moment, a ranged/keyed completion keeps the frame.
+        if (source.IsFullyHydrated && seam != LeafSnapshotDetachSeam.RangeHydrationCompleted)
         {
             DetachSnapshot(seam);
         }
