@@ -3055,10 +3055,31 @@ public static class LatticeMetrics
     /// and a flat zero means it did and the outcome never occurred. Absence is
     /// therefore evidence of a missing build rather than of a missing event.
     /// </para>
+    /// <para>
+    /// That guarantee is conditional on something priming cannot establish, and
+    /// the condition was once false here (issue #2938): it holds only while
+    /// <b>every</b> member of the terminal outcome enum has an arm. Priming
+    /// proves a detector exists for the arms that have one and says nothing
+    /// about an arm with no detector at all, whose structural zero is
+    /// indistinguishable from a measured one and passes every priming audit.
+    /// Three of the four terminal outcomes were unarmed while this paragraph
+    /// already promised the reader a measured zero, and the uncounted one fired
+    /// 234 times in a single window. The exhaustiveness is enforced by
+    /// <c>ExecuteAsync_arms_every_terminal_reactivation_outcome</c>; if a member
+    /// is added to the enum, add its arm and prime it here, or that fixture
+    /// fails.
+    /// </para>
+    /// <para>
+    /// The check is deliberately one-directional - every terminal outcome must
+    /// have an arm, not every arm must be a terminal outcome - because
+    /// <c>attempted</c>, <c>healed</c>, <c>abandoned</c> and <c>rearmed</c> are
+    /// lifecycle events rather than members of that enum. A symmetric check
+    /// would reject four legitimate arms.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> WalGcBlockedLeafReactivations =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
-            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome (attempted/healed/abandoned/rearmed/undelivered). All outcomes share one instrument and every one is zero-primed per tree per pass, so a zero on 'healed' is a measured zero and not an unpublished series.");
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Two disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it. All eight are zero-primed per tree per pass, so every zero is a measured zero rather than an unpublished series (issue #2938).");
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
@@ -3129,6 +3150,59 @@ public static class LatticeMetrics
     /// </remarks>
     public static readonly KeyValuePair<string, object?> BlockedLeafReactivationUndelivered =
         new(TagOutcome, "undelivered");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a touch that reached the
+    /// leaf and returned without error (issue #2938).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the arm whose absence did the damage. Paired with a flat
+    /// <c>healed</c> it says something no other series can: the sweep reached
+    /// the leaf, the leaf answered, and the tree stayed blocked - so
+    /// reachability is not sufficient to clear the pin and the remedy's premise
+    /// is wrong. Without it that state is indistinguishable from a sweep whose
+    /// calls never arrive, and the two call for opposite responses.
+    /// </para>
+    /// <para>
+    /// It was uncounted while it occurred 234 times in a single observation
+    /// window, and recovering the fact cost an arithmetic derivation from
+    /// source constants plus a log grep. It is a counter now so that the same
+    /// question is one query.
+    /// </para>
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationCompleted =
+        new(TagOutcome, "completed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a touch whose consumer id
+    /// did not resolve to a leaf, so nothing was called (issue #2938).
+    /// </summary>
+    /// <remarks>
+    /// Distinct from every other outcome in that the sweep never left the
+    /// process. A tree accumulating this arm has a naming or parsing fault
+    /// rather than a stuck leaf, and no amount of reactivation will help it -
+    /// which is why the outcome is not refunded against the attempt budget.
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationUnresolvable =
+        new(TagOutcome, "unresolvable");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a touch whose probe call
+    /// threw something other than a timeout (issue #2938).
+    /// </summary>
+    /// <remarks>
+    /// Evidence about the silo rather than about the leaf, so it is refunded
+    /// against the attempt budget in the same way as
+    /// <see cref="BlockedLeafReactivationUndelivered"/> and reported separately
+    /// from it, because a call that failed and a call that has not yet answered
+    /// support different conclusions about whether the leaf can heal.
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationFaulted =
+        new(TagOutcome, "faulted");
 
     /// <summary>
     /// Terminal states of a leaf's deferred WAL replay (issue #2871), tagged by
