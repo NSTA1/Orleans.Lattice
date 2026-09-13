@@ -26,6 +26,28 @@ namespace Orleans.Lattice.Tests;
 /// of the enum - so a symmetric check would reject four legitimate arms on its
 /// first run.
 /// </para>
+/// <para>
+/// <b>Why this gate cannot go vacuous by rename.</b> A reflection gate that
+/// resolves its target by name turns into a green no-op the moment the target
+/// is renamed or moved. This gate is bound to the enum at <b>compile time</b>
+/// through <see cref="Enum.GetValues{TEnum}"/>, so a rename is a build error
+/// rather than a silent pass - the vacuity route is closed by construction, not
+/// by an assertion that could itself be deleted. Do not "improve" this into a
+/// name-based reflection scan; that would trade a compile-time guarantee for a
+/// runtime one that fails open. The two anti-vacuity assertions below guard the
+/// remaining route, which is a mapping or an enum that is reachable but empty.
+/// </para>
+/// <para>
+/// <b>Known boundary - deliberately not fixed here.</b> A one-directional
+/// enum-to-arm gate says nothing about the four lifecycle arms. If
+/// <c>healed</c> were dropped from the recording path tomorrow, nothing in this
+/// fixture would catch it, because <c>healed</c> is not an enum member and this
+/// gate only walks the enum. That is an accepted limitation of the narrow gate
+/// rather than an oversight; the general form, which would need a marker
+/// attribute to relate arms to their source without re-introducing the arity
+/// mismatch above, is tracked as issue #2939. It is written down here so a
+/// later reader does not mistake this gate for coverage of the whole tag space.
+/// </para>
 /// </summary>
 public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
@@ -42,9 +64,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // member for exactly the same reason the arm was omitted.
         var members = Enum.GetValues<LatticeWalGcScheduler.ReactivationOutcome>();
 
-        // Anti-vacuity. A gate that silently enumerated nothing would pass for
-        // the whole life of the defect it is meant to prevent, which is the
-        // failure mode this epic has now found inside three passing gates.
+        // Anti-vacuity, input side. A gate that silently enumerated nothing would
+        // pass for the whole life of the defect it is meant to prevent, which is
+        // the failure mode this epic has now found inside three passing gates.
         Assert.That(members, Has.Length.GreaterThanOrEqualTo(4),
             "the enum must actually have members, or the arming assertion below proves nothing.");
 
@@ -53,6 +75,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         var armed = members
             .Select(m => LatticeWalGcScheduler.ReactivationOutcomeTag(m).Value as string)
             .ToArray();
+
+        // Anti-vacuity, scanned side. Asserted separately from the member count
+        // because the two can diverge: a mapping that returned nothing for every
+        // member would leave the count above satisfied and compare an empty set
+        // against an empty set.
+        Assert.That(armed, Is.Not.Empty,
+            "the mapping must have produced arms, or the comparison below is empty-against-empty.");
 
         Assert.Multiple(() =>
         {
