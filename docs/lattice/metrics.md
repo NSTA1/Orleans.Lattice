@@ -58,6 +58,12 @@ unbounded tag cardinality. All leaf instruments are aggregated to the tree level
 
 ## Instrument catalog
 
+### Process identity
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.build.info` | `ObservableGauge<long>` | `{build}` | Always `1`, tagged with the `version` and the full 40-character `sha` the running process was built from. **This is the only instrument that reports a property of the process rather than of a feature**, and it exists because "is the build under test the build that is actually running" cannot be answered from any feature metric: every other instrument in this catalog stays silent until its feature is exercised, so a missing series is ambiguous between "the image did not deploy" and "the code deployed but that path was never reached" - opposite conclusions drawn from byte-identical evidence. It is emitted unconditionally on every collection from process start, with no registry to populate and no work to wait for, so it has no empty state to prime: an absent series means the process is not running or is not exporting, and means nothing else. The value carries no information and is always `1`; all of the content is in the tags, which is the conventional info-metric shape and keeps the series safe to join against in a query. The sha is sourced from the `+<sha>` build-metadata suffix the SDK appends to `AssemblyInformationalVersionAttribute` from `SourceRevisionId`, so it comes **from the build, never from a runtime `git` call** - a deployment container is distroless and has no git, which is precisely where the value matters most - and it identifies the **image** rather than the checkout the process happens to be running beside. Carries `version` and `sha` only: cardinality on an info gauge multiplies across every other series a reader joins it against. A placeholder sha would be worse than an absent one, because it reads as a working detector while identifying nothing, so `BuildInfoMetricTests` fails outright on an empty or sentinel value rather than tolerating it. |
+
 ### Shard-level (sourced from `ShardRootGrain`)
 
 | Name | Kind | Unit | Description |

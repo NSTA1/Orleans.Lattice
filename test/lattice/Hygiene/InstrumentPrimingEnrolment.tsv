@@ -193,6 +193,7 @@ src/lattice/LatticeMetrics.cs#AtomicActionStep	unresolved	reason=bounded domain 
 src/lattice/LatticeMetrics.cs#AtomicWriteBatchSize	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#AtomicWriteCompleted	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#AtomicWriteDuration	unresolved	reason=dimension tree: no declaration found for TreeId
+src/lattice/LatticeMetrics.cs#BuildInfo	none	
 src/lattice/LatticeMetrics.cs#CacheHits	unresolved	reason=dimension (unread-tag-argument:CacheTreeTag(), CacheTenantTag()): tag argument(s) CacheTreeTag(), CacheTenantTag() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#CacheMisses	unresolved	reason=dimension (unread-tag-argument:CacheTreeTag(), CacheTenantTag()): tag argument(s) CacheTreeTag(), CacheTenantTag() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#CompactionLeavesVisited	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { noopTreeTag, LatticeMetrics.OutcomeNoop, noopTrig, noopPath, noopTenantTag, }): tag argument(s) new System.Diagnostics.TagList { noopTreeTag, LatticeMetrics.OutcomeNoop, noopTrig, noopPath, noopTenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read

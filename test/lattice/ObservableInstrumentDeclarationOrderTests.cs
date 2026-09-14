@@ -55,6 +55,27 @@ namespace Orleans.Lattice.Tests;
 /// for the same reason: they are compile-time constants with no initialiser to
 /// be part-way through.
 /// </para>
+/// <para>
+/// <b>What this guard does not do, stated because the gap is easy to assume
+/// away.</b> This is static analysis over <c>src/</c> at build time. It
+/// publishes no instrument and emits no series, so it cannot make anything
+/// distinguishable <i>on a scrape</i>. When an expected series is absent from a
+/// scrape there are at least four distinct causes - the callback threw, the
+/// callback returned no measurements, the instrument was never created, or the
+/// process has not lived long enough to report - and they are indistinguishable
+/// from the scrape alone. A green run here eliminates exactly one of them, and
+/// only in advance: the declaration ordering that would make a callback throw
+/// is not present in source. That narrows a later investigation; it does not
+/// resolve one.
+/// </para>
+/// <para>
+/// The mechanism that <i>does</i> collapse part of that ambiguity at the scrape
+/// is zero-priming, which is enrolled separately: pre-minting an instrument at
+/// zero makes an absent series and a zero series two different observations
+/// rather than one ambiguous one. That is a property of the instrument's
+/// registration, not of its declaration order, so it is deliberately out of
+/// scope here.
+/// </para>
 /// </remarks>
 [TestFixture]
 public class ObservableInstrumentDeclarationOrderTests
