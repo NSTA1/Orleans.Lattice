@@ -175,6 +175,29 @@ public sealed class RepositoryWideGateEnrolmentTests
     private static string RepoRoot => HygieneRepository.FindRepoRoot();
 
     /// <summary>
+    /// Whether a type name is this fixture's own, which must be excluded from every arm of
+    /// the detector rather than from whichever arm was written first.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A detector necessarily contains the shape it detects, so this fixture matches itself
+    /// on both the direct-scan arm (its remarks quote the canonical call) and the
+    /// delegation arm (its remarks name the helper, and <c>MetricEmissionScanner.</c> in an
+    /// English sentence satisfies a regex looking for a member access on that helper). The
+    /// exclusion therefore lives behind one predicate used by both arms, because the arm
+    /// that is added later is the one that will not get its own copy.
+    /// </para>
+    /// <para>
+    /// That is not hypothetical: the delegation arm went uncovered when the first version
+    /// of this fixture was written, and the defect surfaced only when a later edit happened
+    /// to mention the helper in prose. A symbol named in a comment changing what a scanner
+    /// concludes is the same class of fault this epic has been chasing elsewhere.
+    /// </para>
+    /// </remarks>
+    private static bool IsSelfSource(string typeName) =>
+        string.Equals(typeName, nameof(RepositoryWideGateEnrolmentTests), StringComparison.Ordinal);
+
+    /// <summary>
     /// Derives the owning type name from the file path rather than by parsing the source.
     /// Every fixture in this repository lives in a file named after its type, and a
     /// partial carries the type name before the first dot. Parsing for an enclosing
@@ -279,7 +302,85 @@ public sealed class RepositoryWideGateEnrolmentTests
         IReadOnlySet<string> ScanningFixtures,
         IReadOnlySet<string> NonFixtureScanners,
         int RawSiteCount,
-        bool SelfExclusionFired);
+        bool SelfExclusionFired,
+        bool SelfExclusionFiredOnDelegationArm);
+
+    /// <summary>
+    /// Fixtures read by hand and confirmed to scan the whole of <c>src/</c>, each chosen
+    /// because it is the <b>only</b> witness to one of the detector's rules. A rule that
+    /// silently stops firing removes its anchor and nothing else, so the failure names the
+    /// rule rather than a count.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the guard the non-emptiness assertions cannot be: the detector's first
+    /// regex excluded parentheses from the first <c>Path.Combine</c> argument, which
+    /// rejected every nested call and silently dropped two real scanners. The population
+    /// it produced was clean, plausible, and <b>not empty</b> - it was quietly short, which
+    /// is the one shape a vacuity guard passes by construction. Anchoring each rule to a
+    /// named fixture converts that silence into a specific, readable failure.
+    /// </para>
+    /// </remarks>
+    private static readonly IReadOnlyDictionary<string, string> KnownPositiveAnchors =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [nameof(SecurityInstructionsCoverageTests)] =
+                "Its scan reads Path.Combine(HygieneRepository.FindRepoRoot(), \"src\"), so "
+                    + "the first argument is a nested call. It is the witness for a detector "
+                    + "pattern that admits a call expression there, and it is precisely the "
+                    + "fixture an over-restrictive character class drops without trace.",
+            [nameof(MeterFieldDeclarationOrderTests)] =
+                "Its scan reads Path.Combine(root, \"src\") from a plain identifier, and it "
+                    + "is the witness for the simple shape. It also sits outside the Hygiene "
+                    + "namespace, so it anchors that the enumeration walks test/ rather than "
+                    + "one namespace.",
+            [nameof(InstrumentEmissionCoverageTests)] =
+                "It contains no \"src\" literal at all and is reachable only through the "
+                    + "one-hop delegation closure via MetricEmissionScanner. It is the sole "
+                    + "witness that the closure runs; without it the closure could be inert "
+                    + "and every set comparison would still pass.",
+            ["BPlusLeafGrainTests"] =
+                "Its scan lives in two partial files that carry no [TestFixture] attribute, "
+                    + "while the attribute sits in eight other partials of the same type. It "
+                    + "is the witness for keying the population by type rather than by file: "
+                    + "file-keyed identity attributes the scan to a file that declares no "
+                    + "fixture and drops it silently.",
+            ["DashboardHistogramQuantileTests"] =
+                "It lives in test/lattice.dashboards/, so it is the witness that enumeration "
+                    + "is not confined to test/lattice/. That project is outside the "
+                    + "Formal|Hygiene|Docs content-gate filter, which is the reason its rows "
+                    + "belong in the table at all. Named as a string because it is in another "
+                    + "assembly this project does not reference; that is safe here because an "
+                    + "anchor is asserted present, so a rename fails this test loudly rather "
+                    + "than unanchoring the rule in silence.",
+        };
+
+    /// <summary>
+    /// Types that combine a path with <c>"src"</c> but must <b>not</b> be admitted, each
+    /// chosen because it is the most plausible false positive for one exclusion rule.
+    /// </summary>
+    /// <remarks>
+    /// An over-broad population is the failure mode that looks like thoroughness, so the
+    /// exclusions need witnesses exactly as the inclusions do.
+    /// </remarks>
+    private static readonly IReadOnlyDictionary<string, string> KnownNegativeAnchors =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["HygieneRepository"] =
+                "Its only \"src\" use is Directory.Exists(Path.Combine(dir.FullName, "
+                    + "\"src\")), which locates the repository root rather than enumerating "
+                    + "it. Admitting it would be the worst single false positive available: "
+                    + "it lives in test/shared/ and every fixture that calls FindRepoRoot "
+                    + "would follow it in.",
+            [nameof(MetricEmissionScannerTests)] =
+                "It creates a synthetic src/ directory under a temporary root and never "
+                    + "calls FindRepoRoot. It is the witness for the real-root rule.",
+            ["RepoContextGraphToolTests"] =
+                "Its repoRoot is Path.Combine(workspace, repoName) over a temporary "
+                    + "workspace. A mechanical scan for the combine shape reports it, so it "
+                    + "is the false positive most likely to be admitted by a detector that "
+                    + "drops the real-root rule.",
+        };
 
     /// <summary>
     /// Computes the whole-<c>src/</c> scanning fixture population, closed over one hop of
@@ -318,9 +419,9 @@ public sealed class RepositoryWideGateEnrolmentTests
             // remarks quote the canonical call shape, and its failure messages repeat it.
             // Excluding it is not a carve-out for an inconvenient result - it scans test/,
             // not src/, so every hit in this file is the detector reading its own prose.
-            // The exclusion is asserted to still fire in Neither_population_is_vacuous, so
-            // it cannot quietly become a no-op.
-            if (string.Equals(typeName, nameof(RepositoryWideGateEnrolmentTests), StringComparison.Ordinal))
+            // Both arms of the exclusion are asserted to fire in Neither_population_is_vacuous,
+            // so neither can quietly become a no-op.
+            if (IsSelfSource(typeName))
             {
                 selfExclusionFired = true;
                 continue;
@@ -340,6 +441,7 @@ public sealed class RepositoryWideGateEnrolmentTests
         }
 
         var delegated = new HashSet<string>(StringComparer.Ordinal);
+        var selfExclusionFiredOnDelegationArm = false;
         var nonFixtureHelpers = helperScanners
             .Concat(directScanners)
             .Where(name => !fixtureTypes.Contains(name))
@@ -348,6 +450,17 @@ public sealed class RepositoryWideGateEnrolmentTests
         foreach (var (path, text) in textByPath)
         {
             var typeName = TypeNameForPath(path);
+
+            // The sibling of the exclusion above. This fixture names the delegation helper
+            // in its own remarks, and a member access on that name is what the closure
+            // looks for, so without this arm the detector admits itself by reading its own
+            // documentation of the rule it implements.
+            if (IsSelfSource(typeName))
+            {
+                selfExclusionFiredOnDelegationArm = true;
+                continue;
+            }
+
             if (directScanners.Contains(typeName) || !fixtureTypes.Contains(typeName))
             {
                 continue;
@@ -377,7 +490,8 @@ public sealed class RepositoryWideGateEnrolmentTests
             scanningFixtures,
             nonFixtureHelpers.ToHashSet(StringComparer.Ordinal),
             rawSiteCount,
-            selfExclusionFired);
+            selfExclusionFired,
+            selfExclusionFiredOnDelegationArm);
     }
 
     private sealed record DocumentedTable(
@@ -601,12 +715,88 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "No enrolment cell claims its gate reads src/, so "
                     + nameof(Enrolment_column_source_claims_match_the_computed_scanner_population)
                     + " now iterates an empty set and passes without comparing anything.");
+            Assert.That(
+                population.SelfExclusionFiredOnDelegationArm,
+                Is.True,
+                "The delegation arm of the self-exclusion did not fire. It is asserted "
+                    + "separately from the direct-scan arm on purpose: the two are siblings, "
+                    + "and this fixture admitted itself through the delegation arm the first "
+                    + "time its remarks happened to name the helper, because only the "
+                    + "direct-scan arm had an exclusion. One assertion covering 'the "
+                    + "exclusion' would have stayed green through exactly that defect, which "
+                    + "is why each arm is measured rather than counted.");
+            Assert.That(
+                KnownPositiveAnchors,
+                Is.Not.Empty,
+                "The known-positive anchor set is empty, so the anchor test passes without "
+                    + "measuring a single detector rule. An anchor test with no anchors is "
+                    + "the defect it was written to catch.");
+            Assert.That(
+                KnownNegativeAnchors,
+                Is.Not.Empty,
+                "The known-negative anchor set is empty, so no exclusion rule has a witness "
+                    + "and an over-broad population would pass unremarked.");
+        });
+    }
+
+    /// <summary>
+    /// Measures the detector against results already known by hand: every rule has a named
+    /// witness that must be admitted, and every exclusion a named witness that must not be.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The assertions above check that no population is <i>empty</i>. This one checks that
+    /// each is <i>right</i>, and the difference is the whole reason it exists. A detector
+    /// fault does not usually empty a population - it shortens one, quietly, while every
+    /// count stays plausible and every set comparison still passes. Non-emptiness cannot
+    /// see that. A known answer can.
+    /// </para>
+    /// <para>
+    /// Each anchor therefore carries the rule it witnesses rather than merely a name, so a
+    /// failure reports which rule stopped firing instead of leaving the reader to diff two
+    /// lists of fixture names and infer it.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Detector_reproduces_its_known_positive_and_negative_anchors()
+    {
+        var population = ComputePopulation();
+        var admitted = new HashSet<string>(population.ScanningFixtures, StringComparer.Ordinal);
+        admitted.UnionWith(population.NonFixtureScanners);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var (anchor, rule) in KnownPositiveAnchors.OrderBy(static a => a.Key, StringComparer.Ordinal))
+            {
+                Assert.That(
+                    admitted,
+                    Does.Contain(anchor),
+                    $"Known-positive anchor '{anchor}' is no longer detected as a "
+                        + "whole-src scanner, so the detector rule it witnesses has stopped "
+                        + $"firing. {rule} Either the rule regressed and the computed "
+                        + "population is now quietly short, or this fixture genuinely "
+                        + "stopped scanning src and a replacement witness for that rule must "
+                        + "be chosen here. Do not delete the anchor to go green: an anchor "
+                        + "removed is a rule left unmeasured.");
+            }
+
+            foreach (var (anchor, rule) in KnownNegativeAnchors.OrderBy(static a => a.Key, StringComparer.Ordinal))
+            {
+                Assert.That(
+                    admitted,
+                    Does.Not.Contain(anchor),
+                    $"Known-negative anchor '{anchor}' was admitted to the scanning "
+                        + "population, so an exclusion rule has stopped firing and the "
+                        + $"population is now over-broad. {rule} An over-broad population "
+                        + "reads as thoroughness and inflates the table with fixtures that "
+                        + "do not scan the repository, which is the same unexecuted-claim "
+                        + "defect in the opposite direction.");
+            }
         });
     }
 
     [Test]
-    public void Documented_gate_table_matches_the_computed_repository_wide_population()
-    {
+    public void Documented_gate_table_matches_the_computed_repository_wide_population()    {
         var population = ComputePopulation();
         var table = ReadDocumentedTable();
 
