@@ -29,13 +29,47 @@ Recording is guarded by each instrument's `Enabled` flag: when no listener is at
 
 ### Tags
 
-The decision counter and the decision-latency histogram carry three tags:
+The decision counter and the decision-latency histogram carry four tags:
 
 | Tag | Constant | Values |
 |---|---|---|
 | `operation` | `LatticeAuthMetrics.TagOperation` | The authorized `LatticeOperation`. |
 | `tree` | `LatticeAuthMetrics.TagTree` | The target tree id. |
+| `tenant` | `LatticeTenantLabel.TagTenant` | The owning tenant derived from `tree`. Always emitted, on tenancy-on and tenancy-off clusters alike. |
 | `effect` | `LatticeAuthMetrics.TagEffect` | `allow` or `deny`. |
+
+### Zero-primed effect arms
+
+The decision counter publishes **both** effect arms at zero the first time the gate
+decides a given `operation`/`tree` pair, before either outcome has occurred. A pair
+that has only ever been allowed therefore still carries an `effect="deny"` series
+reading `0`.
+
+This exists because the two readings an operator most needs to tell apart were
+otherwise indistinguishable. Without priming, a `deny` series is created by the first
+denial, so its absence carries at least four meanings:
+
+- the gate ran and denied nothing,
+- the gate never ran for that operation or tree,
+- the package was never registered on the silo,
+- the path is exempt and never consults the gate.
+
+Only the first is good news, and it is the reading an operator is least likely to
+interrogate, because it arrives as a healthy dashboard. With priming, a flat zero on
+`deny` is a **measured** zero, and an absent series means the gate did not evaluate
+that pair at all. Alert on the absence, not only on the value.
+
+**The boundary.** Priming is per `operation`/`tree` pair and starts at that pair's
+first decision, not at silo start: the cross product of operations and trees is not
+knowable before traffic arrives. A pair that has never been decided has no series of
+either arm, which is the correct reading of it.
+
+**The latency histogram is deliberately not primed.**
+`orleans.lattice.auth.decision.duration` carries the same tags and has the same
+absent-arm behaviour, but the remedy does not carry across. A counter is primed by
+adding zero, which changes no aggregate; priming a histogram means recording a `0` ms
+sample, which is a real observation that moves count, sum, and every bucket below the
+first. Priming it would corrupt the distribution it exists to measure.
 
 ## The audit sink
 

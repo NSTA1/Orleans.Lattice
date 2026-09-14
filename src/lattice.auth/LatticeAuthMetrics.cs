@@ -98,7 +98,21 @@ public static class LatticeAuthMetrics
     /// </summary>
     public static readonly Counter<long> Decisions =
         Meter.CreateCounter<long>(DecisionsName, unit: "{decision}",
-            description: "Authorization decisions produced by the enforcement gate, tagged by operation, tree and effect.");
+            description: "Authorization decisions produced by the enforcement gate, tagged by operation, tree and effect. Both effect arms are zero-primed the first time the gate decides a given operation/tree pair, so a flat zero on deny is a measured zero rather than an absent series.");
+
+    /// <summary>
+    /// The <see cref="TagEffect"/> tag for an allowed decision, prebuilt so that
+    /// <see cref="PrimeDecisions"/> can pass it as a literal at the priming site.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> EffectAllowTag =
+        new(TagEffect, EffectAllow);
+
+    /// <summary>
+    /// The <see cref="TagEffect"/> tag for a denied decision, prebuilt so that
+    /// <see cref="PrimeDecisions"/> can pass it as a literal at the priming site.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> EffectDenyTag =
+        new(TagEffect, EffectDeny);
 
     /// <summary>
     /// Histogram of enforcement-gate decision latency in milliseconds, tagged by
@@ -124,4 +138,63 @@ public static class LatticeAuthMetrics
     /// <param name="allowed">Whether the decision allowed the request.</param>
     /// <returns>The effect tag value.</returns>
     public static string EffectTag(bool allowed) => allowed ? EffectAllow : EffectDeny;
+
+    /// <summary>
+    /// Zero-primes both <see cref="TagEffect"/> arms of <see cref="Decisions"/> for
+    /// one operation/tree pair, at the moment the gate first decides that pair and
+    /// so before either effect is known to occur for it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Priming both arms together is what makes the absence of a series meaningful.
+    /// After this call, a flat zero on <see cref="EffectDeny"/> means the gate
+    /// evaluated this operation/tree pair and denied nothing, whereas no series at
+    /// all means the gate was never asked about that pair. Those are different facts
+    /// and, on a security surface, they have opposite readings: the first says the
+    /// policy allowed everything it was asked about, the second is equally
+    /// consistent with a gate that never ran, was never registered, or is fail-open.
+    /// Before this priming existed, only the second shape was ever emitted.
+    /// </para>
+    /// <para>
+    /// <b>Boundary - this primes per pair, not at startup.</b> The tag set is
+    /// {operation, tree, tenant, effect} and the operation/tree cross product is not
+    /// known until requests arrive, so there is no startup-time set to prime without
+    /// either manufacturing cardinality or priming a sentinel that corresponds to no
+    /// real gate. The guarantee is therefore "from the first decision on a pair
+    /// onward", not "from process start": a pair the gate has never been asked about
+    /// still has no series, which remains correct - nothing measured it.
+    /// </para>
+    /// <para>
+    /// <b><see cref="DecisionDuration"/> is deliberately NOT primed</b>, although it
+    /// carries the identical tag set and has the identical absent-arm behaviour. A
+    /// counter is primed by adding zero, which leaves the value untouched and is not
+    /// an observation. Priming a histogram would mean recording a 0 ms sample, which
+    /// is a real observation: it would report that one decision took zero
+    /// milliseconds, moving count, sum, and every bucket boundary below the first.
+    /// That corrupts the latency distribution it exists to measure, so the remedy for
+    /// a counter is a defect when transplanted to a histogram. Its absent deny arm is
+    /// a genuine and separate limitation, recorded rather than silently mis-fixed.
+    /// </para>
+    /// </remarks>
+    /// <param name="operation">The resolved <see cref="TagOperation"/> tag value.</param>
+    /// <param name="treeId">The target tree id, as the recording site tags it.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="operation"/> or <paramref name="treeId"/> is <see langword="null"/>.</exception>
+    public static void PrimeDecisions(string operation, string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        var operationTag = new KeyValuePair<string, object?>(TagOperation, operation);
+        var treeTag = new KeyValuePair<string, object?>(TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        // Written as two literal calls rather than through a shared helper or a
+        // TagList: the priming-enrolment gate resolves a prime by reading args[0] of
+        // the Add call and each tag pair at the call site, and discards anything it
+        // cannot resolve to a literal. A helper would prime correctly at run time and
+        // present nothing to the gate, so the instrument would keep its unprimed
+        // enrolment while appearing fixed - a failure whose symptom is a green build.
+        Decisions.Add(0, operationTag, treeTag, tenantTag, EffectAllowTag);
+        Decisions.Add(0, operationTag, treeTag, tenantTag, EffectDenyTag);
+    }
 }
