@@ -25,10 +25,12 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </summary>
 /// <param name="store">The context store the repository listing is read from.</param>
 /// <param name="workspaceGuard">The guard holding the canonicalised workspace roots.</param>
+/// <param name="runAuthority">Supplies the fixed background credential the listing read assumes.</param>
 /// <param name="logger">The log sink for the startup report.</param>
 internal sealed class RepoContextIndexedRootReporter(
     RepoContextStore store,
     RepoContextWorkspaceGuard workspaceGuard,
+    IRepoIndexRunAuthority runAuthority,
     ILogger<RepoContextIndexedRootReporter> logger) : BackgroundService
 {
     /// <summary>
@@ -90,6 +92,18 @@ internal sealed class RepoContextIndexedRootReporter(
                 roots.Count,
                 string.Join(", ", roots),
                 workspaceGuard.IsEnforcing);
+
+            // A background turn carries no caller credential, and a DENIED range read
+            // does not throw: it resolves to a reject-all key filter and returns a
+            // clean, empty, successful result. Without this scope the reporter would
+            // read zero repositories under a fail-closed gate and log the reassuring
+            // "no repository is registered yet" line below - the exact shape of defect
+            // this reporter exists to make visible, committed by the reporter itself.
+            // Guarded by BackgroundCredentialScopeGuardTests (#2423), which caught it.
+            var credential = runAuthority.Resolve();
+            using IDisposable? credentialScope = credential is null
+                ? null
+                : LatticeCredentialContext.With(credential);
 
             var listing = await store.ListReposAsync(stoppingToken).ConfigureAwait(false);
 
