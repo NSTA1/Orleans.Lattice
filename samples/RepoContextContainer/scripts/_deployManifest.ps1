@@ -96,6 +96,46 @@ $script:DeclarationNotAttempted = 'NotAttempted'
 
 <#
 .SYNOPSIS
+	Whether the compose files a declared reading was resolved FROM are the ones
+	the running deployment was actually created from.
+
+.DESCRIPTION
+	The declared half is only as good as the file set it was resolved from, and
+	until #2993 that set was a hardcoded list nothing checked. It happened to be
+	right. Nothing made it right, and nothing would have said so if it stopped
+	being right - a deployment brought up with a different overlay would have
+	been resolved from the wrong files and still reported a full
+	DECLARATION_RESOLVED count.
+
+	That is RESOLVED-BUT-WRONG, which is strictly worse than absent. An absent
+	declaration is visibly unmeasured and reads as NotAttempted; a confidently
+	wrong one is scored as a measurement.
+
+	  Agreed    the container's own config_files label names exactly the files
+	            the reading was resolved from, in the same order.
+	  Diverged  the label and the list disagree. The declared half was resolved
+	            from the wrong files and must not be scored.
+	  Unknown   no label, or nothing parseable in it. Whether the set was right
+	            is NOT KNOWN - which is a different claim from knowing it wrong.
+
+	UNKNOWN IS NOT FOLDED INTO DIVERGED, for the same reason vintage
+	Indeterminate is not folded into a difference: they answer different
+	questions. Diverged says the file set is wrong; Unknown says no statement
+	about the file set can be made. A caller that cannot tell them apart will go
+	looking for an overlay mismatch that was never demonstrated.
+
+	Unknown is also the reading for a container that is not compose-managed at
+	all, which is a legitimate state rather than a fault. It is recorded rather
+	than refused - but it is RECORDED, never silently treated as agreement,
+	because falling back to the hardcoded list on a missing label would bypass
+	the check precisely when the deployment is least standard.
+#>
+$script:ComposeSetAgreed = 'Agreed'
+$script:ComposeSetDiverged = 'Diverged'
+$script:ComposeSetUnknown = 'Unknown'
+
+<#
+.SYNOPSIS
 	Which instrument version wrote a manifest, and how two of them relate.
 
 .DESCRIPTION
@@ -158,6 +198,120 @@ function Get-DeployComposeFile {
 	param()
 
 	return @('docker-compose.yml', 'docker-compose.tuning.yml')
+}
+
+<#
+.SYNOPSIS
+	Compares the compose files a reading was resolved from against the ones the
+	container records having been created from.
+
+.DESCRIPTION
+	PURE, and deliberately takes the label as a STRING rather than a container
+	name, so every branch - agreement, divergence, reordering, a missing label,
+	an unparseable one - is assertable without a daemon. The impure half is the
+	one line that runs `docker inspect`, and it has nothing to decide.
+
+	ORDER IS COMPARED, NOT JUST MEMBERSHIP. A compose overlay later in the list
+	overrides an earlier one, so the same two files in the opposite order can
+	resolve to different values. A set difference is empty for that case and
+	would pass it. This is the same shape as a count matching while the set does
+	not, one level further in: here the SET matches and the ORDER does not, and
+	only an ordered comparison sees it.
+
+	PATHS ARE COMPARED BY LEAF NAME. The label holds absolute paths, and on the
+	live rig they point at whichever checkout deployed the stack, which is not
+	the checkout this script is being run from and legitimately differs. The
+	leaf is the part that identifies the overlay. The cost is that two files of
+	the same name in different directories compare equal; that is accepted,
+	because the alternative - demanding the deploy checkout and the running
+	script share a path - would refuse every correct deployment operated from a
+	second worktree, which is how this repository is actually worked.
+
+	KNOWN LIMITATION: docker joins the paths with a comma and does not escape
+	them, so a compose file whose path CONTAINS a comma is indistinguishable
+	from two files. Nothing in the label can resolve that, and inventing a
+	heuristic would manufacture a confident wrong answer out of an ambiguous
+	input. Such a path would surface as Diverged - visible, and refusing to
+	score - rather than as a silent mis-parse.
+#>
+function Get-ComposeFileSetVerdict {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param(
+		[Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $Expected,
+		[Parameter(Mandatory)] [AllowNull()] [AllowEmptyString()] [string] $LabelValue
+	)
+
+	$expectedLeaf = @($Expected | ForEach-Object { Split-Path -Path $_ -Leaf })
+
+	if ([string]::IsNullOrWhiteSpace($LabelValue)) {
+		return [pscustomobject]@{
+			Status = $script:ComposeSetUnknown
+			Expected = $expectedLeaf
+			Observed = @()
+			Missing = @()
+			Unexpected = @()
+			OrderDiffers = $false
+			Reason = 'the container carries no com.docker.compose.project.config_files label, so the overlay set could not be verified'
+		}
+	}
+
+	# Split on the comma docker joins with, then reduce each entry to its leaf.
+	# Both separators are handled because the label is written by whichever
+	# platform created the stack, not by the platform reading it.
+	$observed = @(
+		$LabelValue -split ',' |
+			ForEach-Object { $_.Trim() } |
+			Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+			ForEach-Object { ($_ -split '[\\/]')[-1] }
+	)
+
+	if ($observed.Count -eq 0) {
+		return [pscustomobject]@{
+			Status = $script:ComposeSetUnknown
+			Expected = $expectedLeaf
+			Observed = @()
+			Missing = @()
+			Unexpected = @()
+			OrderDiffers = $false
+			Reason = "the config_files label held nothing parseable ('$LabelValue'), so the overlay set could not be verified"
+		}
+	}
+
+	$missing = @($expectedLeaf | Where-Object { $observed -notcontains $_ })
+	$unexpected = @($observed | Where-Object { $expectedLeaf -notcontains $_ })
+
+	# Compared as an ordered sequence. Reached only when the two sets agree, so
+	# a true here is a pure reordering and nothing else.
+	$orderDiffers = ($missing.Count -eq 0 -and $unexpected.Count -eq 0 -and
+		(($expectedLeaf -join "`n") -ne ($observed -join "`n")))
+
+	if ($missing.Count -eq 0 -and $unexpected.Count -eq 0 -and -not $orderDiffers) {
+		return [pscustomobject]@{
+			Status = $script:ComposeSetAgreed
+			Expected = $expectedLeaf
+			Observed = $observed
+			Missing = @()
+			Unexpected = @()
+			OrderDiffers = $false
+			Reason = "the container was created from exactly $($observed -join ', ')"
+		}
+	}
+
+	$parts = @()
+	if ($missing.Count -gt 0) { $parts += "expected but not used by the deployment: $($missing -join ', ')" }
+	if ($unexpected.Count -gt 0) { $parts += "used by the deployment but not read: $($unexpected -join ', ')" }
+	if ($orderDiffers) { $parts += "same files in a different OVERLAY ORDER - read as [$($expectedLeaf -join ', ')], deployed as [$($observed -join ', ')], and a later overlay overrides an earlier one" }
+
+	return [pscustomobject]@{
+		Status = $script:ComposeSetDiverged
+		Expected = $expectedLeaf
+		Observed = $observed
+		Missing = $missing
+		Unexpected = $unexpected
+		OrderDiffers = $orderDiffers
+		Reason = ($parts -join '; ')
+	}
 }
 
 <#

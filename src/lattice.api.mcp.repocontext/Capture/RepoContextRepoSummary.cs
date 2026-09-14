@@ -2,9 +2,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// A single registered repository as reported by <c>repocontext_list_repos</c>:
-/// its identity, the last time it was ingested, and the number of files recorded
-/// for it. An agent uses the list to discover which repositories under the
-/// mounted workspace are queryable before it searches, recalls, or removes one.
+/// its identity, the filesystem root it was indexed from, the last time it was
+/// ingested, and the number of files recorded for it. An agent uses the list to
+/// discover which repositories under the mounted workspace are queryable before it
+/// searches, recalls, or removes one - and to confirm that a given id is about the
+/// tree it expects, which the id alone does not establish.
 /// </summary>
 /// <remarks>
 /// An MCP protocol payload projected to JSON by the SDK, not an Orleans grain
@@ -14,6 +16,25 @@ public sealed record RepoContextRepoSummary
 {
     /// <summary>The repository identity records are filed under.</summary>
     public required string RepoId { get; init; }
+
+    /// <summary>
+    /// The resolved filesystem root the repository's records were actually walked from,
+    /// or <see langword="null"/> when it was never indexed (or its index was reset, which
+    /// clears the durable request this is read from). It is read from the same persisted
+    /// index request the drift report walks, so it is the index's own account of what it
+    /// is about rather than a restatement of the id.
+    /// <para>
+    /// It is reported because <see cref="RepoId"/> does not imply it and cannot.
+    /// A repository's id defaults to the final segment of the indexed path, so a git
+    /// worktree registered from the wrong workspace root indexes under the BASE
+    /// repository's id while every record in it describes the worktree - a state in which
+    /// the ingest marker, the file count, and search ranking are all genuinely healthy and
+    /// none of them is about the tree the caller means. Reporting the root beside the id
+    /// makes that self-evident on the first call of a session: the id reads
+    /// <c>lattice</c> and the root reads <c>/workspace/bucket4-merge</c> on the same row.
+    /// </para>
+    /// </summary>
+    public string? IndexedRoot { get; init; }
 
     /// <summary>
     /// The last-ingested marker recorded on the repository root, or

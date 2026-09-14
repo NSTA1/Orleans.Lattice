@@ -131,6 +131,11 @@ $worktreeArchiveSource = '/run/desktop/mnt/host/c/dev/copilot-worktrees/lattice/
 $worktreeArchiveToplevel = 'C:\dev\copilot-worktrees\lattice\bucket4-merge'
 $durableArchiveSource = 'C:\dev\repocontext-memory-archive'
 
+# Check 7's healthy workspace source: the PARENT of the registerable
+# repositories, which is the shape REPO_PATH is documented to take so each
+# repository is reachable at /workspace/<repo>.
+$workspaceSource = 'C:\dev\copilot-worktrees\lattice'
+
 # Join a leaf onto one of the FIXTURE paths above.
 #
 # `Join-Path` resolves a drive qualifier through the PSDrive provider, so
@@ -177,6 +182,14 @@ function New-AgreeingReadings {
 		ImageTags                 = @('orleans-lattice/repocontext:local', "repocontext-mcp:candidate-$($candidateCommit.Substring(0, 9))")
 		ImageCreated              = $imageCreatedAfterCandidate
 		ExpectedCommitDate        = $candidateCommitDate
+		# Check 7's readings. A bind at /workspace whose source is the parent of
+		# the checkouts, which is the shape REPO_PATH is documented to take. The
+		# two identity arms are left unnamed here, matching the script's own
+		# defaults: this fixture asserts the structural arms pass, and the
+		# identity arms are exercised directly against the pure function above.
+		WorkspaceDestination      = '/workspace'
+		WorkspaceSource           = $workspaceSource
+		WorkspaceMountType        = 'bind'
 	}
 }
 
@@ -206,7 +219,7 @@ _Assert -Name 'an empty path is never equal to anything, including another empty
 	-Condition (-not (Test-ProvenancePathsEqual -Left '' -Right '' -CaseSensitive $false))
 
 # ---------------------------------------------------------------------------
-_Section 'Check 1 of 6: compose provenance'
+_Section 'Check 1 of 7: compose provenance'
 # ---------------------------------------------------------------------------
 
 $accepted = Get-ComposeProvenanceViolation `
@@ -312,7 +325,7 @@ _Assert -Name 'ACCEPTS one file when running without an override was DECLARED' `
 	-Condition ($accepted.Count -eq 0) -Detail ($accepted -join '; ')
 
 # ---------------------------------------------------------------------------
-_Section 'Check 2 of 6: git provenance'
+_Section 'Check 2 of 7: git provenance'
 # ---------------------------------------------------------------------------
 
 _Assert -Name 'ACCEPTS a checkout sitting on the expected commit' `
@@ -339,7 +352,7 @@ _Assert -Name 'REFUSES a commit prefix shorter than seven characters' `
 	-Condition ((Get-GitProvenanceViolation -ResolvedCommit $candidateCommit -ExpectedCommit '9fcaa').Count -eq 1)
 
 # ---------------------------------------------------------------------------
-_Section 'Check 3 of 6: image provenance'
+_Section 'Check 3 of 7: image provenance'
 # ---------------------------------------------------------------------------
 
 _Assert -Name 'ACCEPTS a container running the image its reference resolves to' `
@@ -358,7 +371,7 @@ _Assert -Name 'REFUSES a container reporting no image id' `
 	-Condition ((Get-ImageProvenanceViolation -RunningImageId '' -ExpectedImageId 'sha256:bbbb' -ImageReference 'repocontext:local').Count -eq 1)
 
 # ---------------------------------------------------------------------------
-_Section 'Check 4 of 6: environment provenance'
+_Section 'Check 4 of 7: environment provenance'
 # ---------------------------------------------------------------------------
 
 _Assert -Name 'ACCEPTS a setting present in the container with the expected value' `
@@ -444,7 +457,7 @@ _Assert -Name 'ConvertFrom-ProvenanceDuration handles compound units' `
 	-Condition (5400 -eq (ConvertFrom-ProvenanceDuration -Value '1h30m'))
 
 # ---------------------------------------------------------------------------
-_Section 'Check 5 of 6: archive durability'
+_Section 'Check 5 of 7: archive durability'
 # ---------------------------------------------------------------------------
 
 # --- the git reading must distinguish "no" from "no answer" -----------------
@@ -599,7 +612,7 @@ _Assert -Name 'and treats an OMITTED examinability reading as unexaminable, not 
 			-SourceExistsOnHost $true).Count -eq 1)
 
 # ---------------------------------------------------------------------------
-_Section 'Check 6 of 6: build provenance (the image was built from the expected commit)'
+_Section 'Check 6 of 7: build provenance (the image was built from the expected commit)'
 # ---------------------------------------------------------------------------
 
 # --- arm 2: chronology. Tested FIRST because it is the arm that needed no
@@ -890,8 +903,146 @@ _Assert -Name 'returns NULL for an absent timestamp' `
 	-Condition ($null -eq (ConvertFrom-ProvenanceTimestamp -Value ''))
 
 # ---------------------------------------------------------------------------
-_Section 'The self-referential comparison (the tautology this check replaced)'
+_Section 'Check 7 of 7: workspace provenance (WHICH TREE the container indexes)'
 # ---------------------------------------------------------------------------
+
+# Issue #2617. Every arm below is demonstrated in BOTH directions - a reading
+# that must refuse and the nearest reading that must not - because a refusal
+# arm that has never been shown to pass is indistinguishable from a check that
+# refuses everything, and an acceptance arm that has never been shown to refuse
+# is indistinguishable from one that accepts everything. One direction proves
+# nothing about a predicate.
+
+$_wsHost = '/hosts/dev'
+$_wsExpectedRepo = '/hosts/dev/lattice'
+
+# --- the mount must exist (the non-vacuity guard for the check itself) -------
+$refused = Get-WorkspaceProvenanceViolation -WorkspaceDestination '/workspace' -WorkspaceSource ''
+_Assert -Name 'NO /workspace bind at all is REFUSED' `
+	-Condition ($refused.Count -eq 1) -Detail ($refused -join '; ')
+_Assert -Name 'and the refusal says the container has nothing to index' `
+	-Condition ($refused[0] -match 'nothing is mounted') -Detail ($refused -join '; ')
+
+_Assert -Name 'the SAME call with a bind present is accepted, so the arm is not refusing unconditionally' `
+	-Condition ((Get-WorkspaceProvenanceViolation `
+				-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost -WorkspaceMountType 'bind').Count -eq 0)
+
+# --- it must be a bind, not a volume ----------------------------------------
+$refused = Get-WorkspaceProvenanceViolation `
+	-WorkspaceDestination '/workspace' -WorkspaceSource 'repocontext_workspace' -WorkspaceMountType 'volume'
+_Assert -Name 'a named VOLUME at /workspace is REFUSED' `
+	-Condition ($refused.Count -eq 1 -and $refused[0] -match "not a bind mount") -Detail ($refused -join '; ')
+
+_Assert -Name 'and a bind of the same source is accepted' `
+	-Condition ((Get-WorkspaceProvenanceViolation `
+				-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost -WorkspaceMountType 'bind').Count -eq 0)
+
+# --- the source must be absolute --------------------------------------------
+# The same defect issue #2627 found on the WRITE path: compose resolves a
+# relative bind source against its invocation directory, so which tree is
+# indexed becomes a function of where the operator was standing.
+$refused = Get-WorkspaceProvenanceViolation `
+	-WorkspaceDestination '/workspace' -WorkspaceSource '../../..' -WorkspaceMountType 'bind'
+_Assert -Name 'a RELATIVE bind source is REFUSED' `
+	-Condition ($refused.Count -eq 1 -and $refused[0] -match 'relative source') -Detail ($refused -join '; ')
+
+_Assert -Name 'and the absolute form of a source is accepted' `
+	-Condition ((Get-WorkspaceProvenanceViolation `
+				-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost -WorkspaceMountType 'bind').Count -eq 0)
+
+# --- the source must be the expected root, WHEN ONE IS NAMED ----------------
+$refused = Get-WorkspaceProvenanceViolation `
+	-WorkspaceDestination '/workspace' -WorkspaceSource '/hosts/other' -WorkspaceMountType 'bind' `
+	-ExpectedWorkspaceRoot $_wsHost
+_Assert -Name 'a bind source that MISMATCHES the expected workspace root is REFUSED' `
+	-Condition ($refused.Count -eq 1 -and $refused[0] -match 'not the expected') -Detail ($refused -join '; ')
+
+_Assert -Name 'and the matching source is accepted, so the comparison can dissent both ways' `
+	-Condition ((Get-WorkspaceProvenanceViolation `
+				-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost -WorkspaceMountType 'bind' `
+				-ExpectedWorkspaceRoot $_wsHost).Count -eq 0)
+
+_Assert -Name 'the expected root is a PARAMETER: a different host path adjudicates cleanly against itself' `
+	-Condition ((Get-WorkspaceProvenanceViolation `
+				-WorkspaceDestination '/workspace' -WorkspaceSource 'D:\elsewhere\trees' -WorkspaceMountType 'bind' `
+				-ExpectedWorkspaceRoot 'D:\elsewhere\trees').Count -eq 0)
+
+_Assert -Name 'and naming NO expected root leaves the identity unasserted rather than failed' `
+	-Condition ((Get-WorkspaceProvenanceViolation `
+				-WorkspaceDestination '/workspace' -WorkspaceSource '/hosts/anything-at-all' -WorkspaceMountType 'bind').Count -eq 0)
+
+# --- container paths are mapped back through the bind before comparison -----
+_Assert -Name 'a container path under the mount maps to its host path' `
+	-Condition ((ConvertTo-WorkspaceHostPath -ContainerPath '/workspace/lattice' `
+				-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost) -eq '/hosts/dev/lattice')
+_Assert -Name 'the mount point itself maps to the source' `
+	-Condition ((ConvertTo-WorkspaceHostPath -ContainerPath '/workspace' `
+				-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost) -eq $_wsHost)
+_Assert -Name 'a path OUTSIDE the mount is returned unchanged rather than given a fabricated host path' `
+	-Condition ((ConvertTo-WorkspaceHostPath -ContainerPath '/data/tree' `
+				-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost) -eq '/data/tree')
+_Assert -Name 'a windows bind source is joined with a windows separator' `
+	-Condition ((ConvertTo-WorkspaceHostPath -ContainerPath '/workspace/lattice' `
+				-WorkspaceDestination '/workspace' -WorkspaceSource 'C:\dev') -eq 'C:\dev\lattice')
+_Assert -Name 'a sibling directory sharing the prefix is NOT treated as being under the mount' `
+	-Condition ((ConvertTo-WorkspaceHostPath -ContainerPath '/workspaces-other/x' `
+				-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost) -eq '/workspaces-other/x')
+
+# --- THE ISSUE #2617 ARM ----------------------------------------------------
+# The incident itself: a linked worktree at /workspace/bucket4-merge registered
+# under the base repository's id. Every other reading in the listing was
+# indistinguishable from a correct index of /hosts/dev/lattice.
+$refused = Get-WorkspaceProvenanceViolation `
+	-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost -WorkspaceMountType 'bind' `
+	-ExpectedWorkspaceRoot $_wsHost `
+	-ExpectedRepositoryRoot $_wsExpectedRepo `
+	-IndexedRoots @('/workspace/bucket4-merge') -IndexedRootsExaminable $true
+_Assert -Name 'ISSUE #2617: a worktree indexed under the base id is REFUSED' `
+	-Condition ($refused.Count -eq 1) -Detail ($refused -join '; ')
+_Assert -Name 'and the refusal names both the reported root and its host mapping' `
+	-Condition ($refused[0] -match 'bucket4-merge' -and $refused[0] -match [regex]::Escape('/hosts/dev/bucket4-merge')) `
+	-Detail ($refused -join '; ')
+
+_Assert -Name 'THE CONTROL: the correctly-rooted index, identical in every other reading, is accepted' `
+	-Condition ((Get-WorkspaceProvenanceViolation `
+				-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost -WorkspaceMountType 'bind' `
+				-ExpectedWorkspaceRoot $_wsHost `
+				-ExpectedRepositoryRoot $_wsExpectedRepo `
+				-IndexedRoots @('/workspace/lattice') -IndexedRootsExaminable $true).Count -eq 0)
+
+_Assert -Name 'the expected repository is found among SEVERAL registered roots' `
+	-Condition ((Get-WorkspaceProvenanceViolation `
+				-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost -WorkspaceMountType 'bind' `
+				-ExpectedRepositoryRoot $_wsExpectedRepo `
+				-IndexedRoots @('/workspace/other', '/workspace/lattice') -IndexedRootsExaminable $true).Count -eq 0)
+
+# --- the arm fails closed once it has been asked ----------------------------
+$refused = Get-WorkspaceProvenanceViolation `
+	-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost -WorkspaceMountType 'bind' `
+	-ExpectedRepositoryRoot $_wsExpectedRepo
+_Assert -Name 'naming an expected repository with NO indexed-root reading is REFUSED, not passed over' `
+	-Condition ($refused.Count -eq 1 -and $refused[0] -match 'cannot be established') -Detail ($refused -join '; ')
+
+$refused = Get-WorkspaceProvenanceViolation `
+	-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost -WorkspaceMountType 'bind' `
+	-ExpectedRepositoryRoot $_wsExpectedRepo `
+	-IndexedRoots @() -IndexedRootsExaminable $true
+_Assert -Name 'an EMPTY listing is refused with its own message, distinct from the wrong-tree one' `
+	-Condition ($refused.Count -eq 1 -and $refused[0] -match 'NO repository registered') -Detail ($refused -join '; ')
+
+_Assert -Name 'omitting the expected repository leaves the arm unasked rather than failed' `
+	-Condition ((Get-WorkspaceProvenanceViolation `
+				-WorkspaceDestination '/workspace' -WorkspaceSource $_wsHost -WorkspaceMountType 'bind').Count -eq 0)
+
+# --- the destination is a parameter, and the whole check follows it ---------
+$refused = Get-WorkspaceProvenanceViolation -WorkspaceDestination '/repos' -WorkspaceSource ''
+_Assert -Name 'a relocated destination is adjudicated, and the message names it' `
+	-Condition ($refused.Count -eq 1 -and $refused[0] -match [regex]::Escape("'/repos'")) -Detail ($refused -join '; ')
+
+_Assert -Name 'and the default destination is /workspace when none is given' `
+	-Condition ((Get-WorkspaceProvenanceViolation -WorkspaceSource '')[0] -match [regex]::Escape("'/workspace'"))
+
+
 
 # The whole defect in one predicate. Check 1 REQUIRES the compose working
 # directory to equal the expected checkout, so on every passing run check 2's
@@ -931,7 +1082,7 @@ _Section 'Composite report'
 
 $report = Get-ContainerProvenanceReport -Readings (New-AgreeingReadings) `
 	-ExpectedCheckout $candidateCheckout -ExpectedSettings $expectedSettings -CaseSensitive $false
-_Assert -Name 'ACCEPTS readings on which all five checks agree' `
+_Assert -Name 'ACCEPTS readings on which all seven checks agree' `
 	-Condition ($report.IsSatisfied -and $report.Violations.Count -eq 0) -Detail ($report.Violations -join '; ')
 
 # THE GUARD-DIRECTION FIXTURE. New-AgreeingReadings composes from
@@ -1047,6 +1198,57 @@ $report = Get-ContainerProvenanceReport -Readings $missingKey `
 	-ExpectedCheckout $candidateCheckout -ExpectedSettings $expectedSettings -CaseSensitive $false
 _Assert -Name 'REFUSES readings that OMIT the archive examinability key entirely' `
 	-Condition ((-not $report.IsSatisfied) -and $report.Violations.Count -eq 1) -Detail ($report.Violations -join '; ')
+
+# --- check 7 is wired into the composite, and fails closed the same way -----
+# Readings that carry NO workspace keys must refuse, for the same reason the
+# archive ones do: a composite that treated an absent workspace reading as
+# "nothing to complain about" would accept every fixture in this file while
+# never once looking at the tree the container indexes, which is precisely the
+# unfalsifiable state issue #2617 was.
+$noWorkspace = New-AgreeingReadings
+$noWorkspace.Remove('WorkspaceSource')
+$report = Get-ContainerProvenanceReport -Readings $noWorkspace `
+	-ExpectedCheckout $candidateCheckout -ExpectedSettings $expectedSettings -CaseSensitive $false
+_Assert -Name 'REFUSES readings that carry no workspace mount at all' `
+	-Condition ((-not $report.IsSatisfied) -and $report.Violations.Count -eq 1) -Detail ($report.Violations -join '; ')
+_Assert -Name 'and that disagreement is the workspace one, not a knock-on from another check' `
+	-Condition ($report.Violations.Count -ge 1 -and $report.Violations[0].Contains('nothing is mounted')) `
+	-Detail ($report.Violations -join '; ')
+
+# The identity arm reaches the composite through the readings, and the #2617
+# state must refuse THERE and not only against the pure function.
+$wrongTree = New-AgreeingReadings
+$wrongTree['ExpectedRepositoryRoot'] = (Join-FixturePath $workspaceSource 'bucket4')
+$wrongTree['IndexedRoots'] = @('/workspace/bucket4-merge')
+$wrongTree['IndexedRootsExaminable'] = $true
+$report = Get-ContainerProvenanceReport -Readings $wrongTree `
+	-ExpectedCheckout $candidateCheckout -ExpectedSettings $expectedSettings -CaseSensitive $false
+_Assert -Name 'REFUSES the composite on a wrongly-rooted index alone' `
+	-Condition ((-not $report.IsSatisfied) -and $report.Violations.Count -eq 1 `
+			-and $report.Violations[0].Contains('#2617')) -Detail ($report.Violations -join '; ')
+
+# THE CONTROL, at the composite level. The identical readings with the RIGHT
+# registered root must pass, or the arm above proves only that the composite
+# refuses this fixture for some reason.
+$rightTree = New-AgreeingReadings
+$rightTree['ExpectedRepositoryRoot'] = (Join-FixturePath $workspaceSource 'bucket4')
+$rightTree['IndexedRoots'] = @('/workspace/bucket4')
+$rightTree['IndexedRootsExaminable'] = $true
+$report = Get-ContainerProvenanceReport -Readings $rightTree `
+	-ExpectedCheckout $candidateCheckout -ExpectedSettings $expectedSettings -CaseSensitive $false
+_Assert -Name 'and ACCEPTS the same composite when the registered root is the expected one' `
+	-Condition ($report.IsSatisfied -and $report.Violations.Count -eq 0) -Detail ($report.Violations -join '; ')
+
+# Naming the expected repository while omitting the examinability key must
+# refuse, mirroring the archive arm above: the identity question, once asked,
+# cannot be satisfied by leaving a reading out.
+$unaskedWorkspace = New-AgreeingReadings
+$unaskedWorkspace['ExpectedRepositoryRoot'] = (Join-FixturePath $workspaceSource 'bucket4')
+$report = Get-ContainerProvenanceReport -Readings $unaskedWorkspace `
+	-ExpectedCheckout $candidateCheckout -ExpectedSettings $expectedSettings -CaseSensitive $false
+_Assert -Name 'REFUSES a named expected repository with no indexed-root reading' `
+	-Condition ((-not $report.IsSatisfied) -and $report.Violations.Count -eq 1 `
+			-and $report.Violations[0].Contains('cannot be established')) -Detail ($report.Violations -join '; ')
 
 # ---------------------------------------------------------------------------
 Write-Host ''

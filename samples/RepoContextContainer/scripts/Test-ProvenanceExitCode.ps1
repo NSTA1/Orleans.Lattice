@@ -254,6 +254,9 @@ function Set-ShimFixture {
 		[string] $WorkingDirectory = $script:Checkout,
 		[string] $ArchiveSource = $script:Archive,
 		[string] $ArchiveMountType = 'bind',
+		[string] $WorkspaceSource = '',
+		[string] $WorkspaceMountType = 'bind',
+		[switch] $OmitWorkspaceMount,
 		[string] $RevisionLabel = '',
 		[string] $GracePeriod = '120s',
 		[switch] $OmitGracePeriod,
@@ -279,6 +282,21 @@ function Set-ShimFixture {
 		(Join-Path $WorkingDirectory 'docker-compose.override.yml')
 	) -join ','
 
+	# Check 7's reading. Defaulted to the sandbox checkout's PARENT, which is the
+	# shape REPO_PATH is documented to take - a parent of the repositories you
+	# register - so the healthy fixture satisfies check 7 the same way a correct
+	# deployment does, rather than by the check being inert.
+	if ([string]::IsNullOrWhiteSpace($WorkspaceSource)) {
+		$WorkspaceSource = (Split-Path -Parent $script:Checkout)
+	}
+
+	$mounts = @(
+		@{ Type = $ArchiveMountType; Source = $ArchiveSource; Destination = '/memory-archive' }
+	)
+	if (-not $OmitWorkspaceMount) {
+		$mounts += @{ Type = $WorkspaceMountType; Source = $WorkspaceSource; Destination = '/workspace' }
+	}
+
 	$container = @{
 		Image  = $imageId
 		Config = @{
@@ -289,9 +307,7 @@ function Set-ShimFixture {
 			}
 			Env    = $environment
 		}
-		Mounts = @(
-			@{ Type = $ArchiveMountType; Source = $ArchiveSource; Destination = '/memory-archive' }
-		)
+		Mounts = $mounts
 	}
 
 	# An hour AHEAD of the sandbox commit, so check 6's chronology arm is
@@ -418,7 +434,7 @@ try {
 		$healthySubprocess = Invoke-AssertScript -Channel Subprocess
 
 		_Assert -Name 'healthy: the printed verdict is the all-checks-agree one' `
-			-Condition ($healthySubprocess.Output -match 'all six provenance checks agree') `
+			-Condition ($healthySubprocess.Output -match 'all seven provenance checks agree') `
 			-Detail ($healthySubprocess.Output)
 
 		_Assert -Name 'healthy: the IN-PROCESS channel exits 0' `

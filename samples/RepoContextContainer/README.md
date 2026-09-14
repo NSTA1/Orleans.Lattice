@@ -343,7 +343,7 @@ Verify where it actually landed, rather than where you meant it to land:
 ```bash
 docker inspect repocontext-mcp \
   --format '{{range .Mounts}}{{.Destination}} <- {{.Type}} {{.Source}}{{"\n"}}{{end}}'
-pwsh -File scripts/Assert-ContainerProvenance.ps1   # check 5 of 5 refuses a doomed path
+pwsh -File scripts/Assert-ContainerProvenance.ps1   # check 5 of 7 refuses a doomed path
 ```
 
 | Variable | Default | Meaning |

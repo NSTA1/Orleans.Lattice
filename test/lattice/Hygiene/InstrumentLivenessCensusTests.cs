@@ -224,33 +224,62 @@ public sealed class InstrumentLivenessCensusTests
     }
 
     /// <summary>
-    /// The census must agree with the gate that already covers state 1. A disagreement
-    /// means one of the two populations has drifted, and a census that contradicts a
-    /// shipped gate is reporting on something other than what it claims.
+    /// The census and <see cref="InstrumentEmissionCoverageTests"/> must enumerate the
+    /// same synchronous instruments. They reach that population through two independent
+    /// reflection walks of the core assembly, so this is a real cross-check between two
+    /// separate pieces of code and not a restatement compared with itself.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This arm replaces one that claimed to cross-check the emission <i>predicate</i>
+    /// against the shipped gate and did not: it restated the gate's expression and
+    /// compared the restatement with itself, so it passed while the two populations
+    /// disagreed on all 194 instruments. See #3011.
+    /// </para>
+    /// <para>
+    /// That question is no longer asked here because it is no longer askable. The census
+    /// now invokes <see cref="InstrumentEmissionCoverageTests.HasNoEmissionSite"/>
+    /// directly, so predicate drift between the two is impossible by construction rather
+    /// than merely detected after the fact. What survives as a genuine risk is the two
+    /// reflection walks drifting apart, which is what this asserts, and which carries
+    /// data on both sides at every tip rather than only when the gate is red.
+    /// </para>
+    /// </remarks>
     [Test]
-    public void Census_state_one_agrees_with_the_shipped_emission_gate()
+    public void Census_and_the_shipped_emission_gate_enumerate_the_same_instruments()
     {
-        var emitted = EmittedFields.Value;
-
-        var censusSaysNoSite = Rows.Value
-            .Where(static r => !r.HasEmissionSite)
-            .Where(static r => !r.Instrument.IsObservable)
-            .Select(static r => r.Instrument.MetricName)
-            .ToHashSet(StringComparer.Ordinal);
-
-        var gateWouldReport = Instruments.Value
+        var censusSynchronous = Instruments.Value
             .Where(static d => !d.IsObservable)
-            .Where(d => !d.FieldNames.Any(emitted.Contains))
             .Select(static d => d.MetricName)
             .ToHashSet(StringComparer.Ordinal);
 
-        Assert.That(
-            censusSaysNoSite,
-            Is.EquivalentTo(gateWouldReport),
-            "The census and InstrumentEmissionCoverageTests disagree about which synchronous "
-            + "instruments have no emission site. Two registries of the same fact that can "
-            + "silently diverge is the defect class this epic exists to remove.");
+        var gateSynchronous = InstrumentEmissionCoverageTests.SynchronousMetricNames;
+
+        Assert.Multiple(() =>
+        {
+            // Without these the comparison below would pass on two empty sets, which is
+            // how the arm this replaced came to be unfalsifiable.
+            Assert.That(
+                censusSynchronous,
+                Is.Not.Empty,
+                "The census enumerated no synchronous instruments, so the comparison below "
+                + "would hold vacuously and prove nothing about either walk.");
+
+            Assert.That(
+                gateSynchronous,
+                Is.Not.Empty,
+                "The emission gate enumerated no synchronous instruments, so the comparison "
+                + "below would hold vacuously and prove nothing about either walk.");
+
+            Assert.That(
+                censusSynchronous,
+                Is.EquivalentTo(gateSynchronous),
+                "The census and InstrumentEmissionCoverageTests disagree about which "
+                + "synchronous instruments exist. Both reach this set by reflecting over the "
+                + "core assembly independently, so a disagreement means one walk has drifted "
+                + "and the census is reporting on a different population from the gate whose "
+                + "coverage it claims to extend.");
+        });
     }
 
     private static void Append(StringBuilder report, string heading, IReadOnlyList<Census> rows)
@@ -278,7 +307,10 @@ public sealed class InstrumentLivenessCensusTests
         var emitted = EmittedFields.Value;
 
         return Instruments.Value
-            .Select(d => new Census(d, d.FieldNames.Any(emitted.Contains), WitnessFor(d)))
+            .Select(d => new Census(
+                d,
+                !InstrumentEmissionCoverageTests.HasNoEmissionSite(d.FieldNames, emitted),
+                WitnessFor(d)))
             .ToList();
     }
 
