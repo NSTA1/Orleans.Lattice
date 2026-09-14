@@ -510,12 +510,18 @@ public static class RepoContextHostBuilder
         // could not distinguish a replaying lifecycle from a degraded vector plane.
         // The status-code mapping is left at the framework default deliberately: the
         // code is what an orchestrator routes on, and this adds detail without moving
-        // the verdict. See RepoContextReadinessHealthResponse (issue #2962).
+        // the verdict. See RepoContextComponentHealthResponse (issue #2962).
         app.MapHealthChecks(ReadinessPath, RepoContextReadinessHealthEndpoint.CreateOptions(ReadinessTag));
-        app.MapHealthChecks(BackupPath, new HealthCheckOptions
-        {
-            Predicate = registration => registration.Tags.Contains(BackupTag),
-        });
+
+        // The backup endpoint, mapped through the same shared writer for the same
+        // reason (issue #2980). The backup check renders which tree is in scope, what
+        // the sink holds, and the last failure text, and a bare predicate here threw
+        // all of it away on every probe - measured off the wire as a 503 whose entire
+        // body was the word "Unhealthy". This endpoint carries neither the liveness
+        // nor the readiness tag, deliberately: a failing backup must not restart the
+        // container or pull it from rotation, because that converts a durability
+        // fault into an availability outage. Only the body changes here.
+        app.MapHealthChecks(BackupPath, RepoContextBackupHealthEndpoint.CreateOptions(BackupTag));
 
         // The grain-liveness endpoint the container's --healthcheck self-probe hits.
         // Degraded (silo still starting) and Unhealthy both map to 503 so a plain

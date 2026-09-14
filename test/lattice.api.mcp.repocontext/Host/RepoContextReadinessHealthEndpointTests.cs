@@ -236,14 +236,14 @@ public sealed class RepoContextReadinessHealthEndpointTests
         => Assert.Multiple(() =>
         {
             Assert.ThrowsAsync<ArgumentNullException>(
-                () => RepoContextReadinessHealthResponse.Write(
+                () => RepoContextComponentHealthResponse.Write(
                     null!,
                     new HealthReport(
                         new Dictionary<string, HealthReportEntry>(StringComparer.Ordinal),
                         TimeSpan.Zero)));
 
             Assert.ThrowsAsync<ArgumentNullException>(
-                () => RepoContextReadinessHealthResponse.Write(
+                () => RepoContextComponentHealthResponse.Write(
                     new Microsoft.AspNetCore.Http.DefaultHttpContext(), null!));
 
             Assert.Throws<ArgumentException>(

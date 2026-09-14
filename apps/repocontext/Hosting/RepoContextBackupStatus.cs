@@ -397,6 +397,16 @@ public sealed class RepoContextBackupStatus
                 ? " WARNING: the last full capture described ZERO entries, so it protects nothing."
                 : string.Empty;
 
+            // RecordCapture clears _lastFailure, so a failure surviving into this
+            // branch necessarily post-dates the last successful capture: it is the
+            // live reason the cadence is broken, never a stale string from before a
+            // recovery. Dropping it here left the FailingAfterCapture state saying
+            // that a capture FAILED without ever saying why. Rendered last so the
+            // most urgent fact ends the line.
+            var failureNote = _lastFailure is null
+                ? string.Empty
+                : $" Last failure: {_lastFailure}";
+
             var fallbackNote = _incrementalFallbackCount == 0
                 ? string.Empty
                 : $" {_incrementalFallbackCount.ToString(CultureInfo.InvariantCulture)} incremental "
@@ -411,7 +421,8 @@ public sealed class RepoContextBackupStatus
                 + $"last incremental '{_lastIncrementalBackupId ?? "(none)"}' at "
                 + $"{_lastIncrementalAtUtc?.ToString("O", CultureInfo.InvariantCulture) ?? "(never)"} "
                 + $"describing {_lastIncrementalEntryCount} entries; "
-                + $"{_captureCount} capture(s) total.{durabilityNote}{scopeNote}{emptyNote}{fallbackNote}")
+                + $"{_captureCount} capture(s) total."
+                + $"{durabilityNote}{sinkNote}{scopeNote}{emptyNote}{fallbackNote}{failureNote}")
                 .Trim();
         }
     }
