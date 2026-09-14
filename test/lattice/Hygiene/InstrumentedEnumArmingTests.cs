@@ -291,6 +291,96 @@ public sealed class InstrumentedEnumArmingTests
     }
 
     /// <summary>
+    /// Per-enum anti-vacuity. Every marked enum resolves, declares at least one
+    /// member, and yields at least one armed tag value, so no individual enum is
+    /// carried through the distinctness check over an empty set.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Gate_inputs_are_not_vacuous"/> guards the <i>population</i>: it
+    /// fails when no enum carries the marker at all. It says nothing about an
+    /// individual member of that population, and the two are not the same property.
+    /// An empty enum is legal C# - <c>enum E { }</c> compiles - so a marked enum with
+    /// no members walks the whole of
+    /// <see cref="Every_marked_enum_member_maps_to_a_distinct_armed_tag"/> without
+    /// entering the loop body once. It is green, it is counted as covered, and it
+    /// asserts nothing, while the population check remains satisfied by its
+    /// siblings.
+    /// </para>
+    /// <para>
+    /// That is the arity defect one scale down, and it is exactly what issue #2944
+    /// asks for in its points 2 and 3: assert the member set and the armed set are
+    /// <b>non-zero before comparing</b>, rather than after. The distinction the epic
+    /// keeps arriving at is that <b>the denominator has to be read, not the
+    /// verdict</b> - a gate reporting "all members armed" over zero members is the
+    /// same statement as an unprimed counter reporting a zero.
+    /// </para>
+    /// <para>
+    /// The armed-set clause is the stronger half. A mapping that threw for every
+    /// member would leave the member count non-zero and the armed set empty, and the
+    /// distinctness check would report those throws - but it would report them as
+    /// individual failures, and a future refactor that swallowed them would leave
+    /// this shape undetected. Asserting the armed set is non-empty pins the property
+    /// directly rather than relying on another clause's diagnostics.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Every_marked_enum_has_members_and_arms_before_it_is_compared()
+    {
+        var failures = new List<string>();
+
+        foreach (var enumType in MarkedEnums.Value)
+        {
+            var members = Enum.GetValues(enumType).Cast<object>().ToList();
+            if (members.Count == 0)
+            {
+                failures.Add(
+                    $"{enumType.Name} carries [InstrumentedEnum] but declares no members, so the "
+                    + "exhaustive-arming check walks an empty set for it and passes without asserting "
+                    + "anything. Remove the marker or give the enum its members.");
+                continue;
+            }
+
+            var marker = enumType.GetCustomAttribute<InstrumentedEnumAttribute>()!;
+            var probe = new List<string>();
+            var mapping = ResolveMapping(enumType, marker, probe);
+            if (mapping is null)
+            {
+                failures.AddRange(probe);
+                continue;
+            }
+
+            var armed = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var member in members)
+            {
+                try
+                {
+                    var tag = (KeyValuePair<string, object?>)mapping.Invoke(null, [member])!;
+                    if (tag.Value?.ToString() is { Length: > 0 } value)
+                    {
+                        armed.Add(value);
+                    }
+                }
+                catch (TargetInvocationException)
+                {
+                    // Reported in detail by the distinctness arm; here only its
+                    // contribution to the armed set matters, which is none.
+                }
+            }
+
+            if (armed.Count == 0)
+            {
+                failures.Add(
+                    $"{enumType.Name} has {members.Count} member(s) but yields no armed tag value at all "
+                    + $"through {mapping.Name}. Every member is unarmed, so the instrument carries no "
+                    + "series for this enum and an absent series reads as an outcome that never occurred.");
+            }
+        }
+
+        Assert.That(failures, Is.Empty, string.Join(Environment.NewLine, failures));
+    }
+
+    /// <summary>
     /// Resolves an enum's tag mapping by <i>signature</i> rather than by name: the
     /// unique static method on the declaring type taking the enum and returning a tag.
     /// Matching on a name would put a stringly-typed member reference in the marker
