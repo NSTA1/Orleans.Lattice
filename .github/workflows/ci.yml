@@ -651,6 +651,28 @@ jobs:
       - name: Self-test the package selector
         run: .github/workflows/select-test-packages-selftest.sh
 
+      # The aggregate's vacuity guard is the single point at which a fan-out
+      # reporting green over an EMPTY population is caught, and it had no test
+      # at all until this self-test landed - an untested guard being
+      # indistinguishable from a clean configuration, which is the defect that
+      # guard itself exists to prevent one level up.
+      #
+      # It matters that all three cases ship. The guard is keyed on
+      # `(package, shard)` summed across every tier and every leg, and that
+      # unit is the whole answer: a single empty tier is normal, an all-empty
+      # leg is survivable when its shards ran in another leg, and only a shard
+      # silent everywhere is a defect. A guard keyed on the leg instead would
+      # not be a weak guard, it would be one answering a different question,
+      # and it would read as clean forever.
+      #
+      # Ungated for the same reason as the selector self-test above: it is pure
+      # Python (no restore, no build, under a second), and a pull request that
+      # touches only `.github/workflows/**` sets `code` and `nonSample` to
+      # false, so nothing else in this job would validate a change to the
+      # aggregator.
+      - name: Self-test the leg aggregator
+        run: python3 .github/workflows/summarise-test-legs-selftest.py
+
       # A samples-only change selects no package leg, because `nonSample`
       # carries '!samples/**'. That was sound while every sample was
       # self-contained, and stopped being sound when a sample became the body of
