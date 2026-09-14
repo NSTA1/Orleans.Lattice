@@ -147,6 +147,34 @@ internal sealed partial class BPlusLeafGrain
     private static int _replayConcurrencyCeiling;
 
     /// <summary>
+    /// Count of activations currently blocked on
+    /// <see cref="_replayConcurrencyGate"/>, incremented immediately before the
+    /// wait and decremented in a <c>finally</c> once it ends by any route.
+    /// <para>
+    /// This is the <b>un-terminated</b> set, and nothing else in this file can
+    /// see it. Both existing recording sites - the cancel arm and the acquire
+    /// arm of <c>orleans.lattice.wal.replay.permit_queue_wait</c> - run
+    /// <b>downstream</b> of <c>WaitAsync</c>, so an activation that is still
+    /// queued records nothing at all: not its wait, not its replay start. A gate
+    /// that is permanently saturated therefore renders byte-identically to a
+    /// gate nobody has ever asked for a permit from, which is the ambiguity that
+    /// left 47% of the deployed estate's stranding uninterpretable (issue
+    /// #3047).
+    /// </para>
+    /// <para>
+    /// The decrement lives in a <c>finally</c> rather than being mirrored onto
+    /// the two recording sites, and that placement is load-bearing. The catch
+    /// below handles <see cref="OperationCanceledException"/> <b>only</b>, so a
+    /// mirrored decrement would leak on any other exception escaping the wait.
+    /// This is a process-wide static that is never rebuilt, so a single missed
+    /// decrement is permanent and presents as a large standing backlog on an
+    /// idle gate - a false positive for the exact condition the instrument
+    /// exists to detect.
+    /// </para>
+    /// </summary>
+    private static int _queuedReplayPermitWaiters;
+
+    /// <summary>
     /// Count of permits currently <b>withheld</b> from
     /// <see cref="_replayConcurrencyGate"/> by the memory-adaptive backpressure of
     /// issue #2781, so the effective ceiling is
@@ -239,9 +267,114 @@ internal sealed partial class BPlusLeafGrain
                 + "#2784).");
 
     /// <summary>
+    /// Publishes the ceiling <see cref="_replayConcurrencyGate"/> was sized to.
+    /// <para>
+    /// This is the <b>denominator</b> that every other permit series is missing.
+    /// One permit withheld from a ceiling of sixteen is noise; one withheld from
+    /// a ceiling of two is half this silo's replay throughput; on a scrape the
+    /// two read identically. A <see cref="SemaphoreSlim"/> does not expose its
+    /// own maximum, and the gate is sized once from
+    /// <see cref="ResolveGateSizing"/> and never re-created or topped up, so
+    /// nothing in the estate could recover the figure after the fact.
+    /// </para>
+    /// <para>
+    /// <c>0</c> is an unambiguous sentinel for <b>not yet sized</b>, not a
+    /// degenerate reading. <see cref="ResolveGateSizing"/> returns the configured
+    /// value when it is positive and otherwise the derived default, and both
+    /// are at least one, so a sized gate can never publish zero here.
+    /// </para>
+    /// <para>
+    /// Declared <b>below</b> <see cref="_replayConcurrencyCeiling"/>, which its
+    /// callback reads, for the reason given on
+    /// <see cref="WithheldReplayPermitsGauge"/>.
+    /// </para>
+    /// </summary>
+    private static readonly ObservableGauge<int> ReplayConcurrencyCeilingGauge =
+        LatticeMetrics.Meter.CreateObservableGauge(
+            LatticeMetrics.WalReplayPermitCeilingName,
+            static () => new Measurement<int>(
+                Volatile.Read(ref _replayConcurrencyCeiling),
+                LatticeTenantLabel.Platform),
+            unit: "{permit}",
+            description:
+                "Ceiling the per-silo WAL replay concurrency gate was sized to, or 0 before the first "
+                + "activation sizes it. The denominator for orleans.lattice.wal.replay.permits_withheld "
+                + "and orleans.lattice.wal.replay.permits_available, neither of which is interpretable "
+                + "without it (issue #3047).");
+
+    /// <summary>
+    /// Publishes the permits currently available on
+    /// <see cref="_replayConcurrencyGate"/> - the headroom a new activation
+    /// arriving now would find.
+    /// <para>
+    /// <b>Never read alone.</b> A zero here is ambiguous between a gate that has
+    /// not been sized and a gate that is fully saturated, and only
+    /// <see cref="ReplayConcurrencyCeilingGauge"/> separates the two. Saturation
+    /// is the reading this instrument exists for, which is why the pair lands
+    /// together and is documented as a pair.
+    /// </para>
+    /// <para>
+    /// It also does not measure the queue. <see cref="SemaphoreSlim.CurrentCount"/>
+    /// saturates at zero and reports the same figure whether one activation or a
+    /// thousand are waiting behind it;
+    /// <see cref="QueuedReplayPermitWaitersGauge"/> is the instrument for that.
+    /// </para>
+    /// </summary>
+    private static readonly ObservableGauge<int> AvailableReplayPermitsGauge =
+        LatticeMetrics.Meter.CreateObservableGauge(
+            LatticeMetrics.WalReplayPermitsAvailableName,
+            static () => new Measurement<int>(
+                Volatile.Read(ref _replayConcurrencyGate)?.CurrentCount ?? 0,
+                LatticeTenantLabel.Platform),
+            unit: "{permit}",
+            description:
+                "Permits currently available on the per-silo WAL replay concurrency gate. Zero is "
+                + "ambiguous between an unsized gate and a saturated one and must be read against "
+                + "orleans.lattice.wal.replay.permit_ceiling; it does not measure queue depth, for "
+                + "which see orleans.lattice.wal.replay.permits_queued (issue #3047).");
+
+    /// <summary>
+    /// Publishes the activations currently blocked on
+    /// <see cref="_replayConcurrencyGate"/>.
+    /// <para>
+    /// This is the only series in the estate that can see a gate <b>admitting
+    /// nothing</b>. Every other permit instrument records at a terminal
+    /// outcome - a wait that acquired, a wait that was cancelled - so an
+    /// activation that never terminates is absent from all of them by
+    /// construction, and its absence is indistinguishable from a tree that
+    /// never activated a leaf at all.
+    /// </para>
+    /// <para>
+    /// Declared <b>below</b> <see cref="_queuedReplayPermitWaiters"/>, which its
+    /// callback reads, for the reason given on
+    /// <see cref="WithheldReplayPermitsGauge"/>.
+    /// </para>
+    /// </summary>
+    private static readonly ObservableGauge<int> QueuedReplayPermitWaitersGauge =
+        LatticeMetrics.Meter.CreateObservableGauge(
+            LatticeMetrics.WalReplayPermitsQueuedName,
+            static () => new Measurement<int>(
+                Volatile.Read(ref _queuedReplayPermitWaiters),
+                LatticeTenantLabel.Platform),
+            unit: "{activation}",
+            description:
+                "Activations currently blocked waiting for a permit on the per-silo WAL replay "
+                + "concurrency gate. The only series that observes the un-terminated set: the queue-wait "
+                + "histogram records at acquisition or cancellation, so an activation that never "
+                + "terminates is invisible to it (issue #3047).");
+
+    /// <summary>
     /// Test-only view of <see cref="_withheldReplayPermits"/>.
     /// </summary>
     internal static int WithheldReplayPermitsForTest => Volatile.Read(ref _withheldReplayPermits);
+
+    /// <summary>
+    /// Test-only view of <see cref="_queuedReplayPermitWaiters"/>. Exposed so a
+    /// fixture can assert the counter returns to zero after a wait ends by
+    /// cancellation as well as by acquisition: this is a process-wide static
+    /// that is never rebuilt, so a leak on the cancel path would be permanent.
+    /// </summary>
+    internal static int QueuedReplayPermitWaitersForTest => Volatile.Read(ref _queuedReplayPermitWaiters);
 
     /// <summary>
     /// Test-only view of <see cref="_replayConcurrencyCeiling"/>. Exposed so a
@@ -269,6 +402,7 @@ internal sealed partial class BPlusLeafGrain
             _replayConcurrencyGate = null;
             _replayConcurrencyCeiling = 0;
             Volatile.Write(ref _withheldReplayPermits, 0);
+            Volatile.Write(ref _queuedReplayPermitWaiters, 0);
             Volatile.Write(ref ReplayHeapPressure.ReaderForTest, null);
         }
     }
@@ -807,28 +941,56 @@ internal sealed partial class BPlusLeafGrain
         // allocation and no clock-adjustment sensitivity.
         var queuedAt = Stopwatch.GetTimestamp();
 
-        // Issue #3044. Both arms below are terminal, so a wait that never
-        // returns records on neither and the histogram is silent about exactly
-        // the state a saturated gate produces. The scope registers this wait as
-        // in flight for its duration and is disposed in the finally, so it
-        // covers both terminal paths AND leaves the entry live for a wait that
-        // has no terminal path - which is the observable being added.
-        var permitWaitScope = LatticeMetrics.EnterWalReplayPermitWait(state.State.TreeId);
+        // Issue #3047. The counter is incremented BEFORE the wait and decremented
+        // in a `finally`, because the un-terminated set is exactly what neither
+        // recording site below can observe: both run downstream of WaitAsync, so
+        // an activation that never acquires records nothing anywhere. The
+        // `finally` is not tidiness - the catch below handles
+        // OperationCanceledException only, so a decrement mirrored onto the two
+        // recording sites would leak on any other exception, permanently, on a
+        // static that is never rebuilt.
+        Interlocked.Increment(ref _queuedReplayPermitWaiters);
         try
         {
-            await gate.WaitAsync(cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitCanceled);
-            throw;
+            // Issue #3044. Both recording sites below are terminal, so a wait that
+            // never returns records on neither of them and the histogram falls
+            // silent about exactly the state a saturated gate produces. The scope
+            // registers this wait as in flight for its duration and is disposed in
+            // its own `finally`, so it covers both terminal paths AND leaves the
+            // entry live for a wait that has no terminal path - which is the whole
+            // observable being added.
+            //
+            // It nests INSIDE the #3047 counter rather than sitting beside it, and
+            // that is load-bearing rather than stylistic: one `finally` per state
+            // means every exit decrements exactly once and disposes exactly once.
+            // Mirroring either onto the recording sites instead would double-count
+            // on a process-wide static that is never rebuilt, so the error would be
+            // permanent and would present as a negative standing depth (or a
+            // phantom in-flight waiter) on an idle gate.
+            var permitWaitScope = LatticeMetrics.EnterWalReplayPermitWait(state.State.TreeId);
+            try
+            {
+                try
+                {
+                    await gate.WaitAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitCanceled);
+                    throw;
+                }
+
+                RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitAcquired);
+            }
+            finally
+            {
+                permitWaitScope.Dispose();
+            }
         }
         finally
         {
-            permitWaitScope.Dispose();
+            Interlocked.Decrement(ref _queuedReplayPermitWaiters);
         }
-
-        RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitAcquired);
 
         _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
         return gate;

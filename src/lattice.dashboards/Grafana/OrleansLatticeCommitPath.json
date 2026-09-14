@@ -912,24 +912,24 @@
       ]
     },
     {
-      "id": 156,
+      "id": 158,
       "title": "WAL replay permit waits currently parked (level) by tree - issue #3044",
       "description": "Activations currently QUEUED on the per-silo WAL replay concurrency gate (orleans.lattice.wal.replay.permit_waits_in_flight). THIS PANEL EXISTS BECAUSE THE HISTOGRAM ABOVE IT IS STRUCTURALLY BLIND TO THE STATE THAT MATTERS MOST. permit_queue_wait records on exactly two arms and BOTH ARE TERMINAL: acquired is written after the semaphore is entered, canceled is written from the catch around the wait. A wait that never returns writes NEITHER, so an activation parked on a saturated gate forever contributes nothing to either arm and the instrument built to measure gate contention goes quiet exactly when the gate is at its worst. That is not an edge case - it is what saturation looks like from the inside. NO AMOUNT OF ZERO-PRIMING REACHES THAT GAP, and this is worth stating because priming is the reflex the rest of this dashboard teaches. A primed canceled arm reading zero asserts that NO CANCELLATION COMPLETED, which is true and irrelevant while a wait is still in flight. The missing observable is a LEVEL, not a terminal event, so it needs a gauge and could never have been a prime. READ IT WITH THE OLDEST-AGE PANEL BESIDE IT AND DO NOT READ EITHER ALONE. A count of three cannot distinguish three healthy 200ms waits from one activation parked for twelve minutes, and those two have different causes and opposite remedies. The count answers IS ANYONE QUEUED; the age answers FOR HOW LONG, and only the pair is diagnostic. ABSENT IS NOT ZERO, BUT ZERO IS A MEASURED ZERO. This gauge IS primed, unlike the histogram above, and the asymmetry between them is deliberate rather than inconsistent: priming is free for an instrument whose empty state is genuinely a level and wrong for one whose empty state is a distribution, because adding a zero to a level does not perturb it while a fabricated 0 ms sample is a real datum that biases a shape. A tree reports zero here once it has queued at least once in this process, so a flat zero line is a measured zero and a MISSING line means either the build did not land or that tree has never activated a leaf in this silo. THE PRIMING HAS A BOUNDARY AND THE BOUNDARY IS PART OF THE READING: it covers trees this process has OBSERVED queueing, not every tree in the estate, so a zero here means 'has queued before, is not queued now' and never means 'this tree cannot queue'. TAGGED BY TREE for the same reason permit_queue_wait is and permit_adaptations is not - a ceiling is process-wide and has no per-tree value, but a wait is one caller's own experience and is attributable to the tree that is paying it.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 342 },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 349 },
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "max by (tree) (orleans_lattice_wal_replay_permit_waits_in_flight{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "parked permit waits {{tree}}" }
       ]
     },
     {
-      "id": 157,
+      "id": 159,
       "title": "WAL replay permit oldest parked wait (age) by tree - issue #3044",
       "description": "Age in seconds of the OLDEST activation currently queued on the per-silo WAL replay concurrency gate (orleans.lattice.wal.replay.permit_wait.oldest_age). THIS IS THE HALF OF THE PAIR THAT SEPARATES BUSY FROM STUCK. The count panel beside it reports how many activations are parked; it cannot say whether they are moving. A steady count of three with this age oscillating near zero is a gate serving a real queue promptly, which is the mechanism working. The SAME count of three with this age climbing without bound is one or more activations that will never be admitted, and it is the shape that closes the loop issue #2691 measured from the filesystem: a leaf that cannot get a permit cannot replay, cannot bank a snapshot, cannot advance the durable materialiser pin, so WAL garbage collection finds its pin unusable and reclaims nothing, and the next replay window is larger still. A MONOTONIC CLIMB HERE IS THE ALARM and no threshold is encoded in the instrument, deliberately: stuck is read off the slope against real data rather than guessed in code, because the honest threshold differs per host and per WAL size. NOT PRIMED, AND THE ASYMMETRY WITH THE COUNT BESIDE IT IS THE WHOLE DESIGN. The age of the oldest waiter when there is no waiter is UNDEFINED, not zero. Priming it would publish the healthiest possible value for the emptiest possible state, so a genuinely idle gate would be indistinguishable on the scrape from a gate whose waits are all instant - and 'the gate is innocent' is precisely one of the two conclusions this pair exists to choose between. So an absent series here is CORRECT and means nothing is queued; confirm that reading against the count panel, which IS primed and does distinguish a measured zero from a build that did not land. Use the count for presence and this for severity; neither substitutes for the other. TAGGED BY TREE, matching the count and permit_queue_wait, because a wait is attributable to the tree paying it even though the gate itself is a process-wide static with no per-tree ceiling.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 349 },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 356 },
       "fieldConfig": { "defaults": { "unit": "s", "custom": { "spanNulls": false } }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "max by (tree) (orleans_lattice_wal_replay_permit_wait_oldest_age{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "oldest parked wait {{tree}}" }
@@ -1078,6 +1078,19 @@
       "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "spanNulls": false } }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "max by (tree) (orleans_lattice_leaf_snapshot_segment_peak_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "{{tree}} peak segment bytes" }
+      ]
+    }, {
+      "id": 156,
+      "title": "WAL replay gate occupancy: ceiling, available, queued - issue #3047",
+      "description": "Occupancy of the per-silo WAL replay concurrency gate, as three series that are only interpretable together. CEILING is the denominator the permit family previously lacked: a SemaphoreSlim does not expose its own maximum and the gate is sized once and never re-created or topped up, so one permit withheld from sixteen (noise) and one withheld from two (half this silo's replay throughput) were indistinguishable on a scrape. A ceiling of 0 is an unambiguous not-yet-sized sentinel, never a sized gate, because the sizing resolver returns the configured value when positive and the derived default otherwise and both are at least 1. AVAILABLE is the headroom a new activation would find; a zero is ambiguous between an unsized gate and a saturated one and is resolved only against the ceiling, which is why the two are charted together. QUEUED is the un-terminated set, and it is the only series here that can show a gate admitting nothing: every other permit instrument records at a terminal outcome downstream of the wait - the queue-wait histogram on acquisition or cancellation, the replay counters once a permit is held - so an activation that never acquires and is never cancelled records nothing anywhere, and a permanently saturated gate renders byte-identically to a tree that never activated a leaf. Available cannot substitute for it: that count saturates at zero and reports the same figure for one waiter and for a thousand. Read the panel as the width of the door, whether it is open, and the queue outside it. An absent series means the build does not carry the instruments; a queued series pinned above zero while available sits at zero is a saturated gate with a standing backlog, and on an otherwise idle gate it is the signature of a leaked decrement rather than of real demand (issue #3047).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 342 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(orleans_lattice_wal_replay_permit_ceiling{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "gate ceiling" },
+        { "refId": "B", "expr": "sum(orleans_lattice_wal_replay_permits_available{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "permits available" },
+        { "refId": "C", "expr": "sum(orleans_lattice_wal_replay_permits_queued{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "activations queued for a permit" }
       ]
     }
   ]

@@ -1882,6 +1882,88 @@ public static class LatticeMetrics
     public const string WalReplayPermitsWithheldName = "orleans.lattice.wal.replay.permits_withheld";
 
     /// <summary>
+    /// Metric name for the gauge publishing the <b>ceiling</b> the per-silo WAL
+    /// replay concurrency gate was sized to, or <c>0</c> before any activation
+    /// has sized it (issue #3047).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the <b>denominator</b> for every other permit series. The withheld
+    /// level and the adaptation counters are absolute counts, and an absolute
+    /// count cannot be judged without the total it is drawn from: one permit
+    /// withheld from a ceiling of sixteen is noise, and one withheld from a
+    /// ceiling of two is half the silo's replay throughput. Those two readings
+    /// are numerically identical on a scrape and operationally opposite.
+    /// </para>
+    /// <para>
+    /// Like <see cref="WalReplayPermitsWithheldName"/>, the instrument is
+    /// declared in <c>BPlusLeafGrain.Activation.cs</c> beside the static it
+    /// reads, and the name is exported here so the dashboard drift guard can
+    /// resolve a panel token against it. See the remarks on that field for why
+    /// exporting the name is a requirement rather than a convenience.
+    /// </para>
+    /// </remarks>
+    public const string WalReplayPermitCeilingName = "orleans.lattice.wal.replay.permit_ceiling";
+
+    /// <summary>
+    /// Metric name for the gauge publishing the permits currently
+    /// <b>available</b> on the per-silo WAL replay concurrency gate (issue
+    /// #3047).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Never read alone.</b> Zero on this series is ambiguous between an
+    /// unsized gate and a fully saturated one, and only
+    /// <see cref="WalReplayPermitCeilingName"/> separates them: a ceiling of
+    /// <c>0</c> means the gate does not exist yet and this figure is meaningless,
+    /// while a ceiling of one or more makes a zero here a measured saturation.
+    /// Saturation is the reading the instrument exists for, which is why the pair
+    /// is documented as a pair.
+    /// </para>
+    /// <para>
+    /// It sizes <b>headroom, not backlog</b>. The underlying count cannot fall
+    /// below zero, so it says how much room is left and nothing about how many
+    /// activations are waiting once there is none;
+    /// <see cref="WalReplayPermitsQueuedName"/> is the instrument for that.
+    /// </para>
+    /// <para>
+    /// Declared outside this class and exported here for the drift guard, as
+    /// above.
+    /// </para>
+    /// </remarks>
+    public const string WalReplayPermitsAvailableName = "orleans.lattice.wal.replay.permits_available";
+
+    /// <summary>
+    /// Metric name for the gauge publishing the activations currently
+    /// <b>queued</b> on the per-silo WAL replay concurrency gate (issue #3047).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The only non-terminal instrument on the admission path.</b>
+    /// <see cref="WalReplayPermitQueueWait"/> records once a wait has ended and
+    /// <see cref="LeafActivationReplays"/> records once a permit is held, so both
+    /// sit downstream of the wait and an activation that is <em>still queued</em>
+    /// appears on neither. A permanently saturated gate is therefore silent
+    /// across the whole surface, and renders identically to a gate nothing ever
+    /// asked for a permit. That is a property of measuring terminated events
+    /// only, and the sole repair is to measure the population that has not
+    /// terminated.
+    /// </para>
+    /// <para>
+    /// Not derivable from <see cref="WalReplayPermitsAvailableName"/>, which
+    /// saturates at zero and so reports the same figure for one waiter and for a
+    /// thousand. Read the three together: the ceiling says how wide the door is,
+    /// availability says whether it is open, and this says how many are waiting
+    /// at it.
+    /// </para>
+    /// <para>
+    /// Declared outside this class and exported here for the drift guard, as
+    /// above.
+    /// </para>
+    /// </remarks>
+    public const string WalReplayPermitsQueuedName = "orleans.lattice.wal.replay.permits_queued";
+
+    /// <summary>
     /// Tag marking a replay permit queue wait that ended in the permit being
     /// <b>acquired</b>, on <see cref="WalReplayPermitQueueWait"/>.
     /// </summary>
@@ -3649,6 +3731,100 @@ public static class LatticeMetrics
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
+
+    /// <summary>
+    /// Which durable-pin state each <i>absent</i> consumer blocking a WAL GC
+    /// pass is in, tagged by tree, partition and
+    /// <see cref="WalGcBlockingPinState"/> (issue #3042).
+    /// <para>
+    /// <c>blocked</c> on <see cref="WalGcPasses"/> says a tree cannot reclaim;
+    /// it cannot say whether that is a defect or correct behaviour, because the
+    /// leaf publishes the same unusable pin on both routes in. This instrument
+    /// resolves that from the leaf's persisted projection checkpoint, read
+    /// directly from the storage provider <i>without activating the leaf</i> -
+    /// the blocking population is exactly the population that cannot be
+    /// activated.
+    /// </para>
+    /// <para>
+    /// Every arm is zero-primed, and primed twice over. Each tree mints all
+    /// four arms under the reserved partition value
+    /// <see cref="PartitionNone"/> on every pass, above every early return, so
+    /// an absent series means the classifier is not running on this silo rather
+    /// than that nothing was classified. Each classified
+    /// <c>(tree, partition)</c> then mints all four of its own arms before
+    /// recording the one it resolved, so a zero on a state reads as
+    /// measured-and-not-this-state rather than as silence. Absence on this
+    /// instrument has been read as evidence three times on the epic that
+    /// produced it, and on each occasion "no series" and "never ran" were
+    /// byte-identical.
+    /// </para>
+    /// <para>
+    /// Diagnostic only - it never changes what a pass is allowed to trim.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcBlockingPinStates =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocking_pin_state", unit: "{consumer}",
+            description: "Durable-pin state of each absent consumer blocking a WAL GC pass (issue #3042), tagged by tree, partition and status. 'checkpointed_uncovered' is repairable: the leaf durably checkpointed the partition but published an unusable pin because snapshot coverage is absent. 'never_checkpointed' is correct by design and has no repair: the leaf holds live data it has never checkpointed, so there is no WAL offset it could honestly claim. 'no_durable_state' is a fourth thing and not a flavour of either: the provider answered and reported nothing ever persisted for that leaf. 'unreadable' reports a failure of the classifier itself - an unparseable consumer id, no storage provider on this silo, or a read that threw - and is kept separate so a defect in the measurement is never rendered as a finding about the system. Classified by a direct storage-provider read that never activates the leaf, once per consumer per blocked episode. All four arms are zero-primed per tree per pass under partition 'none', and again per classified partition. Diagnostic only: it never changes what a pass is allowed to trim.");
+
+    /// <summary>Canonical name of <see cref="WalGcBlockingPinStates"/>.</summary>
+    public const string WalGcBlockingPinStatesName = "orleans.lattice.wal.gc.blocking_pin_state";
+
+    /// <summary>
+    /// Reserved <see cref="TagPartition"/> value used by the per-tree
+    /// reachability priming of <see cref="WalGcBlockingPinStates"/>.
+    /// <para>
+    /// A real classification always carries the numeric partition it resolved.
+    /// This value is minted on every pass for every tree, whether or not the
+    /// tree is blocked, so that the instrument has a series on a silo where
+    /// nothing has ever blocked - which is what makes an absent series a
+    /// positive statement ("the classifier is not wired here") instead of an
+    /// ambiguous one.
+    /// </para>
+    /// </summary>
+    public const string PartitionNone = "none";
+
+    /// <summary>
+    /// Reserved <see cref="TagPartition"/> value for a blocking consumer whose
+    /// id could not be parsed back to a leaf grain id and partition, so no
+    /// partition can be named. Always recorded against
+    /// <see cref="BlockingPinUnreadable"/>.
+    /// </summary>
+    public const string PartitionUnknown = "unknown";
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcBlockingPinStates"/>
+    /// for <see cref="WalGcBlockingPinState.CheckpointedUncovered"/> - the
+    /// repairable state.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockingPinCheckpointedUncovered =
+        new(TagStatus, "checkpointed_uncovered");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcBlockingPinStates"/>
+    /// for <see cref="WalGcBlockingPinState.NeverCheckpointed"/> - the state
+    /// that is correct by design and has no repair.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockingPinNeverCheckpointed =
+        new(TagStatus, "never_checkpointed");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcBlockingPinStates"/>
+    /// for <see cref="WalGcBlockingPinState.NoDurableState"/> - the storage
+    /// provider answered and reported nothing persisted for the leaf. Kept
+    /// distinct from <see cref="BlockingPinNeverCheckpointed"/> so an absence
+    /// is never presented as a claim about live data.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockingPinNoDurableState =
+        new(TagStatus, "no_durable_state");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcBlockingPinStates"/>
+    /// for <see cref="WalGcBlockingPinState.Unreadable"/> - the classifier
+    /// could not answer. Reports a failure of the instrument, not a property of
+    /// the leaf, so it is counted separately from every arm that does.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockingPinUnreadable =
+        new(TagStatus, "unreadable");
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on
