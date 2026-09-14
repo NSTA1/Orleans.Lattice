@@ -590,6 +590,56 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
+    /// Drops every read this activation holds for one leaf, in flight or not,
+    /// and reports how many were dropped. The stranded-leaf recovery
+    /// (issue #3016) is its only caller.
+    /// <para>
+    /// <b>This is the one place an in-flight entry may be evicted, and the
+    /// comment in <see cref="SweepScanPageLeafReads"/> forbidding it is not
+    /// being overridden - its premise has failed.</b> That rule protects the
+    /// case where the read will complete: evicting one there lets the next
+    /// attempt enqueue a duplicate behind it, trading a bounded map for the
+    /// unbounded queue growth coalescing exists to suppress. The recovery path
+    /// is reached only after the same leaf has missed the ceiling on
+    /// <see cref="StrandedLeafStallThreshold"/> consecutive attempts having
+    /// read nothing on any of them, which is the evidence that this particular
+    /// read is not going to complete. Once that holds, retaining the entry does
+    /// not suppress a duplicate - there is no useful read to be duplicated -
+    /// it guarantees that no attempt ever reaches the leaf again.
+    /// </para>
+    /// <para>
+    /// Nothing is cancelled. The parked call keeps its place in the leaf's
+    /// queue; dropping the entry only means no future caller will wait on it.
+    /// </para>
+    /// </summary>
+    private int EvictScanPageLeafReads(GrainId leafId)
+    {
+        lock (_scanPageLeafReadsGate)
+        {
+            List<ScanPageLeafReadKey>? evict = null;
+            foreach (var key in _scanPageLeafReads.Keys)
+            {
+                if (key.LeafId == leafId)
+                {
+                    (evict ??= []).Add(key);
+                }
+            }
+
+            if (evict is null)
+            {
+                return 0;
+            }
+
+            foreach (var key in evict)
+            {
+                _scanPageLeafReads.Remove(key);
+            }
+
+            return evict.Count;
+        }
+    }
+
+    /// <summary>
     /// The single recorder every leaf-read outcome goes through, including the
     /// zero prime, so that the primed series and the live series carry the same
     /// tag set by construction rather than by inspection.
