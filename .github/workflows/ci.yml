@@ -1693,7 +1693,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: leg-results-${{ matrix.leg.id }}
+          # The attempt is part of the name because artifacts are scoped to the
+          # RUN, not the attempt. Without it, re-running a failed leg uploads a
+          # second artifact under the same name as the first, and the aggregate
+          # report reads whichever survived extraction - see issue #2924.
+          name: leg-results-${{ github.run_attempt }}-${{ matrix.leg.id }}
           path: leg-results/
           retention-days: 7
 
@@ -1704,7 +1708,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: test-output-${{ matrix.leg.id }}
+          name: test-output-${{ github.run_attempt }}-${{ matrix.leg.id }}
           path: |
             **/*.trx
             **/*.dmp
@@ -1879,13 +1883,24 @@ jobs:
           # file, not the job.
           fetch-depth: 0
 
+      # The pattern deliberately matches EVERY attempt, not just the current
+      # one. "Re-run failed jobs" does not re-run the legs that passed, so they
+      # upload nothing under the new attempt; narrowing this to
+      # `leg-results-${{ github.run_attempt }}-*` would collect only the re-run
+      # legs and report every other leg as missing. The aggregator picks the
+      # highest attempt per leg instead.
+      #
+      # `merge-multiple` is NOT set, and that is load-bearing. Every leg writes
+      # its record under the same file name, so merging all artifacts into one
+      # directory makes attempt-scoped artifact names achieve nothing - the
+      # files inside still collide. Keeping one directory per artifact is what
+      # lets both attempts survive to be compared.
       - name: Download leg results
         if: needs.plan.outputs.leg_count != '0'
         uses: actions/download-artifact@v6
         with:
           pattern: leg-results-*
           path: leg-results
-          merge-multiple: true
 
       # Aggregates every leg into one table: which package, which shard, which
       # tier, and whether that package was seeded by this diff or pulled in by

@@ -70,6 +70,8 @@ SCRIPT = os.environ.get("SUMMARISE_TEST_LEGS", ".github/workflows/summarise-test
 
 VACUITY_HEADING = "Shards that executed no tests in any tier"
 REPORT_HEADING = "## Test matrix result"
+COLLISION_HEADING = "Colliding leg results"
+SUPERSEDED_HEADING = "Superseded leg results"
 
 failures = 0
 checks = 0
@@ -91,8 +93,10 @@ def check() -> None:
     checks += 1
 
 
-def item(package: str, shard: str, tier: str, executed: int, outcome: str) -> dict:
+def item(package: str, shard: str, tier: str, executed: int, outcome: str,
+         failures: list[str] | None = None) -> dict:
     """One leg-result record, matching the schema run-test-leg.py writes."""
+    names = list(failures or [])
     return {
         "label": f"{package} / {shard} ({tier})",
         "package": package,
@@ -105,26 +109,43 @@ def item(package: str, shard: str, tier: str, executed: int, outcome: str) -> di
         "outcome": outcome,
         "duration": 0.04,
         "executed": executed,
-        "failures": [],
-        "failure_count": 0,
+        "failures": names,
+        "failure_count": len(names),
     }
 
 
-def leg(leg_id: str, items: list[dict]) -> dict:
-    return {"leg": {"id": leg_id, "name": f"leg {leg_id}", "estimate": 0.1}, "items": items}
+def leg(leg_id: str, items: list[dict], attempt: int = 1) -> dict:
+    return {
+        "leg": {"id": leg_id, "name": f"leg {leg_id}", "estimate": 0.1, "attempt": attempt},
+        "items": items,
+    }
 
 
 def run_aggregator(legs: list[dict], script: str | None = None) -> tuple[int, str]:
-    """Invoke the unmodified script over a synthesised results directory."""
+    """Invoke the unmodified script over a synthesised results directory.
+
+    Each payload is written into a directory of its own, which is how
+    `actions/download-artifact` lays multiple artifacts out when it is not
+    merging them into one. Keeping them separate is what lets this suite
+    present the same leg twice, which is exactly what a re-run produces and
+    what a merged layout would hide by overwriting.
+
+    `--expect-legs` is the number of DISTINCT legs, because that is what the
+    plan counts. Passing the number of payloads instead would make a re-run
+    look like a missing leg.
+    """
     work = tempfile.mkdtemp(prefix="summarise-selftest-")
     try:
-        for payload in legs:
-            path = os.path.join(work, f"{payload['leg']['id']}.json")
-            with open(path, "w", encoding="utf-8") as handle:
+        for index, payload in enumerate(legs):
+            leg_id = payload["leg"]["id"]
+            subdir = os.path.join(work, f"leg-results-{index}-{leg_id}")
+            os.makedirs(subdir, exist_ok=True)
+            with open(os.path.join(subdir, f"{leg_id}.json"), "w", encoding="utf-8") as handle:
                 json.dump(payload, handle)
+        planned = len({payload["leg"]["id"] for payload in legs})
         completed = subprocess.run(
             [sys.executable, script or SCRIPT,
-             "--results-dir", work, "--expect-legs", str(len(legs))],
+             "--results-dir", work, "--expect-legs", str(planned)],
             capture_output=True,
             text=True,
         )
@@ -176,7 +197,7 @@ def main() -> int:
     # would reduce the suite silently and the survivors would still pass.
     # Assert the population before asserting anything about it.
     # -----------------------------------------------------------------------
-    expected_cases = 3
+    expected_cases = 5
     observed_cases = 0
 
     # -----------------------------------------------------------------------
@@ -298,9 +319,122 @@ def main() -> int:
         passed("the aggregate rendered its report.")
 
     # -----------------------------------------------------------------------
-    # D. SELF-VALIDATION. Can this suite fail at all?
+    # D. A PARTIAL RE-RUN. MUST PASS, and must report the RE-RUN result.
     #
-    # Cases A to C establish what the guard does. They do not establish that
+    # This is the case the whole change exists for. "Re-run failed jobs" does
+    # not re-run the legs that passed, so a re-run run carries leg-1 from
+    # attempt 1 and BOTH of leg-2's attempts - the red one and the green one.
+    #
+    # Two things have to hold, and only together do they mean anything. The run
+    # must go green, and the attempt-1 failure must be ABSENT from the report.
+    # Exit status alone would also be satisfied by an aggregator that dropped
+    # leg-2 entirely, which would be a silent loss of a leg rather than a
+    # recovery.
+    # -----------------------------------------------------------------------
+    observed_cases += 1
+    code, report = run_aggregator([
+        leg("leg-1", [
+            item("pkgA", "shardX", "deterministic", 355, "passed"),
+        ], attempt=1),
+        leg("leg-2", [
+            item("pkgB", "shardY", "deterministic", 210, "failed",
+                 failures=["Flaky_test_from_the_first_attempt"]),
+        ], attempt=1),
+        leg("leg-2", [
+            item("pkgB", "shardY", "deterministic", 210, "passed"),
+        ], attempt=2),
+    ])
+    print(f"  case D: exit={code} (expected 0)")
+
+    check()
+    if code != 0:
+        fail(
+            f"a re-run leg did not clear its earlier failure (exit {code}); the aggregate is "
+            "still reading the superseded attempt, so re-running failed jobs is not a "
+            "recovery path."
+        )
+    else:
+        passed("a re-run leg's later attempt supersedes its earlier failure.")
+
+    check()
+    if "Flaky_test_from_the_first_attempt" in report:
+        fail(
+            "the superseded attempt's failing test is still named in the report, so the "
+            "earlier attempt was merged with the later one rather than replaced."
+        )
+    else:
+        passed("the superseded attempt's failure is absent from the report.")
+
+    check()
+    if SUPERSEDED_HEADING not in report or "leg-2" not in report:
+        fail(
+            "the report does not record that a leg was superseded, so a reader cannot tell "
+            "the reported result came from a re-run rather than the original attempt."
+        )
+    else:
+        passed("the report names the superseded leg.")
+
+    check()
+    if "summarise-test-legs: PASS" not in report:
+        fail(
+            "the verdict did not reach stdout, so the job log shows no conclusion and a "
+            "reader has to open the step summary to learn what happened."
+        )
+    else:
+        passed("the verdict is printed to stdout.")
+
+    # -----------------------------------------------------------------------
+    # E. TWO RESULTS FOR ONE LEG UNDER ONE ATTEMPT. MUST FAIL.
+    #
+    # The attempt is what distinguishes a legitimate re-run from a collision.
+    # Two results for the same leg carrying the SAME attempt cannot arise from
+    # a correctly wired collection, so resolving them by picking one would be
+    # choosing arbitrarily between two results that disagree about nothing
+    # visible. This is the assertion that stops case D's selection rule from
+    # quietly swallowing a genuine duplicate.
+    # -----------------------------------------------------------------------
+    observed_cases += 1
+    code, report = run_aggregator([
+        leg("leg-1", [
+            item("pkgA", "shardX", "deterministic", 355, "passed"),
+        ], attempt=1),
+        leg("leg-2", [
+            item("pkgB", "shardY", "deterministic", 210, "passed"),
+        ], attempt=1),
+        leg("leg-2", [
+            item("pkgB", "shardY", "deterministic", 210, "passed"),
+        ], attempt=1),
+    ])
+    print(f"  case E: exit={code} (expected 1)")
+
+    check()
+    if code != 1:
+        fail(
+            f"two results for one leg under the same attempt exited {code}, expected 1; the "
+            "aggregate is resolving a collision arbitrarily instead of refusing it."
+        )
+    else:
+        passed("two results for one leg under one attempt fail the aggregate.")
+
+    check()
+    if COLLISION_HEADING not in report or "leg-2" not in report:
+        fail(
+            "the aggregate failed without naming the colliding leg, so the failure is not "
+            "actionable and is indistinguishable from an unrelated error."
+        )
+    else:
+        passed("the colliding leg is named in the report.")
+
+    check()
+    if "summarise-test-legs: FAIL" not in report:
+        fail("the failing verdict did not reach stdout.")
+    else:
+        passed("the failing verdict is printed to stdout.")
+
+    # -----------------------------------------------------------------------
+    # F. SELF-VALIDATION. Can this suite fail at all?
+    #
+    # Cases A to E establish what the guards do. They do not establish that
     # this file would notice if it stopped doing it - and a self-test that
     # cannot redden is worth precisely as much as the untested guard it
     # replaced. The mutations below are the answer to "name a change that
@@ -341,6 +475,45 @@ def main() -> int:
                 ])],
                 0,
                 "case B would still have passed against a guard keyed on the wrong unit",
+            ),
+            (
+                "the aggregate stops selecting the latest attempt per leg",
+                "    payloads, superseded, conflicts = select_latest(payloads)",
+                "    payloads, superseded, conflicts = payloads, [], []",
+                [
+                    leg("leg-1", [
+                        item("pkgA", "shardX", "deterministic", 355, "passed"),
+                    ], attempt=1),
+                    leg("leg-2", [
+                        item("pkgB", "shardY", "deterministic", 210, "failed",
+                             failures=["Flaky_test_from_the_first_attempt"]),
+                    ], attempt=1),
+                    leg("leg-2", [
+                        item("pkgB", "shardY", "deterministic", 210, "passed"),
+                    ], attempt=2),
+                ],
+                0,
+                "case D would still have passed against an aggregate that reads every "
+                "attempt at once, which is the defect itself",
+            ),
+            (
+                "a same-attempt collision is resolved instead of refused",
+                "    if conflicts:\n        ok = False\n",
+                "    if conflicts:\n        ok = ok\n",
+                [
+                    leg("leg-1", [
+                        item("pkgA", "shardX", "deterministic", 355, "passed"),
+                    ], attempt=1),
+                    leg("leg-2", [
+                        item("pkgB", "shardY", "deterministic", 210, "passed"),
+                    ], attempt=1),
+                    leg("leg-2", [
+                        item("pkgB", "shardY", "deterministic", 210, "passed"),
+                    ], attempt=1),
+                ],
+                1,
+                "case E would still have passed against an aggregate that picks one of two "
+                "colliding results arbitrarily",
             ),
         ]
 
