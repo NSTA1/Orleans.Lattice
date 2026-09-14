@@ -178,6 +178,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`SnapshotLeafIdleTtl`](snapshot-cursors.md) | `TimeSpan` | 30 minutes | Yes |
 | [`SoftDeleteDuration`](#softdeleteduration) | `TimeSpan` | 72 hours | Yes |
 | [`SplitDrainBatchSize`](#splitdrainbatchsize) | `int` | 1024 | Yes |
+| [`StarvationDriveBudget`](#starvationdrivebudget) | `TimeSpan` | 5 minutes | Yes (on the next drive) |
 | [`StorageUsageCacheTtl`](#storageusagecachettl) | `TimeSpan` | 10 seconds | Yes |
 | [`StorageUsagePollInterval`](#storageusagepollinterval) | `TimeSpan` | 15 seconds | No (global; read from the default options) |
 | [`StorageUsageDeepPollInterval`](#storageusagedeeppollinterval) | `TimeSpan` | `TimeSpan.Zero` (disabled) | No (global; read from the default options) |
@@ -1177,6 +1178,24 @@ This option can be changed freely at any time. The new duration takes effect on 
 Number of entries per batch during the shadow-write drain phase of an adaptive split (default: 1024). Larger batches reduce the number of drain rounds but increase per-round memory and storage I/O.
 
 This option can be changed freely at any time.
+
+### `StarvationDriveBudget`
+
+Hard ceiling on how long a single WAL GC starved-leaf checkpoint drive may run while holding a permit on the per-silo WAL replay concurrency gate, before it abandons its replay and releases that permit (default: 5 minutes = `4 * WalDrainBudget`).
+
+**What it defends against (issue #3065).** The retention sweep reactivates a dormant leaf whose unusable durable pin is blocking its tree's WAL cursor floor, and drives that leaf's outstanding replay under the same replay permit gate the activation path uses. Before this budget existed, every await inside the permit-guarded region was passed `CancellationToken.None`: no timeout, no cancellation, anywhere. A drive whose commit-log read never returned therefore held one of a small number of per-silo permits **indefinitely**, and could not even be cancelled. The gate drained, every subsequent leaf activation on that silo queued behind it, and the silo presented as an activation outage. Measured on a frozen production container: gate ceiling 2, available 0, 345 activations queued, the oldest for 66.8 minutes.
+
+A caller-side timeout does not help and is not what this option is. The sweep's grain call already times out at the Orleans response-timeout default and records `undelivered`; abandoning the caller's wait does nothing to the grain-side method, which keeps running and keeps holding its permit. The budget has to be enforced **inside** the permit-guarded region, which is what this option does.
+
+**How the budget is enforced.** The drive creates a `CancellationTokenSource` for the budget and passes its token to every await in the region, and additionally bounds its own wait on the work with that token. Both halves are needed and they fail differently: the token genuinely terminates work that honours cancellation, while the wait bound covers a host-supplied storage call that ignores it. In the second case the storage call keeps running detached - but **without a permit**, which is the property that matters. The permit is acquired and released in the outer frame, the only frame guaranteed to run its `finally`, so abandonment cannot skip the release.
+
+**Sizing.** The default is `4 * WalDrainBudget`. A full starved-leaf replay reads at most `MaxLeafReplayEntries` entries in slices of `WalReplaySliceBudget`, which at the shipped defaults is 40 slice reads; 5 minutes leaves 7.5 seconds per read against a healthy sub-millisecond read and a 15-second `WalFlushTimeout`, so a legitimately slow replay finishes comfortably inside it. Raise it if your storage tier is slow enough that real drives are being abandoned - the `orleans.lattice.wal.replay.starvation_drive_abandonments` counter tells you, and it is the only series that can. Lower it only if you are willing to trade drive completion for faster permit recovery.
+
+**`InfiniteTimeSpan` is rejected, unlike most other timeout options here.** An infinite budget restores exactly the outage this option exists to bound, so it is refused at validation rather than honoured at runtime. The validator also rejects zero and negative values.
+
+**Observability.** An abandoned drive increments `orleans.lattice.wal.replay.starvation_drive_abandonments` (tagged `tree`), zero-primed per tree beside the sweep's `attempted` arm so an absent series proves the build is not deployed rather than that no drive has run, and emits a warning log carrying the tree, the budget and how long the drive actually ran. It also records the `drove_timed_out` verdict on `orleans.lattice.wal.gc.blocked_leaf_reactivations` - but that arm is near-silent in practice, because the caller has usually already timed out, so read the counter and not the verdict. See [Metrics](metrics.md).
+
+This option can be changed freely at any time. The new value takes effect on the next drive.
 
 ### `StorageUsageCacheTtl`
 

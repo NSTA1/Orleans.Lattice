@@ -717,16 +717,74 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                     // Four terminal arms, primed by walking ReactivationOutcome
                     // (issue #2938).
                     "completed", "unresolvable", "faulted", "undelivered",
-                    // Five drive verdicts, primed by walking
+                    // Six drive verdicts, primed by walking
                     // LeafStarvationDriveOutcome (issue #2692).
                     "drove_lifted", "drove_no_advance", "drove_memory_refused",
-                    "drove_not_driven", "drove_already_driving",
+                    "drove_not_driven", "drove_already_driving", "drove_timed_out",
                 }),
                 "every outcome must be minted, so a reader can tell a measured zero from a missing build.");
             Assert.That(recorder.Measurements.Select(m => m.Value), Is.All.Zero,
                 "a prime must mint the series without claiming an event occurred.");
             Assert.That(recorder.Counted, Is.Empty,
                 "and must stay invisible to any fixture counting real occurrences.");
+        });
+
+        await scheduler.StopAsync(CancellationToken.None);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_primes_the_starvation_drive_abandonment_counter_at_zero()
+    {
+        // Issue #3065. The grain-side abandonment counter is the ONLY signal
+        // that separates "a drive is running slowly but is bounded" from "a
+        // drive is parked forever holding its permit" - the two are otherwise
+        // byte-identical on the scheduler's own arms, because a touch that
+        // times out at the Orleans response-timeout default records
+        // 'undelivered' in both cases and a successor bouncing off the in-flight
+        // latch records 'drove_already_driving' in both cases. That was the
+        // measured signature of the frozen containers (attempted 81 =
+        // undelivered 78 + completed 3), and bounding the drive reproduces it
+        // exactly for a merely-slow drive. So the counter must distinguish a
+        // measured zero from a build that never landed, or the next operator is
+        // in the position this epic spent weeks in.
+        //
+        // It is primed HERE - beside 'attempted', on the scheduler - and
+        // deliberately not at the grain's drive entry point. Priming at the
+        // drive would make the absent series mean "no drive has ever run" as
+        // well as "this build is not deployed", which is precisely the
+        // ambiguity the priming exists to remove. Co-primed with 'attempted',
+        // the reading is unambiguous: attempted > 0 with the series present is
+        // a real zero; attempted > 0 with the series absent is an undeployed
+        // build. Do not tidy this back to the drive.
+        const string QuietTree = "walgc-abandonment-primed";
+        var gc = Substitute.For<ILatticeWalGc>();
+        gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Report(entriesTrimmed: 0)));
+        var time = new VirtualTimeProvider();
+
+        using var abandonments = new InstrumentRecorder(
+            LatticeMetrics.WalReplayStarvationDriveAbandonments, QuietTree);
+        using var reactivations = new InstrumentRecorder(
+            LatticeMetrics.WalGcBlockedLeafReactivations, QuietTree);
+
+        var scheduler = CreateScheduler(FactoryWithTrees(QuietTree), gc, Adaptive(), time);
+        await StartAndRunFirstPassAsync(scheduler, time);
+
+        Assert.Multiple(() =>
+        {
+            // Method Rule 2: the co-priming claim is only meaningful if the
+            // partner arm was actually minted on the same pass. Without this,
+            // a build that primed neither would satisfy "both are zero".
+            Assert.That(
+                reactivations.Measurements.Count(m => (m.Tag(LatticeMetrics.TagOutcome) as string) == "attempted"),
+                Is.EqualTo(1),
+                "the partner arm must be minted on this pass, or the co-priming assertion below is vacuous.");
+            Assert.That(abandonments.Measurements, Has.Count.EqualTo(1),
+                "the abandonment series must be minted on the same pass as 'attempted', so an absent series means an undeployed build and nothing else.");
+            Assert.That(abandonments.Measurements.Select(m => m.Value), Is.All.Zero,
+                "a prime must mint the series without claiming a drive was abandoned.");
+            Assert.That(abandonments.Counted, Is.Empty,
+                "and must stay invisible to any fixture counting real abandonments.");
         });
 
         await scheduler.StopAsync(CancellationToken.None);

@@ -96,4 +96,29 @@ internal enum LeafStarvationDriveOutcome
     /// the same leaf. The sweep retries after its cooldown.
     /// </summary>
     AlreadyDriving = 4,
+
+    /// <summary>
+    /// The drive exceeded <see cref="LatticeOptions.StarvationDriveBudget"/> and
+    /// was abandoned: its replay permit was released back to the per-silo gate,
+    /// its in-flight latch was cleared, and any work still parked in a
+    /// non-cooperative await was left to unwind detached (issue #3065).
+    /// <para>
+    /// Kept apart from <see cref="NoAdvance"/> for the same reason
+    /// <see cref="MemoryRefused"/> is, and more urgently. A drive that ran to
+    /// completion and lifted nothing says the leaf is structurally blocked and
+    /// further touches are wasted. An abandoned drive says the opposite: nothing
+    /// was learned about the leaf at all, because storage did not answer inside
+    /// the budget, and the correct remedy is to look at the storage provider
+    /// rather than at the leaf. Folding them would report an unanswered read as
+    /// a permanent structural block - the precise misreading that kept issue
+    /// #2368 open, since the unbounded drive's silence was taken for a leaf that
+    /// had nothing to give.
+    /// </para>
+    /// <para>
+    /// <b>Abandonment is not a lost drive.</b> Replay banks its absorbed prefix
+    /// at every slice boundary, so the next drive resumes from a strictly
+    /// shorter gap. This verdict means "not finished yet", not "failed".
+    /// </para>
+    /// </summary>
+    TimedOut = 5,
 }

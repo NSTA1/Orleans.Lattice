@@ -167,13 +167,14 @@ public sealed class DashboardPanelTagDomainTests
             // between them is what separates a sweep that reaches the leaf
             // from one that clears the pin.
             //
-            // The five drive arms (issue #2692) record what a touch achieved
+            // The six drive arms (issues #2692, #3065) record what a touch achieved
             // rather than that it was issued, and are charted with their full
             // interpretation on panel 2692 below.
             ["Replication|2783|orleans.lattice.wal.gc.blocked_leaf_reactivations|outcome"] =
                 [
                     "attempted", "drove_already_driving", "drove_lifted",
                     "drove_memory_refused", "drove_no_advance", "drove_not_driven",
+                    "drove_timed_out",
                 ],
 
             // Panel 2692 is the converse of 2783: it charts only the five drive
@@ -494,15 +495,15 @@ public sealed class DashboardPanelTagDomainTests
             // hop is what keeps a newly added arm in scope for the charting
             // gate below. Issue #2692 added a second such mapping over a second
             // enum, so the domain is now the union of three disjoint groups:
-            // four lifecycle arms, four terminal arms, and five drive verdicts.
-            // All thirteen are derivable; a drop here means the hop stopped
+            // four lifecycle arms, four terminal arms, and six drive verdicts.
+            // All fourteen are derivable; a drop here means the hop stopped
             // resolving for one of the two mappings.
             AssertDomain("orleans_lattice_wal_gc_blocked_leaf_reactivations_total", "outcome",
                 [
                     "abandoned", "attempted", "completed", "drove_already_driving",
                     "drove_lifted", "drove_memory_refused", "drove_no_advance",
-                    "drove_not_driven", "faulted", "healed", "rearmed",
-                    "undelivered", "unresolvable",
+                    "drove_not_driven", "drove_timed_out", "faulted", "healed",
+                    "rearmed", "undelivered", "unresolvable",
                 ]);
 
             // Collection-built tag list plus a static string-returning helper
