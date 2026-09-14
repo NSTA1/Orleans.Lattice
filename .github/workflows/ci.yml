@@ -25,6 +25,62 @@ on:
     # cutting the release merges only when it is green.
     branches: [main, '*/epic/**', 'release/**']
 
+  # The integration-branch lane. The `pull_request` trigger above gates a pull
+  # request INTO a bucket; nothing gated the bucket ITSELF, so its combined
+  # state is built and tested only through the epic's own pull request into
+  # `main`.
+  #
+  # READ THAT PRECISELY, BECAUSE THE OBVIOUS READING OVERSTATES IT. If the
+  # epic's pull request is already open - raised early as a draft, which is
+  # common - then its head IS the bucket, so every merge into the bucket fires
+  # a `synchronize` event and CI runs against the combined state, diffed
+  # against `main`. That is genuinely good coverage, and while such a pull
+  # request is open this push lane is redundant with it.
+  #
+  # The problem is that the coverage is INCIDENTAL RATHER THAN DECLARED.
+  # Nothing requires the epic's pull request to exist yet, and the documented
+  # convention is the opposite - the epic "reaches `main` as a single fully
+  # gated pull request once its integration item passes", i.e. at the END. A
+  # bucket run that way has NO coverage for its entire working life, and the
+  # difference between the two cases is invisible: both look identical from
+  # the workflow configuration, which is the only thing a reader can inspect.
+  # Ask the diagnostic question - name the thing that can make "this bucket is
+  # sound" report false - and without this trigger the answer is "a draft pull
+  # request somebody happened to open", which is a fact about one bucket's
+  # process history, not a property of CI.
+  #
+  # The defect class it protects against: a gate that quantifies over a
+  # structurally-derived set is only as current as the last run that evaluated
+  # it, so two changes are individually safe and jointly unsafe when one ADDS A
+  # MEMBER to the set the other QUANTIFIES OVER. Textual mergeability cannot
+  # see it, because the two changes need share no file - the coupling runs
+  # through the gate's own predicate. See #2972 for the worked near-miss (a
+  # three-site replay inventory gate, and a sibling adding a fourth replay
+  # entry point).
+  #
+  # THIS IS ADVISORY AND MUST NEVER BECOME BRANCH PROTECTION. A bucket exists
+  # so members merge in any order without invalidating each other; a `strict`
+  # required check would cost N(N+1)/2 CI cycles instead of N+1 and destroy the
+  # entire benefit. A push-triggered run BLOCKS NOTHING - it reports, so a
+  # collision is attributed to the merge that introduced it rather than
+  # surfacing on the epic's pull request mixed with every other member's
+  # changes. Do not add this branch pattern to a protection rule.
+  #
+  # KNOWN COST, stated rather than discovered: while the epic's pull request is
+  # open, a merge into the bucket now runs CI twice - once here and once as
+  # that pull request's `synchronize`. The two occupy different concurrency
+  # groups, so neither cancels the other. That is the price of making the
+  # coverage unconditional, and it falls to zero for any bucket whose pull
+  # request is raised at the end, which is the case this lane exists for.
+  #
+  # `release/**` is deliberately NOT included. The same mechanism applies to a
+  # patch wave, but the consequence does not: `publish.yml` builds the package,
+  # runs its deterministic and chaos tiers and the durable active-active gate
+  # before anything reaches NuGet, so a release line's combined state IS
+  # evaluated before it ships. A bucket had no such backstop at all.
+  push:
+    branches: ['*/epic/**']
+
 # Least-privilege: this workflow only reads source code.
 permissions:
   contents: read
@@ -64,6 +120,9 @@ jobs:
       # deliberate no-op into a workflow-level error.
       legs: ${{ steps.matrix.outputs.legs || '[]' }}
       leg_count: ${{ steps.matrix.outputs.leg_count || '0' }}
+      # Empty on pull_request (the classifier step does not run) and on any
+      # non-member push, so only a member push can suppress the aggregate.
+      push_is_member: ${{ steps.pushref.outputs.member }}
 
     steps:
       - uses: actions/checkout@v5
@@ -99,6 +158,14 @@ jobs:
       # rules, including the enumerated branch prefixes. The two lists below
       # mirror it; change them together.
       - name: Guard - branch name and commit trailers
+        # Pull-request-only. Both halves are properties of a PROPOSED change:
+        # `github.head_ref` names the source branch of a pull request and is
+        # empty on a push, and the trailer scan walks the commits a pull request
+        # adds. On the integration-branch push lane the branch is the bucket
+        # itself and its commits have already passed this guard on the member
+        # pull requests that introduced them, so re-checking them would fail on
+        # an empty branch name and re-litigate settled history.
+        if: github.event_name == 'pull_request'
         env:
           BRANCH: ${{ github.head_ref }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
@@ -201,7 +268,14 @@ jobs:
       # gate whose predicate is broader than the one it stands in for reports a
       # state the system does not have.
       - name: Guard - inert closing keywords
-        if: github.event.pull_request.base.ref != github.event.repository.default_branch
+        # The `github.event_name` term is load-bearing, not belt-and-braces. On
+        # a push `github.event.pull_request.base.ref` is EMPTY, and an empty
+        # string is not equal to the default branch, so the original condition
+        # alone evaluates TRUE on the integration-branch lane - running a
+        # pull-request-body check against a body that does not exist.
+        if: >-
+          github.event_name == 'pull_request'
+          && github.event.pull_request.base.ref != github.event.repository.default_branch
         env:
           # Passed through the environment, never interpolated into the script
           # body: a pull request description is attacker-controlled text.
@@ -373,8 +447,34 @@ jobs:
       # globstar when it stands alone as a path segment - '**.md' degrades to
       # '*.md' and silently fails to match nested files like
       # 'docs/lattice/observability.md', defeating the docs-only skip.
+      # ---------------------------------------------------------------------
+      # CHANGE DETECTION - PULL REQUEST ONLY.
+      #
+      # Every step from here to the package selector answers "what did THIS
+      # BRANCH change", from a diff against the pull request's merge base. That
+      # question is meaningless on the integration-branch push lane and
+      # answering it there would defeat the lane's entire purpose: the diff of
+      # a push is the ONE member that just merged, so a diff-scoped run would
+      # re-test exactly what that member's own pull request already tested, at
+      # full cost, while remaining blind to the joint defects between it and
+      # every member already on the branch.
+      #
+      # So on push these steps are skipped outright and the selector is handed
+      # an EMPTY changed-path list, which takes its documented no-match
+      # fallback and selects every package (46 of 46, confirmed against the
+      # selector rather than assumed). The bucket is evaluated as a whole,
+      # which is the only reading of "the combined state" that means anything.
+      #
+      # This is also why `extras` needs no edit: its `if:` reads the outputs of
+      # these steps, which are empty when they are skipped, so the samples,
+      # reference-architecture, apps and benchmark lanes do not run on the push
+      # lane. That is a DELIBERATE and disclosed limit, not an oversight - those
+      # lanes are themselves diff-scoped, and the package matrix plus the
+      # content gates are where the joint-defect class actually lives.
+      # ---------------------------------------------------------------------
       - name: Check for non-markdown changes
         id: filter
+        if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v4
         with:
           predicate-quantifier: every
@@ -421,6 +521,8 @@ jobs:
       # change is built and tested WITHOUT fanning out to every package.
       - name: Detect benchmark harness changes
         id: benchmark
+        # Pull-request-only: see CHANGE DETECTION above.
+        if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -469,7 +571,8 @@ jobs:
       # core library matrix it legitimately skips).
       - name: Classify version-only change
         id: verbump
-        if: steps.filter.outputs.code == 'true'
+        # Pull-request-only: see CHANGE DETECTION above.
+        if: github.event_name == 'pull_request' && steps.filter.outputs.code == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -575,6 +678,8 @@ jobs:
       # is a git diff plus one grep.
       - name: Detect changed samples with test-project dependents
         id: sampledeps
+        # Pull-request-only: see CHANGE DETECTION above.
+        if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -631,6 +736,64 @@ jobs:
       # The `else` arm's stated reason used to be "no test-relevant files
       # changed", and a samples-only change took it. That premise was false
       # whenever the changed file WAS the body of a test, which is the whole of
+      # The integration-branch push filter `'*/epic/**'` CANNOT distinguish a
+      # bucket from one of its members, and no glob can. The convention names a
+      # bucket `<type>/epic/<bucket-slug>` and each member
+      # `<type>/epic/<bucket-slug>-<item-slug>` - a HYPHEN, not a slash, because
+      # git stores a branch as a file at `refs/heads/<name>` and so cannot hold
+      # both `refs/heads/X` and `refs/heads/X/y`. That rule is what makes the two
+      # shapes textually identical to a branch filter: both are three segments,
+      # and `*` does not match `/`.
+      #
+      # Left unhandled, this lane therefore fires a FULL matrix (all packages,
+      # via the no-match fallback) on every push to every member branch, on top
+      # of the pull-request run that already gates that member. Member pushes are
+      # the dominant CI volume during an epic, so that is a large cost for a run
+      # which duplicates a lane that already exists.
+      #
+      # The discriminator is derived from the naming convention rather than
+      # guessed: this ref is a MEMBER if some OTHER branch on the remote is a
+      # proper prefix of it followed by `-`, which is exactly the shape the
+      # convention mandates. Pure git, no API call and no extra token scope.
+      #
+      # Residual false positive, stated rather than hidden: two buckets whose
+      # slugs differ only by a `-<suffix>` would classify the longer as a member
+      # of the shorter. The failure direction is a skipped advisory run, never a
+      # blocked merge, and it is visible in the step's own output.
+      - name: Classify the pushed integration ref
+        id: pushref
+        if: github.event_name == 'push'
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          member=false
+          parent=""
+
+          while read -r _sha ref; do
+            branch="${ref#refs/heads/}"
+
+            # A proper prefix, and the very next character is the `-` separator.
+            case "$BRANCH" in
+              "$branch"-*)
+                if [ "$branch" != "$BRANCH" ]; then
+                  member=true
+                  parent="$branch"
+                fi
+                ;;
+            esac
+          done < <(git ls-remote --heads origin)
+
+          echo "member=$member" >> "$GITHUB_OUTPUT"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+
+          if [ "$member" = "true" ]; then
+            echo "Pushed ref '$BRANCH' extends integration branch '$parent'; treating it as a member."
+          else
+            echo "Pushed ref '$BRANCH' extends no existing branch; treating it as an integration branch."
+          fi
+
       # #2653: the reason did not merely fail to select a leg, it asserted that
       # there was nothing to select, so the hole could not be read off the run's
       # own output. Every arm below now states something that is actually
@@ -638,15 +801,30 @@ jobs:
       - name: Decide whether to run tests
         id: gate
         env:
+          EVENT: ${{ github.event_name }}
           CODE: ${{ steps.filter.outputs.code }}
           NON_SAMPLE: ${{ steps.filter.outputs.nonSample }}
           WORKFLOWS: ${{ steps.filter.outputs.workflows }}
           VERSION_ONLY: ${{ steps.verbump.outputs.version_only }}
           SAMPLE_DEPENDENTS: ${{ steps.sampledeps.outputs.found }}
+          PUSH_IS_MEMBER: ${{ steps.pushref.outputs.member }}
         run: |
           set -euo pipefail
 
-          if [ "$VERSION_ONLY" = "true" ]; then
+          # FIRST arm, and it has to be first. Every OTHER arm reads an output
+          # of a change-detection step, and all of those are skipped on the
+          # integration-branch push lane, so each of their variables is the
+          # empty string and control would fall all the way through to the
+          # final `else` - declining to test the very branch the lane exists to
+          # test, while reporting a reason ("nothing changed outside
+          # documentation") that is not something the run checked.
+          if [ "$EVENT" = "push" ] && [ "$PUSH_IS_MEMBER" = "true" ]; then
+            run_tests=false
+            reason="member branch push: this ref extends an integration branch, so it is a member and its own pull request into that branch already gates it"
+          elif [ "$EVENT" = "push" ]; then
+            run_tests=true
+            reason="integration branch push (#2972): the bucket's combined state is evaluated in full, via an empty changed-path list and the selector's no-match fallback"
+          elif [ "$VERSION_ONLY" = "true" ]; then
             run_tests=false
             reason="release version bump only"
           elif [ "$NON_SAMPLE" = "true" ]; then
@@ -697,9 +875,15 @@ jobs:
       # static YAML, so adding a new src/{name}/ folder would still require a
       # workflow edit. The script picks up new packages - and new project
       # references - automatically.
-      - name: Discover changed packages
-        id: discover
-        if: steps.gate.outputs.run_tests == 'true'
+      # SPLIT FROM DISCOVERY DELIBERATELY (#2972). Collecting the changed paths
+      # and selecting packages from them are two jobs, and only the FIRST is
+      # event-specific. Keeping them in one step would force that step to carry
+      # pull-request context on a lane where no pull request exists - which is
+      # precisely the shape `CiIntegrationBranchTriggerTests` gates against, and
+      # the shape that would have made a naive push trigger produce a broken
+      # run rather than a useful one.
+      - name: Collect the changed paths
+        if: steps.gate.outputs.run_tests == 'true' && github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -737,6 +921,41 @@ jobs:
           # Requires the merge base to be present locally; see the fetch-depth
           # note on the checkout step.
           git diff --name-only "$BASE_SHA...$HEAD_SHA" > /tmp/changed-files.txt
+
+      - name: Collect the changed paths (integration branch)
+        if: steps.gate.outputs.run_tests == 'true' && github.event_name == 'push'
+        run: |
+          set -euo pipefail
+
+          # EMPTY, ON PURPOSE, AND THE EMPTINESS IS THE MECHANISM.
+          #
+          # `select-test-packages.sh` treats a changed-path list that seeds no
+          # package as a no-match and falls back to selecting EVERY package
+          # (section 4b). That fallback already exists for a different reason -
+          # a workflow-file edit, where the blast radius is unknowable from the
+          # diff - and its semantics are exactly what this lane wants: evaluate
+          # the whole branch, because the defect class here is a joint one
+          # between members and has no diff to be read off.
+          #
+          # Verified against the selector rather than assumed: an empty list
+          # selects 46 of 46 packages, which the matrix planner then balances
+          # into 10 legs. That is not an exotic run - a change anywhere under
+          # `src/lattice` already selects all 46 through the #2330 dependency
+          # closure, so the integration lane costs what an ordinary core-library
+          # pull request costs.
+          #
+          # Writing the file (rather than leaving it absent) matters: the
+          # selector must be INVOKED so its own report lands in the job summary.
+          # A lane that silently skipped selection would report a green run
+          # whose scope no reader could recover, which is the failure this
+          # repository's reporting gates exist to prevent.
+          : > /tmp/changed-files.txt
+
+      - name: Discover changed packages
+        id: discover
+        if: steps.gate.outputs.run_tests == 'true'
+        run: |
+          set -euo pipefail
 
           # The report goes to the job summary, not just the log. A green
           # `build-and-test` says nothing about its own scope - a run over one
@@ -849,18 +1068,30 @@ jobs:
   # lanes. These were serial steps in the old single job, so they delayed the
   # tests even though nothing about them is related. They now run alongside the
   # test matrix and only when their own paths changed.
+  #
+  # PULL-REQUEST-ONLY, DECLARED RATHER THAN INCIDENTAL (#2972). Every term of
+  # the condition below reads an output of a change-detection step, and those
+  # steps are skipped on the integration-branch push lane, so this job would
+  # already skip there - by accident. That is the difference between a property
+  # the system HAS and a property the system STATES: nothing declared it, and a
+  # later change to the `plan` job that gave those outputs a non-empty value on
+  # push would have silently enabled a job whose steps read pull-request
+  # context. The explicit event term makes the skip a decision rather than a
+  # side effect, and it is what lets the integration-branch gate treat this
+  # job's steps as guarded.
   # ---------------------------------------------------------------------------
   extras:
     name: Samples, reference architecture, apps, benchmark
     needs: plan
     runs-on: ubuntu-latest
     if: >-
-      needs.plan.outputs.refArch == 'true'
-      || needs.plan.outputs.apps == 'true'
-      || needs.plan.outputs.benchmark_changed == 'true'
-      || (needs.plan.outputs.code == 'true'
-          && needs.plan.outputs.nonSample != 'true'
-          && needs.plan.outputs.version_only != 'true')
+      github.event_name == 'pull_request'
+      && (needs.plan.outputs.refArch == 'true'
+          || needs.plan.outputs.apps == 'true'
+          || needs.plan.outputs.benchmark_changed == 'true'
+          || (needs.plan.outputs.code == 'true'
+              && needs.plan.outputs.nonSample != 'true'
+              && needs.plan.outputs.version_only != 'true'))
 
     steps:
       - uses: actions/checkout@v5
@@ -1600,7 +1831,22 @@ jobs:
   build-and-test:
     name: build-and-test
     needs: [plan, extras, test, content-gates]
-    if: always()
+    # `always()` so a docs-only change still reports, per the note above.
+    #
+    # The second term suppresses this aggregate on a member push, and it is a
+    # correctness term rather than a cost one. The push lane cannot be kept off
+    # member branches by glob (`*/epic/**` matches both a bucket and its
+    # `<bucket>-<item>` members), so it starts, classifies the ref, and skips
+    # the test legs. Without this term the aggregate would then run with every
+    # leg skipped and publish `build-and-test: success` - a check asserting a
+    # build and a test run when neither happened, on the same commit sha as the
+    # member's own pull request, where it is indistinguishable from that pull
+    # request's real result. A skipped job reports `skipped`, which does not
+    # read as a pass.
+    #
+    # An empty `push_is_member` (a pull request, or a failed plan) does not
+    # match, so every path that should report still reports.
+    if: always() && needs.plan.outputs.push_is_member != 'true'
     runs-on: ubuntu-latest
 
     steps:
