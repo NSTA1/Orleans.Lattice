@@ -952,17 +952,40 @@ internal sealed partial class BPlusLeafGrain
         Interlocked.Increment(ref _queuedReplayPermitWaiters);
         try
         {
+            // Issue #3044. Both recording sites below are terminal, so a wait that
+            // never returns records on neither of them and the histogram falls
+            // silent about exactly the state a saturated gate produces. The scope
+            // registers this wait as in flight for its duration and is disposed in
+            // its own `finally`, so it covers both terminal paths AND leaves the
+            // entry live for a wait that has no terminal path - which is the whole
+            // observable being added.
+            //
+            // It nests INSIDE the #3047 counter rather than sitting beside it, and
+            // that is load-bearing rather than stylistic: one `finally` per state
+            // means every exit decrements exactly once and disposes exactly once.
+            // Mirroring either onto the recording sites instead would double-count
+            // on a process-wide static that is never rebuilt, so the error would be
+            // permanent and would present as a negative standing depth (or a
+            // phantom in-flight waiter) on an idle gate.
+            var permitWaitScope = LatticeMetrics.EnterWalReplayPermitWait(state.State.TreeId);
             try
             {
-                await gate.WaitAsync(cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitCanceled);
-                throw;
-            }
+                try
+                {
+                    await gate.WaitAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitCanceled);
+                    throw;
+                }
 
-            RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitAcquired);
+                RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitAcquired);
+            }
+            finally
+            {
+                permitWaitScope.Dispose();
+            }
         }
         finally
         {
