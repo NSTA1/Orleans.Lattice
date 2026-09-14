@@ -36,7 +36,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public class ShardRootGrainStrandedLeafRecoveryTests
+public partial class ShardRootGrainStrandedLeafRecoveryTests
 {
     private const string TreeId = "stranded-tree";
     private const string ShardKey = TreeId + "/0";
@@ -121,12 +121,17 @@ public class ShardRootGrainStrandedLeafRecoveryTests
     private static RecoveryHarness CreateHarness(
         int wedgeLeafIndex = 0,
         int leafCount = 2,
-        bool asynchronousReads = false)
+        bool asynchronousReads = false,
+        FakePersistentState<ShardRootState>? carriedState = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", ShardKey));
 
-        var state = new FakePersistentState<ShardRootState>();
+        // Passing a state forward is how this fixture models a shard root that
+        // has been recycled: the storage row survives, every activation-scoped
+        // field does not. The leaf identities are deterministic, so the second
+        // activation addresses the same leaves as the first (issue #3016).
+        var state = carriedState ?? new FakePersistentState<ShardRootState>();
         var ids = new GrainId[leafCount];
         for (var i = 0; i < leafCount; i++)
         {
