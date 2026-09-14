@@ -222,8 +222,85 @@ public sealed class DashboardPanelTagDomainTests
         public string Key(string dottedInstrument) => $"{Dashboard}|{Site}|{dottedInstrument}|{Tag}";
     }
 
-    /// <summary>The derived emittable set for one instrument/tag pair.</summary>
-    private sealed record TagDomain(IReadOnlySet<string> Values, IReadOnlyList<string> Problems);
+    /// <summary>
+    /// One tag domain, in one of two states: decided, or unresolved with a reason.
+    /// </summary>
+    /// <remarks>
+    /// The primary constructor is private and the two factories below are the
+    /// only ways to build one, so the states are enforced by the type rather than
+    /// by convention.
+    /// </remarks>
+    private sealed record TagDomain
+    {
+        private TagDomain(
+            IReadOnlySet<string> values,
+            IReadOnlyList<string> problems,
+            string? unresolvedReason)
+        {
+            Values = values;
+            Problems = problems;
+            UnresolvedReason = unresolvedReason;
+        }
+
+        /// <summary>The literal values the resolver derived.</summary>
+        public IReadOnlySet<string> Values { get; }
+
+        /// <summary>Diagnostics describing anything it could not do.</summary>
+        public IReadOnlyList<string> Problems { get; }
+
+        /// <summary>
+        /// Non-null when the resolver could not decide this domain. It is a
+        /// distinct state from an empty <see cref="Values"/> set that carries no
+        /// reason, because "I derived nothing" and "I declined to derive, because
+        /// what I would have derived is untrustworthy" have opposite remedies.
+        /// The token <c>unresolved</c> is deliberately the same word
+        /// <c>InstrumentPrimingEnrolment</c> uses for the same state (issue
+        /// #2917), so the repository's two tag parsers cannot disagree about how
+        /// to say "I do not know" (issues #2968, #2970).
+        /// </summary>
+        public string? UnresolvedReason { get; }
+
+        /// <summary>Builds a domain the resolver decided.</summary>
+        public static TagDomain Resolved(
+            IReadOnlySet<string> values,
+            IReadOnlyList<string> problems) => new(values, problems, null);
+
+        /// <summary>
+        /// Builds an unresolved domain, which always carries an empty value set.
+        /// </summary>
+        /// <remarks>
+        /// The emptiness is an invariant of the type, not a convention the
+        /// callers keep. The primary constructor is private and these two
+        /// factories are the only ways to build a <see cref="TagDomain"/>, so
+        /// "unresolved, and here are some values" is not a state this program can
+        /// express: writing it is a build error rather than an assertion that a
+        /// later edit could delete. That matters because a resolver which
+        /// declined a descent may well have harvested some values first, and
+        /// publishing those would restate the #2970 defect in a quieter form - a
+        /// confident answer over a population it did not read. Whatever was
+        /// harvested belongs in <paramref name="problems"/>, where it reads as a
+        /// diagnostic, not in <see cref="Values"/>, where it would read as a
+        /// domain.
+        ///
+        /// Holding that shape is also what keeps the pairing with the other
+        /// parser decidable. <c>InstrumentPrimingEnrolment</c> represents the
+        /// same state as empty-values-plus-a-flag (issues #2968, #2970), and a
+        /// cross-gate audit can join the two on "did either admit it could not
+        /// read this" only while both sides agree. Here the flag and its note are
+        /// fused into one nullable field, so the illegal state "ambiguous, but no
+        /// reason given" is likewise unrepresentable.
+        ///
+        /// Stated against interest: no instrument in the corpus today harvests a
+        /// value and then declines a descent, so the emptiness this factory
+        /// enforces has no live witness and cannot be reddened by perturbing it -
+        /// a build that leaks the partial harvest through here still passes the
+        /// whole suite. It is enforced at compile time rather than asserted
+        /// precisely because a clause with no reachable case is otherwise the
+        /// dead code this family of gates keeps finding elsewhere.
+        /// </remarks>
+        public static TagDomain Unresolved(IReadOnlyList<string> problems, string reason) =>
+            new(new HashSet<string>(StringComparer.Ordinal), problems, reason);
+    }
 
     // ---------------------------------------------------------------- tests
 
@@ -788,29 +865,65 @@ public sealed class DashboardPanelTagDomainTests
             problems.Add(
                 $"No {field.FieldName}.Add(/.Record( site found under src/. If this instrument is "
                 + "observable, declare it in InstrumentsWithoutImperativeEmission with a reason.");
-            return new TagDomain(values, problems);
+            return TagDomain.Unresolved(
+                problems,
+                $"no emission site found for {field.FieldName}");
         }
 
-        foreach (var (file, argsStart) in sites)
+        var outerDescents = _ambiguousDescents;
+        var descents = new List<string>();
+        _ambiguousDescents = descents;
+
+        try
         {
-            var text = SourceText(file);
-            var args = SplitArguments(text, argsStart);
-            var bound = false;
-
-            foreach (var arg in args)
+            foreach (var (file, argsStart) in sites)
             {
-                var resolved = ResolveTagArgument(file, arg, argsStart, tag, depth: 0);
-                if (resolved.Count == 0) continue;
-                bound = true;
-                values.UnionWith(resolved);
-            }
+                var text = SourceText(file);
+                var args = SplitArguments(text, argsStart);
+                var bound = false;
 
-            if (!bound)
-            {
-                // A site that stamps no value for this tag is only a problem when
-                // no site does; an instrument may carry the tag on some arms only.
-                continue;
+                foreach (var arg in args)
+                {
+                    var resolved = ResolveTagArgument(file, arg, argsStart, tag, depth: 0);
+                    if (resolved.Count == 0) continue;
+                    bound = true;
+                    values.UnionWith(resolved);
+                }
+
+                if (!bound)
+                {
+                    // A site that stamps no value for this tag is only a problem when
+                    // no site does; an instrument may carry the tag on some arms only.
+                    continue;
+                }
             }
+        }
+        finally
+        {
+            _ambiguousDescents = outerDescents;
+        }
+
+        // A refused descent means the value expression reached a method name this
+        // resolver cannot bind. Whatever it did derive is therefore a lower bound
+        // on the real domain, not the domain, so it must not be published as one.
+        // Reporting the partial set would be the exact #2970 failure in a quieter
+        // form: a confident answer over a population the resolver did not read.
+        // The partial harvest is named in the diagnostic instead, where it reads
+        // as evidence about the resolver rather than as a fact about the tag.
+        if (descents.Count > 0)
+        {
+            problems.Add(
+                $"Declined {descents.Count} ambiguous method-name descent(s) while resolving tag "
+                + $"'{tag}' for {field.FieldName}: {string.Join(", ", descents)}. Bind the value to a "
+                + "uniquely-named helper or a literal rather than widening the resolver. "
+                + (values.Count == 0
+                    ? "No value was derived before the descent was declined."
+                    : $"{values.Count} value(s) were derived before the descent was declined and "
+                      + $"are withheld as a lower bound, not a domain: {string.Join(", ", values.Order(StringComparer.Ordinal))}."));
+
+            return TagDomain.Unresolved(
+                problems,
+                $"ambiguous method-name descent declined: {string.Join(", ", descents)}");
         }
 
         if (values.Count == 0)
@@ -819,9 +932,13 @@ public sealed class DashboardPanelTagDomainTests
                 $"Found {sites.Count} emission site(s) for {field.FieldName}, but could not derive "
                 + $"a single value for tag '{tag}' from any of them. Extend the resolver rather "
                 + "than narrowing the guard.");
+
+            return TagDomain.Unresolved(
+                problems,
+                $"no value derivable for tag '{tag}' from {sites.Count} emission site(s)");
         }
 
-        return new TagDomain(values, problems);
+        return TagDomain.Resolved(values, problems);
     }
 
     // --------------------------------------------------------- source corpus
@@ -1100,13 +1217,54 @@ public sealed class DashboardPanelTagDomainTests
         {
             var name = call.Groups["name"].Value;
             if (name is "new" or "nameof" or "typeof") continue;
-            foreach (var body in FindMethodBodies(name))
+
+            var bodies = FindMethodBodies(name);
+
+            // A simple name declared by more than one method under src/ cannot be
+            // bound to a single body by this resolver, and descending into all of
+            // them harvests every string literal each one happens to contain.
+            //
+            // That is not a theoretical over-width. Issue #2970: the grain_type
+            // value at LatticeGrainCallObservationFilter.cs:225 is t.ToString(),
+            // and ToString is declared by dozens of types, so the descent
+            // returned seven ToString formatting templates belonging to unrelated
+            // types as though they were the tag's domain.
+            //
+            // Refusing is the conservative direction. An ambiguous descent that
+            // is declined costs a domain this resolver then reports as
+            // unresolved; an ambiguous descent that is taken produces a confident
+            // wrong answer, which every downstream gate believes.
+            if (bodies.Count > 1)
+            {
+                NoteAmbiguousDescent(name, bodies.Count);
+                continue;
+            }
+
+            foreach (var body in bodies)
             {
                 values.UnionWith(ResolveValueExpression(body.File, body.Body, body.Index, depth + 1));
             }
         }
 
         return values;
+    }
+
+    /// <summary>
+    /// Ambiguous method-name descents refused while resolving the domain
+    /// currently in flight on this thread. Collected per resolution so the
+    /// refusal can be named in the unresolved reason rather than presenting as
+    /// an unexplained empty domain.
+    /// </summary>
+    [ThreadStatic]
+    private static List<string>? _ambiguousDescents;
+
+    private static void NoteAmbiguousDescent(string name, int count)
+    {
+        var seen = _ambiguousDescents;
+        if (seen is null) return;
+
+        var entry = $"{name} ({count} declarations)";
+        if (!seen.Contains(entry, StringComparer.Ordinal)) seen.Add(entry);
     }
 
     private static bool IsSimpleIdentifier(string text)
@@ -1403,11 +1561,22 @@ public sealed class DashboardPanelTagDomainTests
 
     /// <summary>
     /// Returns the bodies of every method declared under <c>src/</c> with the
-    /// given name. Resolution is by simple name, which is an approximation, but
-    /// an over-wide candidate set can only add values a same-named method could
-    /// produce - and the fixture fails loudly rather than silently when a real
-    /// binding is missed.
+    /// given name. Resolution is by simple name, which is an approximation.
     /// </summary>
+    /// <remarks>
+    /// An earlier revision argued that an over-wide candidate set "can only add
+    /// values a same-named method could produce" and was therefore safe. Issue
+    /// #2970 falsified that: <c>ToString</c> is a same-named method on dozens of
+    /// unrelated types, so descending into every match harvested seven
+    /// formatting templates belonging to types with no connection to the
+    /// instrument, and published them as a tag domain.
+    ///
+    /// The candidate set is still built by simple name, because narrowing it
+    /// would need real binding. What changed is that the caller now refuses to
+    /// descend when this returns more than one body, and reports the domain
+    /// unresolved instead - so an ambiguity costs a missing answer rather than a
+    /// confidently wrong one.
+    /// </remarks>
     private static IReadOnlyList<MethodBody> FindMethodBodies(string name)
     {
         lock (MethodBodyCache)
@@ -1473,6 +1642,91 @@ public sealed class DashboardPanelTagDomainTests
         }
 
         var domain = ResolveDomain(dottedName.Replace('.', '_'), tag);
-        return domain is null || domain.Values.Count == 0 ? null : domain.Values;
+
+        // An unresolved domain is reported as undecidable. The disjunct is
+        // redundant while TagDomain.Unresolved is the only way to reach that
+        // state, since that factory fixes Values empty and the next line would
+        // return null anyway - a perturbation that deletes this clause reddens
+        // nothing, and that is disclosed rather than hidden. It is retained
+        // because it states the consumer-side rule ("a lower bound is not a
+        // domain") at the point the decision is taken, so a later edit that
+        // reintroduces a partial harvest inherits the right behaviour instead of
+        // silently publishing it.
+        if (domain is null || domain.UnresolvedReason is not null) return null;
+
+        return domain.Values.Count == 0 ? null : domain.Values;
+    }
+
+    /// <summary>
+    /// Reports why this resolver declined to decide a tag domain, or
+    /// <see langword="null"/> when it did decide one (or when the instrument is
+    /// outside the owner types this resolver reads at all).
+    /// </summary>
+    /// <remarks>
+    /// Exists so a caller can tell the three states apart. <see cref="ArmedValues"/>
+    /// alone collapses them: it returns <see langword="null"/> for an instrument
+    /// this resolver does not cover, for one whose domain it declined to decide,
+    /// and for one with no armed value. Those have different remedies, and
+    /// conflating the first two is precisely the defect issue #2968 records
+    /// against the other tag parser in this repository.
+    /// </remarks>
+    /// <param name="dottedName">The instrument's canonical dotted name.</param>
+    /// <param name="tag">The tag key whose resolution status is wanted.</param>
+    /// <returns>The unresolved reason, or <see langword="null"/>.</returns>
+    internal static string? UnresolvedReason(string dottedName, string tag)
+    {
+        if (!InstrumentFields().ContainsKey(dottedName)) return null;
+
+        return ResolveDomain(dottedName.Replace('.', '_'), tag)?.UnresolvedReason;
+    }
+
+    /// <summary>
+    /// The number of methods declared under <c>src/</c> with the given simple
+    /// name, as this resolver counts them.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so a fixture can prove the ambiguity condition is reachable. The
+    /// refusal in <c>ResolveValueExpression</c> only fires when a name resolves
+    /// to more than one body, so if no such name existed the guard would be dead
+    /// code and issue #2970 could return without reddening anything.
+    /// </remarks>
+    /// <param name="methodName">The simple method name to count.</param>
+    /// <returns>The number of declarations found.</returns>
+    internal static int DeclarationCount(string methodName)
+        => FindMethodBodies(methodName).Count;
+
+    /// <summary>
+    /// Whether this resolver reads the owner type that declares the named
+    /// instrument at all, so a caller can separate "outside my scope" from
+    /// "in scope and undecided".
+    /// </summary>
+    /// <param name="dottedName">The instrument's canonical dotted name.</param>
+    /// <returns><see langword="true"/> when the instrument is in scope.</returns>
+    internal static bool CoversInstrument(string dottedName)
+        => InstrumentFields().ContainsKey(dottedName);
+
+    /// <summary>
+    /// The number of values this resolver actually derived for an instrument/tag
+    /// pair, independently of whether it was willing to publish them.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so a fixture can witness the shape an unresolved domain takes on
+    /// the live corpus, rather than only on a hand-built instance. The other
+    /// tag parser in this repository represents the same state as an empty value
+    /// set plus a flag naming what it could not read (issues #2968, #2970), and a
+    /// cross-gate audit can join the two on "did either admit it could not read
+    /// this" only while both sides hold that shape. Reading the count through a
+    /// separate accessor is what lets a test assert emptiness and the reason
+    /// together; <see cref="ArmedValues"/> collapses both into
+    /// <see langword="null"/> and so cannot distinguish them.
+    /// </remarks>
+    /// <param name="dottedName">The instrument's canonical dotted name.</param>
+    /// <param name="tag">The tag key whose derived value count is wanted.</param>
+    /// <returns>The derived value count, or -1 when the instrument is out of scope.</returns>
+    internal static int DerivedValueCount(string dottedName, string tag)
+    {
+        if (!InstrumentFields().ContainsKey(dottedName)) return -1;
+
+        return ResolveDomain(dottedName.Replace('.', '_'), tag)?.Values.Count ?? -1;
     }
 }
