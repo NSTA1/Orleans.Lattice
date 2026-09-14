@@ -1640,6 +1640,38 @@
           "legendFormat": "{{tree}} {{kind}}"
         }
       ]
+    },
+    {
+      "id": 72,
+      "title": "Leaf-split completions in flight",
+      "description": "Count of leaf-split completions currently suspended inside CompleteSplitAsync per tree (orleans_lattice_leaf_split_completion_in_flight, issue #2967). The divided/faulted outcome counters partition only TERMINATED divisions, so a division still in the completion body at scrape time is a member of none of them, and because the catch that records faulted is unconditional a division carrying neither divided nor faulted did not throw - it is genuinely in flight. Read this BESIDE the oldest-completion-age panel: a non-zero count is only actionable once that age is climbing. A tree with nothing in flight emits no series, so 'No data' is the healthy steady state, not a gap.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1028 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree) (orleans_lattice_leaf_split_completion_in_flight{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 73,
+      "title": "Oldest leaf-split completion age",
+      "description": "Age in seconds of the oldest leaf-split completion currently suspended inside CompleteSplitAsync per tree (orleans_lattice_leaf_split_completion_oldest_age, issue #2967). This is the signal that separates a division momentarily in flight (age near zero, falling as scrapes advance) from one that is STUCK (age climbing without bound), which the bare in-flight count cannot do. It is a measurement, not a threshold: the code encodes no age at which a completion is declared abandoned, so alert on a sustained climb read against real completion durations rather than on a fixed value. A tree with nothing in flight emits no series, so 'No data' is the healthy steady state.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1028 },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tree) (orleans_lattice_leaf_split_completion_oldest_age{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}}"
+        }
+      ]
     }
   ]
 }
