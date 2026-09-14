@@ -233,8 +233,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.saga.broadcast.shard.stage.duration` | histogram (ms) | `tree`, `shard`, `stage` | AtomicWrites | Saga broadcast sub-attribution p95 (ms) - per-shard / per-leaf / per-shard-stage |
 | `orleans.lattice.saga.checkpoint.duration` | histogram (ms) | `tree`, `phase` | AtomicWrites | Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder |
 | `orleans.lattice.saga.reminder.duration` | histogram (ms) | `tree`, `phase` | AtomicWrites | Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder |
-| `orleans.lattice.saga.perkey.duration` | histogram (ms) | `tree`, `wal_partitions` | AtomicWrites | Per-key saga work - p95 per-key duration vs serial-gap wait (ms) |
-| `orleans.lattice.saga.wait.serial_gap` | histogram (ms) | `tree` | AtomicWrites | Per-key saga work - p95 per-key duration vs serial-gap wait (ms) |
+| `orleans.lattice.saga.perkey.duration` | histogram (ms) | `tree`, `wal_partitions` | AtomicWrites | Per-key saga work - p95 per-key duration (ms) |
 | `orleans.lattice.saga.fanout.size` | histogram (`{entry}`) | `tree`, `wal_partitions` | AtomicWrites | Saga fan-out size (entries per saga) |
 | `orleans.lattice.atomic_write.cross_tree.completed` | counter (`{saga}`) | `outcome`, `tree_count` | AtomicWrites | Cross-tree atomic write outcomes (rate); Cross-tree failure rate (%) |
 | `orleans.lattice.atomic_write.cross_tree.duration` | histogram (ms) | `outcome` | AtomicWrites | Cross-tree coordinator duration (p50/p95/p99 ms) |
