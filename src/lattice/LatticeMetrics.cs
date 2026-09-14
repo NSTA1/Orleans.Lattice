@@ -3440,6 +3440,100 @@ public static class LatticeMetrics
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
 
     /// <summary>
+    /// Which durable-pin state each <i>absent</i> consumer blocking a WAL GC
+    /// pass is in, tagged by tree, partition and
+    /// <see cref="WalGcBlockingPinState"/> (issue #3042).
+    /// <para>
+    /// <c>blocked</c> on <see cref="WalGcPasses"/> says a tree cannot reclaim;
+    /// it cannot say whether that is a defect or correct behaviour, because the
+    /// leaf publishes the same unusable pin on both routes in. This instrument
+    /// resolves that from the leaf's persisted projection checkpoint, read
+    /// directly from the storage provider <i>without activating the leaf</i> -
+    /// the blocking population is exactly the population that cannot be
+    /// activated.
+    /// </para>
+    /// <para>
+    /// Every arm is zero-primed, and primed twice over. Each tree mints all
+    /// four arms under the reserved partition value
+    /// <see cref="PartitionNone"/> on every pass, above every early return, so
+    /// an absent series means the classifier is not running on this silo rather
+    /// than that nothing was classified. Each classified
+    /// <c>(tree, partition)</c> then mints all four of its own arms before
+    /// recording the one it resolved, so a zero on a state reads as
+    /// measured-and-not-this-state rather than as silence. Absence on this
+    /// instrument has been read as evidence three times on the epic that
+    /// produced it, and on each occasion "no series" and "never ran" were
+    /// byte-identical.
+    /// </para>
+    /// <para>
+    /// Diagnostic only - it never changes what a pass is allowed to trim.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcBlockingPinStates =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocking_pin_state", unit: "{consumer}",
+            description: "Durable-pin state of each absent consumer blocking a WAL GC pass (issue #3042), tagged by tree, partition and status. 'checkpointed_uncovered' is repairable: the leaf durably checkpointed the partition but published an unusable pin because snapshot coverage is absent. 'never_checkpointed' is correct by design and has no repair: the leaf holds live data it has never checkpointed, so there is no WAL offset it could honestly claim. 'no_durable_state' is a fourth thing and not a flavour of either: the provider answered and reported nothing ever persisted for that leaf. 'unreadable' reports a failure of the classifier itself - an unparseable consumer id, no storage provider on this silo, or a read that threw - and is kept separate so a defect in the measurement is never rendered as a finding about the system. Classified by a direct storage-provider read that never activates the leaf, once per consumer per blocked episode. All four arms are zero-primed per tree per pass under partition 'none', and again per classified partition. Diagnostic only: it never changes what a pass is allowed to trim.");
+
+    /// <summary>Canonical name of <see cref="WalGcBlockingPinStates"/>.</summary>
+    public const string WalGcBlockingPinStatesName = "orleans.lattice.wal.gc.blocking_pin_state";
+
+    /// <summary>
+    /// Reserved <see cref="TagPartition"/> value used by the per-tree
+    /// reachability priming of <see cref="WalGcBlockingPinStates"/>.
+    /// <para>
+    /// A real classification always carries the numeric partition it resolved.
+    /// This value is minted on every pass for every tree, whether or not the
+    /// tree is blocked, so that the instrument has a series on a silo where
+    /// nothing has ever blocked - which is what makes an absent series a
+    /// positive statement ("the classifier is not wired here") instead of an
+    /// ambiguous one.
+    /// </para>
+    /// </summary>
+    public const string PartitionNone = "none";
+
+    /// <summary>
+    /// Reserved <see cref="TagPartition"/> value for a blocking consumer whose
+    /// id could not be parsed back to a leaf grain id and partition, so no
+    /// partition can be named. Always recorded against
+    /// <see cref="BlockingPinUnreadable"/>.
+    /// </summary>
+    public const string PartitionUnknown = "unknown";
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcBlockingPinStates"/>
+    /// for <see cref="WalGcBlockingPinState.CheckpointedUncovered"/> - the
+    /// repairable state.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockingPinCheckpointedUncovered =
+        new(TagStatus, "checkpointed_uncovered");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcBlockingPinStates"/>
+    /// for <see cref="WalGcBlockingPinState.NeverCheckpointed"/> - the state
+    /// that is correct by design and has no repair.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockingPinNeverCheckpointed =
+        new(TagStatus, "never_checkpointed");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcBlockingPinStates"/>
+    /// for <see cref="WalGcBlockingPinState.NoDurableState"/> - the storage
+    /// provider answered and reported nothing persisted for the leaf. Kept
+    /// distinct from <see cref="BlockingPinNeverCheckpointed"/> so an absence
+    /// is never presented as a claim about live data.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockingPinNoDurableState =
+        new(TagStatus, "no_durable_state");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcBlockingPinStates"/>
+    /// for <see cref="WalGcBlockingPinState.Unreadable"/> - the classifier
+    /// could not answer. Reports a failure of the instrument, not a property of
+    /// the leaf, so it is counted separately from every arm that does.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockingPinUnreadable =
+        new(TagStatus, "unreadable");
+
+    /// <summary>
     /// <see cref="TagOutcome"/> value on
     /// <see cref="WalGcBlockedLeafReactivations"/> for a touch that was issued
     /// to a blocking leaf. Counts the cost the sweep imposes, independently of
