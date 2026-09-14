@@ -120,7 +120,7 @@ public sealed class InstrumentEmissionCoverageTests
         var emitted = EmittedNames.Value;
 
         var dead = Synchronous.Value
-            .Where(d => !d.FieldNames.Any(emitted.Contains))
+            .Where(d => Selects(d, emitted))
             .Where(d => !Exempt.ContainsKey(d.MetricName))
             .OrderBy(static d => d.MetricName, StringComparer.Ordinal)
             .ToList();
@@ -302,7 +302,31 @@ public sealed class InstrumentEmissionCoverageTests
     }
 
     private static bool Selects(DeclaredInstrument declaration, IReadOnlySet<string> emitted) =>
-        !declaration.FieldNames.Any(emitted.Contains);
+        HasNoEmissionSite(declaration.FieldNames, emitted);
+
+    /// <summary>
+    /// The single definition of "this declaration has no emission site", keyed on field
+    /// names so a caller holding a different declaration record can <i>invoke</i> it
+    /// rather than restate it.
+    /// </summary>
+    /// <remarks>
+    /// Restating this predicate is not a style question. A second copy agrees with the
+    /// first by construction, so an agreement test written across the two is a constant
+    /// compared with itself: it passes at maximum divergence and no anti-vacuity guard
+    /// can catch it, because the populations it compares are legitimately empty while the
+    /// gate is green. That is exactly the defect #3011 removed from the instrument
+    /// liveness census, which had restated this expression twice more.
+    /// </remarks>
+    internal static bool HasNoEmissionSite(IReadOnlySet<string> fieldNames, IReadOnlySet<string> emitted) =>
+        !fieldNames.Any(emitted.Contains);
+
+    /// <summary>
+    /// Metric names of every declared synchronous instrument the gate enumerates.
+    /// Exposed so a second reader of the same reflection walk can be checked against
+    /// this one rather than assumed to agree with it.
+    /// </summary>
+    internal static IReadOnlySet<string> SynchronousMetricNames =>
+        Synchronous.Value.Select(static d => d.MetricName).ToHashSet(StringComparer.Ordinal);
 
     /// <summary>
     /// Enumerates instrument declarations from the compiled core assembly, partitioned
