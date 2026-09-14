@@ -74,6 +74,25 @@ $script:_PassCount = 0
 $script:_FailCount = 0
 $script:_SkipCount = 0
 
+<#
+	The literal com.docker.compose.project.config_files label read from the live
+	rig on 2026-09-14 by
+
+	  docker inspect repocontextcontainer-repocontext-1 --format
+	    '{{ index .Config.Labels "com.docker.compose.project.config_files" }}'
+
+	Kept verbatim, absolute deploy-checkout paths and all, because the point of
+	#2993 is that the check works on what docker ACTUALLY writes rather than on a
+	tidied approximation of it. Defined ONCE and shared by the pure section and
+	the end-to-end section, so the two cannot drift into agreeing with each other
+	while both disagree with the rig.
+
+	Note the paths name the DEPLOY checkout (bucket4-merge), which is not the
+	checkout these tests run from. That divergence is real, permanent, and must
+	not be read as a mismatch - which is itself one of the assertions below.
+#>
+$script:RealRigConfigFilesLabel = 'C:\dev\copilot-worktrees\lattice\bucket4-merge\samples\RepoContextContainer\docker-compose.yml,C:\dev\copilot-worktrees\lattice\bucket4-merge\samples\RepoContextContainer\docker-compose.tuning.yml'
+
 function _Assert {
 	param(
 		[Parameter(Mandatory)] [string] $Name,
@@ -410,6 +429,16 @@ else {
 		# check" as a green line is the defect under test.
 		_Skip -Name 'real compose resolution (Unreadable arm)' -Why 'docker compose is not available on this host'
 		_Skip -Name 'real compose resolution (Available arm)' -Why 'docker compose is not available on this host'
+
+		# #2993's end-to-end arms live inside the same `if ($dockerUsable)` block,
+		# so without these they would simply not run and the denominator would
+		# drop by four with nothing anywhere saying so. An unrun check that leaves
+		# no trace is the exact substitution this suite exists to refuse, and it
+		# does not stop being that when the unrun check is one of mine.
+		_Skip -Name 'compose set on the real path (agreeing arm)' -Why 'docker compose is not available on this host'
+		_Skip -Name 'compose set on the real path (divergent arm)' -Why 'docker compose is not available on this host'
+		_Skip -Name 'compose set on the real path (reordered arm)' -Why 'docker compose is not available on this host'
+		_Skip -Name 'compose set on the real path (absent-label arm)' -Why 'docker compose is not available on this host'
 	}
 }
 
@@ -609,6 +638,136 @@ if ($dockerUsable) {
 		_Assert -Name 'the same real path ACCEPTS agreeing halves (exit 0)' `
 			-Condition ($cleanExit -eq 0) `
 			-Detail "got exit $cleanExit - the skew arm is unfalsifiable unless this is 0"
+
+		# -------------------------------------------------------------------
+		# #2993 ON THE REAL PATH. The pure section proves the VERDICT; these
+		# prove the WIRING, which is a different claim. A correct verdict that
+		# nothing acts on is the same silent no-op this epic keeps finding.
+		#
+		# Every arm below is the SAME invocation as the clean one above, differing
+		# ONLY in the config_files label. Anything that moves is therefore caused
+		# by the label and by nothing else.
+		# -------------------------------------------------------------------
+
+		# HEALTHY FIRST, and with the rig's real bytes. A guard that refuses a
+		# correct deployment gets deleted, so this is the arm that must hold.
+		$agreePath = Join-Path $scratch 'compose-agree.manifest'
+
+		& $assert -ComposeDirectory $envDirectory -ManifestPath $agreePath `
+			-Label 'compose-agree' -EffectiveReading $effective -CgroupCpuQuota 6 `
+			-ComposeConfigFilesLabel $script:RealRigConfigFilesLabel -Quiet 2>&1 | Out-Null
+
+		$agreeExit = $LASTEXITCODE
+
+		_Assert -Name 'REAL PATH: the live rig label is ACCEPTED (exit 0)' `
+			-Condition ($agreeExit -eq 0) `
+			-Detail "got exit $agreeExit - the refusal arms below are unfalsifiable unless this is 0"
+
+		_Assert -Name 'REAL PATH: an agreeing label still WRITES the manifest' `
+			-Condition (Test-Path -LiteralPath $agreePath) `
+			-Detail 'the check must not cost a reading when nothing is wrong'
+
+		if (Test-Path -LiteralPath $agreePath) {
+			$agreed = Read-DeployManifest -Text ([IO.File]::ReadAllText($agreePath))
+
+			_Assert -Name 'REAL PATH: the agreeing manifest records the set as CONFIRMED' `
+				-Condition ($agreed.DeclarationReason -match 'confirmed against the container') `
+				-Detail $agreed.DeclarationReason
+
+			_Assert -Name 'REAL PATH: a confirmed set is still DeclarationStatus Available' `
+				-Condition ($agreed.DeclarationStatus -eq 'Available') `
+				-Detail "got '$($agreed.DeclarationStatus)'"
+		}
+		else {
+			_Assert -Name 'REAL PATH: the agreeing manifest records the set as CONFIRMED' -Condition $false -Detail 'no manifest written'
+			_Assert -Name 'REAL PATH: a confirmed set is still DeclarationStatus Available' -Condition $false -Detail 'no manifest written'
+		}
+
+		# REFUSAL. A deployment brought up without the tuning overlay.
+		$divergePath = Join-Path $scratch 'compose-diverge.manifest'
+
+		& $assert -ComposeDirectory $envDirectory -ManifestPath $divergePath `
+			-Label 'compose-diverge' -EffectiveReading $effective -CgroupCpuQuota 6 `
+			-ComposeConfigFilesLabel '/srv/app/docker-compose.yml' -Quiet 2>&1 | Out-Null
+
+		$divergeExit = $LASTEXITCODE
+
+		_Assert -Name 'REAL PATH: a divergent overlay set is REFUSED (exit 5)' `
+			-Condition ($divergeExit -eq 5) `
+			-Detail "got exit $divergeExit"
+
+		# THE LOAD-BEARING ONE. The declared half resolved perfectly and would
+		# have rendered indistinguishably from a correct manifest. Had it been
+		# written it would have become a baseline - a reading attributed to a
+		# deployment it never came from. This asserts the file does not exist.
+		_Assert -Name 'REAL PATH: the refusal writes NO manifest, so no poisoned baseline exists' `
+			-Condition (-not (Test-Path -LiteralPath $divergePath)) `
+			-Detail 'a manifest written here would be scored as a measurement'
+
+		# REORDERING, end to end. The set difference is empty, so the remedy the
+		# issue specified would have written a manifest here.
+		$reorderPath = Join-Path $scratch 'compose-reorder.manifest'
+
+		& $assert -ComposeDirectory $envDirectory -ManifestPath $reorderPath `
+			-Label 'compose-reorder' -EffectiveReading $effective -CgroupCpuQuota 6 `
+			-ComposeConfigFilesLabel 'docker-compose.tuning.yml,docker-compose.yml' -Quiet 2>&1 | Out-Null
+
+		$reorderExit = $LASTEXITCODE
+
+		_Assert -Name 'REAL PATH: a REORDERED overlay set is refused too (exit 5)' `
+			-Condition ($reorderExit -eq 5) `
+			-Detail "got exit $reorderExit - a set-difference check would have written this manifest"
+
+		_Assert -Name 'REAL PATH: the reordering refusal also writes NO manifest' `
+			-Condition (-not (Test-Path -LiteralPath $reorderPath)) `
+			-Detail 'overlay order changes which value wins, so this reading is not this deployment'
+
+		# UNKNOWN, end to end. A container with no label must still be readable -
+		# recorded as unverified, never refused and never silently confirmed.
+		$unknownPath = Join-Path $scratch 'compose-unknown.manifest'
+
+		& $assert -ComposeDirectory $envDirectory -ManifestPath $unknownPath `
+			-Label 'compose-unknown' -EffectiveReading $effective -CgroupCpuQuota 6 `
+			-ComposeConfigFilesLabel '' -Quiet 2>&1 | Out-Null
+
+		$unknownExit = $LASTEXITCODE
+
+		_Assert -Name 'REAL PATH: an ABSENT label does not refuse (exit 0)' `
+			-Condition ($unknownExit -eq 0) `
+			-Detail "got exit $unknownExit - a non-compose container is not a divergence"
+
+		_Assert -Name 'REAL PATH: an absent label still writes the manifest' `
+			-Condition (Test-Path -LiteralPath $unknownPath) `
+			-Detail 'refusing here would break every deployment this check cannot see'
+
+		if (Test-Path -LiteralPath $unknownPath) {
+			$unknownManifest = Read-DeployManifest -Text ([IO.File]::ReadAllText($unknownPath))
+
+			# Carried in DECLARATION_REASON, a field consumers ALREADY read, so a
+			# consumer that never learns about the compose-set check still cannot
+			# mistake this for a verified set. Amendment 25 applied at authoring.
+			_Assert -Name 'REAL PATH: the unverified set is marked UNVERIFIED in the manifest' `
+				-Condition ($unknownManifest.DeclarationReason -match 'UNVERIFIED') `
+				-Detail $unknownManifest.DeclarationReason
+
+			_Assert -Name 'REAL PATH: an unverified set is NOT recorded as confirmed' `
+				-Condition ($unknownManifest.DeclarationReason -notmatch 'confirmed against the container') `
+				-Detail 'silently claiming confirmation is the defect #2993 is about'
+		}
+		else {
+			_Assert -Name 'REAL PATH: the unverified set is marked UNVERIFIED in the manifest' -Condition $false -Detail 'no manifest written'
+			_Assert -Name 'REAL PATH: an unverified set is NOT recorded as confirmed' -Condition $false -Detail 'no manifest written'
+		}
+
+		# The four arms differ ONLY in the label, so their exit codes must not all
+		# be equal. A wiring that ignored the label entirely would give 0/0/0/0 and
+		# every individual assertion above would still need to fail for that to be
+		# caught; this catches it in one.
+		$composeExits = @($agreeExit, $divergeExit, $reorderExit, $unknownExit)
+
+		_Assert -Name 'REAL PATH: the label ALONE changes the outcome (4 arms, 2 distinct codes)' `
+			-Condition (@($composeExits).Count -eq 4 -and @($composeExits | Sort-Object -Unique).Count -eq 2) `
+			-Detail "exits [$($composeExits -join ', ')] - identical codes would mean the label is not being read"
 	}
 	finally {
 		Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
@@ -874,6 +1033,161 @@ _Assert -Name 'END TO END: the excused population is exactly the three thin keys
 _Assert -Name 'END TO END: the excused deltas are ones the OLD path called unattributable' `
 	-Condition ((Get-AttributionVerdict -Deltas $e2eDeltas).Attributable -eq $false) `
 	-Detail 'an empty delta set would make the incomparability claim vacuous'
+
+
+_Section 'COMPOSE FILE SET (#2993 - the overlay list is asserted, not assumed)'
+
+# The live rig's real label, defined once at the top of this file. See the note
+# there for how it was captured and why it is kept verbatim.
+$realLabel = $script:RealRigConfigFilesLabel
+
+# HEALTHY CASE FIRST. A guard that refuses a correct deployment is the failure
+# mode that gets guards deleted, so the arm that must work is the one where
+# nothing is wrong - and it is asserted against the real bytes, not a fixture.
+$healthy = Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue $realLabel
+
+_Assert -Name 'HEALTHY: the live rig label AGREES with the hardcoded list' `
+	-Condition ($healthy.Status -eq 'Agreed') `
+	-Detail "status $($healthy.Status): $($healthy.Reason)"
+
+_Assert -Name 'HEALTHY: agreement reports no missing and no unexpected file' `
+	-Condition (@($healthy.Missing).Count -eq 0 -and @($healthy.Unexpected).Count -eq 0) `
+	-Detail "missing $(@($healthy.Missing).Count), unexpected $(@($healthy.Unexpected).Count)"
+
+_Assert -Name 'HEALTHY: the deploy checkout path does NOT count as a divergence' `
+	-Condition ($healthy.Observed -contains 'docker-compose.yml' -and $healthy.Observed -contains 'docker-compose.tuning.yml') `
+	-Detail "observed [$($healthy.Observed -join ', ')]"
+
+_Assert -Name 'HEALTHY: the overlay is present in the verified set, not just the base' `
+	-Condition ($healthy.Observed -contains 'docker-compose.tuning.yml') `
+	-Detail 'every attribution-relevant knob is set by the tuning overlay'
+
+# Portability of the parse. The label is written by whichever platform created
+# the stack, and is read by whichever platform runs this script.
+_Assert -Name 'PARSE: forward-slash paths agree too' `
+	-Condition ((Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue '/srv/app/docker-compose.yml,/srv/app/docker-compose.tuning.yml').Status -eq 'Agreed') `
+	-Detail 'a Linux-created stack must not read as a mismatch'
+
+_Assert -Name 'PARSE: bare relative names agree too' `
+	-Condition ((Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue 'docker-compose.yml,docker-compose.tuning.yml').Status -eq 'Agreed') `
+	-Detail 'compose does not always record absolute paths'
+
+_Assert -Name 'PARSE: surrounding whitespace is tolerated' `
+	-Condition ((Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue ' docker-compose.yml , docker-compose.tuning.yml ').Status -eq 'Agreed') `
+	-Detail 'whitespace is not a configuration difference'
+
+# UNKNOWN. The arm the issue did not ask for and the one most likely to be got
+# wrong, because the tempting implementation is to fall back to the hardcoded
+# list - which bypasses the check exactly when the deployment is least standard.
+$unknownNull = Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue $null
+
+_Assert -Name 'UNKNOWN: an ABSENT label reads as Unknown' `
+	-Condition ($unknownNull.Status -eq 'Unknown') `
+	-Detail "status $($unknownNull.Status)"
+
+_Assert -Name 'UNKNOWN: an absent label is NOT silently reported as agreement' `
+	-Condition ($unknownNull.Status -ne 'Agreed') `
+	-Detail 'falling back to the hardcoded list is the defect, not the remedy'
+
+_Assert -Name 'UNKNOWN: an absent label is NOT reported as a divergence either' `
+	-Condition ($unknownNull.Status -ne 'Diverged') `
+	-Detail 'a non-compose container has no label to disagree with; inventing a mismatch is a false finding'
+
+_Assert -Name 'UNKNOWN: an EMPTY label reads as Unknown' `
+	-Condition ((Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue '').Status -eq 'Unknown') `
+	-Detail 'empty is absent'
+
+_Assert -Name 'UNKNOWN: a WHITESPACE-only label reads as Unknown' `
+	-Condition ((Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue '   ').Status -eq 'Unknown') `
+	-Detail 'whitespace is absent'
+
+$unparseable = Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue ',,,'
+
+_Assert -Name 'UNKNOWN: a label holding nothing parseable reads as Unknown, not as zero files' `
+	-Condition ($unparseable.Status -eq 'Unknown') `
+	-Detail "status $($unparseable.Status)"
+
+_Assert -Name 'UNKNOWN: the unparseable reason is DISTINCT from the absent one' `
+	-Condition ($unparseable.Reason -ne $unknownNull.Reason) `
+	-Detail 'a present-but-broken label is a different fact from no label at all'
+
+_Assert -Name 'UNKNOWN: the reason SAYS the set could not be verified' `
+	-Condition ($unknownNull.Reason -match 'could not be verified') `
+	-Detail "reason: $($unknownNull.Reason)"
+
+# DIVERGED. Membership in both directions.
+$missingOverlay = Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue '/srv/docker-compose.yml'
+
+_Assert -Name 'DIVERGED: a deployment brought up WITHOUT the tuning overlay is refused' `
+	-Condition ($missingOverlay.Status -eq 'Diverged') `
+	-Detail "status $($missingOverlay.Status)"
+
+_Assert -Name 'DIVERGED: the missing overlay is NAMED, not merely counted' `
+	-Condition ($missingOverlay.Missing -contains 'docker-compose.tuning.yml') `
+	-Detail "missing [$($missingOverlay.Missing -join ', ')]"
+
+$extraOverlay = Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue 'docker-compose.yml,docker-compose.tuning.yml,docker-compose.onyx.yml'
+
+_Assert -Name 'DIVERGED: an EXTRA overlay the reader never opened is refused' `
+	-Condition ($extraOverlay.Status -eq 'Diverged') `
+	-Detail 'docker-compose.onyx.yml sits in the same directory on the real rig'
+
+_Assert -Name 'DIVERGED: the extra overlay is NAMED' `
+	-Condition ($extraOverlay.Unexpected -contains 'docker-compose.onyx.yml') `
+	-Detail "unexpected [$($extraOverlay.Unexpected -join ', ')]"
+
+$withOverride = Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue 'docker-compose.yml,docker-compose.override.yml,docker-compose.tuning.yml'
+
+_Assert -Name 'DIVERGED: an override.yml in the deployed set is refused' `
+	-Condition ($withOverride.Status -eq 'Diverged' -and $withOverride.Unexpected -contains 'docker-compose.override.yml') `
+	-Detail 'the 11,679-byte override.yml on disk is deliberately NOT part of this deployment'
+
+$bothWays = Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue 'docker-compose.yml,docker-compose.onyx.yml'
+
+_Assert -Name 'DIVERGED: both directions of the difference are reported together' `
+	-Condition (@($bothWays.Missing).Count -gt 0 -and @($bothWays.Unexpected).Count -gt 0) `
+	-Detail "missing [$($bothWays.Missing -join ', ')] unexpected [$($bothWays.Unexpected -join ', ')]"
+
+# ORDER. The issue asked for a SYMMETRIC DIFFERENCE, which is a set operation and
+# is empty for this input. A later overlay overrides an earlier one, so the same
+# two files in the opposite order resolve to different values. The set matches;
+# the order does not; only an ordered comparison sees it.
+$reordered = Get-ComposeFileSetVerdict -Expected (Get-DeployComposeFile) -LabelValue 'docker-compose.tuning.yml,docker-compose.yml'
+
+_Assert -Name 'ORDER: a REORDERED overlay list is refused, though the set difference is EMPTY' `
+	-Condition ($reordered.Status -eq 'Diverged') `
+	-Detail "status $($reordered.Status) - a set comparison would have passed this"
+
+_Assert -Name 'ORDER: the empty symmetric difference is asserted, so the case is genuinely order-only' `
+	-Condition (@($reordered.Missing).Count -eq 0 -and @($reordered.Unexpected).Count -eq 0) `
+	-Detail "missing $(@($reordered.Missing).Count), unexpected $(@($reordered.Unexpected).Count) - both MUST be 0 or this proves nothing about ordering"
+
+_Assert -Name 'ORDER: OrderDiffers is set so the caller can tell reordering from membership' `
+	-Condition ($reordered.OrderDiffers -eq $true) `
+	-Detail 'the operator is told which of the two happened'
+
+_Assert -Name 'ORDER: the reason SAYS overlay order, not a bare mismatch' `
+	-Condition ($reordered.Reason -match 'OVERLAY ORDER') `
+	-Detail "reason: $($reordered.Reason)"
+
+_Assert -Name 'ORDER: an AGREEING set does not claim a reordering' `
+	-Condition ($healthy.OrderDiffers -eq $false) `
+	-Detail 'the flag must be false on the healthy case or it is meaningless'
+
+# Structural. The verdict must always answer, and only ever with a known token.
+$allStatuses = @($healthy, $unknownNull, $unparseable, $missingOverlay, $extraOverlay, $reordered) | ForEach-Object { $_.Status }
+
+_Assert -Name 'STRUCTURE: every verdict carries one of exactly three statuses' `
+	-Condition (@($allStatuses | Where-Object { $_ -notin @('Agreed', 'Diverged', 'Unknown') }).Count -eq 0) `
+	-Detail "statuses seen: $($allStatuses -join ', ')"
+
+_Assert -Name 'STRUCTURE: the probe population is 6 and covers all three statuses' `
+	-Condition (@($allStatuses).Count -eq 6 -and (@($allStatuses | Sort-Object -Unique).Count -eq 3)) `
+	-Detail "count $(@($allStatuses).Count), distinct $(@($allStatuses | Sort-Object -Unique).Count) - a shrunk population would make the check above vacuous"
+
+_Assert -Name 'STRUCTURE: every verdict carries a non-empty reason' `
+	-Condition (@(@($healthy, $unknownNull, $unparseable, $missingOverlay, $extraOverlay, $reordered) | Where-Object { [string]::IsNullOrWhiteSpace($_.Reason) }).Count -eq 0) `
+	-Detail 'a refusal without a stated cause sends the operator looking blind'
 
 
 Write-Host ('  Total {0}   Passed {1}   Failed {2}   Skipped {3}' -f `

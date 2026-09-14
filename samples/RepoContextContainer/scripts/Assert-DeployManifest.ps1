@@ -112,6 +112,19 @@
 	     rather than by the configuration. The deployment itself raised no
 	     finding; what is refused is scoring the comparison.
 	  4  the deployment could not be read
+	  5  REFUSED: the compose files this script read are not the ones the
+	     container was actually created from, so no reading was taken and no
+	     manifest was written. The deployment is readable and the resolution
+	     succeeded; what is refused is attributing values to a deployment that
+	     did not come from them.
+
+	5 is deliberately NOT folded into 2 or 4. 4 says the deployment could not be
+	read; 5 says it was read, correctly, from the wrong source - the values are
+	all present and would render indistinguishably from a correct manifest. 2
+	says the configuration moved; 5 makes no claim about whether it moved,
+	because the comparison was never against this deployment in the first place.
+	Conflating 5 with either sends the operator to debug something that is not
+	broken, which is worse than not refusing at all.
 
 	3 is deliberately NOT folded into 2. They answer different questions - 2
 	says the configuration moved, 3 says no statement about the configuration
@@ -140,6 +153,13 @@ param(
 	[string] $Reason,
 	[hashtable] $DeclaredReading,
 	[hashtable] $EffectiveReading,
+	# Test seam, symmetric with -DeclaredReading / -EffectiveReading above. When
+	# BOUND, it replaces the `docker inspect` label read, so every arm of the
+	# compose-set check - including the refusal - is assertable without a daemon.
+	# Bound-ness is tested rather than emptiness, so an explicitly supplied empty
+	# string means "this container carries no label" and is honoured as Unknown,
+	# instead of silently falling through to a live read.
+	[AllowNull()] [AllowEmptyString()] [string] $ComposeConfigFilesLabel,
 	[AllowNull()] [nullable[double]] $CgroupCpuQuota,
 	[string] $ContainerName = 'repocontextcontainer-repocontext-1',
 	[string] $EmbedContainerName = 'repocontextcontainer-embedder-1',
@@ -318,6 +338,45 @@ function ConvertTo-CpuGrant {
 	param([Parameter(Mandatory)] [double] $Cores)
 
 	return ('{0:0.##}' -f $Cores)
+}
+
+<#
+.SYNOPSIS
+	Reads the container's own record of which compose files created it.
+
+.DESCRIPTION
+	The entire impure half of the #2993 check: one read, no decisions. Every
+	judgement about what the value means lives in Get-ComposeFileSetVerdict in
+	the pure library, which is why that judgement is testable without a daemon.
+
+	Returns $null when the label is absent or the container cannot be inspected.
+	Both are UNKNOWN and neither is a divergence - a container that is not
+	compose-managed has no label to disagree with, and reporting that as a
+	mismatch would invent a finding out of a legitimate deployment.
+#>
+function Get-ComposeConfigFilesLabel {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[Parameter(Mandatory)] [string] $Container
+	)
+
+	try {
+		$raw = & docker inspect $Container --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' 2>&1
+	}
+	catch {
+		return $null
+	}
+
+	if ($LASTEXITCODE -ne 0) { return $null }
+
+	$value = ($raw | Out-String).Trim()
+
+	# docker renders a missing key as the literal '<no value>'. Treated as absent
+	# rather than compared, which would otherwise diverge against every file name.
+	if ([string]::IsNullOrWhiteSpace($value) -or $value -eq '<no value>') { return $null }
+
+	return $value
 }
 
 <#
@@ -522,8 +581,69 @@ else {
 		$declarationReason = $reason
 	}
 	else {
-		$declarationStatus = 'Available'
-		$declarationReason = "resolved from $((Get-DeployComposeFile) -join ', ')"
+		# #2993: the file list above is a hardcoded constant. It is correct for
+		# this deployment, but nothing made it correct and nothing would have
+		# said so if it stopped being. Verified against the container's own
+		# record BEFORE the declaration is allowed to call itself Available,
+		# because a declaration resolved from the wrong overlay set is scored as
+		# a measurement rather than read as a gap.
+		$composeSetLabel = if ($PSBoundParameters.ContainsKey('ComposeConfigFilesLabel')) {
+			$ComposeConfigFilesLabel
+		}
+		elseif ($null -ne $EffectiveReading) {
+			# A candidate configuration was supplied, so there may be no running
+			# container to compare against. Unknown, not a divergence.
+			$null
+		}
+		else {
+			Get-ComposeConfigFilesLabel -Container $ContainerName
+		}
+
+		$composeSetVerdict = Get-ComposeFileSetVerdict `
+			-Expected (Get-DeployComposeFile) `
+			-LabelValue $composeSetLabel
+
+		if ($composeSetVerdict.Status -eq 'Diverged') {
+			# REFUSED, and deliberately NOT degraded to Unreadable the way a
+			# resolution failure is. The asymmetry is the point:
+			#
+			#   Unreadable is an ENVIRONMENTAL condition - a shell with no .env
+			#   cannot expand the `${VAR:?}`-guarded knobs. It is common, benign,
+			#   and recoverable, so the manifest is still worth writing with the
+			#   declared half honestly marked absent.
+			#
+			#   Diverged is a statement about the DEPLOYMENT. The resolution
+			#   succeeded, so every declared value is present and would render
+			#   indistinguishably from a correct one - while describing files the
+			#   running container was never created from. Writing that manifest
+			#   produces a poisoned baseline that reads as a measurement.
+			#
+			# Reusing 'Unreadable' here would also hand the operator a specific
+			# WRONG cause: its suppression notice opens "the compose configuration
+			# could not be resolved", which is false - it resolved fine, from the
+			# wrong files. That is #2992's defect in a new place, and it sends
+			# someone to debug a compose failure that did not happen.
+			Write-Host 'DEPLOY MANIFEST NOT TAKEN: the compose files read are not the ones this container was created from.'
+			Write-Host ("  read from : {0}" -f ($composeSetVerdict.Expected -join ', '))
+			Write-Host ("  deployed  : {0}" -f ($composeSetVerdict.Observed -join ', '))
+			Write-Host ("  {0}" -f $composeSetVerdict.Reason)
+			Write-Host ''
+			Write-Host 'No manifest was written. A declared half resolved from files the deployment does not'
+			Write-Host 'use renders exactly like a correct one, and would be scored as a measurement.'
+			exit 5
+		}
+		elseif ($composeSetVerdict.Status -eq 'Unknown') {
+			# Recorded, not refused, and NOT silently treated as agreement. The
+			# qualifier goes in the reason a reader of the existing field already
+			# sees, so a consumer that never learns about the new status still
+			# cannot mistake this for a verified set.
+			$declarationStatus = 'Available'
+			$declarationReason = "resolved from $((Get-DeployComposeFile) -join ', ') (overlay set UNVERIFIED: $($composeSetVerdict.Reason))"
+		}
+		else {
+			$declarationStatus = 'Available'
+			$declarationReason = "resolved from $((Get-DeployComposeFile) -join ', ') (overlay set confirmed against the container)"
+		}
 	}
 }
 
