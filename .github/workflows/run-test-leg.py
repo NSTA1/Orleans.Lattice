@@ -128,6 +128,23 @@ def parse_trx(path: str) -> tuple[int, list[str]]:
     return executed, failures
 
 
+def run_attempt() -> int:
+    """The run attempt this leg executed under, recorded into its own result.
+
+    Artifacts are scoped to the run, not to the attempt, so re-running a failed
+    leg adds a second artifact beside the first rather than replacing it. The
+    aggregate report needs to tell the two apart, and the only place it can read
+    that from is the record itself - the artifact name is plumbing, and plumbing
+    is what regresses. Recording it here means a stale result is detectable from
+    its content no matter how it was collected.
+    """
+    raw = os.environ.get("GITHUB_RUN_ATTEMPT", "").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return 1
+
+
 def run_item(item: dict, results_dir: str) -> dict:
     label = item["label"]
     project = find_test_project(item["package"])
@@ -241,7 +258,15 @@ def main() -> int:
 
     records = [run_item(item, args.results_dir) for item in leg["items"]]
 
-    payload = {"leg": {"id": leg["id"], "name": leg["name"], "estimate": leg["estimate"]}, "items": records}
+    payload = {
+        "leg": {
+            "id": leg["id"],
+            "name": leg["name"],
+            "estimate": leg["estimate"],
+            "attempt": run_attempt(),
+        },
+        "items": records,
+    }
     with open(os.path.join(args.results_dir, f"{slug(leg['id'])}.json"), "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
 

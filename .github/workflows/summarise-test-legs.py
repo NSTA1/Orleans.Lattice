@@ -21,6 +21,13 @@ produces:
 4. The CONCURRENCY RESULT: serial cost against actual makespan, which is the
    number the whole exercise exists to move.
 
+Artifacts are scoped to the run rather than the run attempt, so a re-run leaves
+the earlier attempt's results in place beside the new ones. Before any of the
+above is computed the payloads are reduced to one per leg, keeping the highest
+attempt, so a leg that was red and has been re-run green reports green. Two
+results for one leg under the same attempt cannot arise from a correctly wired
+collection and are reported as an error rather than resolved arbitrarily.
+
 Usage:
   summarise-test-legs.py --results-dir DIR [--summary-file FILE]
 """
@@ -31,6 +38,7 @@ import argparse
 import glob
 import json
 import os
+import sys
 from collections import defaultdict
 
 
@@ -57,7 +65,58 @@ def load(results_dir: str) -> list[dict]:
     return payloads
 
 
-def render(handle, payloads: list[dict], expect_legs: int) -> bool:
+def attempt_of(payload: dict) -> int:
+    """The run attempt a leg result was produced under; 0 when it predates the field."""
+    try:
+        return int(payload.get("leg", {}).get("attempt", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def select_latest(payloads: list[dict]) -> tuple[list[dict], list[tuple], list[tuple]]:
+    """Keep one result per leg - the one from the highest run attempt.
+
+    Artifacts are scoped to the run rather than the attempt, so re-running a
+    failed leg leaves the earlier artifact in place and the run legitimately
+    carries results from more than one attempt.
+
+    Selecting per leg is what makes a re-run usable, and the reason the obvious
+    alternative does not work is worth stating: narrowing the collection to the
+    CURRENT attempt would discard every leg that passed first time, because
+    "re-run failed jobs" does not re-run the passing legs and they therefore
+    upload nothing under the new attempt. That turns a recoverable run into one
+    that can never report, which is a worse failure than the one being fixed.
+
+    Two results for one leg under the SAME attempt are a different matter. That
+    cannot happen while each leg uploads once per attempt under an
+    attempt-scoped name, so it means the collection plumbing has regressed, and
+    it is returned as a conflict rather than silently resolved - which of the
+    two survived extraction is not determined, so neither can be trusted.
+    """
+    best: dict[str, dict] = {}
+    superseded: list[tuple[str, int, int]] = []
+    conflicts: list[tuple[str, int]] = []
+
+    for payload in payloads:
+        leg_id = payload["leg"]["id"]
+        attempt = attempt_of(payload)
+        if leg_id not in best:
+            best[leg_id] = payload
+            continue
+        incumbent = attempt_of(best[leg_id])
+        if attempt > incumbent:
+            best[leg_id] = payload
+            superseded.append((leg_id, incumbent, attempt))
+        elif attempt < incumbent:
+            superseded.append((leg_id, attempt, incumbent))
+        else:
+            conflicts.append((leg_id, attempt))
+
+    return [best[key] for key in sorted(best)], superseded, conflicts
+
+
+def render(handle, payloads: list[dict], expect_legs: int) -> tuple[bool, dict]:
+    payloads, superseded, conflicts = select_latest(payloads)
     items = [item for payload in payloads for item in payload["items"]]
     legs = [payload["leg"] for payload in payloads]
 
@@ -95,6 +154,31 @@ def render(handle, payloads: list[dict], expect_legs: int) -> bool:
             "writing its record is invisible here, so this is treated as a failure rather than "
             "silently reducing the denominator.\n\n"
         )
+
+    if conflicts:
+        ok = False
+        handle.write("### Colliding leg results\n\n")
+        handle.write(
+            "Two results for the same leg carry the same run attempt. One overwrote the other "
+            "when the artifacts were extracted and which one survived is not determined, so "
+            "neither can be trusted. The attempt is part of each artifact name specifically to "
+            "prevent this, so either that naming or the download step's `merge-multiple` "
+            "setting has regressed.\n\n"
+        )
+        for leg_id, attempt in sorted(conflicts):
+            handle.write(f"- `{leg_id}` (attempt {attempt})\n")
+        handle.write("\n")
+
+    if superseded:
+        handle.write("### Superseded leg results\n\n")
+        handle.write(
+            "These legs were re-run. The later attempt is the result reported above; the "
+            "earlier one is ignored rather than merged, so a leg that was red and is now green "
+            "reports green.\n\n"
+        )
+        for leg_id, older, newer in sorted(superseded):
+            handle.write(f"- `{leg_id}`: using attempt {newer}, ignoring attempt {older}\n")
+        handle.write("\n")
 
     # -- Vacuity: a shard that ran nothing anywhere ---------------------------
     per_shard: dict[tuple[str, str], int] = defaultdict(int)
@@ -156,7 +240,16 @@ def render(handle, payloads: list[dict], expect_legs: int) -> bool:
             )
         handle.write("```\n\n</details>\n\n")
 
-    return ok
+    stats = {
+        "legs": len(legs),
+        "items": len(items),
+        "executed": sum(item["executed"] for item in items),
+        "failing": len(failures),
+        "superseded": len(superseded),
+        "conflicts": len(conflicts),
+        "silent": len(silent),
+    }
+    return ok, stats
 
 
 def main() -> int:
@@ -169,11 +262,21 @@ def main() -> int:
 
     if args.summary_file:
         with open(args.summary_file, "a", encoding="utf-8") as handle:
-            ok = render(handle, payloads, args.expect_legs)
+            ok, stats = render(handle, payloads, args.expect_legs)
     else:
-        import sys
+        ok, stats = render(sys.stdout, payloads, args.expect_legs)
 
-        ok = render(sys.stdout, payloads, args.expect_legs)
+    # The verdict goes to stdout as well as the step summary. The summary is a
+    # separate artefact that a reader has to navigate to; the log is what is
+    # open when a job goes red, and a required check whose reasoning is only
+    # legible somewhere else is a check people learn to re-run rather than read.
+    print(
+        f"summarise-test-legs: {'PASS' if ok else 'FAIL'} - "
+        f"{stats['legs']} leg(s), {stats['items']} item(s), "
+        f"{stats['executed']} test(s) executed, {stats['failing']} failing item(s), "
+        f"{stats['silent']} silent shard(s), "
+        f"{stats['superseded']} superseded result(s), {stats['conflicts']} colliding result(s)."
+    )
 
     return 0 if ok else 1
 
