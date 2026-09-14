@@ -116,6 +116,41 @@ public sealed class AddRepoContextToolsTests
     }
 
     [Test]
+    public void AddRepoContextTools_registers_the_symbol_walk_reporter_the_ingestor_takes_optionally()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            // Same silent-default hazard as the two reporters above. It is worth
+            // asserting separately here because this instrument's whole job is to
+            // distinguish a symbol walk that resumed banked progress from one that
+            // silently restarted at the head of the range - at the tree the two
+            // passes are byte-identical, so an absent series does not read as a
+            // missing instrument, it reads as "the resumable cursor is not live",
+            // which is exactly the wrong answer about the fix in issue #2953.
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(RepoContextSymbolWalkReporter)),
+                Is.True,
+                "the symbol-walk reporter must be registered, or the ingestor's optional "
+                + "parameter silently defaults to null and every arm of the instrument is absent");
+
+            Assert.That(provider.GetService<RepoContextSymbolWalkReporter>(), Is.Not.Null);
+
+            // One instance, because the three arms are a single tally over one
+            // series; a transient would give each resolution its own meter and its
+            // own priming.
+            Assert.That(
+                provider.GetService<RepoContextSymbolWalkReporter>(),
+                Is.SameAs(provider.GetService<RepoContextSymbolWalkReporter>()),
+                "the reporter must be a singleton so every pass charges one instrument");
+        });
+    }
+
+    [Test]
     public void AddRepoContextTools_registers_the_coverage_probe_reporter_both_consumers_take_optionally()
     {
         var services = new ServiceCollection();
