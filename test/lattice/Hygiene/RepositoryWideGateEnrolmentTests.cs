@@ -134,6 +134,44 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "repository-wide by reflection over the live meters; contains no src path at all",
         };
 
+    /// <summary>
+    /// Documented gates whose description states a <b>mandated absence</b>: the backticked
+    /// identifiers it names must resolve to nothing in code, permanently and by design.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// These rows are the exact inverse of an enrolment anchor. An anchor is a claim that
+    /// a symbol <i>exists</i> in the fixture the row names; a mandated-absence row names
+    /// identifiers that were deliberately deleted and whose reappearance is the defect.
+    /// Pointing the anchor check at such a row would demand the symbols exist in the very
+    /// fixture that exists to prove they do not.
+    /// </para>
+    /// <para>
+    /// Nothing reddens today: the anchor check reads only the enrolment table, and these
+    /// rows live in the separate gate table further down the same file. The hazard fires
+    /// on <b>widening</b>, which is the likely next change here, and it fires badly: the
+    /// red would name a real fixture and a real identifier, and its two obvious remedies
+    /// are both wrong - delete the documentation of a deletion mandate, or reintroduce the
+    /// identifier to satisfy the doc. The reason is knowable now and would not be then, so
+    /// it is recorded now.
+    /// </para>
+    /// <para>
+    /// Recorded by <b>fixture name only</b>. The forbidden identifiers are deliberately
+    /// not written here: this file is itself within the slice that gate scans, so spelling
+    /// them would violate the mandate that this record exists to protect. They are derived
+    /// from the documented row at run time instead, which also means the record cannot
+    /// drift from the prose it exempts.
+    /// </para>
+    /// </remarks>
+    private static readonly IReadOnlyDictionary<string, string> RecordedMandatedAbsenceGates =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["DeletionMandateHygieneTests"] =
+                "states a deletion mandate: the identifiers it names must never resolve in "
+                    + "code, so they are the inverse of an enrolment anchor and must never "
+                    + "be checked as one",
+        };
+
     private static string RepoRoot => HygieneRepository.FindRepoRoot();
 
     /// <summary>
@@ -193,6 +231,72 @@ public sealed class RepositoryWideGateEnrolmentTests
             .EnumerateFiles(Path.Combine(RepoRoot, "test"), "*.cs")
             .Where(static p => !HygieneRepository.HasExcludedSegment(p))
             .ToList();
+
+    /// <summary>
+    /// All source files declaring the named fixture type, including partials. Resolution
+    /// is by file name via <see cref="TypeNameForPath"/>, the same rule the population
+    /// detector uses, so a fixture cannot be visible to one and invisible to the other.
+    /// </summary>
+    private static IReadOnlyList<string> SourceFilesForType(string typeName) =>
+        TestSourceFiles()
+            .Where(p => string.Equals(TypeNameForPath(p), typeName, StringComparison.Ordinal))
+            .ToList();
+
+    /// <summary>
+    /// Every tracked C# file under <c>src/</c> and <c>test/</c>. This is the slice a
+    /// deletion mandate covers, so it is what a mandated-absence claim is checked against.
+    /// </summary>
+    private static IReadOnlyList<string> AllSourceFiles() =>
+        new[] { "src", "test" }
+            .SelectMany(dir => HygieneRepository.EnumerateFiles(Path.Combine(RepoRoot, dir), "*.cs"))
+            .Where(static p => !HygieneRepository.HasExcludedSegment(p))
+            .ToList();
+
+    /// <summary>
+    /// The "what it enforces" cell of the separate gate table, for the row naming
+    /// <paramref name="fixture"/>. Returns null when no such row exists, which the caller
+    /// treats as a failure rather than as an empty population.
+    /// </summary>
+    private static string? GateTableEnforcementCell(string fixture)
+    {
+        var path = Path.Combine(RepoRoot, InstructionsPath.Replace('/', Path.DirectorySeparatorChar));
+        foreach (var line in File.ReadAllLines(path))
+        {
+            if (!line.StartsWith("|", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var cells = line.Split('|', StringSplitOptions.None);
+            if (cells.Length > 2 && string.Equals(cells[1].Trim().Trim('`').Trim(), fixture, StringComparison.Ordinal))
+            {
+                return cells[2].Trim();
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// True for a line that is wholly a comment, by the three comment forms this
+    /// repository actually uses: <c>//</c>, an XML doc <c>///</c>, and a line within a
+    /// block comment.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately line-level rather than a comment stripper. Parsing C# text for
+    /// comment extents is exactly the unreliability <see cref="TypeNameForPath"/> avoids,
+    /// and the conservative direction matters: a line this misclassifies as code can only
+    /// make the anchor check <i>weaker</i> (it admits a match it should have rejected),
+    /// never redden a correct row. A trailing comment on a code line is treated as code
+    /// for the same reason.
+    /// </remarks>
+    private static bool IsCommentLine(string line)
+    {
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("//", StringComparison.Ordinal)
+            || trimmed.StartsWith("*", StringComparison.Ordinal)
+            || trimmed.StartsWith("/*", StringComparison.Ordinal);
+    }
 
     private sealed record Population(
         IReadOnlySet<string> ScanningFixtures,
@@ -392,9 +496,47 @@ public sealed class RepositoryWideGateEnrolmentTests
 
     private sealed record DocumentedTable(
         IReadOnlyDictionary<string, string> Rows,
+        IReadOnlyDictionary<string, string> Enrolments,
         int StatedTotal,
         int StatedScannerCount,
         int StatedRunCount);
+
+    /// <summary>
+    /// Matches a backtick-delimited span in the enrolment column. Backticks in that column
+    /// are the contributor's declaration that the enclosed text is a code symbol rather
+    /// than prose, which is what makes the cell's claim checkable at all.
+    /// </summary>
+    private static readonly Regex BacktickedSpan = new(@"`([^`]+)`", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Extracts the <b>code anchors</b> of an enrolment cell: the backticked tokens that
+    /// name a C# symbol. Bracketed attribute syntax and generic arity are stripped, so
+    /// <c>[InstrumentedEnum]</c> and <c>Histogram&lt;T&gt;</c> reduce to the bare
+    /// identifier. Anything that is not a single PascalCase word is deliberately ignored:
+    /// paths (<c>src/</c>), meter names (<c>orleans.lattice</c>) and PromQL functions
+    /// (<c>histogram_quantile</c>) are backticked in this column too and are not symbols
+    /// in the fixture.
+    /// </summary>
+    private static IReadOnlyList<string> EnrolmentAnchors(string cell)
+    {
+        var anchors = new List<string>();
+        foreach (Match match in BacktickedSpan.Matches(cell))
+        {
+            var token = match.Groups[1].Value.Trim().Trim('[', ']').Trim();
+            var generic = token.IndexOf('<');
+            if (generic >= 0)
+            {
+                token = token[..generic];
+            }
+
+            if (Regex.IsMatch(token, @"^[A-Z][A-Za-z0-9]*$") && !anchors.Contains(token, StringComparer.Ordinal))
+            {
+                anchors.Add(token);
+            }
+        }
+
+        return anchors;
+    }
 
     private static readonly IReadOnlyDictionary<string, int> NumberWords =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
@@ -448,6 +590,7 @@ public sealed class RepositoryWideGateEnrolmentTests
 
         var lines = File.ReadAllLines(path);
         var rows = new Dictionary<string, string>(StringComparer.Ordinal);
+        var enrolments = new Dictionary<string, string>(StringComparer.Ordinal);
 
         var headerIndex = Array.FindIndex(
             lines,
@@ -481,12 +624,14 @@ public sealed class RepositoryWideGateEnrolmentTests
             }
 
             rows[fixture] = project;
+            enrolments[fixture] = cells.Length > 3 ? cells[3].Trim() : string.Empty;
         }
 
         var text = File.ReadAllText(path);
 
         return new DocumentedTable(
             rows,
+            enrolments,
             ParseStatedNumber(
                 text,
                 @"(?<n>\w+) fixtures below are repository-wide",
@@ -541,14 +686,35 @@ public sealed class RepositoryWideGateEnrolmentTests
                     + "this gate exists to prevent.");
             Assert.That(
                 population.SelfExclusionFired,
-                Is.True,
-                "This fixture's own source no longer matches the detector pattern, so the "
+                Is.True,                "This fixture's own source no longer matches the detector pattern, so the "
                     + "self-exclusion in ComputePopulation is now a no-op. That is not "
                     + "harmless: the exclusion exists because a detector necessarily quotes "
                     + "the shape it detects, and its going quiet means either the pattern "
                     + "stopped matching the canonical call shape written in the remarks, or "
                     + "this fixture was renamed and the exclusion now names nothing. Both "
                     + "leave a live carve-out that no longer describes anything.");
+            Assert.That(
+                table.Enrolments.Values.Count(static v => v.Length > 0),
+                Is.EqualTo(table.Rows.Count),
+                $"The third column of the {InstructionsPath} gate table did not parse for "
+                    + "every row. The enrolment assertions all iterate that column, so a "
+                    + "partial parse silently narrows them instead of failing.");
+            Assert.That(
+                table.Enrolments.Values.Count(static v => EnrolmentAnchors(v).Count > 0),
+                Is.GreaterThan(0),
+                "No enrolment cell yielded a code anchor, so "
+                    + nameof(Enrolment_column_code_anchors_resolve_in_the_fixture_they_describe)
+                    + " is now checking nothing. Either every backticked symbol was removed "
+                    + "from the column, or the anchor extraction stopped matching the "
+                    + "table's markup. A gate that cannot fail is worse here than no gate, "
+                    + "because the surrounding enforcement lends the unchecked column "
+                    + "credibility it has not earned.");
+            Assert.That(
+                table.Enrolments.Values.Count(static v => v.Contains("src/", StringComparison.Ordinal)),
+                Is.GreaterThan(0),
+                "No enrolment cell claims its gate reads src/, so "
+                    + nameof(Enrolment_column_source_claims_match_the_computed_scanner_population)
+                    + " now iterates an empty set and passes without comparing anything.");
             Assert.That(
                 population.SelfExclusionFiredOnDelegationArm,
                 Is.True,
@@ -804,5 +970,272 @@ public sealed class RepositoryWideGateEnrolmentTests
                     + "vacuous green rather than an error: "
                     + string.Join(", ", misfiled));
         });
+    }
+
+    /// <summary>
+    /// The enrolment column's <b>code anchors</b> must name symbols that exist in the
+    /// fixture the row describes.
+    /// </summary>
+    /// <remarks>
+    /// The cell as a whole is prose and is not derivable from source - "what does this
+    /// gate enrol" has no mechanical definition, which is precisely why the column was
+    /// left unchecked when the other two were made executable (issue #3003). What <i>is</i>
+    /// derivable is the part of the cell that rots silently: the symbols it names. A cell
+    /// stating that a gate keys on <c>PlatformSentinelInstruments</c> is making a claim
+    /// that a rename can falsify without touching the table, and nothing noticed.
+    /// <para>
+    /// The anchor must appear on a <b>non-comment</b> line. Matching the whole file text
+    /// was the first form of this check and it was too weak: a perturbation planting
+    /// <c>AspNetCore</c> - a word appearing only in that fixture's prose - resolved
+    /// cleanly and the gate stayed green. Since a rename very often leaves a stale comment
+    /// carrying the old name, the prose-satisfiable form would have gone quiet on the
+    /// exact drift it exists to catch.
+    /// </para>
+    /// <para>
+    /// This is deliberately narrower than the column's full meaning, and the gap is stated
+    /// rather than papered over: a cell carrying no backticked symbol is not checked by
+    /// this assertion at all. Claiming otherwise would be the same false credibility the
+    /// gate exists to remove.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Enrolment_column_code_anchors_resolve_in_the_fixture_they_describe()
+    {
+        var table = ReadDocumentedTable();
+        var unresolved = new List<string>();
+
+        foreach (var (fixture, cell) in table.Enrolments.OrderBy(static r => r.Key, StringComparer.Ordinal))
+        {
+            var anchors = EnrolmentAnchors(cell);
+            if (anchors.Count == 0)
+            {
+                continue;
+            }
+
+            var sources = SourceFilesForType(fixture);
+            if (sources.Count == 0)
+            {
+                unresolved.Add($"{fixture} (no source file, so no anchor can resolve)");
+                continue;
+            }
+
+            var codeLines = sources
+                .SelectMany(File.ReadAllLines)
+                .Where(static l => !IsCommentLine(l))
+                .ToList();
+
+            foreach (var anchor in anchors)
+            {
+                var pattern = @"\b" + Regex.Escape(anchor) + @"\b";
+                if (!codeLines.Any(l => Regex.IsMatch(l, pattern)))
+                {
+                    unresolved.Add($"{fixture} -> `{anchor}`");
+                }
+            }
+        }
+
+        Assert.That(
+            unresolved,
+            Is.Empty,
+            "These enrolment-column cells name a code symbol that does not appear on a "
+                + "non-comment line of the fixture they describe. Backticks in that column "
+                + "declare the enclosed text to be a symbol of that fixture, so an "
+                + "unresolved anchor means the description has drifted from the code - the "
+                + "row still reads as an accurate account of what the gate enrols while "
+                + "naming something that no longer exists. A match in prose does not "
+                + "count, because a rename that leaves a stale comment behind is precisely "
+                + "the drift this checks for. Either update the cell to the current name, "
+                + "or unbacktick the word if it was meant as prose: "
+                + string.Join(", ", unresolved));
+    }
+
+    /// <summary>
+    /// A cell claiming its gate reads <c>src/</c> must name a fixture the detector
+    /// actually found scanning the whole source tree.
+    /// </summary>
+    /// <remarks>
+    /// Asserted in one direction only, and the asymmetry is real rather than an oversight:
+    /// most rows are source scanners without saying so, so requiring the converse would
+    /// fail on seven correct rows today. The direction that is checkable is the one that
+    /// misleads - describing a gate as reading <c>src/</c> when it does not. That is
+    /// exactly the confusion that made the original prose false about
+    /// <c>DashboardJsonTests</c>, which is repository-wide by reflection over the live
+    /// meters and reads no source at all.
+    /// </remarks>
+    [Test]
+    public void Enrolment_column_source_claims_match_the_computed_scanner_population()
+    {
+        var population = ComputePopulation();
+        var table = ReadDocumentedTable();
+
+        var falseClaims = table
+            .Enrolments
+            .Where(static r => r.Value.Contains("src/", StringComparison.Ordinal))
+            .Where(r => !population.ScanningFixtures.Contains(r.Key))
+            .Select(static r => r.Key)
+            .OrderBy(static n => n, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(
+            falseClaims,
+            Is.Empty,
+            "These enrolment-column cells say the gate reads src/, but the detector does "
+                + "not find them scanning the source tree. A row that describes a "
+                + "reflection-based or data-driven gate as a source scanner sends a "
+                + "contributor looking for the wrong kind of breakage: "
+                + string.Join(", ", falseClaims));
+    }
+
+    /// <summary>
+    /// Every row carries a distinct, non-empty enrolment description.
+    /// </summary>
+    /// <remarks>
+    /// The weakest of the three checks and the only one covering all rows. It catches the
+    /// realistic authoring error the other two cannot reliably reach: a row added by
+    /// copying an adjacent one and editing only the fixture name. The anchor check often
+    /// catches that too, when the copied cell names a symbol absent from the new fixture,
+    /// but it cannot be relied on to - a copied cell carrying no anchor, or one whose
+    /// anchor happens to exist in both fixtures, resolves cleanly while describing the
+    /// wrong gate.
+    /// </remarks>
+    [Test]
+    public void Enrolment_column_descriptions_are_present_and_distinct()
+    {
+        var table = ReadDocumentedTable();
+
+        var empty = table
+            .Enrolments
+            .Where(static r => r.Value.Length == 0)
+            .Select(static r => r.Key)
+            .OrderBy(static n => n, StringComparer.Ordinal)
+            .ToList();
+
+        var duplicated = table
+            .Enrolments
+            .GroupBy(static r => r.Value, StringComparer.Ordinal)
+            .Where(static g => g.Count() > 1)
+            .Select(static g => string.Join(" == ", g.Select(static r => r.Key).OrderBy(static n => n, StringComparer.Ordinal)))
+            .OrderBy(static s => s, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                empty,
+                Is.Empty,
+                "These gate table rows have an empty third cell. The column is the only "
+                    + "statement of what the gate actually enrols, and a blank one leaves "
+                    + "the row naming a fixture a contributor has no reason to run: "
+                    + string.Join(", ", empty));
+            Assert.That(
+                duplicated,
+                Is.Empty,
+                "These gate table rows share an identical enrolment description, which "
+                    + "means at least one of them describes a gate other than its own: "
+                    + string.Join("; ", duplicated));
+        });
+    }
+
+    /// <summary>
+    /// Every recorded mandated-absence gate still states a mandate, and every identifier
+    /// it names is still absent from the code.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the live half of <see cref="RecordedMandatedAbsenceGates"/>. A bare
+    /// exemption would be an assertion-shaped comment: it would record that a row must
+    /// never be anchor-checked and then check nothing, so it could not tell a mandate that
+    /// still holds from one that has been quietly violated. Recording the row instead buys
+    /// an assertion, because the same identifiers that must never be checked as anchors
+    /// are exactly the ones that must never resolve at all.
+    /// </para>
+    /// <para>
+    /// The identifiers are derived from the documented row rather than listed here, for
+    /// two reasons. This file is inside the slice the mandate's own gate scans, so
+    /// spelling them would violate the mandate. And a hand-copied list could drift from
+    /// the prose it exempts, reproducing inside the remedy the defect the remedy exists to
+    /// catch.
+    /// </para>
+    /// <para>
+    /// Both populations are asserted non-empty. Unbackticking the identifiers, or dropping
+    /// the row, would otherwise leave this passing on nothing - the vacuity failure this
+    /// fixture's own perturbation history turned up, and the reason the guard is here
+    /// rather than implied.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Recorded_mandated_absence_claims_are_still_absent_from_the_code()
+    {
+        Assert.That(
+            RecordedMandatedAbsenceGates,
+            Is.Not.Empty,
+            "The mandated-absence record is empty, so this gate would pass while checking "
+                + "nothing. If the last deletion mandate really was retired, delete this "
+                + "test rather than leaving it green over an empty population.");
+
+        var sources = AllSourceFiles();
+        Assert.That(
+            sources,
+            Is.Not.Empty,
+            "No source files were enumerated under src/ or test/, so every absence claim "
+                + "below would hold trivially. A zero from a failed enumeration is "
+                + "indistinguishable from a zero meaning genuine absence.");
+
+        var texts = sources.ToDictionary(static p => p, File.ReadAllText, StringComparer.Ordinal);
+        var violations = new List<string>();
+        var checkedIdentifiers = 0;
+
+        foreach (var (fixture, reason) in RecordedMandatedAbsenceGates.OrderBy(static r => r.Key, StringComparer.Ordinal))
+        {
+            var cell = GateTableEnforcementCell(fixture);
+            Assert.That(
+                cell,
+                Is.Not.Null,
+                $"{fixture} is recorded as stating a deletion mandate ({reason}), but no "
+                    + $"row naming it exists in {InstructionsPath}. The record now exempts "
+                    + "a row that is not there, so either the row moved and the record "
+                    + "must follow it, or the mandate was retired and the record must go.");
+
+            var identifiers = EnrolmentAnchors(cell!)
+                .Where(n => !string.Equals(n, fixture, StringComparison.Ordinal))
+                .ToList();
+
+            Assert.That(
+                identifiers,
+                Is.Not.Empty,
+                $"The {fixture} row names no backticked identifier, so there is nothing "
+                    + "left to assert absent and this gate would pass vacuously on it. A "
+                    + "mandate whose subjects have been unbackticked has stopped being "
+                    + "machine-readable, which is the state this fixture exists to prevent.");
+
+            foreach (var identifier in identifiers)
+            {
+                checkedIdentifiers++;
+                var word = new Regex($@"\b{Regex.Escape(identifier)}\b", RegexOptions.Compiled);
+                foreach (var (path, text) in texts)
+                {
+                    if (word.IsMatch(text))
+                    {
+                        violations.Add(
+                            $"{identifier} -> {Path.GetRelativePath(RepoRoot, path).Replace('\\', '/')}");
+                    }
+                }
+            }
+        }
+
+        Assert.That(
+            checkedIdentifiers,
+            Is.GreaterThan(0),
+            "No mandated-absence identifier was checked at all, so this gate reported "
+                + "success without performing a single comparison.");
+
+        Assert.That(
+            violations,
+            Is.Empty,
+            "These identifiers are documented as permanently deleted, but have reappeared "
+                + "in code. The documented row is a mandate, not a description, so the "
+                + "reappearance is the defect and the fix is in the code rather than in "
+                + "the documentation: "
+                + string.Join(", ", violations.OrderBy(static v => v, StringComparer.Ordinal)));
     }
 }
