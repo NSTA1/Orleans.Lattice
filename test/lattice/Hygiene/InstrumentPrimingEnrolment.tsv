@@ -164,6 +164,9 @@ src/lattice.tenancy/TenantObservabilityGaugeRegistry.cs#(unassigned:LatticeTenan
 src/lattice.tenancy/TenantObservabilityGaugeRegistry.cs#(unassigned:LatticeTenantMetrics.UsageTreesName)	none	
 src/lattice/AutoTrainingCompressionDictionaryProvider.cs#(unassigned:LatticeMetrics.CompressionDictionaryActiveVersionName)	none	
 src/lattice/AutoTrainingCompressionDictionaryProvider.cs#(unassigned:LatticeMetrics.CompressionDictionaryReservoirFillName)	none	
+src/lattice/BPlusTree/Grains/BPlusLeafGrain.Activation.cs#AvailableReplayPermitsGauge	none	
+src/lattice/BPlusTree/Grains/BPlusLeafGrain.Activation.cs#QueuedReplayPermitWaitersGauge	none	
+src/lattice/BPlusTree/Grains/BPlusLeafGrain.Activation.cs#ReplayConcurrencyCeilingGauge	none	
 src/lattice/BPlusTree/Grains/BPlusLeafGrain.Activation.cs#WithheldReplayPermitsGauge	none	
 src/lattice/BPlusTree/Grains/CoordinatorPhaseTickCensus.cs#Gauge	none	
 src/lattice/BPlusTree/Grains/LeafResidencyMetrics.cs#(unassigned:LatticeMetrics.LeafResidencyBudgetBytesName)	none	

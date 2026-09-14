@@ -1055,6 +1055,19 @@
       "targets": [
         { "refId": "A", "expr": "max by (tree) (orleans_lattice_leaf_snapshot_segment_peak_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "{{tree}} peak segment bytes" }
       ]
+    }, {
+      "id": 156,
+      "title": "WAL replay gate occupancy: ceiling, available, queued - issue #3047",
+      "description": "Occupancy of the per-silo WAL replay concurrency gate, as three series that are only interpretable together. CEILING is the denominator the permit family previously lacked: a SemaphoreSlim does not expose its own maximum and the gate is sized once and never re-created or topped up, so one permit withheld from sixteen (noise) and one withheld from two (half this silo's replay throughput) were indistinguishable on a scrape. A ceiling of 0 is an unambiguous not-yet-sized sentinel, never a sized gate, because the sizing resolver returns the configured value when positive and the derived default otherwise and both are at least 1. AVAILABLE is the headroom a new activation would find; a zero is ambiguous between an unsized gate and a saturated one and is resolved only against the ceiling, which is why the two are charted together. QUEUED is the un-terminated set, and it is the only series here that can show a gate admitting nothing: every other permit instrument records at a terminal outcome downstream of the wait - the queue-wait histogram on acquisition or cancellation, the replay counters once a permit is held - so an activation that never acquires and is never cancelled records nothing anywhere, and a permanently saturated gate renders byte-identically to a tree that never activated a leaf. Available cannot substitute for it: that count saturates at zero and reports the same figure for one waiter and for a thousand. Read the panel as the width of the door, whether it is open, and the queue outside it. An absent series means the build does not carry the instruments; a queued series pinned above zero while available sits at zero is a saturated gate with a standing backlog, and on an otherwise idle gate it is the signature of a leaked decrement rather than of real demand (issue #3047).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 342 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(orleans_lattice_wal_replay_permit_ceiling{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "gate ceiling" },
+        { "refId": "B", "expr": "sum(orleans_lattice_wal_replay_permits_available{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "permits available" },
+        { "refId": "C", "expr": "sum(orleans_lattice_wal_replay_permits_queued{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "activations queued for a permit" }
+      ]
     }
   ]
 }

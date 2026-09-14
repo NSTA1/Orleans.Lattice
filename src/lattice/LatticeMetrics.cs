@@ -1882,6 +1882,88 @@ public static class LatticeMetrics
     public const string WalReplayPermitsWithheldName = "orleans.lattice.wal.replay.permits_withheld";
 
     /// <summary>
+    /// Metric name for the gauge publishing the <b>ceiling</b> the per-silo WAL
+    /// replay concurrency gate was sized to, or <c>0</c> before any activation
+    /// has sized it (issue #3047).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the <b>denominator</b> for every other permit series. The withheld
+    /// level and the adaptation counters are absolute counts, and an absolute
+    /// count cannot be judged without the total it is drawn from: one permit
+    /// withheld from a ceiling of sixteen is noise, and one withheld from a
+    /// ceiling of two is half the silo's replay throughput. Those two readings
+    /// are numerically identical on a scrape and operationally opposite.
+    /// </para>
+    /// <para>
+    /// Like <see cref="WalReplayPermitsWithheldName"/>, the instrument is
+    /// declared in <c>BPlusLeafGrain.Activation.cs</c> beside the static it
+    /// reads, and the name is exported here so the dashboard drift guard can
+    /// resolve a panel token against it. See the remarks on that field for why
+    /// exporting the name is a requirement rather than a convenience.
+    /// </para>
+    /// </remarks>
+    public const string WalReplayPermitCeilingName = "orleans.lattice.wal.replay.permit_ceiling";
+
+    /// <summary>
+    /// Metric name for the gauge publishing the permits currently
+    /// <b>available</b> on the per-silo WAL replay concurrency gate (issue
+    /// #3047).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Never read alone.</b> Zero on this series is ambiguous between an
+    /// unsized gate and a fully saturated one, and only
+    /// <see cref="WalReplayPermitCeilingName"/> separates them: a ceiling of
+    /// <c>0</c> means the gate does not exist yet and this figure is meaningless,
+    /// while a ceiling of one or more makes a zero here a measured saturation.
+    /// Saturation is the reading the instrument exists for, which is why the pair
+    /// is documented as a pair.
+    /// </para>
+    /// <para>
+    /// It sizes <b>headroom, not backlog</b>. The underlying count cannot fall
+    /// below zero, so it says how much room is left and nothing about how many
+    /// activations are waiting once there is none;
+    /// <see cref="WalReplayPermitsQueuedName"/> is the instrument for that.
+    /// </para>
+    /// <para>
+    /// Declared outside this class and exported here for the drift guard, as
+    /// above.
+    /// </para>
+    /// </remarks>
+    public const string WalReplayPermitsAvailableName = "orleans.lattice.wal.replay.permits_available";
+
+    /// <summary>
+    /// Metric name for the gauge publishing the activations currently
+    /// <b>queued</b> on the per-silo WAL replay concurrency gate (issue #3047).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The only non-terminal instrument on the admission path.</b>
+    /// <see cref="WalReplayPermitQueueWait"/> records once a wait has ended and
+    /// <see cref="LeafActivationReplays"/> records once a permit is held, so both
+    /// sit downstream of the wait and an activation that is <em>still queued</em>
+    /// appears on neither. A permanently saturated gate is therefore silent
+    /// across the whole surface, and renders identically to a gate nothing ever
+    /// asked for a permit. That is a property of measuring terminated events
+    /// only, and the sole repair is to measure the population that has not
+    /// terminated.
+    /// </para>
+    /// <para>
+    /// Not derivable from <see cref="WalReplayPermitsAvailableName"/>, which
+    /// saturates at zero and so reports the same figure for one waiter and for a
+    /// thousand. Read the three together: the ceiling says how wide the door is,
+    /// availability says whether it is open, and this says how many are waiting
+    /// at it.
+    /// </para>
+    /// <para>
+    /// Declared outside this class and exported here for the drift guard, as
+    /// above.
+    /// </para>
+    /// </remarks>
+    public const string WalReplayPermitsQueuedName = "orleans.lattice.wal.replay.permits_queued";
+
+    /// <summary>
     /// Tag marking a replay permit queue wait that ended in the permit being
     /// <b>acquired</b>, on <see cref="WalReplayPermitQueueWait"/>.
     /// </summary>
