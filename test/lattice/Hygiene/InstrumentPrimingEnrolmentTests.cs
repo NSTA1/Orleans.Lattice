@@ -105,6 +105,35 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// defect on this epic.
 /// </para>
 /// <para>
+/// <b>The same indirection hides the PRIMING, and this fix does not close that hole.</b>
+/// Naming it here because an unnamed blind spot is the defect this gate exists to prevent,
+/// and leaving one unnamed inside the fix for it would be the same error one level down.
+/// <c>ZeroEmittedValues</c> recognises a prime only as a literal zero in <c>args[0]</c> of an
+/// <c>owner.Add(</c> / <c>owner.Record(</c> call, and it reads tags through the same
+/// literal-only path as <c>ResolveDimensions</c>. An instrument primed through a shared
+/// recorder therefore has invisible primes as well as invisible dimensions - one indirection,
+/// two blind spots.
+/// </para>
+/// <para>
+/// <c>LatticeMetrics.WalGcBlockedLeafReactivations</c> is the worked example of BOTH halves.
+/// Its single write seam is <c>LatticeWalGcScheduler.RecordBlockedLeafReactivation</c> (that
+/// file, line 1895), through which all ten call sites route; five of them prime, at lines
+/// 1161-1164 and 1176. Every one passes the zero as the recorder's trailing <c>delta</c>
+/// argument, so at the <c>.Add(</c> site <c>args[0]</c> is the variable <c>delta</c> and no
+/// prime is visible. The instrument is in fact fully primed and is nonetheless enrolled here
+/// as <see cref="Enrolment.Unresolved"/>.
+/// </para>
+/// <para>
+/// That enrolment is correct rather than a concession. <see cref="Enrolment.Unresolved"/>
+/// claims only that a dimension is present and its domain is not resolvable from source, which
+/// is exactly true of this parser's reach; it makes no claim either way about priming.
+/// Enrolling it <see cref="Enrolment.Primed"/> would assert a zero sample per value that this
+/// parser cannot see and so cannot falsify - trading a false negative claim for an
+/// unfalsifiable positive one, which is strictly worse. Widening the prime detection is a
+/// second parser change with its own blast radius and is deliberately left undone here rather
+/// than done partially and reported as complete.
+/// </para>
+/// <para>
 /// To regenerate the enrolment file after adding instruments, set
 /// <c>LATTICE_REWRITE_PRIMING_ENROLMENT=1</c> and run this fixture. The rewritten file
 /// records the parser's current view; the <c>none</c> rows it emits are a checked-in
@@ -161,6 +190,12 @@ public sealed class InstrumentPrimingEnrolmentTests
     // opposite directions and cancel. The floor exists only so the scan cannot go
     // vacuous and report green over nothing.
     private const int MinimumDeclarations = 300;
+
+    // A floor on the named-blind-spot population, for the same reason as the floor above. The
+    // measured value when this landed was 140 of the 212 rows that had previously claimed no
+    // dimension; the floor sits well below that so ordinary churn does not trip it, and well
+    // above zero so the marker silently ceasing to be emitted cannot read as green.
+    private const int MinimumNamedBlindSpots = 100;
 
     private const string EnrolmentFileName = "InstrumentPrimingEnrolment.tsv";
 
@@ -580,6 +615,170 @@ public sealed class InstrumentPrimingEnrolmentTests
         {
             Assert.That(resolved.Ambiguous, Is.False, "An unambiguous helper must still resolve.");
             Assert.That(resolved.Values, Is.EquivalentTo(new[] { "alpha", "beta" }));
+        });
+    }
+
+    [Test]
+    public void Tag_arguments_that_are_not_literal_pairs_are_named_rather_than_dropped()
+    {
+        // Known-positive control for issue #2968. This parser reads a tag only from a literal
+        // `new KeyValuePair<string, object?>(...)` at the emission site. An emission whose tags
+        // are PRE-BUILT KeyValuePair VARIABLES matched nothing, produced no dimensions at all,
+        // and therefore seeded the enrolment `none` - a positive claim that the instrument
+        // carries no bounded taxonomy, manufactured out of the parser's own blindness.
+        //
+        // This is a DIFFERENT hole from the unresolved-key path: that path needs a literal to
+        // have been found before it can report that the literal's key would not resolve. With
+        // no literal there is no pair whose key failed, so neither it nor the
+        // None-contradiction check that consumes it had anything to fire on.
+        var blind = SourceCorpus.ForTesting(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["src/probe/Caller.cs"] = """
+                internal static class Caller
+                {
+                    private static readonly Counter<long> _probe = Meter.CreateCounter<long>("probe.a");
+                    public void Emit(long delta, KeyValuePair<string, object?> outcome)
+                        => _probe.Add(delta, treeTag, outcome, tenantTag);
+                }
+                """,
+        });
+
+        var unread = blind.Declarations.Single(d => d.Owner == "_probe").Dimensions
+            .Where(d => d.Key.StartsWith("(unread-tag-argument:", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                unread,
+                Is.Not.Empty,
+                "The control did not fire. Tag arguments that are not literal KeyValuePair "
+                + "constructions must surface as a named blind spot. Dropping them leaves the "
+                + "declaration with no dimensions, which seeds `none` - a parse failure "
+                + "laundered into a measured absence, inside the gate that exists to prevent "
+                + "exactly that.");
+
+            Assert.That(
+                unread.All(d => d.Value.Ambiguous),
+                Is.True,
+                "An unread tag argument must be marked ambiguous. An unread domain recorded as "
+                + "resolved-and-empty is the same collapse in a new field.");
+        });
+
+        // The negative half of the control, and the half that makes the positive half mean
+        // anything: a detector that fires on every emission is indistinguishable from one
+        // stuck on. Fully literal tags must produce NO marker, and must still resolve.
+        var readable = SourceCorpus.ForTesting(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["src/probe/Caller.cs"] = """
+                internal static class Caller
+                {
+                    private static readonly Counter<long> _probe = Meter.CreateCounter<long>("probe.a");
+                    public void EmitAlpha() => _probe.Add(1, new KeyValuePair<string, object?>("state", "alpha"));
+                    public void EmitBeta() => _probe.Add(1, new KeyValuePair<string, object?>("state", "beta"));
+                }
+                """,
+        });
+
+        var readableDimensions = readable.Declarations.Single(d => d.Owner == "_probe").Dimensions;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                readableDimensions.Keys.Where(k => k.StartsWith("(unread-tag-argument:", StringComparison.Ordinal)),
+                Is.Empty,
+                "The detector fired on tags it CAN read, so it does not distinguish a blind spot "
+                + "from a successful parse and its output carries no information.");
+
+            // Guards the residue analysis against a specific regression. SplitArguments is not
+            // generic-aware, so it splits `KeyValuePair<string, object?>` at the comma inside
+            // the type argument list; the callers rejoin the fragments with a comma before
+            // matching, and that rejoin is load-bearing. Analysing the arguments individually
+            // instead - which reads as the obvious simplification - makes the literal
+            // unmatchable, and every readable tag in the repository silently becomes a blind
+            // spot. That inverts this fix while still looking like it is working.
+            Assert.That(
+                readableDimensions.ContainsKey("state"),
+                Is.True,
+                "A literal tag pair no longer resolves. The residue analysis must remove the "
+                + "spans it consumed from the REJOINED argument text, not inspect arguments "
+                + "one at a time.");
+
+            Assert.That(readableDimensions["state"].Values, Is.EquivalentTo(new[] { "alpha", "beta" }));
+        });
+    }
+
+    [Test]
+    public void An_unread_tag_domain_is_never_recorded_as_an_absent_one()
+    {
+        // The audit issue #2968 asked for, expressed as an assertion rather than as a number
+        // in a report: of the instruments the enrolment file records as carrying no bounded
+        // tag dimension, how many are saying "there is nothing to find" and how many were
+        // saying "I found nothing"? Before this fix the two shared the value `none`, so the
+        // split was not derivable from the output at all - which is the defect, not merely a
+        // consequence of it.
+        var byKey = Corpus.Value.Declarations.ToDictionary(d => d.Key, StringComparer.Ordinal);
+        var rows = ReadEnrolmentFile(out _);
+
+        var laundered = new List<string>();
+        foreach (var row in rows.Where(r => r.Enrolment == Enrolment.None))
+        {
+            if (!byKey.TryGetValue(row.Key, out var declaration))
+            {
+                continue;
+            }
+
+            var unread = declaration.Dimensions
+                .Where(d => d.Key.StartsWith("(unread-tag-argument:", StringComparison.Ordinal))
+                .ToList();
+
+            if (unread.Count > 0)
+            {
+                laundered.Add($"{row.Key}: {unread[0].Value.Note}");
+            }
+        }
+
+        // A floor, not a pinned count, for the reason given at MinimumDeclarations: the two
+        // populations move independently and a pinned total lets them cancel. The floor is
+        // what stops this test passing because the marker stopped being produced - in which
+        // case `laundered` is empty for the wrong reason and every assertion above it is
+        // vacuously true.
+        //
+        // It counts the PARSER's live output, not rows of the checked-in file. Counting rows
+        // was the first form of this clause and it was decorative: the file does not change
+        // when the detector breaks, so disabling the detector left the clause green and only
+        // the synthetic control caught it. A floor over an artefact cannot witness a
+        // regression in the machinery that produced the artefact.
+        var named = Corpus.Value.Declarations.Count(d =>
+            d.Dimensions.Keys.Any(k => k.StartsWith("(unread-tag-argument:", StringComparison.Ordinal)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                laundered,
+                Is.Empty,
+                $"{laundered.Count} instrument(s) are enrolled as carrying no bounded tag "
+                + "dimension while the parser can see tag text it never read. `none` is a claim "
+                + "about the instrument's CONTENT; this is a claim about the parser's REACH. "
+                + "Re-enrol each as unresolved:"
+                + $"{Environment.NewLine}  {string.Join($"{Environment.NewLine}  ", laundered.Take(20))}");
+
+            Assert.That(
+                named,
+                Is.GreaterThanOrEqualTo(MinimumNamedBlindSpots),
+                $"Only {named} instrument declaration(s) carry a named unread tag argument, below "
+                + $"the floor of {MinimumNamedBlindSpots}. The blind spot is not hypothetical - it "
+                + "covered 140 of the 212 rows that previously claimed no dimension - so a count "
+                + "near zero means the marker stopped being emitted and every `none` row is once "
+                + "again unfalsifiable, not that the repository got tidier.");
+
+            Assert.That(
+                rows.Count(r => r.Enrolment == Enrolment.None),
+                Is.GreaterThan(0),
+                "No row claims `none` any more. The point of naming the blind spot is to make "
+                + "the two states DISTINGUISHABLE; collapsing every row into `unresolved` "
+                + "destroys the distinction just as surely as collapsing them into `none` did, "
+                + "and leaves nothing falsifiable.");
         });
     }
 
@@ -1053,9 +1252,17 @@ public sealed class InstrumentPrimingEnrolmentTests
             var pattern = new Regex(
                 @"new\s+KeyValuePair\s*<\s*string\s*,\s*object\??\s*>\s*\(", RegexOptions.Compiled);
 
+            // Every region of the blob consumed by a literal KeyValuePair construction. What is
+            // left over after removing them is tag text this parser never read, and it is the
+            // difference between "there was nothing to find" and "I found nothing". See the
+            // residue check below.
+            var consumed = new List<(int Start, int End)>();
+
             foreach (Match m in pattern.Matches(blob))
             {
                 var args = SplitArguments(blob, m.Index + m.Length);
+                consumed.Add((m.Index, ArgumentListEnd(blob, m.Index + m.Length)));
+
                 if (args.Count < 2)
                 {
                     // Never drop a tag pair silently. A discarded pair leaves the instrument
@@ -1086,6 +1293,124 @@ public sealed class InstrumentPrimingEnrolmentTests
 
                 yield return (key, ResolveDomain(args[1], path));
             }
+
+            // The residue: tag text outside every literal KeyValuePair construction. An earlier
+            // revision of this parser yielded pairs only from the literals and discarded the
+            // rest in silence, so an emission whose tags are PRE-BUILT KeyValuePair VARIABLES -
+            // `Add(delta, treeTag, outcome, tenantTag)` - matched nothing, produced no
+            // dimensions, and seeded None: a positive claim that the instrument carries no
+            // bounded taxonomy, manufactured out of the parser's own blindness.
+            //
+            // Note this is a DIFFERENT hole from the unresolved-key path above, which needs a
+            // literal to have been found before it can report that the literal's key would not
+            // resolve. With no literal there is no pair whose key failed, so there was nothing
+            // for that path - or for the None-contradiction check that consumes it - to fire on.
+            // The worked example is LatticeMetrics.WalGcBlockedLeafReactivations, whose sole
+            // emission passes `outcome` as a method parameter (issue #2968). That instrument's
+            // domain is real: LatticeMetrics.cs declares one `BlockedLeafReactivation*` tag
+            // literal per arm, which is where the domain is to be read from.
+            //
+            // The arity is DELIBERATELY NOT WRITTEN DOWN HERE, and that is not squeamishness.
+            // It moves: this branch's base carries eight arms, and issue #2692 then added five
+            // drive verdicts, taking it to thirteen. A count typed into a comment inside the
+            // gate whose whole purpose is to stop stale claims about instruments would be that
+            // defect in its purest form, and a comment cannot fail when it goes stale. Derive
+            // the arm set by enumerating those declarations; do not quote a number for it.
+            //
+            // Where the domain is read from is equally deliberate: from those declarations, and
+            // NOT from the dashboards tag-domain resolver. The resolver happens to agree on this
+            // instrument, but it is not a sound oracle in general (issue #2970 records it
+            // fabricating a `grain_type` domain by descending into every method that shares a
+            // simple name and harvesting the string literals it finds there). A control that
+            // borrows its authority from a detector with known false positives is not a control.
+            //
+            // Residue is reported as ONE marker per emission site rather than one per token.
+            // The claim being made is deliberately weak - "there is tag text here I did not
+            // read" - because a parser that cannot read the text equally cannot count how many
+            // dimensions it holds. Asserting a number would be a second invented measurement.
+            var residue = Collapse(Remove(blob, consumed)).Trim().Trim(',').Trim();
+            if (residue.Length > 0 && residue.Any(char.IsLetterOrDigit))
+            {
+                var rendered = residue.Length <= ResidueRenderLimit
+                    ? residue
+                    : residue[..ResidueRenderLimit] + " (truncated)";
+
+                yield return (
+                    $"(unread-tag-argument:{rendered})",
+                    new DomainResult(
+                        Array.Empty<string>(),
+                        true,
+                        $"tag argument(s) {rendered} are not literal KeyValuePair constructions, "
+                        + "so neither their keys nor their domains were ever read"));
+            }
+        }
+
+        /// <summary>Longest residue rendered verbatim into a marker key. Keeps enrolment rows readable.</summary>
+        private const int ResidueRenderLimit = 120;
+
+        /// <summary>Index just past the argument list whose contents start at <paramref name="start"/>.</summary>
+        private static int ArgumentListEnd(string text, int start)
+        {
+            var depth = 0;
+
+            for (var i = start; i < text.Length; i++)
+            {
+                var c = text[i];
+                if (c is '(' or '[' or '{')
+                {
+                    depth++;
+                }
+                else if (c is ')' or ']' or '}')
+                {
+                    if (c == ')' && depth == 0)
+                    {
+                        return i + 1;
+                    }
+
+                    depth--;
+                }
+                else if (c == '"')
+                {
+                    var j = i + 1;
+                    while (j < text.Length && !(text[j] == '"' && text[j - 1] != '\\'))
+                    {
+                        j++;
+                    }
+
+                    i = j;
+                }
+            }
+
+            return text.Length;
+        }
+
+        /// <summary>The text outside every span in <paramref name="spans"/>.</summary>
+        private static string Remove(string text, List<(int Start, int End)> spans)
+        {
+            if (spans.Count == 0)
+            {
+                return text;
+            }
+
+            var builder = new StringBuilder();
+            var cursor = 0;
+
+            foreach (var (start, end) in spans.OrderBy(s => s.Start))
+            {
+                if (start > cursor)
+                {
+                    builder.Append(text, cursor, start - cursor);
+                }
+
+                cursor = Math.Max(cursor, Math.Min(end, text.Length));
+            }
+
+            if (cursor < text.Length)
+            {
+                builder.Append(text, cursor, text.Length - cursor);
+            }
+
+            return builder.ToString();
         }
 
         private static string Collapse(string expression) =>
