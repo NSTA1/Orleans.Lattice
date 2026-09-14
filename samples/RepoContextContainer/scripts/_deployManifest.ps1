@@ -67,6 +67,64 @@ $script:ProvenanceIndeterminate = 'Indeterminate'
 
 <#
 .SYNOPSIS
+	Whether the DECLARED half was obtained, and if not, why not.
+
+.DESCRIPTION
+	Three states, because #2983 is a case of the first two being rendered
+	identically. A manifest that prints `<absent>` for a key cannot, without
+	this, be read to mean either "compose resolved and does not declare it" or
+	"compose was never resolved, so nothing is known" - and those license
+	opposite conclusions. The second is not a weaker form of the first; it is
+	an absence of evidence being recorded in the notation reserved for evidence
+	of absence.
+
+	  Available     resolution succeeded. Every `<absent>` below it is a
+	                positive finding: the key is genuinely not declared.
+	  Unreadable    resolution was attempted and FAILED. Nothing is known about
+	                any key, and the reason is recorded beside it.
+	  NotAttempted  no resolution was asked for - the caller supplied a reading
+	                directly, or asked for the effective half alone.
+
+	Only `Available` licenses the divergence check. The other two suppress it,
+	which is correct, but they must SAY they suppressed it: a suppressed check
+	that renders as a passing one is the defect this file was written to stop,
+	and #2983 is that defect occurring inside this file.
+#>
+$script:DeclarationAvailable = 'Available'
+$script:DeclarationUnreadable = 'Unreadable'
+$script:DeclarationNotAttempted = 'NotAttempted'
+
+<#
+.SYNOPSIS
+	The compose files that must ALL be resolved for a declared reading to be
+	complete, in overlay order.
+
+.DESCRIPTION
+	Pure on purpose, and separated from the code that runs `docker compose`, so
+	the overlay requirement is assertable without a daemon. The requirement is
+	not cosmetic: a bare `docker compose config` resolves only
+	docker-compose.yml and docker-compose.override.yml, and EVERY
+	attribution-relevant knob in Get-AttributionVariable is set by
+	docker-compose.tuning.yml. Verified 2026-09-14 against the live rig - a bare
+	resolution yields zero matches for LATTICE_WAL_MAX_CONCURRENT_REPLAYS, and
+	the same resolution with the overlay yields "0".
+
+	So a fix that resolved compose WITHOUT the overlay would report `<absent>`
+	for every knob while now claiming to have looked, which is strictly worse
+	than not looking: it converts an admitted gap into a false negative. Keeping
+	the list here means a test can assert the overlay is in it without starting
+	anything.
+#>
+function Get-DeployComposeFile {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param()
+
+	return @('docker-compose.yml', 'docker-compose.tuning.yml')
+}
+
+<#
+.SYNOPSIS
 	The variables whose movement invalidates a run-to-run comparison.
 
 .DESCRIPTION
@@ -284,10 +342,27 @@ function New-DeployManifest {
 		[Parameter(Mandatory)] [hashtable] $Declared,
 		[Parameter(Mandatory)] [hashtable] $Effective,
 		[AllowNull()] [nullable[double]] $CgroupCpuQuota,
-		[AllowNull()] [AllowEmptyString()] [string] $Label
+		[AllowNull()] [AllowEmptyString()] [string] $Label,
+		[ValidateSet('Available', 'Unreadable', 'NotAttempted')]
+		[AllowNull()] [AllowEmptyString()] [string] $DeclarationStatus,
+		[AllowNull()] [AllowEmptyString()] [string] $DeclarationReason
 	)
 
 	$records = @()
+
+	# An omitted status is inferred, so every existing caller keeps working. The
+	# inference is the OLD behaviour and is deliberately the conservative one: an
+	# empty reading becomes NotAttempted, never Available, so a caller that forgot
+	# to say cannot accidentally license the divergence check against nothing.
+	$status = if (-not [string]::IsNullOrWhiteSpace($DeclarationStatus)) {
+		$DeclarationStatus
+	}
+	elseif ($Declared.Keys.Count -gt 0) {
+		$script:DeclarationAvailable
+	}
+	else {
+		$script:DeclarationNotAttempted
+	}
 
 	foreach ($variable in @(Get-AttributionVariable) + @(Get-AttributionGrant)) {
 		$declaredValue = if ($Declared.ContainsKey($variable.Name)) {
@@ -320,14 +395,17 @@ function New-DeployManifest {
 		Label = if ([string]::IsNullOrWhiteSpace($Label)) { 'unlabelled' } else { $Label }
 		Records = @($records)
 		ProcessorCount = $provenance
-		# Whether a DECLARED reading was supplied at all, which is a different fact
-		# from every declared value being absent. Without this distinction a manifest
-		# taken from a running container with no configuration file to hand reports
-		# every variable it found as a declared/effective divergence - the guard
-		# accusing the deployment of the guard's own missing input. A check that
-		# fires on its normal operating condition is one operators learn to ignore,
-		# which costs more than not having it.
-		DeclarationAvailable = ($Declared.Keys.Count -gt 0)
+		# Whether a DECLARED reading was obtained, and if not why not. Inferring this
+		# from ($Declared.Keys.Count -gt 0) - which is what this did until #2983 -
+		# cannot tell "resolved, and the file declares nothing" from "never resolved",
+		# and the caller's own acquisition gap made the second case 100% of real
+		# invocations while it rendered as the first. An explicit status cannot be
+		# satisfied by forgetting to acquire.
+		DeclarationStatus = $status
+		DeclarationReason = if ([string]::IsNullOrWhiteSpace($DeclarationReason)) { '' } else { $DeclarationReason }
+		# Retained so existing readers keep working. Now DERIVED from the status
+		# rather than from emptiness, so it cannot disagree with it.
+		DeclarationAvailable = ($status -eq $script:DeclarationAvailable)
 	}
 }
 
@@ -359,12 +437,24 @@ function Get-DeployManifestDivergence {
 
 	$divergences = @()
 
-	# No declared reading supplied means there is nothing to diverge FROM. Comparing
-	# against an absent declaration would report every variable the container carries
-	# as unattributable, which is false: the manifest simply was not given the file.
-	# Silence here is correct, and it is not a weakening - the ATTRIBUTION check
+	# Only an AVAILABLE declaration licenses this check. Without a declared half
+	# there is nothing to diverge FROM, and comparing against one would report every
+	# variable the container carries as unattributable - the guard accusing the
+	# deployment of the guard's own missing input.
+	#
+	# Silence here is correct and is not a weakening: the ATTRIBUTION check
 	# (Get-AttributionVerdict) runs regardless and is the half that gates a deploy.
-	if ($Manifest.PSObject.Properties.Name -contains 'DeclarationAvailable' -and
+	# But silence must be ATTRIBUTABLE, which is what #2983 was about - the caller
+	# never acquired a declaration, so this returned empty on every real invocation
+	# and the script printed OK. The status now says which of the two silences it
+	# is, and Get-DeclarationSuppression below turns that into a line the operator
+	# reads. A check that cannot fire must say so where a passing one would not.
+	if ($Manifest.PSObject.Properties.Name -contains 'DeclarationStatus') {
+		if ($Manifest.DeclarationStatus -ne $script:DeclarationAvailable) {
+			return ,$divergences
+		}
+	}
+	elseif ($Manifest.PSObject.Properties.Name -contains 'DeclarationAvailable' -and
 		-not $Manifest.DeclarationAvailable) {
 		return ,$divergences
 	}
@@ -397,6 +487,59 @@ function Get-DeployManifestDivergence {
 	}
 
 	return ,$divergences
+}
+
+<#
+.SYNOPSIS
+	Reports, in one line, that the divergence check did NOT run and why.
+
+.DESCRIPTION
+	Returns an empty string when the check ran. Otherwise it names the reason,
+	so a suppressed check is visible in exactly the place a reader looks for its
+	verdict.
+
+	This exists because #2983 was not, at bottom, a missing `docker compose`
+	call. It was that the absence of one was INDISTINGUISHABLE from a clean
+	result: Get-DeployManifestDivergence returned zero divergences, the caller
+	printed OK, and nothing anywhere said the comparison had not happened. The
+	acquisition fix stops that arising; this stops it being silent if it ever
+	arises again by another route - a resolution failure, a caller that supplies
+	only the effective half, a future overlay that will not resolve.
+
+	The general form is worth stating, because it recurs across this epic: a
+	check that can be suppressed needs a channel for "suppressed" that is not
+	the same channel as "passed". Zero findings and no findings possible are
+	different facts, and rendering them identically is what makes a guard
+	report success for work it never did.
+#>
+function Get-DeclarationSuppression {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[Parameter(Mandatory)] [pscustomobject] $Manifest
+	)
+
+	if (-not ($Manifest.PSObject.Properties.Name -contains 'DeclarationStatus')) {
+		return ''
+	}
+
+	$status = $Manifest.DeclarationStatus
+	$reason = if ($Manifest.PSObject.Properties.Name -contains 'DeclarationReason') { [string] $Manifest.DeclarationReason } else { '' }
+	$suffix = if ([string]::IsNullOrWhiteSpace($reason)) { '' } else { " Reason: $reason" }
+
+	switch ($status) {
+		'Available' { return '' }
+		'Unreadable' {
+			return 'DECLARED HALF UNREADABLE: the compose configuration could not be resolved, so the ' +
+				'declared/effective divergence check DID NOT RUN. Every declared value below is ' +
+				"<unreadable>, which is not the same claim as <absent>.$suffix"
+		}
+		default {
+			return 'DECLARED HALF NOT RESOLVED: no compose resolution was attempted, so the ' +
+				'declared/effective divergence check DID NOT RUN. Declared values below are ' +
+				"<not-resolved> and assert nothing about the configuration.$suffix"
+		}
+	}
 }
 
 <#
@@ -574,10 +717,29 @@ function Format-DeployManifest {
 	$lines += ''
 	$lines += "PROCESSOR_COUNT_RESOLVED=$(if ($null -eq $Manifest.ProcessorCount.Resolved) { '<indeterminate>' } else { $Manifest.ProcessorCount.Resolved })"
 	$lines += "PROCESSOR_COUNT_SOURCE=$($Manifest.ProcessorCount.Source)"
+
+	# Recorded IN the manifest, not merely on the console, because the file is what
+	# gets cited when a run is scored. A reader who cannot tell from the file alone
+	# whether the declared column is evidence or an unfilled gap will read it as
+	# evidence - which is how #2983 survived thirteen deployments.
+	$status = if ($Manifest.PSObject.Properties.Name -contains 'DeclarationStatus' -and
+		-not [string]::IsNullOrWhiteSpace($Manifest.DeclarationStatus)) { $Manifest.DeclarationStatus } else { 'NotAttempted' }
+	$reason = if ($Manifest.PSObject.Properties.Name -contains 'DeclarationReason') { [string] $Manifest.DeclarationReason } else { '' }
+	$lines += "DECLARATION_STATUS=$status"
+	$lines += "DECLARATION_REASON=$(if ([string]::IsNullOrWhiteSpace($reason)) { '<none>' } else { $reason })"
 	$lines += ''
 
+	# `<absent>` asserts the key is not declared. That is only true when the
+	# declaration was actually read, so when it was not, the declared column renders
+	# as `<unreadable>` or `<not-resolved>` instead. Same width, different claim.
+	$declaredPlaceholder = switch ($status) {
+		'Available' { '<absent>' }
+		'Unreadable' { '<unreadable>' }
+		default { '<not-resolved>' }
+	}
+
 	foreach ($record in $Manifest.Records) {
-		$declared = if ($null -eq $record.Declared -or $record.Declared.Length -eq 0) { '<absent>' } else { $record.Declared }
+		$declared = if ($null -eq $record.Declared -or $record.Declared.Length -eq 0) { $declaredPlaceholder } else { $record.Declared }
 		$effective = if ($null -eq $record.Effective -or $record.Effective.Length -eq 0) { '<absent>' } else { $record.Effective }
 		$lines += "$($record.Name)|declared=$declared|effective=$effective"
 	}
@@ -614,6 +776,12 @@ function Read-DeployManifest {
 	$resolved = $null
 	$source = $script:ProvenanceIndeterminate
 	$attribution = @{}
+	# A manifest written before #2983 carries no DECLARATION_STATUS line. Defaulting
+	# it to NotAttempted is the honest reading of such a file: its declared column
+	# was never acquired. Defaulting to Available would retroactively promote every
+	# historical `<absent>` into a positive finding it never was.
+	$declarationStatus = $script:DeclarationNotAttempted
+	$declarationReason = 'no DECLARATION_STATUS recorded; manifest predates #2983'
 
 	foreach ($variable in @(Get-AttributionVariable) + @(Get-AttributionGrant)) {
 		$attribution[$variable.Name] = $variable
@@ -646,6 +814,17 @@ function Read-DeployManifest {
 			continue
 		}
 
+		if ($trimmed.StartsWith('DECLARATION_STATUS=')) {
+			$declarationStatus = $trimmed.Substring('DECLARATION_STATUS='.Length)
+			continue
+		}
+
+		if ($trimmed.StartsWith('DECLARATION_REASON=')) {
+			$value = $trimmed.Substring('DECLARATION_REASON='.Length)
+			$declarationReason = if ($value -eq '<none>') { '' } else { $value }
+			continue
+		}
+
 		$parts = $trimmed -split '\|'
 
 		if ($parts.Count -ne 3 -or -not $parts[1].StartsWith('declared=') -or -not $parts[2].StartsWith('effective=')) {
@@ -656,10 +835,15 @@ function Read-DeployManifest {
 		$declared = $parts[1].Substring('declared='.Length)
 		$effective = $parts[2].Substring('effective='.Length)
 
+		# All three placeholders read back as $null - there is no VALUE in any of
+		# them. Which of the three it was is carried by DeclarationStatus, not by
+		# the per-record field, so a reader cannot get the two out of step.
+		$declaredValue = if ($declared -in @('<absent>', '<unreadable>', '<not-resolved>')) { $null } else { $declared }
+
 		$records += [pscustomobject]@{
 			Name = $name
 			Service = if ($attribution.ContainsKey($name)) { $attribution[$name].Service } else { '<unknown>' }
-			Declared = if ($declared -eq '<absent>') { $null } else { $declared }
+			Declared = $declaredValue
 			Effective = if ($effective -eq '<absent>') { $null } else { $effective }
 			Attribution = if ($attribution.ContainsKey($name)) { $attribution[$name].Attribution } else { 'not enumerated by this version of the manifest' }
 			Consumer = if ($attribution.ContainsKey($name)) { $attribution[$name].Consumer } else { '<unknown>' }
@@ -669,6 +853,9 @@ function Read-DeployManifest {
 	return [pscustomobject]@{
 		Label = $label
 		Records = @($records)
+		DeclarationStatus = $declarationStatus
+		DeclarationReason = $declarationReason
+		DeclarationAvailable = ($declarationStatus -eq $script:DeclarationAvailable)
 		ProcessorCount = [pscustomobject]@{
 			Resolved = $resolved
 			Source = $source
