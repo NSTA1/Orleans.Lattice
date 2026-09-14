@@ -448,7 +448,13 @@ dotnet test test/<pkg>/<Project>.Tests.csproj --filter "FullyQualifiedName~Metri
 
 So **a change that adds or removes a metric instrument in any package must also run these eleven**, alongside the six standard content gates, whichever package the instrument itself lives in. Budget for it: adding a single instrument costs at least four edits outside its own package, in two different test projects.
 
-**Run each gate as its own `--filter`, never several OR-ed into one.** OR-ing them crashes the vstest host and misattributes the failure to whichever fixture happened to be running. Confirm each run reports a non-zero discovered count, too: a gate fixture that does not exist in the project you ran it against asserts nothing and exits 0, which reads exactly like a pass. Treat such a vacuous green as evidence about *which project the gate lives in*, not merely about that one fixture.
+**Run them with the checked-in command, not a hand-composed filter.** `tools/Invoke-RepositoryWideGates.ps1` derives its run list from the table above, which is the same source `RepositoryWideGateEnrolmentTests` enforces against the tree, so adding a row here adds it to the run with no second edit. It runs each gate as its own filter and reports the EXECUTED count per gate, failing on any gate that executed zero tests.
+
+```powershell
+pwsh tools/Invoke-RepositoryWideGates.ps1
+```
+
+**Run each gate as its own `--filter`, never several OR-ed into one.** OR-ing them crashes the vstest host and misattributes the failure to whichever fixture happened to be running. Confirm each run reports a non-zero discovered count, too: a gate fixture that does not exist in the project you ran it against asserts nothing and exits 0, which reads exactly like a pass. Treat such a vacuous green as evidence about *which project the gate lives in*, not merely about that one fixture. The command above does both of those checks for you, which is why it exists: a worker who had read this table, and was deliberately verifying the gates as a correctness step, still ran six of the eleven and missed every gate outside `test/lattice/` - the exact blindness this section opens by warning about. A correct document is not a correct run.
 
 **Every emission site of an instrument must use one attribution rule, and zero-priming arms are emission sites.** An instrument primed with one tag set and recorded with another splits its own series and fails the mixed-attribution assertion, even though every individual call site looks correct on its own.
 

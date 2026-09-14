@@ -494,6 +494,24 @@ public sealed class RepositoryWideGateEnrolmentTests
             selfExclusionFiredOnDelegationArm);
     }
 
+    /// <summary>
+    /// The fixtures the gate table is expected to name, reconstructed from the source scan
+    /// and the two recorded partitions rather than read from the table.
+    /// <para>
+    /// Exposed so that <see cref="RepositoryWideGateRunnerTests"/> can compare the runner
+    /// script's emitted run list against a derivation that never parses the table. Comparing
+    /// the script's markdown parse against this fixture's markdown parse would be two parses
+    /// of one file, which agree by construction whenever both are wrong in the same way; this
+    /// compares a parse against a scan, which does not.
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyCollection<string> ExpectedDocumentedFixtures() =>
+        ComputePopulation()
+            .ScanningFixtures
+            .Where(static name => !RecordedNonInstrumentScanners.ContainsKey(name))
+            .Concat(RecordedNonScanningDocumentedGates.Keys)
+            .ToHashSet(StringComparer.Ordinal);
+
     private sealed record DocumentedTable(
         IReadOnlyDictionary<string, string> Rows,
         IReadOnlyDictionary<string, string> Enrolments,
