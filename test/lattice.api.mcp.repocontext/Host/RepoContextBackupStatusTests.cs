@@ -188,13 +188,60 @@ public sealed class RepoContextBackupStatusTests
     }
 
     [Test]
-    public void A_failure_is_surfaced_alongside_the_successes()
+    public void A_failure_before_any_capture_is_surfaced()
     {
         var status = Enabled();
         status.RecordFailure("the sink refused the write");
 
         Assert.That(status.LastFailure, Is.EqualTo("the sink refused the write"));
         Assert.That(status.Describe(), Does.Contain("the sink refused the write"));
+    }
+
+    [Test]
+    public void A_failure_is_surfaced_alongside_the_successes()
+    {
+        // This test previously constructed a status with ZERO successes, so it
+        // exercised the never-captured branch while its name asserted the
+        // after-capture one. It passed, and the behaviour it named was false:
+        // Describe() computed the failure note and dropped it whenever
+        // _captureCount > 0 - that is, in exactly the FailingAfterCapture state
+        // that returns 503. A test name is not coverage.
+        var status = Enabled();
+        status.RecordCapture(
+            backupId: "b-1",
+            capturedTreeId: Tree,
+            entryCount: 412,
+            isFull: true,
+            requestedIncremental: false,
+            capturedAtUtc: DateTimeOffset.UnixEpoch);
+        status.RecordFailure("the sink refused the write");
+
+        var described = status.Describe();
+
+        // RecordCapture clears the failure, so a failure that survives here can
+        // only post-date the last success. It is live, never stale.
+        Assert.That(described, Does.Contain("the sink refused the write"));
+        Assert.That(described, Does.Contain("412"));
+    }
+
+    [Test]
+    public void An_empty_sink_is_still_reported_after_a_capture_has_succeeded()
+    {
+        // The durability gap this exists to expose: local counters say a capture
+        // succeeded, the sink says it holds nothing. Describe() computed the sink
+        // note and dropped it once anything had been captured, suppressing the
+        // warning in precisely the case that warrants it.
+        var status = Enabled();
+        status.RecordCapture(
+            backupId: "b-1",
+            capturedTreeId: Tree,
+            entryCount: 412,
+            isFull: true,
+            requestedIncremental: false,
+            capturedAtUtc: DateTimeOffset.UnixEpoch);
+        status.RecordSinkInventory(0, null, null);
+
+        Assert.That(status.Describe(), Does.Contain("NO backup"));
     }
 
     [Test]
