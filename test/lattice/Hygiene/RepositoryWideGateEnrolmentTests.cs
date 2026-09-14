@@ -792,9 +792,12 @@ public sealed class RepositoryWideGateEnrolmentTests
     /// </summary>
     /// <remarks>
     /// The weakest of the three checks and the only one covering all rows. It catches the
-    /// realistic authoring error the other two cannot: a row added by copying an adjacent
-    /// one and editing only the fixture name, which yields a cell that is confidently
-    /// wrong and whose anchors, being the neighbour's, all resolve.
+    /// realistic authoring error the other two cannot reliably reach: a row added by
+    /// copying an adjacent one and editing only the fixture name. The anchor check often
+    /// catches that too, when the copied cell names a symbol absent from the new fixture,
+    /// but it cannot be relied on to - a copied cell carrying no anchor, or one whose
+    /// anchor happens to exist in both fixtures, resolves cleanly while describing the
+    /// wrong gate.
     /// </remarks>
     [Test]
     public void Enrolment_column_descriptions_are_present_and_distinct()
