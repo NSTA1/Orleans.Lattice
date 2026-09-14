@@ -107,7 +107,16 @@
 	  0  recorded; at most one attribution-relevant variable moved
 	  2  REFUSED: a multi-variable step nobody acknowledged, a declared/effective
 	     divergence, or an indeterminate processor-count provenance
+	  3  NOT COMPARABLE: the baseline was written by a different instrument
+	     vintage, and the deltas against it are explicable by that difference
+	     rather than by the configuration. The deployment itself raised no
+	     finding; what is refused is scoring the comparison.
 	  4  the deployment could not be read
+
+	3 is deliberately NOT folded into 2. They answer different questions - 2
+	says the configuration moved, 3 says no statement about the configuration
+	can be read from this pair - and a caller that cannot tell them apart will
+	chase a deployment defect that does not exist, which is #2992 itself.
 
 	Indeterminate provenance is a REFUSAL and not a warning. The requirement on
 	this script is that the resolved count and its source are observable; a run
@@ -557,6 +566,12 @@ if (-not $Quiet) {
 }
 
 $refusals = @()
+# Kept OUT of $refusals deliberately. An incomparable baseline is not a finding
+# about the deployment - it is a statement that no finding about the deployment
+# can be read from this pair at all - so it gets its own channel and its own
+# exit code. Folding it into the refusal list would print it under "the
+# configuration moved", which is the exact misattribution #2992 records.
+$incomparability = ''
 
 if ($manifest.ProcessorCount.Source -eq 'Indeterminate') {
 	$refusals += 'PROCESSOR COUNT PROVENANCE IS INDETERMINATE. ' + $manifest.ProcessorCount.Reason +
@@ -601,12 +616,20 @@ if (-not $BaselinePath) {
 if ($BaselinePath -and (Test-Path -LiteralPath $BaselinePath -PathType Leaf)) {
 	$baseline = Read-DeployManifest -Text ([IO.File]::ReadAllText($BaselinePath))
 	$deltas = Compare-DeployManifest -Baseline $baseline -Current $manifest
+	$relation = Get-VintageRelation `
+		-BaselineVintage $baseline.ManifestVintage `
+		-CurrentVintage $manifest.ManifestVintage
+	$comparability = Get-ComparabilityVerdict -Deltas $deltas -Relation $relation
 	$verdict = Get-AttributionVerdict -Deltas $deltas
 
 	if (-not $Quiet) {
 		Write-Host ''
 		Write-Host 'ATTRIBUTION' -ForegroundColor Cyan
 		Write-Host ("  baseline : {0}" -f $BaselinePath)
+		Write-Host ("  vintage  : baseline {0}, current {1} ({2})" -f `
+			$(if ($null -eq $baseline.ManifestVintage) { '<unknown>' } else { $baseline.ManifestVintage }),
+			$(if ($null -eq $manifest.ManifestVintage) { '<unknown>' } else { $manifest.ManifestVintage }),
+			$relation)
 		Write-Host ("  verdict  : {0}" -f $verdict.Summary)
 
 		foreach ($detail in $verdict.Detail) {
@@ -614,7 +637,15 @@ if ($BaselinePath -and (Test-Path -LiteralPath $BaselinePath -PathType Leaf)) {
 		}
 	}
 
-	if (-not $verdict.Attributable) {
+	# Asked BEFORE attribution, because "was this step attributable" has no
+	# meaning across two manifests that are not comparable. Answering it anyway
+	# is what produced #2992: three cells the baseline's instrument could not
+	# read were reported as pinned variables, and the refusal named
+	# configuration drift on a rig where nothing had moved.
+	if (-not $comparability.Comparable) {
+		$incomparability = $comparability.Summary
+	}
+	elseif (-not $verdict.Attributable) {
 		if ($AcceptMultipleDeltas -and -not [string]::IsNullOrWhiteSpace($Reason)) {
 			if (-not $Quiet) {
 				Write-Host ''
@@ -638,7 +669,15 @@ elseif (-not $Quiet) {
 	Write-Host 'ATTRIBUTION: no baseline manifest found; this run is recorded as the baseline.'
 }
 
-if ($refusals.Count -eq 0) {
+if (-not [string]::IsNullOrWhiteSpace($incomparability)) {
+	Write-Host ''
+	Write-Host 'BASELINE NOT COMPARABLE' -ForegroundColor Yellow
+	Write-Host ''
+	Write-Host "  $incomparability"
+	Write-Host ''
+}
+
+if ($refusals.Count -eq 0 -and [string]::IsNullOrWhiteSpace($incomparability)) {
 	if (-not $Quiet) {
 		Write-Host ''
 
@@ -654,6 +693,16 @@ if ($refusals.Count -eq 0) {
 	}
 
 	exit 0
+}
+
+# Findings about the DEPLOYMENT outrank an incomparable baseline, because they
+# stand on the current reading alone and do not depend on the baseline at all.
+# An incomparable baseline only ever invalidates the comparison.
+if ($refusals.Count -eq 0) {
+	Write-Host 'The manifest has been written and the deployment itself raised no finding.'
+	Write-Host 'What is refused is scoring this run against a baseline that a different instrument wrote.'
+
+	exit 3
 }
 
 Write-Host ''

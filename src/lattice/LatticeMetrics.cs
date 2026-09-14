@@ -4326,24 +4326,6 @@ public static class LatticeMetrics
             description: "Per-key SetAsync duration inside an atomic-write saga execute loop.");
 
     /// <summary>
-    /// Histogram of the wall-clock gap between consecutive per-key
-    /// awaits inside an atomic-write saga's execute loop, i.e. the
-    /// time the saga spends between one successful key-level commit
-    /// and the next key-level await. Tagged with <see cref="TagTree"/>.
-    /// Captures the saga-side per-iteration overhead
-    /// (<c>WriteStateAsync</c> of the saga checkpoint plus loop
-    /// bookkeeping) that the per-key duration histogram does *not*
-    /// see. A non-trivial value at p50 here indicates the saga
-    /// checkpoint persist is contributing as much to end-to-end
-    /// latency as the data writes themselves; near-zero values mean
-    /// the saga's overhead is negligible and the per-key duration
-    /// is the dominant cost.
-    /// </summary>
-    public static readonly Histogram<double> SagaWaitSerialGap =
-        Meter.CreateHistogram<double>("orleans.lattice.saga.wait.serial_gap", unit: "ms",
-            description: "Wall-clock gap between consecutive per-key awaits inside an atomic-write saga.");
-
-    /// <summary>
     /// Histogram of wall-clock ms spent inside the saga's prepare
     /// phase: from the start of <c>ExecutePhaseAsync</c>'s parallel
     /// batched <c>lattice.SetManyAsync(slice)</c> dispatch to the

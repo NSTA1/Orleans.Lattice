@@ -96,6 +96,43 @@ $script:DeclarationNotAttempted = 'NotAttempted'
 
 <#
 .SYNOPSIS
+	Which instrument version wrote a manifest, and how two of them relate.
+
+.DESCRIPTION
+	#2992. A manifest records what an instrument could READ, not only what the
+	deployment WAS, and those two come apart whenever the instrument improves.
+	Re-capturing the run-13 baseline after #2983 moved three keys from empty to
+	a value on a rig with `RestartCount=0` on every container: nothing had
+	changed except that the reader had learned to look at the embedder. The
+	comparison called it configuration drift and refused.
+
+	That direction of error is the expensive one. An artefact that reports
+	success it did not earn is survivable, because nobody acts on it; an
+	artefact that reports FAILURE it did not earn gets a bypass flag, and then
+	gets deleted. So the vintage exists to stop a correct deployment being
+	refused for a reason that is not a reason.
+
+	The vintage tracks ACQUISITION CAPABILITY - which cells the instrument is
+	able to populate - and not merely "this file changed". Bumping it for an
+	edit that cannot change what is readable would manufacture incomparability
+	between two manifests that agree perfectly, which is the same cry-wolf
+	failure one step removed.
+
+	Unknown is $null and never 0. A manifest written before this field existed
+	has an UNKNOWN vintage, which is a different claim from vintage zero:
+	zero is a value and would compare as merely older, silently asserting that
+	the file's capability is known. It is not known, and the ordering below
+	treats unknown as "older than any recorded vintage" without ever storing a
+	number that says so.
+#>
+$script:ManifestVintageCurrent = 1
+$script:VintageSame = 'Same'
+$script:VintageBaselineOlder = 'BaselineOlder'
+$script:VintageCurrentOlder = 'CurrentOlder'
+$script:VintageIndeterminate = 'Indeterminate'
+
+<#
+.SYNOPSIS
 	The compose files that must ALL be resolved for a declared reading to be
 	complete, in overlay order.
 
@@ -406,6 +443,10 @@ function New-DeployManifest {
 		# Retained so existing readers keep working. Now DERIVED from the status
 		# rather than from emptiness, so it cannot disagree with it.
 		DeclarationAvailable = ($status -eq $script:DeclarationAvailable)
+		# Stamped by the instrument that BUILT it, so a freshly-acquired reading
+		# and a read-back baseline carry the field in the same place and the
+		# comparison never has to special-case which one it is holding.
+		ManifestVintage = $script:ManifestVintageCurrent
 	}
 }
 
@@ -611,6 +652,149 @@ function Compare-DeployManifest {
 
 <#
 .SYNOPSIS
+	Orders two manifest vintages, treating unknown as older than any recorded one.
+
+.DESCRIPTION
+	Unknown is $null, never 0, so a manifest that predates the field cannot
+	claim a known capability. It still ORDERS as older than any recorded
+	vintage, which is the honest reading: the field was added by an instrument
+	that could read strictly more than the ones before it.
+
+	Two unknowns are Indeterminate rather than Same. They may be the same
+	instrument or two different pre-field ones, and nothing in either file can
+	distinguish those - so the relation says so instead of guessing. This is
+	deliberately the conservative direction: Indeterminate explains no delta at
+	all, so a legacy-against-legacy comparison behaves exactly as it did before
+	this function existed, and no historical comparison changes verdict.
+#>
+function Get-VintageRelation {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[AllowNull()] [System.Nullable[int]] $BaselineVintage,
+		[AllowNull()] [System.Nullable[int]] $CurrentVintage
+	)
+
+	if ($null -eq $BaselineVintage -and $null -eq $CurrentVintage) { return $script:VintageIndeterminate }
+	if ($null -eq $BaselineVintage) { return $script:VintageBaselineOlder }
+	if ($null -eq $CurrentVintage) { return $script:VintageCurrentOlder }
+
+	if ($BaselineVintage -lt $CurrentVintage) { return $script:VintageBaselineOlder }
+	if ($BaselineVintage -gt $CurrentVintage) { return $script:VintageCurrentOlder }
+
+	return $script:VintageSame
+}
+
+<#
+.SYNOPSIS
+	Decides whether two manifests are comparable at all, before anything asks
+	whether the step between them was attributable.
+
+.DESCRIPTION
+	These are different questions and the second is meaningless when the first
+	answers no. #2992 is what happens when only the second is asked: three keys
+	that the baseline's instrument could not read compared as three pinned
+	variables, and the refusal named configuration drift on a rig where nothing
+	had moved.
+
+	A vintage difference explains exactly one class of delta, in one direction:
+
+	  BaselineOlder   'Pinned'   (empty -> value). The newer instrument reads a
+	                             cell the older one left empty.
+	  CurrentOlder    'Unpinned' (value -> empty). The older instrument cannot
+	                             read a cell the newer one recorded. This is not
+	                             hypothetical - a deploy checkout that has not
+	                             been updated runs the older script.
+	  Indeterminate   nothing.
+	  Same            nothing.
+
+	'Changed' - both sides populated and different - is NEVER explained by a
+	vintage difference, in either direction. Two instruments disagreeing about a
+	value they can both read is drift whatever wrote them, and excusing it would
+	turn this function into the silent-pass defect it exists to prevent.
+
+	THE LOAD-BEARING PROPERTY, and the one to preserve in any future edit:
+	a cross-vintage comparison that produces NO explicable delta is still
+	COMPARABLE. Incomparability is reported only when the vintage difference
+	actually bites. Without that, adding this field would itself refuse every
+	comparison against every baseline captured before it - a guard crying wolf
+	on its own installation, which is the failure mode that gets guards deleted
+	and is the reason Get-AttributionVerdict already excludes 'Unrecorded'.
+
+	KNOWN LIMITATION, deliberate and conservative. An empty cell is
+	byte-indistinguishable between "the instrument could not read it" and "the
+	deployment genuinely does not set it" - the same shape AMENDMENT 25 records
+	for DECLARATION_STATUS, one level down. So against an UNKNOWN-vintage
+	baseline this cannot tell a newly-readable cell from a newly-pinned one, and
+	it refuses both.
+
+	That is the safe direction: it declines to SCORE the comparison rather than
+	silently excusing a real change, and exit 3 is not exit 0. But it does mean
+	a genuine pin against a legacy baseline is refused rather than attributed.
+
+	The remedy is to re-capture the baseline with the current instrument, after
+	which the relation is Same and every delta is scored normally. The remedy is
+	NOT a hand-authored list of "keys this vintage newly learned to read": such a
+	list cannot be checked for completeness, and a guard whose coverage is a list
+	nobody can audit is the defect family this epic exists to remove.
+
+	Concretely, at the time of writing DOTNET_PROCESSOR_COUNT is the one cell
+	carrying effective=<absent> in run-13-postfix.manifest, so a run that pins it
+	against that baseline is refused as incomparable rather than attributed.
+#>
+function Get-ComparabilityVerdict {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param(
+		[Parameter(Mandatory)] [AllowEmptyCollection()] [array] $Deltas,
+		[Parameter(Mandatory)] [string] $Relation
+	)
+
+	$explicableKind = switch ($Relation) {
+		$script:VintageBaselineOlder { 'Pinned' }
+		$script:VintageCurrentOlder { 'Unpinned' }
+		default { '' }
+	}
+
+	$explained = @()
+
+	if ($explicableKind) {
+		$explained = @($Deltas | Where-Object { $_.Kind -eq $explicableKind })
+	}
+
+	if ($explained.Count -eq 0) {
+		return [pscustomobject]@{
+			Comparable = $true
+			Relation = $Relation
+			ExplainedCount = 0
+			ExplainedNames = @()
+			Summary = ''
+		}
+	}
+
+	$names = ($explained | ForEach-Object { $_.Name }) -join ', '
+	$direction = if ($Relation -eq $script:VintageBaselineOlder) {
+		'the baseline was written by an OLDER instrument that could not populate them'
+	}
+	else {
+		'the current reading was taken by an OLDER instrument that cannot populate them'
+	}
+
+	return [pscustomobject]@{
+		Comparable = $false
+		Relation = $Relation
+		ExplainedCount = $explained.Count
+		ExplainedNames = @($explained | ForEach-Object { $_.Name })
+		Summary = "These two manifests were written by different instrument versions and are NOT " +
+			"comparable on $($explained.Count) key(s): $names. Each shows as a movement because " +
+			"$direction - not because the deployment changed. Re-capture the baseline with the " +
+			'current instrument, or pass an explicitly comparable one, before reading any verdict ' +
+			'about attribution.'
+	}
+}
+
+<#
+.SYNOPSIS
 	Decides whether a step is attributable, and says why not when it is not.
 
 .DESCRIPTION
@@ -703,6 +887,12 @@ function Get-AttributionVerdict {
 	Available, and otherwise repeats the declared column's placeholder - `0 of
 	9` is a finding when resolution ran and an artefact when it did not, and
 	printing the same digits for both would rebuild the confusion.
+
+	MANIFEST_VINTAGE records which instrument wrote the file. Without it a
+	manifest says what the deployment was but not what the reader could SEE, so
+	an instrument that learns to read a new cell makes every older baseline
+	appear to have changed. That is #2992, and it refused a rig whose containers
+	both reported RestartCount=0.
 #>
 function Format-DeployManifest {
 	[CmdletBinding()]
@@ -725,6 +915,22 @@ function Format-DeployManifest {
 	$lines += "# label        : $($Manifest.Label)"
 	$lines += "# generated at : $stamp"
 	$lines += ''
+	# First of the key lines because it describes the FILE, not the deployment:
+	# a reader has to know which instrument wrote the rest before any of it can
+	# be compared against anything. Absent in every manifest written before
+	# #2992, which reads back as unknown rather than as zero.
+	#
+	# Taken from the manifest rather than from the constant, so re-rendering a
+	# read-back legacy manifest does not silently STAMP it with the current
+	# vintage. Promoting an old file to a known capability it never had is the
+	# same hazard AMENDMENT 25 records for DECLARATION_STATUS, and the fix is
+	# the same: carry the absence through instead of defaulting it.
+	$vintage = if ($Manifest.PSObject.Properties.Name -contains 'ManifestVintage') { $Manifest.ManifestVintage } else { $null }
+
+	if ($null -ne $vintage) {
+		$lines += "MANIFEST_VINTAGE=$vintage"
+	}
+
 	$lines += "PROCESSOR_COUNT_RESOLVED=$(if ($null -eq $Manifest.ProcessorCount.Resolved) { '<indeterminate>' } else { $Manifest.ProcessorCount.Resolved })"
 	$lines += "PROCESSOR_COUNT_SOURCE=$($Manifest.ProcessorCount.Source)"
 
@@ -815,6 +1021,12 @@ function Read-DeployManifest {
 	# the two will score an unmeasured baseline as a measured-and-empty one.
 	$declarationResolved = $null
 	$declarationTotal = $null
+	# $null, never 0. A manifest with no vintage line was written by an
+	# instrument whose acquisition capability is UNKNOWN, which is a different
+	# claim from "capability zero" - the latter is a value, and would let a
+	# legacy file compare as merely older while asserting that what it could
+	# read is known. See Get-VintageRelation.
+	$manifestVintage = $null
 
 	foreach ($variable in @(Get-AttributionVariable) + @(Get-AttributionGrant)) {
 		$attribution[$variable.Name] = $variable
@@ -832,6 +1044,17 @@ function Read-DeployManifest {
 		}
 
 		if ($trimmed.Length -eq 0 -or $trimmed.StartsWith('#')) {
+			continue
+		}
+
+		if ($trimmed.StartsWith('MANIFEST_VINTAGE=')) {
+			$value = $trimmed.Substring('MANIFEST_VINTAGE='.Length)
+			# Only a well-formed non-negative integer is a vintage. Anything else
+			# leaves it unknown rather than guessing, because a malformed vintage
+			# that parsed to 0 would claim comparability the file cannot support.
+			if ($value -match '^\s*(\d+)\s*$') {
+				$manifestVintage = [int] $Matches[1]
+			}
 			continue
 		}
 
@@ -903,6 +1126,7 @@ function Read-DeployManifest {
 		DeclarationAvailable = ($declarationStatus -eq $script:DeclarationAvailable)
 		DeclarationResolvedCount = $declarationResolved
 		DeclarationRecordCount = $declarationTotal
+		ManifestVintage = $manifestVintage
 		ProcessorCount = [pscustomobject]@{
 			Resolved = $resolved
 			Source = $source
