@@ -1,6 +1,6 @@
 # Instrument priming enrolment. One row per instrument declaration under src/.
 # key<TAB>enrolment<TAB>detail
-# enrolment: primed | anchored | unresolved | none
+# enrolment: primed | anchored | unresolved | none | unprimed
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension (unread-tag-argument:Tag(outcome), LatticeTenantLabel.Platform): tag argument(s) Tag(outcome), LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm

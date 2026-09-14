@@ -199,6 +199,12 @@ public sealed class InstrumentPrimingEnrolmentTests
 
     private const string EnrolmentFileName = "InstrumentPrimingEnrolment.tsv";
 
+    /// <summary>
+    /// The literal that opens the header comment listing the enrolment vocabulary. Held here so
+    /// the generator that writes the line and the gate that reads it back agree by construction.
+    /// </summary>
+    private const string VocabularyPrefix = "# enrolment:";
+
     private static readonly string[] FactoryNames =
     {
         "CreateCounter",
@@ -473,10 +479,109 @@ public sealed class InstrumentPrimingEnrolmentTests
     }
 
     [Test]
+    public void Documented_enrolment_vocabulary_matches_the_enum()
+    {
+        ReadEnrolmentFile(out var path);
+        Assert.That(
+            File.Exists(path),
+            Is.True,
+            $"{EnrolmentFileName} is missing, so the documented vocabulary cannot be compared "
+                + "to the enum at all. This assertion exists so an absent file fails rather "
+                + "than silently producing an empty comparison that passes.");
+
+        var headerLines = File
+            .ReadAllLines(path)
+            .Select(static line => line.Trim())
+            .Where(static line => line.StartsWith(VocabularyPrefix, StringComparison.Ordinal))
+            .ToList();
+
+        // Exactly one, not at least one: two header lines would let a stale copy sit above or
+        // below a corrected one with the gate reading whichever it happened to find first.
+        Assert.That(
+            headerLines,
+            Has.Count.EqualTo(1),
+            $"{EnrolmentFileName} must carry exactly one '{VocabularyPrefix}' header line; "
+                + $"found {headerLines.Count}. A parse that matches nothing must fail rather "
+                + "than pass, because a comment-parsing assertion that silently matches zero "
+                + "states is the identical defect one level up.");
+
+        var documented = headerLines[0][VocabularyPrefix.Length..]
+            .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+        var declared = Enum.GetValues<Enrolment>().Select(Render).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                documented,
+                Is.Not.Empty,
+                $"The '{VocabularyPrefix}' header in {EnrolmentFileName} parsed to zero states. "
+                    + "The separator or the prefix has changed and this gate is now reading "
+                    + "nothing, which would otherwise compare empty against empty and pass.");
+
+            Assert.That(
+                declared,
+                Is.Not.Empty,
+                "Enum.GetValues<Enrolment>() yielded nothing, so the computed side of this "
+                    + "comparison is empty and every documented state would read as unknown.");
+
+            // Render's default arm maps every unhandled member onto "unresolved". A sixth state
+            // added without its own arm would therefore render as an EXISTING token: it would
+            // not fail the set comparison below, it would vanish into an entry that is already
+            // there and the two sides would still match. This is the arity mismatch hiding
+            // inside the remedy for the arity mismatch, so it is asserted separately.
+            Assert.That(
+                declared.Distinct(StringComparer.Ordinal).Count(),
+                Is.EqualTo(declared.Count),
+                $"Render is not injective over Enrolment: {declared.Count} members render to "
+                    + $"{declared.Distinct(StringComparer.Ordinal).Count()} distinct tokens "
+                    + $"([{string.Join(", ", declared)}]). A member with no Render arm falls "
+                    + "through to the default and aliases onto an existing token, so it would "
+                    + "pass the vocabulary comparison while being undocumented in practice. "
+                    + "Give every member its own arm.");
+
+            var undocumented = declared.Except(documented, StringComparer.Ordinal).ToList();
+            Assert.That(
+                undocumented,
+                Is.Empty,
+                $"Enrolment states exist that {EnrolmentFileName} does not document: "
+                    + $"{string.Join(", ", undocumented)}. A contributor enrolling a row into "
+                    + "one of these is writing a state the file's own header says does not "
+                    + "exist. Regenerate the file so the header is derived from the enum.");
+
+            var unknown = documented.Except(declared, StringComparer.Ordinal).ToList();
+            Assert.That(
+                unknown,
+                Is.Empty,
+                $"{EnrolmentFileName} documents states the enum does not declare: "
+                    + $"{string.Join(", ", unknown)}. A documented state with no member cannot "
+                    + "be parsed out of a row, so a row claiming it is skipped silently by "
+                    + "ReadEnrolmentFile rather than rejected.");
+        });
+    }
+
+    [Test]
     public void Unprimed_records_are_still_unprimed_and_carry_a_tracking_reference()
     {
         var byKey = Corpus.Value.Declarations.ToDictionary(d => d.Key, StringComparer.Ordinal);
         var rows = ReadEnrolmentFile(out _).Where(r => r.Enrolment == Enrolment.Unprimed).ToList();
+
+        // This row set is legitimately empty today, and empty is the DESIRED state: it means
+        // nothing sits in the known-broken-but-tracked bucket. So this test must not demand a
+        // row exist - a gate that only passes while a defect is recorded is worse than one that
+        // is quiet. What it must do instead is distinguish "absent because none exist" from
+        // "absent because the filter stopped working", which is the priming doctrine applied to
+        // a fixture rather than to an instrument: assert the detector, not the population.
+        Assert.That(
+            Enum.TryParse<Enrolment>(Render(Enrolment.Unprimed), ignoreCase: true, out var probe)
+                && probe == Enrolment.Unprimed,
+            Is.True,
+            "The 'unprimed' token no longer round-trips from Render back through the parse that "
+                + "ReadEnrolmentFile uses, so every unprimed row in the file would be skipped "
+                + "silently and the filter below would report zero for a reason unrelated to "
+                + "the rows. Zero unprimed rows is a good state; an unreadable one is not, and "
+                + "without this assertion the two are the same observation.");
 
         var failures = new List<string>();
         foreach (var row in rows)
@@ -910,7 +1015,7 @@ public sealed class InstrumentPrimingEnrolmentTests
         var builder = new StringBuilder();
         builder.AppendLine("# Instrument priming enrolment. One row per instrument declaration under src/.");
         builder.AppendLine("# key<TAB>enrolment<TAB>detail");
-        builder.AppendLine("# enrolment: primed | anchored | unresolved | none");
+        builder.AppendLine(VocabularyHeaderLine);
         builder.AppendLine("# Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.");
 
         foreach (var declaration in declarations.OrderBy(d => d.Key, StringComparer.Ordinal))
@@ -972,6 +1077,16 @@ public sealed class InstrumentPrimingEnrolmentTests
         Enrolment.Unprimed => "unprimed",
         _ => "unresolved",
     };
+
+    /// <summary>
+    /// The enrolment vocabulary line as the file's header must state it, derived from
+    /// <see cref="Enrolment"/> rather than hand-authored. It used to be a literal, which is how
+    /// the file came to document four of the five states: the sentence and the type it described
+    /// were maintained independently and nothing compared them. Deriving it means the generator
+    /// is the only author, so the header cannot drift from the enum without the enum changing.
+    /// </summary>
+    private static string VocabularyHeaderLine =>
+        VocabularyPrefix + " " + string.Join(" | ", Enum.GetValues<Enrolment>().Select(Render));
 
     /// <summary>The parsed source corpus and everything derived from it.</summary>
     public sealed class SourceCorpus
