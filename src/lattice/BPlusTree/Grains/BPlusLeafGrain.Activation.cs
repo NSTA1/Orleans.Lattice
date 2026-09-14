@@ -4520,6 +4520,85 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Banks the applied prefix of a partition after
+    /// <see cref="ILeafProjection.Apply(in LatticeMutation)"/> failed, so the
+    /// failure costs the replay only the entry it could not apply rather than
+    /// every entry the slice had already absorbed (issue #3084).
+    /// <para>
+    /// <paramref name="maxApplied"/> is the caller's running ceiling, which is
+    /// advanced only after a successful apply, so it already excludes
+    /// <paramref name="failedOffset"/>.
+    /// <see cref="TryFlushRecoveredCeilingAsync"/> then applies the same
+    /// deferred-terminal and unresolved-prepare clamps the foot-of-slice flush
+    /// uses, so this can never license a checkpoint past an offset that is not
+    /// durably applied.
+    /// </para>
+    /// <para>
+    /// A snapshot capture driven by that flush can contain partial effects of
+    /// the entry that failed, because the projection is mutated in place. That
+    /// is safe and is not an over-advance: the checkpoint still names
+    /// <paramref name="maxApplied"/>, so the resumed replay re-applies from
+    /// <paramref name="failedOffset"/>, and every mutation apply is an
+    /// idempotent CRDT merge. The snapshot is therefore permitted to cover
+    /// more than the checkpoint claims, never less.
+    /// </para>
+    /// <para>
+    /// A fault raised by the flush itself is logged and swallowed. This runs
+    /// inside the catch for <paramref name="applyFailure"/>, which the caller
+    /// rethrows, and replacing the real diagnosis with a secondary failure
+    /// would cost more than the banking was worth.
+    /// </para>
+    /// </summary>
+    private async Task BankAppliedPrefixAfterApplyFailureAsync(
+        IGrainContext context,
+        string treeId,
+        int partition,
+        long maxApplied,
+        long failedOffset,
+        DeferredOffsetLedger deferredOffsets,
+        ILeafProjection projection,
+        Exception applyFailure,
+        CancellationToken cancellationToken)
+    {
+        bool advanced;
+        try
+        {
+            advanced = await TryFlushRecoveredCeilingAsync(
+                partition,
+                maxApplied,
+                deferredOffsets,
+                projection,
+                cancellationToken);
+        }
+        catch (Exception flushFailure)
+        {
+            ReplayLogger(context)?.LogError(
+                flushFailure,
+                "Leaf {GrainId} could not bank replay progress for tree {TreeId} partition {Partition} "
+                + "after the apply of offset {FailedOffset} failed. The original apply failure is being "
+                + "rethrown and this activation will fail without having advanced its checkpoint.",
+                context.GrainId,
+                treeId,
+                partition,
+                failedOffset);
+            return;
+        }
+
+        ReplayLogger(context)?.LogWarning(
+            applyFailure,
+            "Leaf {GrainId} could not apply offset {FailedOffset} of tree {TreeId} partition {Partition}. "
+            + "Progress up to offset {MaxApplied} has been banked ({Advanced}); this activation will fail "
+            + "and the next will resume from the shorter gap rather than re-reading this slice from the "
+            + "same offset.",
+            context.GrainId,
+            failedOffset,
+            treeId,
+            partition,
+            maxApplied,
+            advanced ? "the checkpoint advanced" : "the checkpoint was already at or above the ceiling");
+    }
+
+    /// <summary>
     /// Builds the order in which pass 1 absorbs the WAL partitions, together
     /// with the head offset probed for each.
     /// <para>
@@ -5338,9 +5417,63 @@ internal sealed partial class BPlusLeafGrain
 #if LATTICE_DIAG
                         DiagSink.Write($"[DIAG replay-apply] gid={context.GrainId} partition={partition} offset={entry.Offset} kind={entry.Mutation.Kind} key='{entry.Mutation.Key}' shardIndex={entry.Mutation.ShardIndex}");
 #endif
-                        using (LatticeApplyOffsetContext.BeginScope(partition, entry.Offset))
+                        // Issue #3084. The apply is the one large allocation in
+                        // this loop (it hydrates the target block and
+                        // materialises the record's value), so it is where a
+                        // process under memory pressure fails - the field
+                        // stack is ApplySet -> LeafEntryCache.HydrateBlock ->
+                        // OutOfMemoryException. Before this guard that failure
+                        // escaped the per-entry loop and skipped the
+                        // foot-of-slice flush below, so every entry already
+                        // applied from this slice was discarded with the
+                        // activation and the attempt banked NOTHING. The retry
+                        // then re-read the identical slice from the identical
+                        // offset and failed identically.
+                        //
+                        // That zero is what closes the loop: a checkpoint that
+                        // never advances holds the whole-tree WAL GC pin, an
+                        // unreclaimed WAL keeps memory pressure high, and the
+                        // pressure is what made the entry unapplyable. Under a
+                        // fixed memory grant there is no exit, which is why the
+                        // field census recorded 145 executed GC passes and 0
+                        // reclaimed. Banking the prefix supplies the exit: the
+                        // next activation resumes from a strictly shorter gap.
+                        //
+                        // What this deliberately does NOT do is skip the entry.
+                        // The ceiling is maxApplied, which is assigned BELOW
+                        // this block, so at the moment of the throw it still
+                        // holds the last fully-applied offset and excludes this
+                        // one. Advancing past an entry this leaf owns would be
+                        // silent data loss - strictly worse than the stall.
+                        //
+                        // The catch is not narrowed to memory-pressure types.
+                        // Banking progress that genuinely happened is correct
+                        // whatever stopped the next entry, and narrowing it
+                        // would leave the same discard-everything behaviour on
+                        // every other apply fault. Cancellation is excluded so
+                        // teardown semantics are untouched (issue #2746 owns
+                        // the interrupted-replay case, and it is not fixable
+                        // here).
+                        try
                         {
-                            projection.Apply(entry.Mutation);
+                            using (LatticeApplyOffsetContext.BeginScope(partition, entry.Offset))
+                            {
+                                projection.Apply(entry.Mutation);
+                            }
+                        }
+                        catch (Exception applyFailure) when (applyFailure is not OperationCanceledException)
+                        {
+                            await BankAppliedPrefixAfterApplyFailureAsync(
+                                context,
+                                treeId,
+                                partition,
+                                maxApplied,
+                                entry.Offset,
+                                deferredOffsets,
+                                projection,
+                                applyFailure,
+                                cancellationToken);
+                            throw;
                         }
 
                         // An applied-but-unresolved saga prepare pins the
