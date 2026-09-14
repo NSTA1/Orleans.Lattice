@@ -1457,13 +1457,40 @@ public sealed class LocalDeploymentRunbookHygieneTests
     /// Runs <c>docker compose config</c> over the two tracked files and flattens the
     /// result to <c>service.setting</c> keys.
     /// </summary>
+    /// <remarks>
+    /// Resolved against an EMPTY env file rather than the auto-loaded <c>.env</c>. This
+    /// fixture asserts properties of the TRACKED REPOSITORY, and <c>.env</c> is gitignored
+    /// machine-local deployment state, so letting it participate makes the gate's verdict
+    /// depend on which machine it runs on. It is absent in CI and on most developer boxes,
+    /// which is the worst version of that: the coupling is invisible until it fires on the
+    /// one machine that has a real deployment sitting next to the checkout.
+    /// <para>
+    /// Concretely, a deployment that deliberately pins an <see cref="UnsetValues"/>
+    /// pass-through - which is the whole point of declaring the name, see issue #2931 -
+    /// would otherwise turn this gate red on the deploy host while the repository is
+    /// perfectly correct. A repository hygiene gate reporting a fault in response to a
+    /// legitimate local deployment is a false red of exactly the kind this file exists to
+    /// eliminate, and it would train a reader to ignore the gate.
+    /// </para>
+    /// </remarks>
     private static Dictionary<string, string> ResolveComposeDocument()
     {
         var workingDirectory = Path.Combine(
             HygieneRepository.FindRepoRoot(),
             ComposeDirectory.Replace('/', Path.DirectorySeparatorChar));
 
-        var json = RunDockerCompose(workingDirectory);
+        var emptyEnvFile = Path.Combine(Path.GetTempPath(), $"lattice-parity-{Guid.NewGuid():N}.env");
+        File.WriteAllText(emptyEnvFile, string.Empty);
+
+        string json;
+        try
+        {
+            json = RunDockerCompose(workingDirectory, emptyEnvFile);
+        }
+        finally
+        {
+            try { File.Delete(emptyEnvFile); } catch { /* best effort */ }
+        }
         var settings = new Dictionary<string, string>(StringComparer.Ordinal);
 
         using var document = JsonDocument.Parse(json);
@@ -1588,6 +1615,15 @@ public sealed class LocalDeploymentRunbookHygieneTests
             foreach (var (_, variable) in CpusetVariables)
             {
                 start.Environment.Remove(variable);
+            }
+
+            // Same reasoning for the unset pass-throughs. An operator running a real
+            // deployment on this machine may legitimately have one exported, and a shell
+            // variable outranks an env file, so stripping the env file alone would not
+            // isolate the resolution.
+            foreach (var key in UnsetValues)
+            {
+                start.Environment.Remove(key[(key.IndexOf('.') + 1)..]);
             }
         }
 
