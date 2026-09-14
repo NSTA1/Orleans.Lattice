@@ -342,6 +342,18 @@ public sealed class TenantMetricDimensionHygieneTests
         // all-zero reading means the scan was never reached rather than that nothing was
         // registered - a distinction this instrument exists to make.
         "_markerScans",
+        // repocontext.bootstrap.coverage_probe - bootstrap coverage resolutions on the
+        // three ingestion arms that stand down when the store's read-path access gate
+        // prunes their membership probe, partitioned by arm and by outcome, issue #2964.
+        // Sentinel for the same reason as _markerScans, which it sits beside: all three
+        // probes read the one shared vector-membership tree, so LatticeTenantLabel.ForTree
+        // would resolve to the same constant for every repository on the host, yielding a
+        // single undiscriminating series that nevertheless reads as a tenant attribution.
+        // The arm and outcome tags carry the whole signal, and all nine pairs are
+        // pre-minted so that an arm reading zero and an arm being absent are different
+        // observations - which is the entire point of an instrument whose subject is a
+        // stand-down that is otherwise silent by design.
+        "_probes",
         // lattice.repocontext.memory.restore - memory-archive restore attempts
         // partitioned by outcome (restored / partial / nothing_to_restore /
         // not_attempted / failed), issue #2641. The restore runs once per HOST PROCESS

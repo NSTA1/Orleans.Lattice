@@ -157,7 +157,8 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetRequiredService<IGrainFactory>(),
                 sp.GetRequiredService<Orleans.Serialization.Serializer>(),
                 sp.GetRequiredService<ILogger<EmbeddingRepoContextVectorIngestor>>(),
-                sp.GetService<IEmbeddingProvider>()));
+                sp.GetService<IEmbeddingProvider>(),
+                sp.GetRequiredService<RepoContextCoverageProbeReporter>()));
         services.TryAddSingleton<RepoContextVectorCache>();
         services.TryAddSingleton(sp => new RepoContextVectorPlaneReDeriver(
             sp.GetRequiredService<IGrainFactory>(),
@@ -171,6 +172,13 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // reporter is not a startup error - it is a null, and the instrument then
         // never exists on any host while every test that passes one keeps passing.
         services.TryAddSingleton<RepoContextMemoryMarkerScanReporter>();
+
+        // Same rule, and it is load-bearing for two consumers rather than one: the
+        // ingestor and the gap scanner both take this as an OPTIONAL parameter, so an
+        // unregistered reporter leaves BOTH holding a null and the whole instrument
+        // absent from the scrape - which the instrument itself would then be read as
+        // reporting "no coverage resolution was ever reached".
+        services.TryAddSingleton<RepoContextCoverageProbeReporter>();
         services.TryAddSingleton<RepoContextVectorWriter>();
         services.TryAddSingleton<RepoContextEmbeddingGapScanner>();
 

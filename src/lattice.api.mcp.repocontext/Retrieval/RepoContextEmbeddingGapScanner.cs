@@ -22,17 +22,23 @@ internal sealed class RepoContextEmbeddingGapScanner
 {
     private readonly IGrainFactory _grainFactory;
     private readonly RepoContextVectorWriter _writer;
+    private readonly RepoContextCoverageProbeReporter? _coverageProbeReporter;
 
     /// <summary>Creates the embedding gap scanner.</summary>
     /// <param name="grainFactory">The grain factory used to reach the structural tree. Must not be <see langword="null"/>.</param>
     /// <param name="writer">The vector writer used to point-probe membership coverage. Must not be <see langword="null"/>.</param>
+    /// <param name="coverageProbeReporter">Meters whether the store's read-path access gate is standing this sweep down, or <see langword="null"/> in a host that registered none.</param>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public RepoContextEmbeddingGapScanner(IGrainFactory grainFactory, RepoContextVectorWriter writer)
+    public RepoContextEmbeddingGapScanner(
+        IGrainFactory grainFactory,
+        RepoContextVectorWriter writer,
+        RepoContextCoverageProbeReporter? coverageProbeReporter = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(writer);
         _grainFactory = grainFactory;
         _writer = writer;
+        _coverageProbeReporter = coverageProbeReporter;
     }
 
     /// <summary>
@@ -97,9 +103,25 @@ internal sealed class RepoContextEmbeddingGapScanner
             return new GapScanPage(GapFound: false, HasMore: false, NextResumeKey: null);
         }
 
-        var covered = await _writer
-            .ProbeCoveredSourceIdsAsync(repoId, pageKeys, cancellationToken)
-            .ConfigureAwait(false);
+        // Only the probe call is wrapped, and the catch rethrows, so control flow is
+        // byte-identical and the attribution is exact (issue #2964). The grain's own
+        // whole-step catch a frame up would also observe this throw, but it covers
+        // the entire scan step and is far too coarse to attribute a coverage-read
+        // failure from.
+        RepoContextProbedSourceIds covered;
+        try
+        {
+            covered = await _writer
+                .ProbeCoveredSourceIdsAsync(repoId, pageKeys, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _coverageProbeReporter?.Record(
+                RepoContextCoverageProbeArm.Sweep,
+                RepoContextCoverageProbeOutcome.ProbeFailed);
+            throw;
+        }
 
         if (!covered.AbsenceIsConclusive)
         {
@@ -111,12 +133,28 @@ internal sealed class RepoContextEmbeddingGapScanner
             // more expensive than a missed page. Report no gap and end the walk, and
             // flag the page so the caller says why rather than recording a clean
             // sweep this scan did not earn.
+            //
+            // This is the strongest of the three stand-down sites #2964 covers, and
+            // the reason is visible in the line below: the other two fall silent and
+            // are only later misread as healthy by a human, whereas this one returns
+            // a positive GapFound:false that the self-heal grain consumes as a
+            // control decision with no reader involved at all.
+            _coverageProbeReporter?.Record(
+                RepoContextCoverageProbeArm.Sweep,
+                RepoContextCoverageProbeOutcome.GatePruned);
             return new GapScanPage(GapFound: false, HasMore: false, NextResumeKey: null)
             {
                 CoverageUnavailable = true,
                 PrunedByAccessGate = covered.PrunedByAccessGate,
             };
         }
+
+        // The sweep resolved coverage it can trust. Charged above every remaining
+        // return on this path, so a zero on any sweep arm means this seam was reached
+        // and that outcome did not occur, never that the sweep was skipped.
+        _coverageProbeReporter?.Record(
+            RepoContextCoverageProbeArm.Sweep,
+            RepoContextCoverageProbeOutcome.Conclusive);
 
         foreach (var key in pageKeys)
         {

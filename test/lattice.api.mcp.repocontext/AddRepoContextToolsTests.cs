@@ -116,6 +116,45 @@ public sealed class AddRepoContextToolsTests
     }
 
     [Test]
+    public void AddRepoContextTools_registers_the_coverage_probe_reporter_both_consumers_take_optionally()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            // Same silent-default hazard as the marker-scan reporter above, and worse
+            // here because TWO consumers take this one optionally - the vector
+            // ingestor and the embedding gap scanner. Dropping the registration
+            // costs no startup error and no red test: it costs every arm of
+            // repocontext.bootstrap.coverage_probe, on every host, at once.
+            //
+            // That failure is uniquely bad for THIS instrument. An absent series
+            // would be read as all-arms-zero, and all-arms-zero is a meaningful
+            // diagnostic state for it - "no coverage resolution was ever reached" -
+            // so an unregistered reporter does not read as a missing instrument. It
+            // reads as a confident, wrong answer.
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(RepoContextCoverageProbeReporter)),
+                Is.True,
+                "the coverage-probe reporter must be registered, or both consumers' optional "
+                + "parameters silently default to null and every arm of the instrument is absent");
+
+            Assert.That(provider.GetService<RepoContextCoverageProbeReporter>(), Is.Not.Null);
+
+            // One instance, because the arms are a single cross-cutting tally: the
+            // ingestor and the scanner charge different arms of the SAME series, and
+            // a transient would give each consumer its own meter and its own priming.
+            Assert.That(
+                provider.GetService<RepoContextCoverageProbeReporter>(),
+                Is.SameAs(provider.GetService<RepoContextCoverageProbeReporter>()),
+                "the reporter must be a singleton so both consumers charge one instrument");
+        });
+    }
+
+    [Test]
     public void AddRepoContextTools_does_not_offer_the_write_tools_by_default()
     {
         var services = new ServiceCollection();
