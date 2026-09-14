@@ -56,6 +56,7 @@ public class LatticeOptionsValidatorBranchTests
         yield return Case("WalReplaySliceBudget", o => o.WalReplaySliceBudget = 0);
         yield return Case("WalAdmissionSaturationWaitBudget", o => o.WalAdmissionSaturationWaitBudget = NegOne);
         yield return Case("WalThrottledAdmissionPace", o => o.WalThrottledAdmissionPace = NegOne);
+        yield return Case("StarvationDriveBudget", o => o.StarvationDriveBudget = TimeSpan.Zero);
     }
 
     private static TestCaseData Case(string field, Action<LatticeOptions> mutate) =>

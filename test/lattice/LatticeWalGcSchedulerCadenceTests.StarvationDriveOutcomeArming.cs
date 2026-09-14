@@ -34,7 +34,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         // Method Rule 2: an empty member list would make every assertion below
         // vacuously true and report a clean gate that scanned nothing.
-        Assert.That(members, Has.Length.GreaterThanOrEqualTo(5),
+        Assert.That(members, Has.Length.GreaterThanOrEqualTo(6),
             "the verdict enum must be non-trivial, or this gate passes without checking anything.");
 
         var armed = members
@@ -50,7 +50,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             Assert.That(armed, Is.EquivalentTo(new[]
                 {
                     "drove_lifted", "drove_no_advance", "drove_memory_refused",
-                    "drove_not_driven", "drove_already_driving",
+                    "drove_not_driven", "drove_already_driving", "drove_timed_out",
                 }),
                 "the arm set must match what the instrument's description, the docs row and the dashboard panels all claim it is.");
         });

@@ -2864,6 +2864,93 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalDrainBudget = TimeSpan.FromSeconds(75);
 
     /// <summary>
+    /// Wall-clock ceiling on one WAL GC starvation drive
+    /// (<c>DriveStarvedCheckpointAsync</c>), measured from the moment the drive
+    /// claims a permit from the per-silo replay concurrency gate to the moment
+    /// it gives that permit back. A drive that exceeds it is abandoned, its
+    /// permit is released, and its in-flight latch is cleared (issue #3065).
+    /// <para>
+    /// <b>This bounds permit residency, not drive latency.</b> A healthy drive
+    /// finishes in milliseconds and never approaches it. What it defends
+    /// against is a drive parked in an await that never returns: the guarded
+    /// region reaches host-supplied storage, whose cancellation behaviour is
+    /// not this library's to assume, and a permit lost there is lost for the
+    /// lifetime of the process because the gate is sized once and is never
+    /// re-created or topped up. A production silo was measured holding both of
+    /// its two permits for 66.8 minutes with 345 activations queued behind them
+    /// and not one acquisition in 102 seconds, which wedges the whole
+    /// cold-activation path and with it WAL GC.
+    /// </para>
+    /// <para>
+    /// <b>Abandonment is not destructive, which is what makes a finite ceiling
+    /// safe.</b> Replay banks its absorbed prefix at every slice boundary, so
+    /// an abandoned drive keeps whatever it achieved and the next one replays a
+    /// strictly shorter - and therefore strictly cheaper - gap. The cost of
+    /// setting this too low is repeated work, not lost work.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultStarvationDriveBudget"/>
+    /// (5 minutes = <c>4 * <see cref="DefaultWalDrainBudget"/></c>). The
+    /// derivation has two sides. A drive issues at most
+    /// <c><see cref="MaxLeafReplayEntries"/> / <see cref="WalReplaySliceBudget"/></c>
+    /// slice reads - 40 at the defaults - so the default budget admits an
+    /// average of 7.5 seconds per read at the maximum permitted replay size,
+    /// against a healthy read of well under a millisecond and a standard
+    /// per-storage-operation ceiling (<see cref="WalFlushTimeout"/>) of 15
+    /// seconds. On the other side the gate ceiling is
+    /// <c>min(ProcessorCount, container CPU grant)</c> - two on the host that
+    /// produced the measurement above - so a parked drive costs one budget of
+    /// cold-activation availability per permit, which is why the ceiling is
+    /// minutes rather than the tens of minutes the unbounded region reached.
+    /// </para>
+    /// <para>
+    /// Configurable because the derivation is a function of three other
+    /// configurable quantities: <see cref="MaxLeafReplayEntries"/>,
+    /// <see cref="WalReplaySliceBudget"/>, and the cluster response timeout
+    /// that self-limits each individual slice read. A host that raises any of
+    /// them, or that runs against storage materially slower than the 7.5
+    /// seconds per read implied above, must be able to raise this with them.
+    /// </para>
+    /// <para>
+    /// <b>There is no value that disables the ceiling</b>, and this option
+    /// deliberately does not accept
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> the way
+    /// <see cref="WalDrainBudget"/> and <see cref="WalSaturationSampleInterval"/>
+    /// do. For those two, the infinite value restores an earlier behaviour that
+    /// was merely unbounded; here it would restore the defect itself. The
+    /// registered options validator rejects any non-positive value, infinite
+    /// included, at first-resolve time.
+    /// </para>
+    /// </summary>
+    public TimeSpan StarvationDriveBudget { get; set; } = DefaultStarvationDriveBudget;
+
+    /// <summary>
+    /// Default value for <see cref="StarvationDriveBudget"/>
+    /// (5 minutes = <c>4 * <see cref="DefaultWalDrainBudget"/></c>).
+    /// <para>
+    /// Expressed as a multiple of <see cref="DefaultWalDrainBudget"/> rather
+    /// than as a fresh literal because that constant is already this library's
+    /// answer to "how long may one WAL-facing operation be given to settle
+    /// against a provider that may be wedged", and is itself declared as
+    /// <c>5 * <see cref="DefaultWalFlushTimeout"/></c>. Binding to it keeps the
+    /// two moving together if the house view of provider latency changes,
+    /// instead of leaving a second independent number to drift.
+    /// </para>
+    /// <para>
+    /// <b>Declared below <see cref="DefaultWalDrainBudget"/>, and that ordering
+    /// is load-bearing.</b> Static field initialisers run in declaration order,
+    /// so a <c>static readonly</c> derived from one declared further down the
+    /// file would silently initialise from <see cref="TimeSpan.Zero"/> rather
+    /// than throw - and a zero budget here abandons every drive instantly,
+    /// which presents as the drive never working rather than as a broken
+    /// constant. This is the same declaration-order hazard the repository's
+    /// metrics convention documents for <c>Meter</c> fields, in a different
+    /// guise and without the null-dereference that makes that one loud.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan DefaultStarvationDriveBudget = 4 * DefaultWalDrainBudget;
+
+    /// <summary>
     /// Cadence at which the silo-scoped sampler that backs
     /// <see cref="Orleans.Lattice.IWalSaturationSignal"/> and
     /// <see cref="Orleans.Lattice.IWalSaturationObserver"/> recomputes

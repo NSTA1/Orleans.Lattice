@@ -618,9 +618,185 @@ internal sealed class LatticeWalGcScheduler(
     private static readonly ReactivationOutcome[] AllReactivationOutcomes =
         Enum.GetValues<ReactivationOutcome>();
 
+    /// <summary>
+    /// Every <see cref="WalGcEnumerationOutcome"/>, cached for the priming walk.
+    /// </summary>
+    /// <remarks>
+    /// Derived from the enum rather than written out, so an arm added to the
+    /// taxonomy is primed by construction. A hand-maintained list is a second
+    /// declaration of the same population, and issue #2938 records what happens
+    /// when the two drift: the new arm ships unprimed and its zero reads as
+    /// absence forever.
+    /// </remarks>
+    private static readonly WalGcEnumerationOutcome[] AllEnumerationOutcomes =
+        Enum.GetValues<WalGcEnumerationOutcome>();
+
+    /// <summary>
+    /// Every <see cref="WalGcSchedulerTermination"/>, cached for the priming
+    /// walk. Derived from the enum for the reason
+    /// <see cref="AllEnumerationOutcomes"/> gives.
+    /// </summary>
+    private static readonly WalGcSchedulerTermination[] AllSchedulerTerminations =
+        Enum.GetValues<WalGcSchedulerTermination>();
+
+    /// <summary>
+    /// The <see cref="LatticeMetrics.TagOutcome"/> tag every measurement of
+    /// <see cref="LatticeMetrics.WalGcSchedulerEnumerations"/> carries for
+    /// <paramref name="outcome"/>.
+    /// <para>
+    /// Total over the enum with no discard arm, so a member added without an arm
+    /// fails the arming gate instead of silently joining another member's series.
+    /// </para>
+    /// </summary>
+    /// <param name="outcome">The enumeration outcome to name.</param>
+    /// <returns>The tag for it.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The outcome has no arm.</exception>
+    internal static KeyValuePair<string, object?> EnumerationOutcomeTag(WalGcEnumerationOutcome outcome) => outcome switch
+    {
+        WalGcEnumerationOutcome.Succeeded => LatticeMetrics.WalGcEnumerationSucceeded,
+        WalGcEnumerationOutcome.Faulted => LatticeMetrics.WalGcEnumerationFaulted,
+        WalGcEnumerationOutcome.Cancelled => LatticeMetrics.WalGcEnumerationCancelled,
+        WalGcEnumerationOutcome.Empty => LatticeMetrics.WalGcEnumerationEmpty,
+        WalGcEnumerationOutcome.AllBlank => LatticeMetrics.WalGcEnumerationAllBlank,
+        WalGcEnumerationOutcome.TimedOut => LatticeMetrics.WalGcEnumerationTimedOut,
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unmapped WAL GC enumeration outcome."),
+    };
+
+    /// <summary>
+    /// The <see cref="LatticeMetrics.TagReason"/> tag every measurement of
+    /// <see cref="LatticeMetrics.WalGcSchedulerTerminations"/> carries for
+    /// <paramref name="reason"/>. Total over the enum, for the reason
+    /// <see cref="EnumerationOutcomeTag"/> gives.
+    /// </summary>
+    /// <param name="reason">The termination reason to name.</param>
+    /// <returns>The tag for it.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The reason has no arm.</exception>
+    internal static KeyValuePair<string, object?> TerminationTag(WalGcSchedulerTermination reason) => reason switch
+    {
+        WalGcSchedulerTermination.Disabled => LatticeMetrics.WalGcSchedulerStoppedDisabled,
+        WalGcSchedulerTermination.Cancelled => LatticeMetrics.WalGcSchedulerStoppedCancelled,
+        WalGcSchedulerTermination.Faulted => LatticeMetrics.WalGcSchedulerStoppedFaulted,
+        _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unmapped WAL GC scheduler termination."),
+    };
+
+    /// <summary>
+    /// How long one registry enumeration is allowed to take before the pass
+    /// abandons it.
+    /// <para>
+    /// A <b>liveness</b> bound, not a performance one. The enumeration is a
+    /// single grain call returning a list of tree ids; anything approaching this
+    /// is already pathological, and the value of the bound is not that it is
+    /// tight but that it is finite - an await with no bound at all is how one
+    /// stalled call ends every tree's collection on the silo permanently, with no
+    /// event anywhere to explain it.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan EnumerationBudget = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// How long one tree's collection is allowed to take before the pass
+    /// abandons it and moves to the next tree.
+    /// <para>
+    /// A liveness bound, for the reason <see cref="EnumerationBudget"/> gives,
+    /// and deliberately loose: a collection legitimately does storage work whose
+    /// duration scales with the tree, and the observed cadence on the silo that
+    /// motivated this was tens of seconds per <i>pass</i> across nineteen trees.
+    /// A single tree exceeding this has left that range by two orders of
+    /// magnitude.
+    /// </para>
+    /// <para>
+    /// Expiring is not fatal to the pass: the tree records a failed pass, relaxes
+    /// on its own timeline, and its siblings keep their schedules - which is the
+    /// behaviour a tree that throws already gets. What changes is that a tree
+    /// which <i>hangs</i> now gets it too.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan TreeCollectBudget = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Bounds one await so that an operation which never returns cannot stall
+    /// the scheduler loop permanently.
+    /// <para>
+    /// <b>The bound is per await, not per pass or per tree.</b> A tree whose
+    /// collect makes two bounded awaits can therefore spend two budgets before
+    /// the pass moves on. That is deliberate: each await is a separate place the
+    /// loop can stop, and the property being bought is that none of them is
+    /// unbounded, not that their sum is small.
+    /// </para>
+    /// <para>
+    /// <b>The operation is abandoned, not cancelled.</b> It keeps its own
+    /// cancellation token - the host's stopping token - so shutdown still
+    /// propagates, but a hang is by definition an operation not responding to
+    /// its token, so waiting on it to notice one would be waiting on the thing
+    /// that is already wrong. An abandoned operation's later fault is observed
+    /// here so it cannot resurface as an unobserved task exception attributed to
+    /// nothing.
+    /// </para>
+    /// <para>
+    /// <b>No timer is armed for an operation that is already complete.</b>
+    /// <see cref="Task.WaitAsync(TimeSpan, TimeProvider, CancellationToken)"/>
+    /// returns the task itself on that fast path. This is load-bearing rather
+    /// than incidental: the cadence fixtures drive a virtual clock whose
+    /// next-timer signal completes on <i>any</i> arming, so a budget timer armed
+    /// unconditionally would release every test's synchronisation part-way
+    /// through a pass and make the whole harness race.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="T">The operation's result.</typeparam>
+    /// <param name="operation">The operation to bound.</param>
+    /// <param name="budget">How long it is allowed to take.</param>
+    /// <param name="stoppingToken">Abandons the wait early on shutdown.</param>
+    /// <returns>The bounded operation.</returns>
+    /// <exception cref="TimeoutException">The budget expired.</exception>
+    /// <exception cref="OperationCanceledException">The silo is shutting down.</exception>
+    private Task<T> Bounded<T>(Task<T> operation, TimeSpan budget, CancellationToken stoppingToken)
+    {
+        ObserveIfAbandoned(operation);
+        return operation.WaitAsync(budget, _time, stoppingToken);
+    }
+
+    /// <inheritdoc cref="Bounded{T}(Task{T}, TimeSpan, CancellationToken)" />
+    private Task Bounded(Task operation, TimeSpan budget, CancellationToken stoppingToken)
+    {
+        ObserveIfAbandoned(operation);
+        return operation.WaitAsync(budget, _time, stoppingToken);
+    }
+
+    /// <summary>
+    /// Observes the fault of an operation this scheduler may stop awaiting, so
+    /// that abandoning one cannot surface later as an unobserved task exception
+    /// with no context attached to it.
+    /// </summary>
+    /// <param name="operation">The operation that may be abandoned.</param>
+    private static void ObserveIfAbandoned(Task operation)
+    {
+        if (operation.IsCompleted)
+        {
+            return;
+        }
+
+        _ = operation.ContinueWith(
+            static faulted => _ = faulted.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Tier-2 reachability priming, and deliberately the first statement of
+        // the method: above the disabled-by-configuration return, above the
+        // startup stagger, and above every await. Priming anywhere below one of
+        // those would make "this silo has the instrument but never got that far"
+        // byte-identical to "this build does not have the instrument", which is
+        // the ambiguity the whole issue is about. The phase gauge needs no
+        // priming of its own - an observable instrument publishes from its
+        // declaration site - which is what makes its presence the build witness
+        // for every counter here.
+        PrimeSchedulerLiveness();
+        WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.Starting, tree: null, _time);
+
         var options = optionsMonitor.Get(Options.DefaultName);
         var interval = options.WalGcInterval;
         if (interval <= TimeSpan.Zero)
@@ -630,6 +806,7 @@ internal sealed class LatticeWalGcScheduler(
             // replication maintenance grain for replicated trees).
             logger.LogDebug(
                 "WAL GC scheduler disabled (WalGcInterval <= 0).");
+            Terminate(WalGcSchedulerTermination.Disabled, WalGcSchedulerPhase.Disabled);
             return;
         }
 
@@ -652,18 +829,104 @@ internal sealed class LatticeWalGcScheduler(
 
         _quietWait = minInterval;
 
-        if (!await SafeDelayAsync(RandomStartupDelay(startupWindow), stoppingToken).ConfigureAwait(false))
+        try
         {
-            return;
-        }
-
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            var wait = await RunPassAsync(minInterval, interval, stoppingToken).ConfigureAwait(false);
-            if (!await SafeDelayAsync(wait, stoppingToken).ConfigureAwait(false))
+            if (!await SafeDelayAsync(RandomStartupDelay(startupWindow), stoppingToken).ConfigureAwait(false))
             {
+                Terminate(WalGcSchedulerTermination.Cancelled, WalGcSchedulerPhase.Stopped);
                 return;
             }
+
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                var wait = await RunPassAsync(minInterval, interval, stoppingToken).ConfigureAwait(false);
+
+                // Observed here rather than inside RunPassAsync, because this
+                // site post-dominates every return from it - the cancelled
+                // enumerate, the faulted enumerate, the mid-loop cancellations,
+                // the no-collectable-tree relax, and the normal return. The
+                // relaxing quiet wait is the only positive signature a loop that
+                // is alive and failing every pass has, so it must be recorded on
+                // exactly the passes that write nothing else.
+                LatticeMetrics.WalGcSchedulerWait.Record(wait.TotalSeconds, LatticeTenantLabel.Platform);
+
+                WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.Waiting, tree: null, _time);
+                if (!await SafeDelayAsync(wait, stoppingToken).ConfigureAwait(false))
+                {
+                    Terminate(WalGcSchedulerTermination.Cancelled, WalGcSchedulerPhase.Stopped);
+                    return;
+                }
+            }
+
+            Terminate(WalGcSchedulerTermination.Cancelled, WalGcSchedulerPhase.Stopped);
+        }
+        catch (Exception)
+        {
+            // Recorded and rethrown, never swallowed. Swallowing would convert a
+            // fault the host is configured to act on into precisely the silent,
+            // permanent stop this issue exists to make visible.
+            Terminate(WalGcSchedulerTermination.Faulted, WalGcSchedulerPhase.Stopped);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Records that the loop has ended, on both halves of the liveness set: the
+    /// counter says why, and the phase census says the silo now has no sweep and
+    /// for how long.
+    /// </summary>
+    /// <param name="reason">Why the loop stopped.</param>
+    /// <param name="phase">The terminal phase to park the census in.</param>
+    private void Terminate(WalGcSchedulerTermination reason, WalGcSchedulerPhase phase)
+    {
+        LatticeMetrics.WalGcSchedulerTerminations.Add(
+            1,
+            TerminationTag(reason),
+            LatticeTenantLabel.Platform);
+        WalGcSchedulerPhaseCensus.Enter(phase, tree: null, _time);
+    }
+
+    /// <summary>
+    /// Zero-primes every silo-scoped liveness series this scheduler owns, so
+    /// that a zero on any of them is a measurement rather than an unpublished
+    /// series.
+    /// <para>
+    /// The taxonomies are primed by <b>walking their enums</b> rather than by
+    /// listing their arms. A list is a second declaration of the same
+    /// population, and issue #2938 is the record of what happens when one of the
+    /// two moves: an arm added to the enum and not to the list ships unprimed,
+    /// and its zero reads as absence forever after.
+    /// </para>
+    /// <para>
+    /// <see cref="LatticeMetrics.WalGcSchedulerWait"/> and
+    /// <see cref="LatticeMetrics.WalGcSchedulerPassDuration"/> are deliberately
+    /// absent from this method. The empty state of a duration distribution is
+    /// undefined rather than zero - a scheduler that has not waited has not
+    /// waited zero seconds - so a primed observation would be a fabricated
+    /// sample that drags every percentile toward it. Their liveness is anchored
+    /// to <see cref="LatticeMetrics.WalGcSchedulerPassesStarted"/> instead, which
+    /// is primed here, and the one-observation-per-started-pass relation is
+    /// asserted by fixture for both.
+    /// </para>
+    /// </summary>
+    private static void PrimeSchedulerLiveness()
+    {
+        LatticeMetrics.WalGcSchedulerPassesStarted.Add(0, LatticeTenantLabel.Platform);
+
+        foreach (var outcome in AllEnumerationOutcomes)
+        {
+            LatticeMetrics.WalGcSchedulerEnumerations.Add(
+                0,
+                EnumerationOutcomeTag(outcome),
+                LatticeTenantLabel.Platform);
+        }
+
+        foreach (var reason in AllSchedulerTerminations)
+        {
+            LatticeMetrics.WalGcSchedulerTerminations.Add(
+                0,
+                TerminationTag(reason),
+                LatticeTenantLabel.Platform);
         }
     }
 
@@ -723,6 +986,66 @@ internal sealed class LatticeWalGcScheduler(
     /// </summary>
     private async Task<TimeSpan> RunPassAsync(TimeSpan minInterval, TimeSpan interval, CancellationToken stoppingToken)
     {
+        // The heartbeat, and its placement is the whole point of it: above the
+        // try, above the registry call, above anything that can fail. Every
+        // other wal_gc series is written per tree after this enumeration
+        // succeeds, so a pass that dies at the first await writes nothing else
+        // at all - which is what makes a loop that is alive and failing
+        // indistinguishable from a loop that has returned. This counter is the
+        // one observable that separates them.
+        LatticeMetrics.WalGcSchedulerPassesStarted.Add(1, LatticeTenantLabel.Platform);
+
+        // Paired with the heartbeat above and recorded in a finally below, so
+        // that exactly one observation exists per started pass however the pass
+        // ends. That pairing is the anchor a fixture asserts, and it is what
+        // keeps a duration histogram from going vacuous: "no new observations"
+        // cannot be mistaken for "no passes" while a counter next to it is
+        // independently visible and flat.
+        //
+        // Read off GetUtcNow rather than GetElapsedTime because a TimeProvider
+        // is only obliged to virtualise the former, and a duration that silently
+        // fell back to wall clock under a virtual clock would be untestable at
+        // exactly the timescales worth testing.
+        var startedAt = _time.GetUtcNow();
+
+        try
+        {
+            return await RunPassCoreAsync(minInterval, interval, stoppingToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // A faulted or abandoned pass is the population whose duration
+            // matters most: a pass that dies at a response timeout has a
+            // duration which is itself the diagnosis, and the selected wait
+            // cannot show it. Recording only on the success path would discard
+            // precisely the interesting cases, so this sits in a finally.
+            // The clamp is hoisted into a local deliberately. A relational '<'
+            // inside the first argument of an emission call defeats the
+            // repository's metric-emission scanner, whose argument splitter
+            // treats '<' as a generic-argument open and so never finds the
+            // comma: the tenant dimension it is checking for becomes invisible
+            // and the site is reported as missing one. Math.Max says the same
+            // thing with no angle bracket.
+            var elapsed = _time.GetUtcNow() - startedAt;
+            var seconds = Math.Max(0d, elapsed.TotalSeconds);
+            LatticeMetrics.WalGcSchedulerPassDuration.Record(seconds, LatticeTenantLabel.Platform);
+        }
+    }
+
+    /// <summary>
+    /// The body of one pass. Split from <see cref="RunPassAsync"/> so that the
+    /// heartbeat counter and the duration histogram bracket every exit from it,
+    /// including the three that return early on a failed enumeration.
+    /// </summary>
+    /// <param name="minInterval">The adaptive floor.</param>
+    /// <param name="interval">The adaptive ceiling.</param>
+    /// <param name="stoppingToken">Cancelled when the silo is shutting down.</param>
+    /// <returns>How long to sleep before the next pass.</returns>
+    private async Task<TimeSpan> RunPassCoreAsync(
+        TimeSpan minInterval,
+        TimeSpan interval,
+        CancellationToken stoppingToken)
+    {
         // Reachability layer (issue #3075). Taken as the very first statement,
         // above every exit below, so that every terminating path out of this
         // method is accounted for against it. Advancing rather than priming is
@@ -732,28 +1055,61 @@ internal sealed class LatticeWalGcScheduler(
         // wal.gc.interval or wal.gc.passes actually raises.
         RecordPassReach(LatticeMetrics.ReachPassEntered);
 
+        WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.Enumerating, tree: null, _time);
+
         IReadOnlyList<string> treeIds;
+
         try
         {
             var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-            treeIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+            treeIds = await Bounded(registry.GetAllTreeIdsAsync(), EnumerationBudget, stoppingToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             RecordPassReach(LatticeMetrics.ReachRegistryCancelled);
+
+            // An orderly silo shutdown. Recorded rather than returned silently:
+            // before this arm existed, this was the quietest of the three exits
+            // from this method, emitting neither a log line nor a metric, so a
+            // shutdown mid-enumeration left no trace of any kind.
+            //
+            // Guarded on the stopping token rather than on the exception type
+            // alone, so that a bound firing can never be absorbed as a shutdown.
+            RecordEnumeration(WalGcEnumerationOutcome.Cancelled);
             return minInterval;
+        }
+        catch (TimeoutException)
+        {
+            // Our own bound fired. Kept apart from the faulted arm below because
+            // a fault is a property of the registry and a timeout is a property
+            // of the bound we chose, and folding the second into the first would
+            // let a decision of ours present as a finding about the system.
+            RecordEnumeration(WalGcEnumerationOutcome.TimedOut);
+            logger.LogWarning(
+                "WAL GC scheduler abandoned the registry enumeration after {Budget}; will retry on the next tick.",
+                EnumerationBudget);
+            return Quiet(minInterval, interval);
         }
         catch (Exception ex)
         {
             // A transient fan-out failure (silo restart, registry not
             // yet ready during startup) must not kill the scheduler; the
             // next tick retries the whole pass.
-            logger.LogDebug(
+            //
+            // Raised from LogDebug to a warning: this is candidate (A) of issue
+            // #3060, and at debug level the one line that names the cause was
+            // absent from every deployed log stream, leaving a silo whose sweep
+            // had stopped with no evidence anywhere at any level.
+            RecordEnumeration(WalGcEnumerationOutcome.Faulted);
+            logger.LogWarning(
                 ex,
                 "WAL GC scheduler failed to enumerate trees; will retry on the next tick.");
             RecordPassReach(LatticeMetrics.ReachRegistryFailed);
             return Quiet(minInterval, interval);
         }
+
+        RecordEnumeration(ClassifyEnumeration(treeIds));
 
         var generation = ++_generation;
         var nowTicks = _time.GetUtcNow().UtcTicks;
@@ -829,6 +1185,7 @@ internal sealed class LatticeWalGcScheduler(
             }
         }
 
+        WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.Pruning, tree: null, _time);
         PruneRetiredTrees(generation, tracked);
 
         if (earliestDueTicks == long.MaxValue)
@@ -850,6 +1207,57 @@ internal sealed class LatticeWalGcScheduler(
 
         RecordPassReach(LatticeMetrics.ReachPassCompletedScheduled);
         return TimeSpan.FromTicks(wait > interval.Ticks ? interval.Ticks : wait);
+    }
+
+    /// <summary>
+    /// Records one enumeration outcome on
+    /// <see cref="LatticeMetrics.WalGcSchedulerEnumerations"/>.
+    /// <para>
+    /// A single emission site, so that the priming walk and the real recording
+    /// cannot drift into carrying different tag sets - the failure that makes a
+    /// primed series and a measured series fail to join.
+    /// </para>
+    /// </summary>
+    /// <param name="outcome">What the enumeration produced.</param>
+    private static void RecordEnumeration(WalGcEnumerationOutcome outcome) =>
+        LatticeMetrics.WalGcSchedulerEnumerations.Add(
+            1,
+            EnumerationOutcomeTag(outcome),
+            LatticeTenantLabel.Platform);
+
+    /// <summary>
+    /// Classifies a registry answer that did not throw.
+    /// <para>
+    /// The scheduler's quiet wait documents three conditions - an empty
+    /// registry, a faulted registry, and a registry reporting only blank ids -
+    /// that until now shared one silent path and one observable. This separates
+    /// the two that are not faults, because a registry answering with ids that
+    /// are all blank reports success, returns content, and collects nothing: on
+    /// every other series it is indistinguishable from an idle silo, which is
+    /// exactly why it needs an arm of its own.
+    /// </para>
+    /// </summary>
+    /// <param name="treeIds">The ids the registry returned.</param>
+    /// <returns>The arm to record.</returns>
+    private static WalGcEnumerationOutcome ClassifyEnumeration(IReadOnlyList<string> treeIds)
+    {
+        if (treeIds.Count == 0)
+        {
+            return WalGcEnumerationOutcome.Empty;
+        }
+
+        // Indexed rather than foreach, for the reason the collection loop gives:
+        // enumerating an IReadOnlyList<string> through its interface boxes the
+        // underlying struct enumerator, and this runs on every pass.
+        for (var i = 0; i < treeIds.Count; i++)
+        {
+            if (!string.IsNullOrEmpty(treeIds[i]))
+            {
+                return WalGcEnumerationOutcome.Succeeded;
+            }
+        }
+
+        return WalGcEnumerationOutcome.AllBlank;
     }
 
     /// <summary>
@@ -876,6 +1284,8 @@ internal sealed class LatticeWalGcScheduler(
         // are the same absence. It must stay above PrimeRetentionSeries, whose
         // own latch makes it silent from the second collection onward.
         LatticeMetrics.WalGcTreeReach.Add(1, treeTag, LatticeMetrics.ReachTreeCollected, tenantTag);
+
+        WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingPriming, treeId, _time);
 
         // Zero-prime the WAL-retention series a reader has to interpret an
         // absence on. A Counter publishes no series until its first Add, so a
@@ -907,9 +1317,11 @@ internal sealed class LatticeWalGcScheduler(
         // to mark a GC pass failed.
         if (snapshotPins is not null)
         {
+            WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingReconciling, treeId, _time);
             try
             {
-                await snapshotPins.ReconcileAsync(treeId, stoppingToken).ConfigureAwait(false);
+                await Bounded(snapshotPins.ReconcileAsync(treeId, stoppingToken), TreeCollectBudget, stoppingToken)
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -927,7 +1339,9 @@ internal sealed class LatticeWalGcScheduler(
         TimeSpan next;
         try
         {
-            var report = await gc.RunOnceAsync(treeId, stoppingToken).ConfigureAwait(false);
+            WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingGcRun, treeId, _time);
+            var report = await Bounded(gc.RunOnceAsync(treeId, stoppingToken), TreeCollectBudget, stoppingToken)
+                .ConfigureAwait(false);
 
             // EntriesTrimmed is the count the pass found eligible under the GC's
             // own predicate, so a positive value is a direct observation of
@@ -1001,12 +1415,14 @@ internal sealed class LatticeWalGcScheduler(
                         ? reported
                         : [blockingConsumerId];
 
+                    WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingHealing, treeId, _time);
                     await ObserveAndHealBlockedTreeAsync(
                         treeId, blockingConsumerIds, treeTag, tenantTag, stoppingToken).ConfigureAwait(false);
                 }
             }
             else
             {
+                WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingHealing, treeId, _time);
                 ClearBlockedObservation(treeId, treeTag, tenantTag);
             }
 
@@ -1039,6 +1455,24 @@ internal sealed class LatticeWalGcScheduler(
             // Host shutdown, not a tree fault: leave the cadence where it was
             // and do not record a failed pass.
             return currentInterval;
+        }
+        catch (TimeoutException)
+        {
+            // Our own bound fired. Treated exactly as a throwing tree already
+            // is - a failed pass, a relaxed cadence, and siblings untouched -
+            // because the remedy is the same; what changes is that a tree which
+            // hangs now gets that treatment instead of stalling the silo.
+            //
+            // Logged at warning rather than debug: unlike a throwing tree, this
+            // one produced no exception of its own to explain it, so this line
+            // is the only account of why the tree was abandoned.
+            RecordPass(1, LatticeMetrics.OutcomeFailed, treeTag, tenantTag);
+            logger.LogWarning(
+                "WAL GC pass for tree {Tree} exceeded its {Budget} budget and was abandoned; will retry on the next tick.",
+                treeId,
+                TreeCollectBudget);
+
+            next = Relax(currentInterval, minInterval, interval);
         }
         catch (Exception ex)
         {
@@ -1204,6 +1638,35 @@ internal sealed class LatticeWalGcScheduler(
         RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationHealed, treeTag, tenantTag, 0);
         RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationAbandoned, treeTag, tenantTag, 0);
         RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationRearmed, treeTag, tenantTag, 0);
+
+        // Zero-prime the grain-side starvation-drive abandonment counter here,
+        // beside 'attempted', rather than at the drive that records it (issue
+        // #3065).
+        //
+        // This looks like the wrong file for it - the counter is emitted by
+        // BPlusLeafGrain, not by the scheduler - and the reason it is here is
+        // the whole value of the priming. Minted at the drive, the series would
+        // exist only once a drive had been entered, so an absent series would be
+        // equally consistent with "no drive has run on this silo" and with "this
+        // build is not deployed". This epic has lost more time to that second
+        // reading than to any other single cause: a zero-primed counter present
+        // in source and absent from the running container made every downstream
+        // reading uninterpretable, and there was no way to tell from the outside.
+        //
+        // Primed beside an instrument that is known to fire, absence becomes a
+        // positive statement. 'attempted' > 0 with this series present and flat
+        // reads as measured-and-never-abandoned; 'attempted' > 0 with this series
+        // absent reads as this build not being deployed. The deployment proof is
+        // free and it is the reason not to move this.
+        //
+        // Tagged tree-and-tenant, exactly as the leaf grain tags it at the
+        // recording site (it derives the same LatticeTenantLabel.ForTree from the
+        // same tree id). A prime whose tag set differs from the emitter's mints a
+        // series shape the emitter can never match, which is worse than not
+        // priming at all: the primed series stays at zero forever while the real
+        // one appears beside it, so the absence-is-a-deployment-proof reading
+        // above silently stops holding.
+        LatticeMetrics.WalReplayStarvationDriveAbandonments.Add(0, treeTag, tenantTag);
 
         // The four above are lifecycle events and are named individually because
         // there is no enum to derive them from. The terminal outcomes are primed
@@ -2126,6 +2589,7 @@ internal sealed class LatticeWalGcScheduler(
             LeafStarvationDriveOutcome.NoAdvance => LatticeMetrics.BlockedLeafReactivationDroveNoAdvance,
             LeafStarvationDriveOutcome.MemoryRefused => LatticeMetrics.BlockedLeafReactivationDroveMemoryRefused,
             LeafStarvationDriveOutcome.AlreadyDriving => LatticeMetrics.BlockedLeafReactivationDroveAlreadyDriving,
+            LeafStarvationDriveOutcome.TimedOut => LatticeMetrics.BlockedLeafReactivationDroveTimedOut,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(outcome),
                 outcome,

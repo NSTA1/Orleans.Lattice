@@ -1672,6 +1672,23 @@
           "legendFormat": "{{tree}}"
         }
       ]
+    },
+    {
+      "id": 74,
+      "title": "Deployed build (version / commit)",
+      "description": "Silo count per distinct running build identity (orleans_lattice_build_info). This is the only instrument in the estate that answers 'is the build under test the build that is actually running'. Every other metric here reports something a feature did, so each is silent until that feature is exercised, which makes a missing series ambiguous between 'the image did not deploy' and 'the code deployed but that path was never reached'. This series is emitted unconditionally from process start with a constant value of 1, so its absence means the process is not running or not exporting, and means nothing else. More than one row means the estate is running mixed builds, which invalidates any comparison drawn across silos. Deliberately carries no tree matcher: build identity is process-scoped, so filtering by $tree would drop the series entirely.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 1035 },
+      "fieldConfig": { "defaults": { "unit": "none", "min": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "horizontal", "colorMode": "value", "textMode": "value_and_name" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count by (version, sha) (orleans_lattice_build_info{cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{version}}+{{sha}}"
+        }
+      ]
     }
   ]
 }

@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using System.Reflection;
 using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice;
@@ -410,6 +411,144 @@ public static class LatticeMetrics
     /// </para>
     /// </remarks>
     public static readonly Meter Meter = new(MeterName);
+
+    // --- Process identity (deployment liveness) ----------------------------------
+
+    /// <summary>Tag key for the Orleans.Lattice package version the running process was built from.</summary>
+    public const string TagVersion = "version";
+
+    /// <summary>
+    /// Tag key for the full 40-character git commit sha the running process was
+    /// built from.
+    /// </summary>
+    public const string TagSha = "sha";
+
+    /// <summary>
+    /// Value reported for <see cref="TagVersion"/> or <see cref="TagSha"/> when the
+    /// running assembly carries no usable build stamp.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Reported as an explicit sentinel rather than an empty string or an absent
+    /// series, so "this build cannot identify itself" stays distinguishable from
+    /// "nothing is publishing build identity at all". The two have different
+    /// causes - a build-system regression versus an undeployed image - and an
+    /// absent series cannot tell them apart.
+    /// </para>
+    /// <para>
+    /// <b>This value must never reach a real deployment</b>, because an info gauge
+    /// carrying a placeholder is worse than one that is missing: it reads as a
+    /// working detector while identifying nothing. It survives here only as a
+    /// last-resort degradation, and
+    /// <c>BuildInfoMetricTests.Build_info_sha_is_a_full_forty_character_sha</c>
+    /// fails outright on it, so a build configuration that stops stamping
+    /// <c>SourceRevisionId</c> reddens in CI rather than shipping a gauge that
+    /// lies quietly.
+    /// </para>
+    /// </remarks>
+    public const string BuildMetadataUnknown = "unknown";
+
+    /// <summary>Canonical name of <see cref="BuildInfo"/>.</summary>
+    public const string BuildInfoName = "orleans.lattice.build.info";
+
+    /// <summary>
+    /// The version and commit sha the running assembly was compiled from, resolved
+    /// once at type initialisation.
+    /// </summary>
+    /// <remarks>
+    /// Declared above <see cref="BuildVersion"/>, <see cref="BuildCommitSha"/> and
+    /// <see cref="BuildInfo"/>, all of which read it. See the remarks on
+    /// <see cref="Meter"/> for why declaration order is load-bearing for anything
+    /// an observable callback reaches.
+    /// </remarks>
+    private static readonly (string Version, string Commit) BuildIdentity = ResolveBuildIdentity();
+
+    /// <summary>
+    /// Package version of the running Orleans.Lattice assembly, or
+    /// <see cref="BuildMetadataUnknown"/> when the assembly carries no informational
+    /// version.
+    /// </summary>
+    public static readonly string BuildVersion = BuildIdentity.Version;
+
+    /// <summary>
+    /// Full 40-character git commit sha the running Orleans.Lattice assembly was
+    /// compiled from, or <see cref="BuildMetadataUnknown"/> when the build carried no
+    /// source-revision stamp.
+    /// </summary>
+    /// <remarks>
+    /// Sourced from the <c>+&lt;sha&gt;</c> build-metadata suffix the SDK appends to
+    /// <see cref="AssemblyInformationalVersionAttribute"/> from <c>SourceRevisionId</c>.
+    /// This is a <b>compile-time</b> stamp, so it identifies the image rather than the
+    /// checkout the process happens to be running beside.
+    /// </remarks>
+    public static readonly string BuildCommitSha = BuildIdentity.Commit;
+
+    /// <summary>
+    /// Constant <c>1</c> carrying the identity of the running build as tags
+    /// (<see cref="TagVersion"/>, <see cref="TagSha"/>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This instrument answers a question no other instrument in the estate can.</b>
+    /// "Is the build under test actually the build that is running?" is a property of
+    /// the <i>process</i>, not of any feature. Every other instrument here reports
+    /// something a feature did, so each one is silent until that feature is exercised -
+    /// which makes every one of them unusable as a deployment signal. Before this
+    /// instrument existed, the only way to answer the question from a scrape was to
+    /// pick some feature metric and hope it had fired, which conflates "the image did
+    /// not deploy" with "the code deployed and that feature was simply never reached".
+    /// Those are opposite conclusions drawn from byte-identical evidence.
+    /// </para>
+    /// <para>
+    /// It therefore emits <b>exactly one measurement, unconditionally, on every
+    /// collection</b>, from process start, with no registry to populate and no work to
+    /// wait for. It has no empty state to prime: absence of this series means the
+    /// process is not running or is not exporting at all, and means nothing else. That
+    /// is the entire point, and it is why this gauge is deliberately not modelled on
+    /// any of its neighbours.
+    /// </para>
+    /// <para>
+    /// The value carries no information and is always <c>1</c>; all of the content is
+    /// in the tags. This is the conventional shape for an info-style metric, and it
+    /// makes the series safe to join against in a query.
+    /// </para>
+    /// </remarks>
+    public static readonly ObservableGauge<long> BuildInfo =
+        Meter.CreateObservableGauge(BuildInfoName, ObserveBuildInfo, unit: "{build}",
+            description: "Always 1, tagged with the version and full commit sha the running process was built from. Process-scoped deployment liveness: emitted unconditionally from process start, so its absence means the process is not running or not exporting, and never that a feature went unexercised.");
+
+    private static (string Version, string Commit) ResolveBuildIdentity()
+    {
+        var informational = typeof(LatticeMetrics).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+
+        if (string.IsNullOrWhiteSpace(informational))
+        {
+            return (BuildMetadataUnknown, BuildMetadataUnknown);
+        }
+
+        var plus = informational.IndexOf('+');
+        if (plus < 0)
+        {
+            return (informational, BuildMetadataUnknown);
+        }
+
+        var version = informational[..plus];
+        var commit = informational[(plus + 1)..];
+
+        return (
+            string.IsNullOrWhiteSpace(version) ? BuildMetadataUnknown : version,
+            string.IsNullOrWhiteSpace(commit) ? BuildMetadataUnknown : commit);
+    }
+
+    private static IEnumerable<Measurement<long>> ObserveBuildInfo()
+    {
+        yield return new Measurement<long>(
+            1,
+            new KeyValuePair<string, object?>(TagVersion, BuildVersion),
+            new KeyValuePair<string, object?>(TagSha, BuildCommitSha),
+            LatticeTenantLabel.Platform);
+    }
 
     // --- Shard-level counters (ShardRootGrain) -----------------------------------
 
@@ -2078,6 +2217,53 @@ public static class LatticeMetrics
             tags: null,
             advice: WalReplayPermitQueueWaitAdvice);
 
+    /// <summary>
+    /// Count of WAL GC starvation drives abandoned at
+    /// <see cref="LatticeOptions.StarvationDriveBudget"/> with their replay
+    /// permit forcibly released, tagged by tree (issue #3065).
+    /// <para>
+    /// <b>This is the sole discriminator for the fault it reports, and that is a
+    /// consequence of the fix rather than a design preference.</b> Before the
+    /// budget existed, a drive parked in host-supplied storage held its permit
+    /// for the life of the process, and the signature a reader used to recognise
+    /// it was <c>attempted</c> climbing while <c>undelivered</c> and
+    /// <c>drove_already_driving</c> climbed with it. A bounded drive reproduces
+    /// that signature exactly: the scheduler's touch abandons at the Orleans
+    /// response deadline, which is far below this budget, so every bounded drive
+    /// that outlives its caller emits one <c>undelivered</c> per cadence tick and
+    /// answers <c>AlreadyDriving</c> to each retry until it terminates. Those
+    /// arms therefore no longer separate "slow and recovering" from "wedged", and
+    /// this counter is what does.
+    /// </para>
+    /// <para>
+    /// <b>Zero-primed alongside <c>attempted</c> in the scheduler's
+    /// <c>PrimeRetentionSeries</c>, deliberately and not at the drive itself.</b>
+    /// Priming at the drive would mint the series only once a drive had been
+    /// entered, so an absent series would be equally consistent with "no drive
+    /// has ever run here" and with "this build is not deployed" - and that second
+    /// reading is the ambiguity this epic has lost the most time to, because a
+    /// counter present in source and absent from the running container makes
+    /// every downstream reading uninterpretable. Co-priming with an instrument
+    /// that is known to fire converts absence into a positive statement:
+    /// <c>attempted &gt; 0</c> with this series present and flat means measured
+    /// and never abandoned, while <c>attempted &gt; 0</c> with this series absent
+    /// means the build carrying the budget is not running here. Do not "tidy"
+    /// the priming back to the drive entry point; the co-presence is the point.
+    /// </para>
+    /// <para>
+    /// Tagged <c>tree</c> plus the universal derived <c>tenant</c> dimension,
+    /// which the leaf grain resolves from the same tree id the scheduler does, so
+    /// the zero the scheduler primes and the one the grain records share a single
+    /// series identity. It is a separate instrument rather than a new arm
+    /// on <see cref="WalGcBlockedLeafReactivations"/> because the verdict arms
+    /// there partition <c>attempted</c> by construction, and a grain-side arm
+    /// recorded on a different schedule would break that sum.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalReplayStarvationDriveAbandonments =
+        Meter.CreateCounter<long>("orleans.lattice.wal.replay.starvation_drive_abandonments",
+            description: "Count of WAL GC starvation drives abandoned at their configured budget with the replay permit forcibly released, tagged by tree. Zero-primed alongside the blocked-leaf 'attempted' arm, so an absent series means this build is not deployed rather than that no drive has been abandoned.");
+
     // ---- Issue #3044: permit waits that never terminate --------------------
     //
     // WalReplayPermitQueueWait records on exactly two arms and BOTH are
@@ -3710,24 +3896,35 @@ public static class LatticeMetrics
     /// <c>DriveOutcomeTag_arms_every_declared_starvation_drive_verdict</c>.
     /// Reachability is established by
     /// <c>ExecuteAsync_records_each_drive_verdict_on_its_own_arm_and_no_other</c>
-    /// as a 5x5 identity matrix on the same principle as the 4x4 above.
+    /// as a 6x6 identity matrix on the same principle as the 4x4 above.
     /// </para>
     /// <para>
     /// The check is deliberately one-directional - every terminal outcome must
     /// have an arm, not every arm must be a terminal outcome - because
     /// <c>attempted</c>, <c>healed</c>, <c>abandoned</c> and <c>rearmed</c> are
-    /// lifecycle events rather than members of that enum, as are the five drive
+    /// lifecycle events rather than members of that enum, as are the six drive
     /// verdicts, which belong to a different enum again. A symmetric check would
-    /// reject nine legitimate arms. The accepted cost is that the four
+    /// reject ten legitimate arms. The accepted cost is that the four
     /// lifecycle arms are unguarded in both directions: were <c>healed</c>
     /// dropped from the recording path, no fixture here would catch it. The
     /// general form that would cover them without re-introducing that arity
     /// mismatch is tracked as issue #2939.
     /// </para>
+    /// <para>
+    /// <b><c>drove_timed_out</c> (issue #3065) is armed here but is not the
+    /// instrument to read for the fault it names.</b> It records only when the
+    /// scheduler's touch outlives the drive, and the touch abandons at the
+    /// Orleans response deadline while the drive's budget is far longer - so in
+    /// the wedged case this arm is structurally silent and the grain-side
+    /// <see cref="WalReplayStarvationDriveAbandonments"/> is the discriminator.
+    /// It is a first-class arm regardless, because folding an abandoned drive
+    /// into <c>drove_no_advance</c> would report a timeout as an ordinary
+    /// no-op, which is the misfiling the enum's own contract forbids.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> WalGcBlockedLeafReactivations =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
-            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving, issue #2692) are what came of driving a starved leaf's replay forward. All thirteen are zero-primed once per tree per process, latched on the tree's first collection rather than repeated per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out, issues #2692 and #3065) are what came of driving a starved leaf's replay forward. All fourteen are zero-primed once per tree per process, latched on the tree's first collection rather than repeated per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
@@ -4185,6 +4382,283 @@ public static class LatticeMetrics
         new(TagOutcome, "faulted");
 
     /// <summary>
+    /// Canonical name of the WAL GC scheduler's phase-age gauge, declared on
+    /// <c>WalGcSchedulerPhaseCensus</c> rather than here because an observable
+    /// instrument's registration has to sit beside the callback that tags its
+    /// measurements.
+    /// <para>
+    /// The name is held here so that the marker on <c>WalGcSchedulerPhase</c>,
+    /// the documentation gates, and the census all read one string.
+    /// </para>
+    /// </summary>
+    public const string WalGcSchedulerPhaseAgeGaugeName = "orleans.lattice.wal.gc.scheduler.phase_age";
+
+    /// <summary>
+    /// Passes the silo's WAL GC scheduler loop has begun, counted before the
+    /// pass does anything that can fail.
+    /// <para>
+    /// <b>This is the heartbeat, and its whole value is where it is emitted.</b>
+    /// Issue #3060 is a sweep that stops silo-wide and never resumes, and every
+    /// other <c>wal_gc</c> series is written per tree, <i>after</i> the registry
+    /// enumeration that opens the pass. A pass that fails at that first await
+    /// therefore writes nothing at all, so a scheduler that is alive and failing
+    /// every attempt produces a scrape byte-identical to one whose loop has
+    /// returned. This counter is incremented above the enumeration's
+    /// <c>try</c>, so it advances on exactly the passes that produce no other
+    /// evidence, and it separates those two states in a single scrape.
+    /// </para>
+    /// <para>
+    /// <b>Untagged by tree, deliberately.</b> The loop is one per silo and the
+    /// question is "did it iterate", not "which tree did it reach" - the second
+    /// is already answered by <see cref="WalGcPasses"/>. Tagging by tree would
+    /// fragment liveness across every registered tree and turn a read into a sum,
+    /// and it would be unanswerable on the failing pass, because a failed
+    /// enumeration has no tree ids to tag with.
+    /// </para>
+    /// <para>
+    /// Zero-primed as the first statement of the loop, above the disabled-by-
+    /// configuration return and above the startup stagger, so a zero here says
+    /// "this silo's scheduler has not begun a pass" rather than "this build has
+    /// no such instrument".
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcSchedulerPassesStarted =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.scheduler.passes_started", unit: "{pass}",
+            description: "Passes the silo's WAL GC scheduler loop has begun (issue #3060), counted above the registry enumeration so it advances even on a pass that fails at its first await. Untagged by tree, because the loop is one per silo and a failed pass has no tree ids to tag with. Read against the scheduler's phase age: a total that keeps climbing while every per-tree wal_gc series is frozen is a loop that is alive and failing, which needs a different remedy from a loop that has stopped. Zero-primed above every early return, so zero is a reading.");
+
+    /// <summary>Canonical name of <see cref="WalGcSchedulerPassesStarted"/>.</summary>
+    public const string WalGcSchedulerPassesStartedName = "orleans.lattice.wal.gc.scheduler.passes_started";
+
+    /// <summary>
+    /// What the registry enumeration that opens each WAL GC scheduler pass
+    /// produced, tagged by outcome.
+    /// <para>
+    /// The enumeration is the pass's first await and the single dependency of
+    /// every later stage, so it is also its most consequential silent failure.
+    /// Before issue #3060 a fault here was swallowed into a <c>LogDebug</c> and
+    /// answered with a relaxing quiet wait: no counter, no warning, and a scrape
+    /// in which every <c>wal_gc</c> series simply stopped advancing.
+    /// </para>
+    /// <para>
+    /// <b>Six arms, because one silent path already served three conditions.</b>
+    /// The scheduler's own quiet-wait documentation names an empty registry, a
+    /// faulted registry, and a registry reporting only blank ids, and routes all
+    /// three to the same wait through the same silence. They have different
+    /// causes and different remedies, so they are separate arms.
+    /// <c>timed_out</c> is separate from <c>faulted</c> for a different reason
+    /// again: a fault is a property of the registry, whereas a timeout is a
+    /// property of the bound this scheduler applies to it, and reporting the
+    /// second as the first would render a decision of ours as a finding about the
+    /// system.
+    /// </para>
+    /// <para>
+    /// Every arm is zero-primed by walking the outcome enum, so a new arm cannot
+    /// ship unprimed and a zero is always a measurement.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcSchedulerEnumerations =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.scheduler.enumerations", unit: "{enumeration}",
+            description: "Outcome of the registry enumeration that opens each WAL GC scheduler pass (issue #3060). 'succeeded' saw at least one non-blank tree id. 'faulted' is the registry throwing, which before this instrument existed was swallowed into a debug log and left no trace on any scrape. 'cancelled' is an orderly silo shutdown and is not a fault. 'empty' and 'all_blank' are separated because a registry that answers with ids that are all blank reports success, returns content, and collects nothing, so it presents exactly as an idle silo on every other series. 'timed_out' is the scheduler's own bound firing, kept apart from 'faulted' so a failure of the measurement is never reported as a failure of the subject. All arms zero-primed by walking the enum.");
+
+    /// <summary>Canonical name of <see cref="WalGcSchedulerEnumerations"/>.</summary>
+    public const string WalGcSchedulerEnumerationsName = "orleans.lattice.wal.gc.scheduler.enumerations";
+
+    /// <summary>
+    /// Why the silo's WAL GC scheduler loop stopped, tagged by reason.
+    /// <para>
+    /// A <c>BackgroundService</c> that returns from <c>ExecuteAsync</c> is
+    /// finished for the lifetime of the process: nothing restarts it, and the
+    /// host neither logs nor reports the return. Every exit therefore ends
+    /// silo-wide WAL garbage collection permanently, and before issue #3060 none
+    /// of them emitted anything a scrape could see.
+    /// </para>
+    /// <para>
+    /// This is the terminal half of the liveness set and is read with the phase
+    /// gauge, never instead of it: a loop wedged inside a phase and a loop that
+    /// has returned are indistinguishable on a counter alone, and the gauge
+    /// cannot say why a stopped loop stopped.
+    /// </para>
+    /// <para>
+    /// All three arms are zero-primed by walking the termination enum before the
+    /// loop can take any of them, so a zero reads as "this silo's scheduler has
+    /// not stopped" rather than as an unpublished series - which matters more
+    /// here than on most instruments, because the entire finding this instrument
+    /// serves is an absence.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcSchedulerTerminations =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.scheduler.terminations", unit: "{termination}",
+            description: "Why the silo's WAL GC scheduler loop stopped (issue #3060), tagged by reason. A background service that returns from ExecuteAsync never runs again for the life of the process and the host reports nothing, so every arm here is a permanent end to silo-wide WAL collection. 'disabled' is WalGcInterval <= 0, a correct exit that on every other instrument is indistinguishable from a wedge. 'cancelled' is an orderly host shutdown. 'faulted' is the loop body throwing, which is recorded and then rethrown so the host's configured exception behaviour is unchanged. All arms zero-primed by walking the enum, so a zero is a reading and not a missing wire.");
+
+    /// <summary>Canonical name of <see cref="WalGcSchedulerTerminations"/>.</summary>
+    public const string WalGcSchedulerTerminationsName = "orleans.lattice.wal.gc.scheduler.terminations";
+
+    /// <summary>
+    /// How long the WAL GC scheduler chose to wait before its next pass, observed
+    /// once per pass at the delay site.
+    /// <para>
+    /// <b>This is the discriminator, not a convenience.</b> When a pass fails
+    /// before it reaches any tree, the scheduler answers with a quiet wait that
+    /// relaxes geometrically toward the configured ceiling - 30s, 60s, 120s, and
+    /// on up to an hour. A loop climbing that ladder is alive and retrying; a
+    /// loop that has returned is dead. Both freeze every per-tree series
+    /// identically, so the ladder is the <i>only positive signature</i> the
+    /// alive-and-retrying case has. Without this histogram the two states are one
+    /// reading, separable only by two scrapes an hour apart.
+    /// </para>
+    /// <para>
+    /// <see cref="WalGcInterval"/> cannot supply it. That instrument is written
+    /// per tree inside the collection stage, so a pass that fails at the
+    /// enumeration writes no observation on it at all - it is absent exactly when
+    /// the question is asked.
+    /// </para>
+    /// <para>
+    /// <b>Not zero-primed, and that is the correct treatment.</b> The empty state
+    /// of a duration distribution is undefined rather than zero: a scheduler that
+    /// has not yet chosen a wait has not waited zero seconds, and a primed
+    /// observation would put a fabricated sample in the distribution and pull
+    /// every percentile toward it. Its liveness is asserted instead by anchoring
+    /// its count to <see cref="WalGcSchedulerPassesStarted"/>, which is primed:
+    /// one observation per started pass, checked by fixture.
+    /// </para>
+    /// <para>
+    /// <b>Boundary: this records the wait the scheduler <i>selected</i>, not how
+    /// long anything took.</b> The two diverge, and the divergence is itself a
+    /// finding this instrument is structurally unable to report: a silo whose
+    /// per-tree touches all end at the Orleans default 30s response timeout
+    /// selects the 30s floor on every pass while the observed wall period is
+    /// 60s, and this histogram reads a flat 30.0 throughout. An instrument sited
+    /// on a decision cannot observe a failure that happens after the decision.
+    /// <see cref="WalGcSchedulerPassDuration"/> is the counterpart that can, and
+    /// the pair is only informative read together.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> WalGcSchedulerWait =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.gc.scheduler.wait", unit: "s",
+            description: "How long the silo's WAL GC scheduler chose to wait before its next pass (issue #3060), observed once per pass at the delay site so it is recorded even when the pass reached no tree. A pass that fails early answers with a quiet wait that relaxes geometrically toward the configured ceiling, and that climbing ladder is the only positive signature a loop which is alive and retrying has - every other series it touches is frozen exactly as a stopped loop leaves them. This is the selected wait, not the elapsed pass: see pass_duration for the counterpart that shows selected-versus-actual divergence. Deliberately not zero-primed, because the empty state of a duration distribution is undefined rather than zero; its count is anchored to passes_started instead.");
+
+    /// <summary>Canonical name of <see cref="WalGcSchedulerWait"/>.</summary>
+    public const string WalGcSchedulerWaitName = "orleans.lattice.wal.gc.scheduler.wait";
+
+    /// <summary>
+    /// How long one WAL GC scheduling pass actually took, in seconds, recorded
+    /// once per started pass (issue #3060).
+    /// <para>
+    /// <b>This is the instrument that shows selected-versus-actual
+    /// divergence</b>, which <see cref="WalGcSchedulerWait"/> cannot. A silo
+    /// whose per-tree touches are fanned out and awaited together, each ending
+    /// at the Orleans default 30s response timeout, selects the 30s adaptive
+    /// floor on every pass while the wall period between passes is 60s. The
+    /// selected wait reads a flat 30.0 and is not wrong - the scheduler really
+    /// did choose 30s - it is simply blind to the other 30. Read together the
+    /// pair names the gap; read apart, neither does.
+    /// </para>
+    /// <para>
+    /// <b>Recorded in a finally, so a pass that fails is recorded too.</b> The
+    /// failing population is the one whose duration matters most: a pass that
+    /// dies at a response timeout has a duration which <i>is</i> the diagnosis.
+    /// Siting this on the success path would discard exactly the sample worth
+    /// having.
+    /// </para>
+    /// <para>
+    /// <b>No tree dimension, deliberately.</b> Tagging by tree would fragment one
+    /// silo fact across every tree the silo hosts and turn "how long is a pass"
+    /// into a sum; a pass is a property of the loop, not of any tree it visited,
+    /// and a pass that failed before enumerating has no tree to attribute itself
+    /// to at all. It carries the constant
+    /// <see cref="LatticeTenantLabel.Platform"/> sentinel and nothing else: the
+    /// repository requires every emission site to carry the tenant dimension so
+    /// that a telemetry query is byte-identical on a tenancy-on and a tenancy-off
+    /// cluster, and a genuinely untagged instrument is not an option here.
+    /// </para>
+    /// <para>
+    /// <b>Not zero-primed, for the reason
+    /// <see cref="WalGcSchedulerWait"/> is not</b> - the empty state of a
+    /// duration distribution is undefined rather than zero. Its liveness is
+    /// anchored instead to <see cref="WalGcSchedulerPassesStarted"/>: exactly one
+    /// observation per started pass, asserted by fixture. That anchor is what
+    /// keeps it from going vacuous, because a frozen count next to a flat
+    /// counter that is independently visible cannot be misread as "no passes".
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> WalGcSchedulerPassDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.gc.scheduler.pass_duration", unit: "s",
+            description: "How long one WAL GC scheduling pass actually took (issue #3060), recorded in a finally so a pass that faults or is abandoned is measured too - that population's duration is itself the diagnosis. This is the counterpart to the selected wait: a silo whose per-tree touches all end at the Orleans default 30s response timeout selects the 30s floor on every pass while the wall period is 60s, and only this instrument can see the difference. Carries no tree dimension, because a pass is a property of the scheduler loop and a pass that failed before enumerating has no tree to attribute itself to. Not zero-primed (an empty duration distribution is undefined, not zero); its count is anchored to passes_started instead.");
+
+    /// <summary>Canonical name of <see cref="WalGcSchedulerPassDuration"/>.</summary>
+    public const string WalGcSchedulerPassDurationName = "orleans.lattice.wal.gc.scheduler.pass_duration";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="WalGcSchedulerEnumerations"/>
+    /// for <see cref="WalGcEnumerationOutcome.Succeeded"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalGcEnumerationSucceeded =
+        new(TagOutcome, "succeeded");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="WalGcSchedulerEnumerations"/>
+    /// for <see cref="WalGcEnumerationOutcome.Faulted"/> - the registry threw.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalGcEnumerationFaulted =
+        new(TagOutcome, "faulted");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="WalGcSchedulerEnumerations"/>
+    /// for <see cref="WalGcEnumerationOutcome.Cancelled"/> - an orderly shutdown,
+    /// kept apart from <see cref="WalGcEnumerationFaulted"/> so that a clean stop
+    /// never trains a reader to ignore the fault arm.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalGcEnumerationCancelled =
+        new(TagOutcome, "cancelled");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="WalGcSchedulerEnumerations"/>
+    /// for <see cref="WalGcEnumerationOutcome.Empty"/> - no tree ids at all.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalGcEnumerationEmpty =
+        new(TagOutcome, "empty");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="WalGcSchedulerEnumerations"/>
+    /// for <see cref="WalGcEnumerationOutcome.AllBlank"/> - ids were returned but
+    /// every one of them was blank, which is the arm that cannot be inferred from
+    /// any other series.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalGcEnumerationAllBlank =
+        new(TagOutcome, "all_blank");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="WalGcSchedulerEnumerations"/>
+    /// for <see cref="WalGcEnumerationOutcome.TimedOut"/> - the scheduler's own
+    /// bound fired. Reports a decision of ours rather than a property of the
+    /// registry, so it is never summed with
+    /// <see cref="WalGcEnumerationFaulted"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalGcEnumerationTimedOut =
+        new(TagOutcome, "timed_out");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="WalGcSchedulerTerminations"/>
+    /// for <see cref="WalGcSchedulerTermination.Disabled"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalGcSchedulerStoppedDisabled =
+        new(TagReason, "disabled");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="WalGcSchedulerTerminations"/>
+    /// for <see cref="WalGcSchedulerTermination.Cancelled"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalGcSchedulerStoppedCancelled =
+        new(TagReason, "cancelled");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="WalGcSchedulerTerminations"/>
+    /// for <see cref="WalGcSchedulerTermination.Faulted"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalGcSchedulerStoppedFaulted =
+        new(TagReason, "faulted");
+
+    /// <summary>
     /// Terminal states of a leaf's deferred WAL replay (issue #2871), tagged by
     /// tree and outcome (<c>completed</c>/<c>faulted</c>/<c>canceled</c>).
     /// <para>
@@ -4364,6 +4838,37 @@ public static class LatticeMetrics
     /// </remarks>
     public static readonly KeyValuePair<string, object?> BlockedLeafReactivationDroveAlreadyDriving =
         new(TagOutcome, "drove_already_driving");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a drive abandoned at
+    /// <see cref="LatticeOptions.StarvationDriveBudget"/>, its replay permit
+    /// forcibly released and its in-flight latch cleared (issue #3065).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A first-class arm rather than a fold into
+    /// <see cref="BlockedLeafReactivationDroveNoAdvance"/>, because an abandoned
+    /// drive and a drive that ran to completion without advancing are different
+    /// events with different remedies: the first says storage did not answer
+    /// within the budget, the second says there was nothing to absorb. Reporting
+    /// the first as the second is the misfiling the verdict enum's contract
+    /// forbids, and <c>DriveOutcomeTag</c> throwing on an unmapped member is the
+    /// mechanism that forces this arm to exist.
+    /// </para>
+    /// <para>
+    /// <b>Structurally silent in the wedged case, and that is expected.</b> This
+    /// arm is recorded scheduler-side, from the value the touch returns; the
+    /// touch abandons at the Orleans response deadline, which is well below the
+    /// drive budget, so a drive that actually reaches its budget has already
+    /// been given up on by the caller that would have recorded this. It counts
+    /// abandonments the scheduler stayed to witness. The grain-side
+    /// <see cref="WalReplayStarvationDriveAbandonments"/> counts all of them and
+    /// is the arm to read when diagnosing a wedged gate.
+    /// </para>
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationDroveTimedOut =
+        new(TagOutcome, "drove_timed_out");
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a

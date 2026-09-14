@@ -798,6 +798,66 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void StarvationDriveBudget_default_is_four_wal_drain_budgets()
+    {
+        // Issue #3065. Asserted as the multiple rather than as the literal five
+        // minutes, because the derivation is what is load-bearing: the budget
+        // must exceed a legitimately slow full replay, and a full replay is
+        // bounded by the drain budget per partition. Restating "5 minutes"
+        // alone would let the two drift apart silently.
+        Assert.That(
+            LatticeOptions.DefaultStarvationDriveBudget,
+            Is.EqualTo(4 * LatticeOptions.DefaultWalDrainBudget));
+        Assert.That(new LatticeOptions().StarvationDriveBudget, Is.EqualTo(LatticeOptions.DefaultStarvationDriveBudget));
+
+        // The declaration-order hazard this default sits one edit away from: a
+        // static readonly derived from a field declared BELOW it initialises
+        // from that field's default, so moving this declaration above
+        // DefaultWalDrainBudget yields TimeSpan.Zero - silently, and the
+        // "4 x" assertion above would still hold, because 0 == 4 * 0. Pin the
+        // absolute value too, so the reordering cannot pass.
+        Assert.That(LatticeOptions.DefaultStarvationDriveBudget, Is.EqualTo(TimeSpan.FromMinutes(5)));
+        Assert.That(LatticeOptions.DefaultStarvationDriveBudget, Is.GreaterThan(TimeSpan.Zero));
+    }
+
+    [Test]
+    public void StarvationDriveBudget_positive_passes()
+    {
+        var result = Validate(o => o.StarvationDriveBudget = TimeSpan.FromSeconds(30));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void StarvationDriveBudget_infinite_fails()
+    {
+        // Deliberately NOT an escape hatch, unlike WalSaturationSampleInterval
+        // above. An infinite budget restores exactly the defect this option
+        // exists to bound: a drive parked in host-supplied storage holding one
+        // of two per-silo replay permits forever. A knob whose extreme value
+        // reintroduces the outage is a trap, so it is rejected at validation
+        // rather than honoured at runtime.
+        var result = Validate(o => o.StarvationDriveBudget = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.StarvationDriveBudget)));
+    }
+
+    [Test]
+    public void StarvationDriveBudget_zero_fails()
+    {
+        var result = Validate(o => o.StarvationDriveBudget = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.StarvationDriveBudget)));
+    }
+
+    [Test]
+    public void StarvationDriveBudget_negative_fails()
+    {
+        var result = Validate(o => o.StarvationDriveBudget = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.StarvationDriveBudget)));
+    }
+
+    [Test]
     public void WalSaturationThrottledRatio_default_is_zero_point_seventy_five()
     {
         Assert.That(new LatticeOptions().WalSaturationThrottledRatio, Is.EqualTo(0.75));

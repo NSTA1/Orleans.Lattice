@@ -1017,6 +1017,26 @@ internal sealed partial class BPlusLeafGrain
             return LeafStarvationDriveOutcome.NotDriven;
         }
 
+        // Resolve options BEFORE the latch is set and before any permit is
+        // taken, which is the one ordering that makes a configurable budget
+        // possible at all (issue #3065).
+        //
+        // The budget has to bound every await that runs while this activation
+        // holds something another activation needs - but it cannot bound the
+        // await that produces the budget. Hoisting the resolve above both the
+        // latch and the permit resolves that circularity rather than hiding it:
+        // an activation parked here holds no permit and has not claimed the
+        // in-flight flag, so it blocks nothing and is safe to leave unbounded.
+        // Every await below this line is bounded; this one does not need to be.
+        var options = await GetOptionsAsync();
+        var budget = options.StarvationDriveBudget;
+        var partitionCount = Math.Max(1, options.WalPartitions);
+
+        // The check-and-set is only safe because it is adjacent - see the
+        // remarks on _starvationDriveInFlight. The resolve above introduced an
+        // await into a method that previously had none before this point, so the
+        // pair is re-tested HERE rather than above the resolve. Testing it above
+        // and setting it below would span an await and could admit two drives.
         if (_starvationDriveInFlight)
         {
             return LeafStarvationDriveOutcome.AlreadyDriving;
@@ -1024,7 +1044,10 @@ internal sealed partial class BPlusLeafGrain
 
         _starvationDriveInFlight = true;
 
+        var startedAt = Stopwatch.GetTimestamp();
+        var driveCts = new CancellationTokenSource(budget);
         SemaphoreSlim? replayPermit = null;
+        Task<LeafStarvationDriveOutcome>? driveTask = null;
         try
         {
             // Take a permit from the same per-silo gate every activation replay
@@ -1033,35 +1056,72 @@ internal sealed partial class BPlusLeafGrain
             // concurrency the gate was not already sized for, and it must not be
             // exempt: a sweep that bypassed the gate would reintroduce the
             // unbounded-replay pathology of issue #2862 through a side door.
-            replayPermit = await AcquireReplayPermitAsync(CancellationToken.None);
+            //
+            // The token is passed but NOT belted with WaitAsync, unlike the work
+            // below, and the asymmetry is deliberate. The gate is an in-repo
+            // SemaphoreSlim, so its WaitAsync is guaranteed to honour the token
+            // and a belt would add nothing. It would also actively harm: a belt
+            // that abandoned this await could do so after the semaphore had been
+            // entered but before the assignment completed, producing a permit
+            // that is held by nobody and released by nothing. That is this very
+            // defect recreated in a narrower window, which is why the belt stops
+            // at the line below.
+            replayPermit = await AcquireReplayPermitAsync(driveCts.Token);
 
-            var advanced = await ReplayWalSinceCheckpointAsync(null, CancellationToken.None);
+            // The permit is acquired and released in THIS frame, and the work
+            // runs in an inner task. That split is the fix.
+            //
+            // Wrapping the whole region in a timeout instead would abandon the
+            // frame whose finally performs the release, so the permit would stay
+            // held exactly as it does today - a fix in the tree with the bug
+            // still live. Only the outer frame is guaranteed to run its finally,
+            // so only the outer frame may own the permit.
+            //
+            // Both mechanisms are used because neither is sufficient alone. The
+            // token reaches the replay's own cancellation checks and any
+            // provider that honours it, and genuinely terminates the work. The
+            // WaitAsync belt bounds OUR wait when the provider does not honour
+            // it - which BPlusLeafGrain.ReplayBarrier.cs already records as an
+            // assumption this library refuses to make, since the awaits below
+            // reach host-supplied storage whose cancellation behaviour is not
+            // ours to assume. The trade the belt accepts is the same one the
+            // barrier accepted: work may continue detached. It is bounded
+            // because the detached replay dies at its next cancellation check,
+            // and it is safe because replay application is idempotent.
+            driveTask = DriveStarvedCheckpointCoreAsync(partitionCount, driveCts.Token);
+            return await driveTask.WaitAsync(driveCts.Token);
+        }
+        catch (OperationCanceledException) when (driveCts.IsCancellationRequested)
+        {
+            // Counted on the grain-side instrument rather than left to the
+            // verdict this method returns. The verdict is recorded by the
+            // scheduler from the value of this call, and the scheduler's touch
+            // abandons at the Orleans response deadline - far below any sane
+            // budget - so in the wedged case nobody is still listening for the
+            // return value. An instrument that cannot fire in the scenario it
+            // exists for is the failure mode this epic is made of.
+            //
+            // One arm covers both shapes of abandonment: giving up while queued
+            // for a permit, and giving up while holding one. They are separable
+            // without a second arm, because AcquireReplayPermitAsync already
+            // records the first on WalReplayPermitQueueWait's 'canceled' arm.
+            LatticeMetrics.WalReplayStarvationDriveAbandonments.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                LatticeTenantLabel.ForTree(state.State.TreeId));
 
-            // Advancing the checkpoint is only HALF of what the pin needs. An
-            // unusable pin at Zero is a leaf whose min(checkpoint, coverage) has
-            // no real offset, so a leaf that is now checkpointed but still
-            // uncovered keeps blocking exactly as before. The existing coverage
-            // repair cannot help a starved leaf on its own, because its
-            // predicate is "checkpointed WITHOUT coverage" and a starved leaf
-            // fails the first half: it was never checkpointed at all. Replay
-            // makes that predicate reachable, so the repair belongs here, driven
-            // in the same call rather than deferred to an activation that is not
-            // going to happen.
-            var options = await GetOptionsAsync();
-            var partitionCount = Math.Max(1, options.WalPartitions);
-            await TryRepairZeroCoverageAsync(partitionCount, CancellationToken.None);
+            // Logged with the measured elapsed rather than the budget alone, so
+            // a drive abandoned while queued for a permit and one abandoned deep
+            // in replay separate numerically in the log as well as on the arm
+            // above.
+            ResolveLogger()?.LogWarning(
+                "WAL GC starvation drive on tree {Tree} exceeded its {Budget} budget after {Elapsed} and was abandoned; the replay permit was {PermitState} and the in-flight latch has been cleared. Replay banks its absorbed prefix at every slice boundary, so the next drive resumes from a shorter gap. A repeating abandonment on this tree means storage is not answering inside the budget - look at the provider, not at the leaf.",
+                state.State.TreeId,
+                budget,
+                Stopwatch.GetElapsedTime(startedAt),
+                replayPermit is null ? "never acquired" : "released");
 
-            // Report the property the pin actually depends on, not a proxy for
-            // it. `advanced` alone is the same class of mistake this issue is
-            // about: it is an output correlated with a usable pin, and the
-            // correlation breaks in both directions - a checkpoint can advance
-            // and leave the partition uncovered, so the tree still cannot trim
-            // and the sweep would nevertheless have recorded a success. Both
-            // halves are asserted here, against the same predicate the WAL GC
-            // cursor floor evaluates.
-            return advanced && !HasCheckpointedPartitionWithoutCoverage(partitionCount)
-                ? LeafStarvationDriveOutcome.Lifted
-                : LeafStarvationDriveOutcome.NoAdvance;
+            return LeafStarvationDriveOutcome.TimedOut;
         }
         catch (Exception ex) when (IsReadMemoryPressure(ex))
         {
@@ -1076,7 +1136,80 @@ internal sealed partial class BPlusLeafGrain
         {
             replayPermit?.Release();
             _starvationDriveInFlight = false;
+
+            // Disposing the source while detached work can still read its token
+            // would fault that work on its next registration, so disposal
+            // follows the task when the task outlived us. The same continuation
+            // observes the detached fault - without it, an abandoned drive that
+            // later throws raises an unobserved-task-exception on a finalizer
+            // thread, the shape BPlusLeafGrain.ReplayBarrier.cs already guards.
+            // TaskScheduler.Default keeps it off this activation; it touches no
+            // grain state.
+            if (driveTask is null || driveTask.IsCompleted)
+            {
+                driveCts.Dispose();
+            }
+            else
+            {
+                _ = driveTask.ContinueWith(
+                    static (task, source) =>
+                    {
+                        _ = task.Exception;
+                        ((CancellationTokenSource)source!).Dispose();
+                    },
+                    driveCts,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
         }
+    }
+
+    /// <summary>
+    /// The permit-guarded body of <see cref="DriveStarvedCheckpointAsync"/>,
+    /// split out so the permit can be owned by the caller's frame (issue #3065).
+    /// </summary>
+    /// <remarks>
+    /// This method deliberately does not acquire, release, or know about the
+    /// replay permit. It may be abandoned mid-flight by its caller and continue
+    /// running detached, so anything it owned would be unreleasable - which is
+    /// exactly the defect the split exists to fix. Every await here takes the
+    /// caller's budget token.
+    /// </remarks>
+    private async Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointCoreAsync(
+        int partitionCount,
+        CancellationToken cancellationToken)
+    {
+        var advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken);
+
+        // Advancing the checkpoint is only HALF of what the pin needs. An
+        // unusable pin at Zero is a leaf whose min(checkpoint, coverage) has
+        // no real offset, so a leaf that is now checkpointed but still
+        // uncovered keeps blocking exactly as before. The existing coverage
+        // repair cannot help a starved leaf on its own, because its
+        // predicate is "checkpointed WITHOUT coverage" and a starved leaf
+        // fails the first half: it was never checkpointed at all. Replay
+        // makes that predicate reachable, so the repair belongs here, driven
+        // in the same call rather than deferred to an activation that is not
+        // going to happen.
+        //
+        // Both awaits take the budget token rather than inheriting a bound from
+        // the caller's belt. A belt abandons the wait and leaves the work
+        // running; the token is what can actually stop it, and the second await
+        // needs its own because the first may consume most of the budget.
+        await TryRepairZeroCoverageAsync(partitionCount, cancellationToken);
+
+        // Report the property the pin actually depends on, not a proxy for
+        // it. `advanced` alone is the same class of mistake this issue is
+        // about: it is an output correlated with a usable pin, and the
+        // correlation breaks in both directions - a checkpoint can advance
+        // and leave the partition uncovered, so the tree still cannot trim
+        // and the sweep would nevertheless have recorded a success. Both
+        // halves are asserted here, against the same predicate the WAL GC
+        // cursor floor evaluates.
+        return advanced && !HasCheckpointedPartitionWithoutCoverage(partitionCount)
+            ? LeafStarvationDriveOutcome.Lifted
+            : LeafStarvationDriveOutcome.NoAdvance;
     }
 
     /// <summary>

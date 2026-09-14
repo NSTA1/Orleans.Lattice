@@ -317,6 +317,21 @@ if (options.WalSaturationSampleInterval <= TimeSpan.Zero
         $"{nameof(LatticeOptions.WalSaturationSampleInterval)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the saturation sampler cadence; infinite disables the sampler entirely and pins every tree's signal to Healthy).");
 }
+// Note the missing InfiniteTimeSpan escape hatch, which every sibling branch
+// above carries. It is absent deliberately (issue #3065): for those options the
+// infinite value restores an earlier behaviour that was merely unbounded, while
+// here it would restore the defect this budget exists to close - a starvation
+// drive holding a replay permit for the life of the process. There is no
+// supported way to switch the ceiling off, so infinite falls through to the
+// non-positive rejection below along with zero and every negative.
+if (options.StarvationDriveBudget <= TimeSpan.Zero)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.StarvationDriveBudget)} must be positive, and unlike the sibling WAL budgets it does not accept "
+        + $"{nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the ceiling on how long one WAL GC starvation drive may hold a replay permit; an infinite or non-positive value either "
+        + "restores the unbounded drive that wedges the per-silo replay gate or abandons every drive instantly).");
+}
 if (options.WalSaturationThrottledRatio < 0.0 || options.WalSaturationThrottledRatio > 1.0
     || double.IsNaN(options.WalSaturationThrottledRatio))
 {

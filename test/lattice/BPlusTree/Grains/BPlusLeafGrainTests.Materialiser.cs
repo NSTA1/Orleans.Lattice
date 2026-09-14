@@ -36,6 +36,7 @@ public partial class BPlusLeafGrainTests
         ILeafCursorReporter? reporter = null,
         int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
         int? maxLeafReplayEntries = null,
+        TimeSpan? starvationDriveBudget = null,
         ILoggerProvider? loggerProvider = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
@@ -93,6 +94,15 @@ public partial class BPlusLeafGrainTests
         // able to lower the budget rather than inflate the WAL.
         if (maxLeafReplayEntries is { } leafReplayBudget)
             baseOptions.MaxLeafReplayEntries = leafReplayBudget;
+
+        // Optional so the production default (5 minutes) stays in force for every
+        // test that does not care. A fixture that drives the starvation-drive
+        // abandonment path has to be able to lower it, because the property under
+        // test - that the permit comes back while the provider is STILL parked -
+        // is only observable within the budget, and a five-minute wait is not a
+        // unit test.
+        if (starvationDriveBudget is { } driveBudget)
+            baseOptions.StarvationDriveBudget = driveBudget;
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
             maxLeafKeys: 128,
