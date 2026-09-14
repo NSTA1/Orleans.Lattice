@@ -820,6 +820,64 @@ internal sealed class LatticeWalGcScheduler(
             TaskScheduler.Default);
     }
 
+    /// <summary>
+    /// Attribution for a <see cref="TimeoutException"/> whose measured elapsed
+    /// reached the budget, which is what this scheduler's own bound firing looks
+    /// like. It is the weaker of the two directions - see
+    /// <see cref="AttributeTimeout"/> - because an operation may also time out of
+    /// its own accord at that same moment.
+    /// </summary>
+    internal const string TimeoutSourceThisBound = "this bound";
+
+    /// <summary>
+    /// Attribution for a <see cref="TimeoutException"/> that arrived before the
+    /// budget could possibly have expired, and so came from the operation. This
+    /// is the decisive direction: the shortfall proves it.
+    /// </summary>
+    internal const string TimeoutSourceInsideOperation = "inside the operation";
+
+    /// <summary>
+    /// Attribution for a <see cref="TimeoutException"/> raised after the bounded
+    /// await had already returned, by code no budget covered.
+    /// </summary>
+    internal const string TimeoutSourceAfterBoundedAwait = "code after the bounded await";
+
+    /// <summary>
+    /// Attributes a <see cref="TimeoutException"/> caught around a bounded await
+    /// either to this scheduler's budget or to the operation underneath it.
+    /// <para>
+    /// <b>Why an attribution is needed at all.</b> <see cref="Bounded{T}"/> is
+    /// <see cref="Task.WaitAsync(TimeSpan, TimeProvider, CancellationToken)"/>,
+    /// which raises <see cref="TimeoutException"/> when the budget expires - and
+    /// which propagates a <see cref="TimeoutException"/> thrown by the operation
+    /// itself unchanged. An Orleans response timeout is a
+    /// <see cref="TimeoutException"/>, so both arrive at the same catch with the
+    /// same type and nothing on them to tell them apart. A message naming only
+    /// the declared budget therefore reads identically whether the operation ran
+    /// for the full budget or for a fraction of it, and asserts a cause it has
+    /// not established. That is not hypothetical: a diagnostic run read the
+    /// constant off one of these lines, concluded the bound had fired, and had
+    /// to withdraw the result once the true elapsed was reconstructed.
+    /// </para>
+    /// <para>
+    /// <b>Why the measured elapsed settles it, in the direction that matters.</b>
+    /// <c>WaitAsync</c> cannot raise its timeout before the budget has elapsed,
+    /// so an elapsed shorter than the budget <i>proves</i> the exception came
+    /// from inside the operation. The converse is weaker: at or beyond the
+    /// budget the two are genuinely indistinguishable, because an operation may
+    /// time out of its own accord at that same moment. The asymmetry is
+    /// deliberate and is why the comparison is <c>&gt;=</c> rather than
+    /// <c>&gt;</c> - under a virtual clock the bound fires at exactly the budget.
+    /// The reading this exists to prevent is "our bound fired" when it did not,
+    /// and that reading is now unreachable.
+    /// </para>
+    /// </summary>
+    /// <param name="elapsed">Measured wall time across the bounded await.</param>
+    /// <param name="budget">The budget that await was given.</param>
+    /// <returns>The attribution to log.</returns>
+    private static string AttributeTimeout(TimeSpan elapsed, TimeSpan budget) =>
+        elapsed >= budget ? TimeoutSourceThisBound : TimeoutSourceInsideOperation;
+
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -1152,6 +1210,11 @@ internal sealed class LatticeWalGcScheduler(
 
         IReadOnlyList<string> treeIds;
 
+        // Measured rather than assumed, for the reason AttributeTimeout gives:
+        // the catch below cannot tell this scheduler's bound from a timeout
+        // thrown inside the operation, and only the elapsed separates them.
+        var enumerationStartedAt = _time.GetUtcNow();
+
         try
         {
             var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
@@ -1178,24 +1241,43 @@ internal sealed class LatticeWalGcScheduler(
         }
         catch (TimeoutException)
         {
-            // Our own bound fired. Kept apart from the faulted arm below because
-            // a fault is a property of the registry and a timeout is a property
-            // of the bound we chose, and folding the second into the first would
-            // let a decision of ours present as a finding about the system.
+            // A budget-shaped failure, though not necessarily ours - see
+            // AttributeTimeout. The arm stays apart from the faulted arm below
+            // in the metric, for the original reason: a fault is a property of
+            // the registry and a timeout is a property of a bound, and folding
+            // the second into the first would let a decision of ours present as
+            // a finding about the system. It no longer stays apart in the
+            // backoff, which ladders identically - see the comment on that
+            // ladder below for why the two views differ on purpose.
+            //
+            // The arm deliberately does not split by attribution. It is the
+            // scheduler's account of "this pass enumerated nothing because an
+            // await ran out of time", which holds either way, and splitting it
+            // would silently change the meaning of a series that dashboards and
+            // alerts already read. The log line below carries the
+            // discrimination instead, which is where a reader who needs the
+            // cause is already looking.
             RecordEnumeration(WalGcEnumerationOutcome.TimedOut);
+            var elapsed = _time.GetUtcNow() - enumerationStartedAt;
             logger.LogWarning(
-                "WAL GC scheduler abandoned the registry enumeration after {Budget} ({ConsecutiveFaults} consecutive); will retry on the next tick.",
+                "WAL GC scheduler abandoned the registry enumeration after {Elapsed} against a {Budget} budget, "
+                + "attributed to {TimeoutSource} ({ConsecutiveFaults} consecutive); will retry on the next tick. An "
+                + "elapsed short of the budget means the TimeoutException came from inside the operation - an Orleans "
+                + "response timeout, 30s by default - and not from this bound; the two are indistinguishable by "
+                + "exception type, so the measured elapsed is the only thing that separates them.",
+                elapsed,
                 EnumerationBudget,
+                AttributeTimeout(elapsed, EnumerationBudget),
                 _consecutiveFaults + 1);
 
             // Laddered on the fault path, not the quiet one (issue #3064). The
             // two arms stay distinct in WalGcSchedulerEnumerations, which is
-            // where the registry-versus-our-bound distinction belongs; for the
-            // purpose of choosing a backoff they are the same event, because
-            // both mean the registry did not answer. A backoff that relaxes on
-            // an absence of information is the inversion this issue exists to
-            // remove, and a timed-out enumeration is the exact shape the
-            // wedged-registry incident took.
+            // where the registry-did-not-answer versus a-bound-expired
+            // distinction belongs; for the purpose of choosing a backoff they
+            // are the same event, because both mean the registry did not
+            // answer. A backoff that relaxes on an absence of information is
+            // the inversion that issue exists to remove, and a timed-out
+            // enumeration is the exact shape the wedged-registry incident took.
             _consecutiveFaults++;
             var timedOutWait = Faulted(minInterval, interval);
             return new PassDecision(timedOutWait, BackoffCause.Faulted, timedOutWait);
@@ -1527,11 +1609,22 @@ internal sealed class LatticeWalGcScheduler(
         }
 
         TimeSpan next;
+
+        // The bounded await's own start, and whether it returned. Both are kept
+        // outside the try because this try also contains unbounded awaits - the
+        // heal path among them. Attributing on elapsed alone here would let a
+        // TimeoutException raised long after a slow-but-successful collect be
+        // charged to a budget it never touched, so the completion is recorded
+        // and the attribution consults it before it consults the clock.
+        var collectStartedAt = _time.GetUtcNow();
+        var collectReturned = false;
+
         try
         {
             WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingGcRun, treeId, _time);
             var report = await Bounded(gc.RunOnceAsync(treeId, stoppingToken), TreeCollectBudget, stoppingToken)
                 .ConfigureAwait(false);
+            collectReturned = true;
 
             // EntriesTrimmed is the count the pass found eligible under the GC's
             // own predicate, so a positive value is a direct observation of
@@ -1648,19 +1741,49 @@ internal sealed class LatticeWalGcScheduler(
         }
         catch (TimeoutException)
         {
-            // Our own bound fired. Treated exactly as a throwing tree already
-            // is - a failed pass, a relaxed cadence, and siblings untouched -
+            // A budget-shaped failure, though not necessarily this bound - see
+            // AttributeTimeout. Treated exactly as a throwing tree already is -
+            // a failed pass, a relaxed cadence, and siblings untouched -
             // because the remedy is the same; what changes is that a tree which
             // hangs now gets that treatment instead of stalling the silo.
             //
             // Logged at warning rather than debug: unlike a throwing tree, this
             // one produced no exception of its own to explain it, so this line
             // is the only account of why the tree was abandoned.
+            //
+            // Three attributions are reachable here, not two, and the collect
+            // having already returned is decisive on its own, so it is consulted
+            // before the clock is.
+            //
+            // That third case is rare rather than routine, and worth naming
+            // exactly so nobody reads it as the common path: the heal path
+            // catches its own TimeoutException (see TryReactivateBlockedLeafAsync)
+            // and so cannot normally reach this catch at all. What can is a
+            // pin-state read during shutdown, whose catch filter excludes a
+            // cancelled stopping token by design and therefore lets the
+            // exception propagate after the collect has returned.
+            //
+            // The flag earns its keep whether or not that path is ever taken.
+            // Without it, "elapsed at or beyond the budget means this bound
+            // fired" would be sound only because of a catch a thousand lines
+            // away that nothing marks as load-bearing - so removing that catch,
+            // or adding one unbounded await here, would silently corrupt an
+            // attribution far from the edit. The flag makes the inference
+            // local, and therefore stable under edits elsewhere.
             RecordPass(1, LatticeMetrics.OutcomeFailed, treeTag, tenantTag);
+            var elapsed = _time.GetUtcNow() - collectStartedAt;
             logger.LogWarning(
-                "WAL GC pass for tree {Tree} exceeded its {Budget} budget and was abandoned; will retry on the next tick.",
+                "WAL GC pass for tree {Tree} was abandoned after {Elapsed} against a {Budget} budget, attributed to "
+                + "{TimeoutSource}; will retry on the next tick. An elapsed short of the budget means the "
+                + "TimeoutException came from inside the operation - an Orleans response timeout, 30s by default - "
+                + "and not from this bound; an attribution naming the code after the bounded await means the collect "
+                + "itself returned and the timeout came from the unbounded heal path that follows it.",
                 treeId,
-                TreeCollectBudget);
+                elapsed,
+                TreeCollectBudget,
+                collectReturned
+                    ? TimeoutSourceAfterBoundedAwait
+                    : AttributeTimeout(elapsed, TreeCollectBudget));
 
             next = Relax(currentInterval, minInterval, interval);
         }
