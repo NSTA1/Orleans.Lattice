@@ -285,102 +285,96 @@ public sealed class MetricDocArmArityTests
     // ------------------------------------- generic-noun ambiguity (issue #2956)
 
     /// <summary>
-    /// No arity claim states a completeness count with a generic noun on an
-    /// instrument that arms more than one tag, where the claim could be satisfied
-    /// by a tag other than the one the row means.
+    /// Every arity claim names the tag set it covers, rather than stating a count
+    /// against a generic noun.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A claim phrased "all three arms" names a count but not a <i>tag</i>. When
+    /// A claim phrased "all three arms" states a count but not a <i>tag</i>. When
     /// the noun maps to a tag key, <see cref="Evaluate"/> pins the comparison to
     /// that tag. When it does not, the evaluator falls through to a search across
     /// every candidate tag and accepts the claim as soon as <b>any</b> of them arms
-    /// that many values - see the <c>matched = true</c> branch. On an instrument
-    /// with a single tag domain that is harmless, because the only tag it could
-    /// match is the one meant. On an instrument with several, the claim is
-    /// certified by a coincidence of cardinality: the row says "three" about
-    /// <c>outcome</c>, some unrelated tag happens to arm three values, and the gate
-    /// reports green over a claim it never checked.
+    /// that many values - the <c>matched = true</c> branch. The row says "three"
+    /// about <c>outcome</c>; the gate reports green as soon as something arms three
+    /// values, having never established that it checked the tag the row meant.
     /// </para>
     /// <para>
-    /// That is the epic's defect in miniature. The verdict reads "claim verified";
-    /// the denominator is a tag nobody was talking about. This guard removes the
-    /// ambiguity at the source - the wording - rather than trying to guess the
-    /// intended tag, because a guess would be one more hand-maintained mapping of
-    /// exactly the kind that goes stale.
-    /// </para>
-    /// <para>
-    /// The rule is deliberately about <b>ambiguity, not correctness</b>: a generic
-    /// claim is reported whenever more than one tag domain is derivable, even if
-    /// only one currently has the claimed cardinality. A claim that is right today
-    /// only because no sibling tag happens to share its size is still unpinned, and
-    /// it starts certifying the wrong tag the moment one does - silently, with no
-    /// edit to the row to attribute it to.
+    /// The rule is therefore about the claim being <b>unpinned</b>, not about it
+    /// being wrong today. An earlier draft of this guard only reported a generic
+    /// claim when the instrument had more than one <i>derivable</i> tag domain, on
+    /// the reasoning that a single-domain instrument has nothing to confuse it
+    /// with. That draft was itself an instance of the defect this epic is about.
+    /// Tags like <c>tree</c> and <c>shard</c> carry runtime values and are never
+    /// armed as constant fields, so almost every instrument resolves to exactly one
+    /// derivable domain, the predicate was false nearly everywhere, and the guard
+    /// passed over the very rows issue #2956 was filed about while its controls
+    /// went green against some unrelated instrument that happened to have two. It
+    /// reported a verdict over a denominator of nearly zero. The condition was
+    /// removed rather than tuned: what makes a claim checkable is that it names its
+    /// tag, and that is a property of the sentence, knowable without resolving
+    /// anything.
     /// </para>
     /// </remarks>
     [Test]
-    public void NoArityClaimUsesAGenericNounWhereTheTagIsAmbiguous()
+    public void EveryArityClaimNamesTheTagSetItCovers()
     {
-        var ambiguous = AmbiguousGenericClaims(ScanClaims());
+        var unpinned = UnpinnedClaims(ScanClaims());
 
-        Assert.That(ambiguous, Is.Empty,
-            "A documentation row states a completeness count with a generic noun on an instrument "
-            + "that arms more than one tag. The count can be satisfied by a tag the row does not "
-            + "mean, so the arity gate can certify it without checking the intended tag. Name the "
-            + "tag in the row - \"all three outcome arms\" rather than \"all three arms\" - which "
-            + "pins the comparison to that tag.\n  "
-            + string.Join("\n  ", ambiguous));
+        Assert.That(unpinned, Is.Empty,
+            "A documentation row states a completeness count against a generic noun, so the claim "
+            + "does not say which tag it covers. The arity gate falls back to accepting the count "
+            + "from whichever tag happens to arm that many values, which can certify a claim about "
+            + "a tag the row never meant. Name the tag - \"all three outcome arms\" rather than "
+            + "\"all three arms\" - which pins the comparison to that tag.\n  "
+            + string.Join("\n  ", unpinned));
     }
 
     /// <summary>
-    /// The ambiguity rule has a population it could apply to: at least one
-    /// documented instrument arms more than one tag domain.
+    /// The pinned/unpinned classification is discriminating: claims exist, and at
+    /// least one of them is pinned.
     /// </summary>
     /// <remarks>
-    /// <see cref="NoArityClaimUsesAGenericNounWhereTheTagIsAmbiguous"/> passes today
-    /// because every such row was reworded, so its claim list is empty - and an
-    /// empty list is exactly what a broken scan produces too. This asserts the
-    /// condition the rule needs in order to be capable of firing, so the guard
-    /// cannot quietly become a test of nothing if the tag resolver stops deriving
-    /// domains.
+    /// <see cref="EveryArityClaimNamesTheTagSetItCovers"/> passes today because
+    /// every row was reworded, so its report list is empty - and an empty list is
+    /// what a broken scan produces too. This pins the two apart: there must be
+    /// claims to classify, and the classifier must actually be recognising nouns
+    /// rather than returning "unpinned" for none of them because
+    /// <see cref="NounTagKeys"/> silently matched everything.
     /// </remarks>
     [Test]
-    public void TheAmbiguityRuleHasAPopulationItCouldApplyTo()
+    public void TheClaimPinningRuleHasAPopulationItCouldApplyTo()
     {
-        var multiTagged = DocumentedInstruments()
-            .Count(name => DerivableTagCount(name) > 1);
+        var claims = ScanClaims();
 
-        Assert.That(multiTagged, Is.GreaterThan(0),
-            "No documented instrument arms more than one derivable tag domain, so no generic "
-            + "claim could ever be ambiguous and this rule is incapable of firing. The tag "
-            + "resolver has most likely stopped deriving domains; fix it rather than deleting "
-            + "this test.");
+        Assert.That(claims, Is.Not.Empty,
+            "No arity claims were found at all, so the pinning rule is classifying an empty set "
+            + "and cannot fail. Fix the scan rather than deleting this test.");
+
+        Assert.That(claims.Count(static c => NounTagKeys.ContainsKey(c.Noun)), Is.GreaterThan(0),
+            "No arity claim uses a noun that names a tag. Either the documentation has no pinned "
+            + "claims left, or NounTagKeys has stopped matching the nouns the rows use; in both "
+            + "cases the rule is not discriminating between pinned and unpinned claims.");
     }
 
     /// <summary>
-    /// A generic claim on a multi-tag instrument is reported - the positive control
-    /// for the ambiguity rule.
+    /// A generic claim is reported - the positive control.
     /// </summary>
     /// <remarks>
-    /// Built against a real instrument resolved at run time, and driven through the
-    /// same helper the gate calls, so it proves the shipping rule rather than a
-    /// parallel reimplementation of it.
+    /// Built against a real documented instrument resolved at run time and driven
+    /// through the same helper the gate calls, so it proves the shipping rule
+    /// rather than a parallel reimplementation of it.
     /// </remarks>
     [Test]
-    public void AGenericClaimOnAMultiTagInstrumentIsReported()
+    public void AGenericClaimIsReportedAsUnpinned()
     {
-        var instrument = DocumentedInstruments().FirstOrDefault(name => DerivableTagCount(name) > 1);
+        var instrument = DocumentedInstruments().First();
 
-        Assert.That(instrument, Is.Not.Null,
-            "No documented instrument arms more than one derivable tag domain, so the control "
-            + "cannot be constructed.");
-
-        var reported = AmbiguousGenericClaims([
-            new ArityClaim("docs/synthetic.md", 1, instrument!, 3, "arms", "all three arms")]);
+        var reported = UnpinnedClaims([
+            new ArityClaim("docs/synthetic.md", 1, instrument, 3, "arms", "all three arms")]);
 
         Assert.That(reported, Is.Not.Empty,
-            $"A generic claim on {instrument}, which arms more than one tag, was not reported. "
-            + "The ambiguity rule is not applying and the real scan above proves nothing.");
+            $"A generic claim on {instrument} was not reported as unpinned, so the rule is not "
+            + "applying and the scan above proves nothing.");
     }
 
     /// <summary>
@@ -389,47 +383,42 @@ public sealed class MetricDocArmArityTests
     /// </summary>
     /// <remarks>
     /// Without this, the positive control would be satisfied by a rule that
-    /// reported every claim on a multi-tag instrument regardless of its wording,
-    /// which would make the reword pointless and the guard unsatisfiable. Holding
-    /// the instrument fixed and varying only the noun isolates genericness as the
-    /// thing being detected.
+    /// reported every claim regardless of wording, which would make the reword
+    /// pointless and the guard unsatisfiable. Holding the instrument and the count
+    /// fixed and varying only the noun isolates the wording as the thing detected.
     /// </remarks>
     [Test]
-    public void AMappedNounOnTheSameInstrumentIsNotReported()
+    public void AClaimNamingItsTagIsNotReported()
     {
-        var instrument = DocumentedInstruments().FirstOrDefault(name => DerivableTagCount(name) > 1);
+        var instrument = DocumentedInstruments().First();
 
-        Assert.That(instrument, Is.Not.Null,
-            "No documented instrument arms more than one derivable tag domain, so the control "
-            + "cannot be constructed.");
-
-        var reported = AmbiguousGenericClaims([
-            new ArityClaim("docs/synthetic.md", 1, instrument!, 3, "outcome arms",
+        var reported = UnpinnedClaims([
+            new ArityClaim("docs/synthetic.md", 1, instrument, 3, "outcome arms",
                 "all three outcome arms")]);
 
         Assert.That(reported, Is.Empty,
-            $"A claim naming the outcome tag on {instrument} was reported as ambiguous. The rule "
-            + "is firing on the instrument rather than on the wording, so rewording a row could "
-            + "never satisfy it.\n  " + string.Join("\n  ", reported));
+            $"A claim naming the outcome tag on {instrument} was reported as unpinned. The rule is "
+            + "firing on something other than the wording, so rewording a row could never satisfy "
+            + "it.\n  " + string.Join("\n  ", reported));
     }
 
     /// <summary>
-    /// Reports the claims whose noun does not name a tag and whose instrument arms
-    /// more than one tag domain.
+    /// Reports the claims whose noun does not name a tag key.
     /// </summary>
     /// <remarks>
     /// Takes its claims as a parameter so the controls drive the same code the gate
     /// runs, rather than a copy that could agree with itself while both are wrong.
     /// </remarks>
-    internal static IReadOnlyList<string> AmbiguousGenericClaims(IEnumerable<ArityClaim> claims) =>
+    internal static IReadOnlyList<string> UnpinnedClaims(IEnumerable<ArityClaim> claims) =>
         claims
             .Where(static c => !NounTagKeys.ContainsKey(c.Noun))
-            .Where(c => DerivableTagCount(c.Instrument) > 1)
             .Select(c =>
-                $"{c.File}:{c.Line}  \"{c.Phrase}\" on {c.Instrument}, which arms "
-                + $"{DerivableTagCount(c.Instrument)} tag domains ("
-                + $"{string.Join(", ", DerivableTags(c.Instrument))}), so the count does not say "
-                + "which tag is meant")
+            {
+                var derivable = DerivableTags(c.Instrument);
+                return $"{c.File}:{c.Line}  \"{c.Phrase}\" on {c.Instrument} names no tag; the "
+                    + "count is matched against whichever of its tags arms that many values "
+                    + $"(derivable now: {(derivable.Count == 0 ? "none" : string.Join(", ", derivable))})";
+            })
             .ToList();
 
     /// <summary>The tag keys an instrument actually arms, derived from source.</summary>
@@ -437,8 +426,6 @@ public sealed class MetricDocArmArityTests
         CandidateTagKeys()
             .Where(k => DashboardPanelTagDomainTests.ArmedValues(instrument, k) is { Count: > 0 })
             .ToList();
-
-    private static int DerivableTagCount(string instrument) => DerivableTags(instrument).Count;
 
     // ------------------------------------------------------ positive controls
 
