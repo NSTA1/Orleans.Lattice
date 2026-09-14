@@ -27,6 +27,22 @@ public sealed class LatticeTreeCallCounter
     /// </summary>
     public string? TreeId { get; init; }
 
+    /// <summary>
+    /// Whether calls that execute on a shard or leaf grain of <see cref="TreeId"/>
+    /// (keyed <c>{treeId}/{index}</c>) are counted too. Off by default so a facade
+    /// call is charged once rather than once plus each shard it fans out to, which
+    /// would make a call-shape assertion ambiguous. Turn it on to measure a call
+    /// that only ever executes on a shard, such as a range scan's page read - the
+    /// quantity a scan that restarts pays for twice.
+    /// <para>
+    /// This mirrors <see cref="LatticeTreeFaultInjector.IncludeShardGrains"/>
+    /// deliberately: a fixture that faults a shard-only call and then wants to
+    /// count it needs the same predicate on both sides, or it measures a different
+    /// population from the one it perturbed.
+    /// </para>
+    /// </summary>
+    public bool IncludeShardGrains { get; init; }
+
     /// <summary>Returns how many times <paramref name="method"/> has been called.</summary>
     /// <param name="method">The <see cref="ILattice"/> method name, for example <c>ApplyCrdtDeltaManyAsync</c>.</param>
     public int Count(string method) => _counts.TryGetValue(method, out var count) ? count : 0;

@@ -158,7 +158,8 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetRequiredService<Orleans.Serialization.Serializer>(),
                 sp.GetRequiredService<ILogger<EmbeddingRepoContextVectorIngestor>>(),
                 sp.GetService<IEmbeddingProvider>(),
-                sp.GetRequiredService<RepoContextCoverageProbeReporter>()));
+                sp.GetRequiredService<RepoContextCoverageProbeReporter>(),
+                sp.GetRequiredService<RepoContextSymbolWalkReporter>()));
         services.TryAddSingleton<RepoContextVectorCache>();
         services.TryAddSingleton(sp => new RepoContextVectorPlaneReDeriver(
             sp.GetRequiredService<IGrainFactory>(),
@@ -172,6 +173,13 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // reporter is not a startup error - it is a null, and the instrument then
         // never exists on any host while every test that passes one keeps passing.
         services.TryAddSingleton<RepoContextMemoryMarkerScanReporter>();
+
+        // Same rule again, and for the same reason as its sibling above: the ingestor
+        // takes this as an OPTIONAL parameter, so leaving it unregistered would not
+        // fail startup - it would leave the ingestor holding a null and the whole
+        // instrument absent from every scrape, which reads as "the symbol walk never
+        // ran" rather than "the reporter was never wired" (issue #2953).
+        services.TryAddSingleton<RepoContextSymbolWalkReporter>();
 
         // Same rule, and it is load-bearing for two consumers rather than one: the
         // ingestor and the gap scanner both take this as an OPTIONAL parameter, so an

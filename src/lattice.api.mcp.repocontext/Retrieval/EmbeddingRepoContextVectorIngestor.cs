@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Orleans.Serialization;
@@ -84,6 +85,27 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     internal const int MaxFileGapScanBackoffPasses = 8;
 
     /// <summary>
+    /// The most changed symbol keys a partial walk will carry forward to the pass
+    /// that resumes it.
+    /// <para>
+    /// A resumed walk starts mid-range, so a changed symbol whose key sorts behind
+    /// the cursor is not visited until the walk wraps. Carrying it forward turns
+    /// that into a deferral rather than a loss: without it, a changed symbol whose
+    /// membership flag is already set is skipped by the gap scan forever and its
+    /// stale vector is never replaced.
+    /// </para>
+    /// <para>
+    /// The set is bounded because it is unbounded in principle - a repository that
+    /// faults on every pass while churning would accumulate one entry per changed
+    /// symbol per pass. Dropping the excess re-exposes exactly the pre-existing
+    /// staleness, which the next completed circuit heals through the gap scan, so
+    /// the ceiling trades a bounded delay for a bounded memory cost rather than
+    /// trading correctness for either.
+    /// </para>
+    /// </summary>
+    internal const int MaxPendingChangedSymbolKeys = 50_000;
+
+    /// <summary>
     /// The ingest arm names carried into every batched embed-and-store log line.
     /// <para>
     /// The three arms share one embed body, so before these existed its warnings
@@ -116,6 +138,32 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly ILogger<EmbeddingRepoContextVectorIngestor> _logger;
     private readonly RepoContextCoverageProbeReporter? _coverageProbeReporter;
+    private readonly RepoContextSymbolWalkReporter? _symbolWalkReporter;
+
+    /// <summary>
+    /// The symbol arm's in-progress range walk, per repository, carried across
+    /// reconcile passes because the ingestor is a singleton.
+    /// <para>
+    /// The arm selects work by paging the entire symbol range. Before issue #2953
+    /// a page read that faulted discarded every page the pass had already read, so
+    /// the next pass restarted at the head and re-issued the identical leaf reads.
+    /// That re-drive is not a bystander to the stall that caused it: scan-page
+    /// issued leaf reads were measured at roughly 98% of the cold WAL replay permit
+    /// demand on the deployed acceptance container, against 1.6% for tombstone
+    /// compaction and 0.16% for the WAL-GC blocked-leaf sweep. A walk that restarts
+    /// therefore regenerates exactly the load that made it fault, and the cycle has
+    /// no exit - the walk never completes a circuit, so the arm never banks a
+    /// snapshot, so the tree's WAL cursor floor never advances and nothing is
+    /// reclaimed.
+    /// </para>
+    /// <para>
+    /// Banking the continuation token turns the re-drive into a resume, so the walk
+    /// makes monotonic progress across faulting passes. The cursor is dropped the
+    /// moment a circuit closes: it bounds a re-drive, it is not a permanent
+    /// position, and leaving it would hide a symbol captured behind it.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, SymbolWalkCursor> _symbolWalkCursors = new();
 
     /// <summary>
     /// The symbol arm's per-repository gap-back-fill backoff, carried across
@@ -218,6 +266,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// <param name="logger">The logger used to record fail-closed fallbacks. Must not be <see langword="null"/>.</param>
     /// <param name="embeddingProvider">The embedding provider, or <see langword="null"/> when the host bound none (search then degrades to keyword recall).</param>
     /// <param name="coverageProbeReporter">Meters whether the store's read-path access gate is standing ingestion coverage down, or <see langword="null"/> in a host that registered none.</param>
+    /// <param name="symbolWalkReporter">Meters whether the symbol arm's range walk completed, resumed banked progress, or banked and stood down, or <see langword="null"/> in a host that registered none.</param>
     /// <exception cref="ArgumentNullException"><paramref name="writer"/>, <paramref name="grainFactory"/>, <paramref name="serializer"/>, or <paramref name="logger"/> is null.</exception>
     public EmbeddingRepoContextVectorIngestor(
         RepoContextVectorWriter writer,
@@ -225,7 +274,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         Serializer serializer,
         ILogger<EmbeddingRepoContextVectorIngestor> logger,
         IEmbeddingProvider? embeddingProvider = null,
-        RepoContextCoverageProbeReporter? coverageProbeReporter = null)
+        RepoContextCoverageProbeReporter? coverageProbeReporter = null,
+        RepoContextSymbolWalkReporter? symbolWalkReporter = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -237,6 +287,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         _logger = logger;
         _embeddingProvider = embeddingProvider;
         _coverageProbeReporter = coverageProbeReporter;
+        _symbolWalkReporter = symbolWalkReporter;
     }
 
     /// <inheritdoc />
@@ -730,7 +781,19 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // churn-bloated membership tree can never force an unbounded sorted-range
         // scan past the response deadline (issue #1556); an already-embedded,
         // unchanged symbol is skipped without a payload read.
+        //
+        // Resume the range walk in progress, if any, rather than restarting it
+        // (issue #2953). The pending set folds in every changed key an earlier
+        // partial pass banked without reaching, so resuming defers those keys to the
+        // pass that walks past them instead of dropping them.
+        var resumed = _symbolWalkCursors.TryGetValue(repoId, out var cursor) ? cursor : null;
         var changed = new HashSet<string>(changedSymbolKeys, StringComparer.Ordinal);
+        if (resumed is not null)
+        {
+            changed.UnionWith(resumed.PendingChangedKeys);
+        }
+
+        var walkPasses = (resumed?.Passes ?? 0) + 1;
 
         // When the previous pass gave the plane up as saturated, this pass embeds
         // only the symbols the reconcile named as changed and leaves the gap
@@ -757,15 +820,47 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // a changed symbol is legitimately re-embedded every time it changes.
         var gapSelected = new HashSet<string>(StringComparer.Ordinal);
 
-        string? token = null;
+        string? token = resumed?.ContinuationToken;
+        var pendingChanged = new HashSet<string>(changed, StringComparer.Ordinal);
         var probeFailures = 0;
         Exception? firstProbeFailure = null;
+        Exception? walkFault = null;
         do
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var page = await RepoContextPortability
-                .EnumerateAsync(tree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
-                .ConfigureAwait(false);
+
+            RepoContextSnapshotPage page;
+            try
+            {
+                var pageToken = token;
+                page = await RepoContextPortability
+                    .EnumerateAsync(tree, prefix, pageToken, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Bank the token this page was READ FROM, never one derived from the
+                // page that never arrived, so the next pass re-attempts exactly the
+                // page that failed and skips nothing.
+                //
+                // Cancellation is deliberately NOT banked: a cancelled pass has not
+                // established that the page is unreadable, and recording it as banked
+                // progress would let a host shutting down look like a degraded walk.
+                walkFault = ex;
+                _symbolWalkCursors[repoId] =
+                    new SymbolWalkCursor(token, TrimPendingChanged(repoId, pendingChanged), walkPasses);
+                _symbolWalkReporter?.Record(RepoContextSymbolWalkOutcome.Banked);
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: a symbol-range page faulted on walk pass {Pass} after selecting {Selected} "
+                    + "symbol(s); banking the continuation token so the next pass resumes from this page rather "
+                    + "than restarting the walk. Restarting would re-issue every leaf read already paid for, and "
+                    + "that re-drive is itself the load that keeps those leaves cold (issue #2953).",
+                    repoId,
+                    walkPasses,
+                    sources.Count);
+                break;
+            }
 
             var pageKeys = new List<string>(page.Records.Count);
             foreach (var record in page.Records)
@@ -854,6 +949,11 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 }
 
                 var sourceKey = record.Key;
+
+                // This key has now been walked, so a later partial pass must not
+                // carry it forward as still-pending changed work.
+                pendingChanged.Remove(sourceKey);
+
                 var selectedByGapScan = !changed.Contains(sourceKey);
                 if (selectedByGapScan
                     && (skipGapScan || embeddedMembers.Contains(VectorCodec.SourceId(sourceKey))))
@@ -878,6 +978,19 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             token = page.HasMore ? page.ContinuationToken : null;
         }
         while (token is not null);
+
+        if (walkFault is null)
+        {
+            // The circuit closed. Drop the cursor so the next pass walks the whole
+            // range again: the cursor bounds a re-drive, it is not a permanent
+            // position, and a symbol captured behind it would otherwise never be
+            // reached.
+            _symbolWalkCursors.TryRemove(repoId, out _);
+            _symbolWalkReporter?.Record(
+                walkPasses > 1
+                    ? RepoContextSymbolWalkOutcome.Resumed
+                    : RepoContextSymbolWalkOutcome.Complete);
+        }
 
         EmbedOutcome outcome;
         try
@@ -920,6 +1033,17 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             _lastGapLanded[repoId] = landedFromGap;
         }
 
+        // Surface the page fault the walk banked - the arm still reports incomplete,
+        // so the bootstrap run re-drives it exactly as before. It is rethrown HERE,
+        // after the gap-scan bookkeeping above, rather than at the point it was
+        // caught: rethrowing earlier would let a walk that faults on every pass keep
+        // re-driving its gap back-fill at full rate, bypassing the saturation
+        // backoff that exists to let the plane drain.
+        if (walkFault is not null)
+        {
+            ExceptionDispatchInfo.Capture(walkFault).Throw();
+        }
+
         // Same rule as the batch boundary: a pass that achieved nothing at all
         // still has to surface its fault, but one that made progress counts as
         // progress even though part of the symbol space went unexamined.
@@ -934,6 +1058,54 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
 
         return symbolsEmbedded;
+    }
+
+    /// <summary>
+    /// A symbol-arm range walk that faulted partway, so the pass after it can
+    /// resume rather than re-read the range from its head (issue #2953).
+    /// </summary>
+    /// <param name="ContinuationToken">The token the faulted page was read FROM, so the resuming pass re-attempts exactly that page and skips nothing. Null when the very first page faulted.</param>
+    /// <param name="PendingChangedKeys">Changed symbol keys this walk had not reached, carried forward so resuming defers them rather than dropping them.</param>
+    /// <param name="Passes">How many passes this walk has taken, so a completed circuit can report whether it consumed banked progress.</param>
+    private sealed record SymbolWalkCursor(
+        string? ContinuationToken,
+        IReadOnlySet<string> PendingChangedKeys,
+        int Passes);
+
+    /// <summary>
+    /// Bounds the changed-key set a partial walk carries forward, logging when the
+    /// ceiling actually bites so a repository that is silently shedding deferred
+    /// work is visible rather than inferred.
+    /// </summary>
+    /// <param name="repoId">The repository whose walk is banking.</param>
+    /// <param name="pendingChanged">The changed keys the walk had not reached.</param>
+    /// <returns>The carried-forward set, at most <see cref="MaxPendingChangedSymbolKeys"/> entries.</returns>
+    private IReadOnlySet<string> TrimPendingChanged(string repoId, HashSet<string> pendingChanged)
+    {
+        if (pendingChanged.Count <= MaxPendingChangedSymbolKeys)
+        {
+            return pendingChanged;
+        }
+
+        var trimmed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var key in pendingChanged)
+        {
+            if (trimmed.Count == MaxPendingChangedSymbolKeys)
+            {
+                break;
+            }
+
+            trimmed.Add(key);
+        }
+
+        _logger.LogWarning(
+            "Repo {RepoId}: a partial symbol walk had {Pending} unreached changed key(s), above the {Ceiling} "
+            + "carried forward; the remainder fall back to gap-scan healing on the next completed circuit.",
+            repoId,
+            pendingChanged.Count,
+            MaxPendingChangedSymbolKeys);
+
+        return trimmed;
     }
 
     /// <summary>
