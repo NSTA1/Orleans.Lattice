@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Dashboards.Tests;
 /// We intentionally use <em>forward</em> mapping (live instrument name to
 /// expected PromQL token forms) rather than reverse mapping (PromQL token
 /// to instrument name), because many instrument names embed underscores
-/// (for example <c>orleans.lattice.replication.apply.dependency_wait_ms</c>
+/// (for example <c>orleans.lattice.replication.apply.dependency_wait</c>
 /// and <c>orleans.lattice.replication.wal.entries_shipped</c>) and the
 /// reverse direction is fundamentally ambiguous once dot-separated
 /// segments and embedded-underscore segments are both translated to
@@ -133,9 +133,15 @@ public sealed class DashboardJsonTests
         map[underscored + "_seconds_count"] = meterName;
         map[underscored + "_seconds_sum"] = meterName;
 
-        // Histogram with no explicit unit (the .NET name itself encodes the unit,
-        // e.g. ".apply.dependency_wait_ms"): the exporter appends the suffix
+        // Histogram with no explicit unit: the exporter appends the suffix
         // directly to the underscored name without inserting a unit segment.
+        //
+        // This arm is deliberately not illustrated with a name that merely
+        // looks unit-bearing. A .NET name ending in a unit alias (say "_ms")
+        // does not mean the declaration omitted the unit, and the exporter
+        // keys its suppression on the mapped form ("milliseconds"), never on
+        // the alias - so such a name takes the unit-segment arm above and
+        // doubles (issue #2920), rather than this one.
         if (bucketed)
         {
             map[underscored + "_bucket"] = meterName;
