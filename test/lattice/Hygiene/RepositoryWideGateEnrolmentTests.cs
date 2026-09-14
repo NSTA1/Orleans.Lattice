@@ -134,6 +134,44 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "repository-wide by reflection over the live meters; contains no src path at all",
         };
 
+    /// <summary>
+    /// Documented gates whose description states a <b>mandated absence</b>: the backticked
+    /// identifiers it names must resolve to nothing in code, permanently and by design.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// These rows are the exact inverse of an enrolment anchor. An anchor is a claim that
+    /// a symbol <i>exists</i> in the fixture the row names; a mandated-absence row names
+    /// identifiers that were deliberately deleted and whose reappearance is the defect.
+    /// Pointing the anchor check at such a row would demand the symbols exist in the very
+    /// fixture that exists to prove they do not.
+    /// </para>
+    /// <para>
+    /// Nothing reddens today: the anchor check reads only the enrolment table, and these
+    /// rows live in the separate gate table further down the same file. The hazard fires
+    /// on <b>widening</b>, which is the likely next change here, and it fires badly: the
+    /// red would name a real fixture and a real identifier, and its two obvious remedies
+    /// are both wrong - delete the documentation of a deletion mandate, or reintroduce the
+    /// identifier to satisfy the doc. The reason is knowable now and would not be then, so
+    /// it is recorded now.
+    /// </para>
+    /// <para>
+    /// Recorded by <b>fixture name only</b>. The forbidden identifiers are deliberately
+    /// not written here: this file is itself within the slice that gate scans, so spelling
+    /// them would violate the mandate that this record exists to protect. They are derived
+    /// from the documented row at run time instead, which also means the record cannot
+    /// drift from the prose it exempts.
+    /// </para>
+    /// </remarks>
+    private static readonly IReadOnlyDictionary<string, string> RecordedMandatedAbsenceGates =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["DeletionMandateHygieneTests"] =
+                "states a deletion mandate: the identifiers it names must never resolve in "
+                    + "code, so they are the inverse of an enrolment anchor and must never "
+                    + "be checked as one",
+        };
+
     private static string RepoRoot => HygieneRepository.FindRepoRoot();
 
     /// <summary>
@@ -180,6 +218,41 @@ public sealed class RepositoryWideGateEnrolmentTests
         TestSourceFiles()
             .Where(p => string.Equals(TypeNameForPath(p), typeName, StringComparison.Ordinal))
             .ToList();
+
+    /// <summary>
+    /// Every tracked C# file under <c>src/</c> and <c>test/</c>. This is the slice a
+    /// deletion mandate covers, so it is what a mandated-absence claim is checked against.
+    /// </summary>
+    private static IReadOnlyList<string> AllSourceFiles() =>
+        new[] { "src", "test" }
+            .SelectMany(dir => HygieneRepository.EnumerateFiles(Path.Combine(RepoRoot, dir), "*.cs"))
+            .Where(static p => !HygieneRepository.HasExcludedSegment(p))
+            .ToList();
+
+    /// <summary>
+    /// The "what it enforces" cell of the separate gate table, for the row naming
+    /// <paramref name="fixture"/>. Returns null when no such row exists, which the caller
+    /// treats as a failure rather than as an empty population.
+    /// </summary>
+    private static string? GateTableEnforcementCell(string fixture)
+    {
+        var path = Path.Combine(RepoRoot, InstructionsPath.Replace('/', Path.DirectorySeparatorChar));
+        foreach (var line in File.ReadAllLines(path))
+        {
+            if (!line.StartsWith("|", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var cells = line.Split('|', StringSplitOptions.None);
+            if (cells.Length > 2 && string.Equals(cells[1].Trim().Trim('`').Trim(), fixture, StringComparison.Ordinal))
+            {
+                return cells[2].Trim();
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// True for a line that is wholly a comment, by the three comment forms this
@@ -871,5 +944,108 @@ public sealed class RepositoryWideGateEnrolmentTests
                     + "means at least one of them describes a gate other than its own: "
                     + string.Join("; ", duplicated));
         });
+    }
+
+    /// <summary>
+    /// Every recorded mandated-absence gate still states a mandate, and every identifier
+    /// it names is still absent from the code.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the live half of <see cref="RecordedMandatedAbsenceGates"/>. A bare
+    /// exemption would be an assertion-shaped comment: it would record that a row must
+    /// never be anchor-checked and then check nothing, so it could not tell a mandate that
+    /// still holds from one that has been quietly violated. Recording the row instead buys
+    /// an assertion, because the same identifiers that must never be checked as anchors
+    /// are exactly the ones that must never resolve at all.
+    /// </para>
+    /// <para>
+    /// The identifiers are derived from the documented row rather than listed here, for
+    /// two reasons. This file is inside the slice the mandate's own gate scans, so
+    /// spelling them would violate the mandate. And a hand-copied list could drift from
+    /// the prose it exempts, reproducing inside the remedy the defect the remedy exists to
+    /// catch.
+    /// </para>
+    /// <para>
+    /// Both populations are asserted non-empty. Unbackticking the identifiers, or dropping
+    /// the row, would otherwise leave this passing on nothing - the vacuity failure this
+    /// fixture's own perturbation history turned up, and the reason the guard is here
+    /// rather than implied.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Recorded_mandated_absence_claims_are_still_absent_from_the_code()
+    {
+        Assert.That(
+            RecordedMandatedAbsenceGates,
+            Is.Not.Empty,
+            "The mandated-absence record is empty, so this gate would pass while checking "
+                + "nothing. If the last deletion mandate really was retired, delete this "
+                + "test rather than leaving it green over an empty population.");
+
+        var sources = AllSourceFiles();
+        Assert.That(
+            sources,
+            Is.Not.Empty,
+            "No source files were enumerated under src/ or test/, so every absence claim "
+                + "below would hold trivially. A zero from a failed enumeration is "
+                + "indistinguishable from a zero meaning genuine absence.");
+
+        var texts = sources.ToDictionary(static p => p, File.ReadAllText, StringComparer.Ordinal);
+        var violations = new List<string>();
+        var checkedIdentifiers = 0;
+
+        foreach (var (fixture, reason) in RecordedMandatedAbsenceGates.OrderBy(static r => r.Key, StringComparer.Ordinal))
+        {
+            var cell = GateTableEnforcementCell(fixture);
+            Assert.That(
+                cell,
+                Is.Not.Null,
+                $"{fixture} is recorded as stating a deletion mandate ({reason}), but no "
+                    + $"row naming it exists in {InstructionsPath}. The record now exempts "
+                    + "a row that is not there, so either the row moved and the record "
+                    + "must follow it, or the mandate was retired and the record must go.");
+
+            var identifiers = EnrolmentAnchors(cell!)
+                .Where(n => !string.Equals(n, fixture, StringComparison.Ordinal))
+                .ToList();
+
+            Assert.That(
+                identifiers,
+                Is.Not.Empty,
+                $"The {fixture} row names no backticked identifier, so there is nothing "
+                    + "left to assert absent and this gate would pass vacuously on it. A "
+                    + "mandate whose subjects have been unbackticked has stopped being "
+                    + "machine-readable, which is the state this fixture exists to prevent.");
+
+            foreach (var identifier in identifiers)
+            {
+                checkedIdentifiers++;
+                var word = new Regex($@"\b{Regex.Escape(identifier)}\b", RegexOptions.Compiled);
+                foreach (var (path, text) in texts)
+                {
+                    if (word.IsMatch(text))
+                    {
+                        violations.Add(
+                            $"{identifier} -> {Path.GetRelativePath(RepoRoot, path).Replace('\\', '/')}");
+                    }
+                }
+            }
+        }
+
+        Assert.That(
+            checkedIdentifiers,
+            Is.GreaterThan(0),
+            "No mandated-absence identifier was checked at all, so this gate reported "
+                + "success without performing a single comparison.");
+
+        Assert.That(
+            violations,
+            Is.Empty,
+            "These identifiers are documented as permanently deleted, but have reappeared "
+                + "in code. The documented row is a mandate, not a description, so the "
+                + "reappearance is the defect and the fix is in the code rather than in "
+                + "the documentation: "
+                + string.Join(", ", violations.OrderBy(static v => v, StringComparer.Ordinal)));
     }
 }
