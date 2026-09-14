@@ -92,6 +92,16 @@ internal sealed class RepoContextWorkspaceGuard
     public bool IsEnforcing => _canonicalRoots.Length != 0;
 
     /// <summary>
+    /// The canonicalised workspace roots this guard admits paths under, in the order
+    /// they were configured, or an empty list when the guard is inert. These are the
+    /// roots after <c>..</c> segments and symlinks were resolved, so they are what the
+    /// host is really mounting rather than what it was configured with - which is the
+    /// form worth reporting, because the two differ in exactly the deployment that
+    /// motivated reporting them (issue #2617).
+    /// </summary>
+    public IReadOnlyList<string> AllowedRoots => _canonicalRoots;
+
+    /// <summary>
     /// Resolves <paramref name="requestedPath"/> to its real on-disk location and,
     /// when the guard is enforcing, asserts it sits inside an allowed workspace
     /// root. Returns the canonical path the caller should walk.

@@ -22,8 +22,8 @@
 	observation was real and correctly made; the discriminator was in a channel
 	nobody was reading.
 
-	This script reads that channel. It performs six checks and REFUSES unless
-	all six agree:
+	This script reads that channel. It performs seven checks and REFUSES unless
+	all seven agree:
 
 	  1. COMPOSE provenance. The container's own
 	     `com.docker.compose.project.working_dir` label resolves to the expected
@@ -47,6 +47,27 @@
 	     `org.opencontainers.image.revision` label, or failing that a
 	     `candidate-<sha>` tag - and cross-checked against chronology: a commit
 	     authored after the image was created cannot be in it. FAILS CLOSED.
+	  7. WORKSPACE provenance. The `/workspace` bind the container INDEXES OUT OF
+	     exists, is a bind rather than a volume, and resolves to an absolute host
+	     path; and, when the caller names them, that path is the expected
+	     workspace root and a registered repository is indexed from the expected
+	     repository root.
+
+	Check 7 is the READ path, and it is the only check that looks at the tree the
+	container's ANSWERS are about. Check 1 adjudicates the directory compose was
+	invoked from; `REPO_PATH`, which selects what is bound at `/workspace`, is a
+	separate setting carried by the same untracked `.env`, so the two are
+	independent inputs and check 1 passing says nothing about check 7.
+
+	It was added because issue #2617 established that a wrongly-rooted index has
+	NO OBSERVABLE SIGNAL. A git worktree registered under the base repository's
+	id produced a listing indistinguishable from a correct index of the base
+	repository: same id, same file count, same current ingest marker, every
+	record internally consistent, and every answer about a different tree. There
+	was no reading a caller could take that would have differed. That is the same
+	shape as the original incident this script was written for - a real
+	observation, correctly made, with the discriminator in a channel nobody was
+	reading - which is why it belongs here rather than in a test.
 
 	Check 4 is the non-redundant one and the reason the first three are not
 	sufficient. Checks 1 to 3 can all pass while an override file, an edit, or a
@@ -181,6 +202,22 @@
 	  - That the archive CONTENT is good. Check 5 adjudicates where the archive
 	    landed, not what is in it, and a durable path holding a stale or empty
 	    snapshot passes it.
+	  - That the workspace CONTENT is current. Check 7 adjudicates WHICH TREE is
+	    bound and registered, not what state that tree is in. A correctly-rooted
+	    workspace whose index is hours stale, mid-ingest, or degraded to keyword
+	    passes it; freshness is `repocontext_index_status`'s question and this
+	    script never asks it.
+	  - That the workspace root or the registered repository is the one you
+	    MEANT, unless you named them. Check 7's two identity arms are opt-in
+	    (-ExpectedWorkspaceRoot, -ExpectedRepositoryRoot) because the correct
+	    values are absolute host paths that differ on every machine. WITHOUT
+	    THEM, a green run establishes only that SOMETHING absolute is bound and
+	    says nothing about what. The report prints NOT ESTABLISHED for each arm
+	    you did not ask for; treat that line as the caveat it is, not as an
+	    omission of a passing check.
+	  - That every registered repository is correctly rooted. The indexed-root
+	    arm succeeds when ONE registered root matches -ExpectedRepositoryRoot;
+	    a second, wrongly-rooted repository alongside it does not fail the check.
 	  - Anything about a container other than -ContainerName.
 
 	What a green run DOES now establish, which it did not before: that the image
@@ -234,7 +271,47 @@ param(
 	# adjudicated, but it must name a mount that EXISTS: check 5 refuses a
 	# container with nothing bound here, because an absent archive is the
 	# strongest form of the defect it looks for.
-	[string] $ArchiveDestination = '/memory-archive'
+	[string] $ArchiveDestination = '/memory-archive',
+
+	# The container path the indexed workspace is bound at. A parameter for the
+	# same reason -ArchiveDestination is, and it must name a mount that EXISTS:
+	# check 7 refuses a container with nothing bound here, because a container
+	# indexing nothing is the strongest form of the defect it looks for.
+	[string] $WorkspaceDestination = '/workspace',
+
+	# The host directory you believe is bound at -WorkspaceDestination, i.e. the
+	# value of REPO_PATH. OPTIONAL AND UNDEFAULTED, deliberately.
+	#
+	# There is no absolute path that is correct on two machines, so a literal
+	# here would refuse every host but its author's. A default DERIVED from
+	# -ExpectedCheckout would be worse: it would encode a guess about your
+	# directory layout - that the workspace is the checkout's parent - and refuse
+	# a correct deployment that is arranged otherwise, which is how a check earns
+	# a reputation for false alarms and then gets relaxed until it adjudicates
+	# nothing. Supply it and the identity is checked; omit it and check 7 still
+	# refuses an absent, non-bind, or relative mount, and REPORTS the identity as
+	# not established rather than counting it as agreement.
+	[string] $ExpectedWorkspaceRoot = '',
+
+	# The host path of the repository you believe is registered and indexed.
+	# Supplying it turns on the indexed-root arm, which is the arm that answers
+	# issue #2617's question: whether the repository id you are querying under
+	# actually names the tree you think it does.
+	#
+	# Having asked, the arm FAILS CLOSED: naming this without also supplying
+	# -IndexedRoot is a violation, not a pass.
+	[string] $ExpectedRepositoryRoot = '',
+
+	# The container-side indexed roots, as `repocontext_list_repos` reports them
+	# in its `indexedRoot` field (for example '/workspace/lattice'). They are
+	# mapped back through the -WorkspaceDestination bind before comparison.
+	#
+	# Passed in rather than fetched because this script speaks to `docker` and
+	# `git`, not to an MCP endpoint over an authenticated transport; acquiring a
+	# token here would put a credential path inside a provenance checker. The
+	# cost is that the reading is the operator's to supply, which is why omitting
+	# it while naming -ExpectedRepositoryRoot refuses.
+	[string[]] $IndexedRoot = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -636,6 +713,20 @@ $archiveSource = if ($null -eq $archiveMount) { '' } else { ConvertFrom-DockerDe
 $archiveMountType = if ($null -eq $archiveMount) { '' } else { "$($archiveMount.Type)" }
 $archiveGit = Get-ArchiveGitReading -Path $archiveSource
 
+# The workspace bind - the READ path - read from the same mount table and
+# normalised the same way. Check 1 adjudicates the directory compose was invoked
+# from; this is the directory the container actually indexes, and REPO_PATH makes
+# them independent inputs.
+$workspaceMount = @($container.Mounts) | Where-Object { "$($_.Destination)" -eq $WorkspaceDestination } | Select-Object -First 1
+$workspaceSource = if ($null -eq $workspaceMount) { '' } else { ConvertFrom-DockerDesktopHostPath -Path "$($workspaceMount.Source)" }
+$workspaceMountType = if ($null -eq $workspaceMount) { '' } else { "$($workspaceMount.Type)" }
+
+# Examinable exactly when the operator supplied a reading. There is no way to
+# obtain the listing from here, so "no -IndexedRoot" means "not looked at" and
+# must never present as "looked at and fine".
+$indexedRoots = @($IndexedRoot | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$indexedRootsExaminable = ($indexedRoots.Count -gt 0)
+
 # Existence is resolved here, in the impure half, and adjudicated in the pure
 # one. Deliberately Test-Path and not a git query: the override this stack needs
 # is gitignored, so asking git whether a config file exists would report the
@@ -667,6 +758,13 @@ $readings = @{
 	CandidateTagPrefix         = $CandidateTagPrefix
 	ClockSkewToleranceSeconds  = $ClockSkewToleranceSeconds
 	ImageIsLocallyBuilt        = $imageIsLocallyBuilt
+	WorkspaceDestination       = $WorkspaceDestination
+	WorkspaceSource            = $workspaceSource
+	WorkspaceMountType         = $workspaceMountType
+	ExpectedWorkspaceRoot      = $ExpectedWorkspaceRoot
+	ExpectedRepositoryRoot     = $ExpectedRepositoryRoot
+	IndexedRoots               = $indexedRoots
+	IndexedRootsExaminable     = $indexedRootsExaminable
 }
 
 $report = Get-ContainerProvenanceReport `
@@ -743,6 +841,13 @@ foreach ($name in ($ExpectedSetting.Keys | Sort-Object)) {
 }
 Write-Host ("  memory archive mount      : {0}" -f $(if ($archiveSource) { "$archiveSource -> $ArchiveDestination ($archiveMountType)" } else { "<NOTHING BOUND AT $ArchiveDestination>" }))
 Write-Host ("  archive inside git        : {0}" -f $(if ($archiveGit.Toplevel) { "$($archiveGit.Toplevel)$(if ($archiveGit.IsLinkedWorktree) { ' (LINKED WORKTREE)' } else { ' (checkout)' })" } elseif (-not $archiveGit.Exists) { '<UNEXAMINABLE - source not present on this host>' } elseif (-not $archiveGit.Examinable) { '<UNEXAMINABLE - the git query DID NOT COMPLETE>' } else { '<no - outside every checkout>' }))
+Write-Host ("  workspace mount           : {0}" -f $(if ($workspaceSource) { "$workspaceSource -> $WorkspaceDestination ($workspaceMountType)" } else { "<NOTHING BOUND AT $WorkspaceDestination>" }))
+# Both identity arms print NOT ESTABLISHED when they were not asked for. An
+# omitted arm that prints nothing reads as an arm that passed, which is the
+# failure shape this entire script exists to refuse.
+Write-Host ("  expected workspace root   : {0}" -f $(if ($ExpectedWorkspaceRoot) { $ExpectedWorkspaceRoot } else { '<NOT ESTABLISHED - pass -ExpectedWorkspaceRoot to check the mount is the tree you believe>' }))
+Write-Host ("  registered indexed roots  : {0}" -f $(if ($indexedRoots.Count) { $indexedRoots -join ', ' } else { '<NOT ESTABLISHED - pass -IndexedRoot from repocontext_list_repos>' }))
+Write-Host ("  expected repository root  : {0}" -f $(if ($ExpectedRepositoryRoot) { $ExpectedRepositoryRoot } else { '<NOT ESTABLISHED - pass -ExpectedRepositoryRoot to check WHICH TREE is indexed (issue #2617)>' }))
 Write-Host ''
 
 if (-not $report.IsSatisfied) {
@@ -752,7 +857,7 @@ if (-not $report.IsSatisfied) {
 	exit $ExitProvenanceRefused
 }
 
-Write-Host ("  OK  all six provenance checks agree for '{0}'" -f $ContainerName) -ForegroundColor Green
+Write-Host ("  OK  all seven provenance checks agree for '{0}'" -f $ContainerName) -ForegroundColor Green
 Write-Host ("      the running image was built from '{0}', established from {1}" -f $imageBuildCommit.Commit, $(if ($imageBuildCommit.Source -eq 'label') { 'the image revision label stamped by the build' } else { "a '$CandidateTagPrefix<sha>' image tag (FALLBACK - this image carries no revision label)" })) -ForegroundColor Green
 if ($report.IsGitCheckSelfReferential) {
 	# Said out loud on the GREEN path specifically. A caveat that only appears on
