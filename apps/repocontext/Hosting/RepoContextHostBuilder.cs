@@ -502,10 +502,16 @@ public static class RepoContextHostBuilder
         {
             Predicate = registration => registration.Tags.Contains(LivenessTag),
         });
-        app.MapHealthChecks(ReadinessPath, new HealthCheckOptions
-        {
-            Predicate = registration => registration.Tags.Contains(ReadinessTag),
-        });
+        // The readiness endpoint. Mapped through a shared factory with a response
+        // writer that names WHICH component of the readiness conjunction is not ready.
+        // Before this the mapping carried a bare predicate, so the framework default
+        // wrote the aggregate status word alone and every component description - each
+        // one computed on every probe - was discarded at the HTTP boundary. A 503 then
+        // could not distinguish a replaying lifecycle from a degraded vector plane.
+        // The status-code mapping is left at the framework default deliberately: the
+        // code is what an orchestrator routes on, and this adds detail without moving
+        // the verdict. See RepoContextReadinessHealthResponse (issue #2962).
+        app.MapHealthChecks(ReadinessPath, RepoContextReadinessHealthEndpoint.CreateOptions(ReadinessTag));
         app.MapHealthChecks(BackupPath, new HealthCheckOptions
         {
             Predicate = registration => registration.Tags.Contains(BackupTag),

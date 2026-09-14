@@ -414,8 +414,8 @@ no shell-exec healthcheck:
 
 A `/health/ready` 503 that does not clear, on a container that is otherwise up,
 does **not** on its own mean the deployment is broken, and must not be used by
-itself as a rollback signal. The endpoint returns a bare `Unhealthy` with no
-per-component breakdown, so a 503 is ambiguous until you narrow it. Five steps,
+itself as a rollback signal. The response body names each component and its verdict on its own line beneath the aggregate status, so the component holding readiness down is readable straight from the probe (issue #2962). That names the component, not the cause, so the steps below still apply: read the body first, then work through them to narrow why that component is unhappy. Before issue #2962 the endpoint returned a bare `Unhealthy` with no
+per-component breakdown, so a 503 was ambiguous until it had been narrowed by hand. Five steps,
 each one ruling out a cause the previous step left open:
 
 1. `curl -fsS http://localhost:8080/health/live`. A 200 says the process and the
