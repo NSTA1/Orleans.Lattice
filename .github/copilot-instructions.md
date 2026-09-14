@@ -239,18 +239,44 @@ field must be declared below every piece of static state its own callback
 reads.**
 
 This matters most for an `ObservableGauge` / `ObservableCounter`, whose callback
-runs on every observation as well as on publication, and whose failure mode is
-the quiet one - a callback that throws inside a `MeterListener` surfaces as a
-missing series, not as an exception at the offending line. That is the same
-silent shape as the cross-type `Meter` case, reached by a different route.
+runs on every observation as well as on publication. Its failure has **two
+shapes, and the second is the worse one**:
+
+- **The callback reads a reference-typed static.** It null-dereferences, throws
+  inside the `MeterListener`, and the **series goes missing** - not an exception
+  at the offending line. That is the same silent shape as the cross-type `Meter`
+  case, reached by a different route.
+- **The callback reads a value-typed static** (an `int` depth, a ceiling, a
+  counter). It cannot null-dereference, because the CLR zero-initialises statics
+  before any initialiser runs, so the premature read returns **`0`** and is
+  correct again on the very next collection. This is a **transient false zero**,
+  and it is strictly worse than a missing series: `0` is a plausible real reading
+  on exactly the instruments that report a depth or an occupancy, it self-heals
+  so re-reading erases the evidence, and nothing logs. A missing series at least
+  announces that something is wrong.
+
+Both shapes are in scope for the invariant, and neither is visible in review
+unless you are looking for it.
 
 `CoordinatorPhaseTickCensus` is the worked example. Its gauge callback reads
 `LiveEnrolments`, so `Gauge` is declared **below** it. That class declares no
 `Meter` field of its own - it builds from `LatticeMetrics.Meter`, the
 documented-safe cross-type form - so `MeterFieldDeclarationOrderTests` does not
 scan it at all. That silence is **correct**: there is no `Meter` field to match
-and nothing to be null. But it also means **no guard catches this ordering**,
-which is why it is written down here rather than delegated to a fixture.
+and nothing to be null.
+
+`ObservableInstrumentDeclarationOrderTests` enforces this generalised invariant
+across `src/`, and is deliberately **not** gated on the presence of a `Meter`
+field - that predicate is precisely what makes `CoordinatorPhaseTickCensus`,
+`BPlusLeafGrain.Activation.cs`, and `LatticeBackupMetrics` invisible to the
+narrower guard. It parses each file, resolves every static field an observable
+instrument's callback reads (following a method-group or helper call *through*
+to the fields it reads, since a method has no initialiser and its own position is
+irrelevant), and fails when an instrument is declared above one of them. Like the
+narrower guard it fails loudly when its own scan matches nothing, and it carries
+an unmatched-type assertion so a new `Observable*` instrument type cannot slip
+past unrecognised. `const` fields are excluded: a compile-time constant is
+inlined and has no initialiser, so reading one from a callback is always safe.
 
 The practical form, and the version nobody can get wrong by adding a field
 later: **declare an observable instrument last in its class**, below every
