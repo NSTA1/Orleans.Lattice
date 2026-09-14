@@ -245,6 +245,8 @@ src/lattice/LatticeMetrics.cs#LeafSnapshotSegmentPeakBytes	none
 src/lattice/LatticeMetrics.cs#LeafSnapshotSegmentReads	unresolved	reason=dimension outcome: tag passed as a prebuilt KeyValuePair static (LatticeMetrics.SnapshotSegmentLoaded/Missing/Failed), so no tag key is visible at the emission site. The domain is bounded and zero-primed (loaded/missing/failed), so a none row here would launder a parser blind spot into a negative claim.
 src/lattice/LatticeMetrics.cs#LeafSnapshotSegmentedHydrations	none	
 src/lattice/LatticeMetrics.cs#LeafSplitAttempts	unresolved	reason=dimension tree: no declaration found for treeId
+src/lattice/LatticeMetrics.cs#LeafSplitCompletionOldestAge	none	
+src/lattice/LatticeMetrics.cs#LeafSplitCompletionsInFlight	none	
 src/lattice/LatticeMetrics.cs#LeafSplits	unresolved	reason=unrecognised value expression: state.State.TreeId ?? string.Empty
 src/lattice/LatticeMetrics.cs#LeafTombstoneRatio	unresolved	reason=unrecognised value expression: context.GrainId.ToString()
 src/lattice/LatticeMetrics.cs#LeafTombstonesCreated	none	

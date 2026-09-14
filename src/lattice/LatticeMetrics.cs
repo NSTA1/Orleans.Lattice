@@ -2573,6 +2573,154 @@ public static class LatticeMetrics
         new(TagFailureClass, "other");
 
 
+    // --- Leaf-split completion in-flight registry (issue #2967) -------------
+    //
+    // The leaf-split outcome taxonomy (LeafSplitAttempts: divided / faulted /
+    // the declining arms) is a partition of *terminated* divisions. A division
+    // suspended inside CompleteSplitAsync at scrape time has terminated on
+    // none of them, and because the catch that records `faulted` is
+    // unconditional a division carrying neither `divided` nor `faulted` did not
+    // throw - it is genuinely in flight. That un-terminated state has no member
+    // in the outcome taxonomy, so a permanently-stuck division reports as
+    // healthy concurrency forever and nothing separates `busy` from `stuck`.
+    //
+    // These two gauges name that state as a *measurement*, not a threshold: the
+    // count of completions currently suspended, and the age of the oldest. No
+    // constant is encoded here - an operator or alert reads `stuck` off the age
+    // climbing, which is a judgement made against real data rather than a guess
+    // baked into the code. Both cover the forward path and the recovery path,
+    // because both funnel through CompleteSplitAsync, which is what the issue
+    // names; the signal is suspension duration, orthogonal to the recovery
+    // *outcome* metering tracked separately by issue #2860.
+
+    /// <summary>
+    /// Live registry of leaf-split completions currently suspended inside
+    /// <c>CompleteSplitAsync</c>, keyed by a process-unique token and carrying
+    /// the tree the completion belongs to and the monotonic timestamp it
+    /// entered. Declared above the gauges that read it so their observation
+    /// callbacks can never see it uninitialised.
+    /// <para>
+    /// An entry lives for exactly as long as one call is suspended in the
+    /// completion body: added when the call enters and removed when the call
+    /// returns or throws. A completion that never resumes - the wedge this
+    /// exists to surface - keeps its entry, and its reported age climbs without
+    /// bound.
+    /// </para>
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, (string Tree, long StartTimestamp)>
+        LeafSplitCompletionsInFlightRegistry = new();
+
+    private static long _leafSplitCompletionToken;
+
+    /// <summary>
+    /// Registers a leaf-split completion as in flight for the duration of the
+    /// returned scope. Disposing the scope (normally via <c>using</c>)
+    /// deregisters it; a scope that is never disposed - a completion suspended
+    /// forever at an <c>await</c> - keeps the entry live, which is precisely the
+    /// state <see cref="LeafSplitCompletionsInFlight"/> and
+    /// <see cref="LeafSplitCompletionOldestAge"/> exist to make observable.
+    /// </summary>
+    public static LeafSplitCompletionScope EnterLeafSplitCompletion(string treeId)
+    {
+        var token = System.Threading.Interlocked.Increment(ref _leafSplitCompletionToken);
+        LeafSplitCompletionsInFlightRegistry[token] = (treeId ?? string.Empty, System.Diagnostics.Stopwatch.GetTimestamp());
+        return new LeafSplitCompletionScope(token);
+    }
+
+    /// <summary>
+    /// Disposable scope returned by <see cref="EnterLeafSplitCompletion"/>.
+    /// Removes its registry entry on <see cref="Dispose"/>. A value type so the
+    /// hot split path takes no per-completion heap allocation; it is never
+    /// copied because it is only ever bound by a <c>using</c> local.
+    /// </summary>
+    public readonly struct LeafSplitCompletionScope : IDisposable
+    {
+        private readonly long _token;
+
+        internal LeafSplitCompletionScope(long token) => _token = token;
+
+        /// <summary>Deregisters the in-flight completion this scope tracks.</summary>
+        public void Dispose() => LeafSplitCompletionsInFlightRegistry.TryRemove(_token, out _);
+    }
+
+    /// <summary>
+    /// Per-tree count of leaf-split completions currently suspended inside
+    /// <c>CompleteSplitAsync</c> (issue #2967). A sustained non-zero value with
+    /// a rising <see cref="LeafSplitCompletionOldestAge"/> is a division wedged
+    /// mid-completion, which the terminal outcome counters cannot name because
+    /// it has terminated on none of them.
+    /// </summary>
+    public static readonly ObservableGauge<long> LeafSplitCompletionsInFlight =
+        Meter.CreateObservableGauge("orleans.lattice.leaf.split.completion.in_flight",
+            ObserveLeafSplitCompletionsInFlight, unit: "{completion}",
+            description: "Leaf-split completions currently suspended inside CompleteSplitAsync, tagged by tree. Read with completion.oldest_age: a non-zero count whose oldest age climbs is a division wedged mid-completion, a state the divided/faulted outcome counters cannot name.");
+
+    /// <summary>Canonical name of <see cref="LeafSplitCompletionsInFlight"/>.</summary>
+    public const string LeafSplitCompletionsInFlightName = "orleans.lattice.leaf.split.completion.in_flight";
+
+    /// <summary>
+    /// Per-tree age in seconds of the oldest leaf-split completion currently
+    /// suspended inside <c>CompleteSplitAsync</c> (issue #2967), or no series
+    /// for a tree with none in flight. This is the signal that separates a
+    /// division that is merely momentarily in flight (age near zero, falling as
+    /// scrapes advance) from one that is stuck (age climbing without bound). It
+    /// is a measurement, not a threshold: the code encodes no age at which a
+    /// completion is declared abandoned, leaving that judgement to an operator
+    /// reading real values.
+    /// </summary>
+    public static readonly ObservableGauge<double> LeafSplitCompletionOldestAge =
+        Meter.CreateObservableGauge("orleans.lattice.leaf.split.completion.oldest_age",
+            ObserveLeafSplitCompletionOldestAge, unit: "s",
+            description: "Age in seconds of the oldest leaf-split completion currently suspended inside CompleteSplitAsync, tagged by tree (no series when none in flight). A climbing value is a division stuck mid-completion; a value near zero is healthy concurrency.");
+
+    /// <summary>Canonical name of <see cref="LeafSplitCompletionOldestAge"/>.</summary>
+    public const string LeafSplitCompletionOldestAgeName = "orleans.lattice.leaf.split.completion.oldest_age";
+
+    private static IEnumerable<Measurement<long>> ObserveLeafSplitCompletionsInFlight()
+    {
+        var counts = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var entry in LeafSplitCompletionsInFlightRegistry)
+        {
+            counts.TryGetValue(entry.Value.Tree, out var current);
+            counts[entry.Value.Tree] = current + 1;
+        }
+
+        foreach (var kv in counts)
+        {
+            yield return new Measurement<long>(
+                kv.Value,
+                new KeyValuePair<string, object?>(TagTree, kv.Key),
+                LatticeTenantLabel.ForTree(kv.Key));
+        }
+    }
+
+    private static IEnumerable<Measurement<double>> ObserveLeafSplitCompletionOldestAge()
+    {
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        var oldestStart = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var entry in LeafSplitCompletionsInFlightRegistry)
+        {
+            if (!oldestStart.TryGetValue(entry.Value.Tree, out var start) || entry.Value.StartTimestamp < start)
+            {
+                oldestStart[entry.Value.Tree] = entry.Value.StartTimestamp;
+            }
+        }
+
+        foreach (var kv in oldestStart)
+        {
+            var seconds = (now - kv.Value) / (double)System.Diagnostics.Stopwatch.Frequency;
+            if (seconds < 0)
+            {
+                seconds = 0;
+            }
+
+            yield return new Measurement<double>(
+                seconds,
+                new KeyValuePair<string, object?>(TagTree, kv.Key),
+                LatticeTenantLabel.ForTree(kv.Key));
+        }
+    }
+
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>immediate</c> on
     /// <see cref="LeafSnapshotHydrationAdmissions"/>: the hydration fitted inside

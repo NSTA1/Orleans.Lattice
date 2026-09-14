@@ -656,6 +656,15 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null)
     {
+        // Register this completion as in flight for as long as this call is
+        // suspended inside the method body (issue #2967). The scope disposes on
+        // every exit - return or throw - so a division that hangs at an await
+        // and never resumes keeps its registry entry, which is exactly what
+        // makes the wedge visible on LeafSplitCompletionOldestAge. Both the
+        // forward caller (SplitAsync) and the recovery caller
+        // (CompleteRecoverySplitUnderGateAsync) reach the completion through
+        // here, so both are covered by this single seam.
+        using var completionScope = LatticeMetrics.EnterLeafSplitCompletion(state.State.TreeId ?? string.Empty);
         var splitKey = state.State.SplitKey!;
         var siblingId = state.State.SplitSiblingId!.Value;
         var donorPreSplitHigh = state.State.HighKeyExclusive;
