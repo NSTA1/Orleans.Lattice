@@ -34,6 +34,13 @@ internal sealed class RepoContextIndexedRootReporter(
     ILogger<RepoContextIndexedRootReporter> logger) : BackgroundService
 {
     /// <summary>
+    /// The separators this reporter recognises, deliberately both of them on every
+    /// platform. See <see cref="IsIdRootMismatch"/> for why the platform's own separator
+    /// is the wrong question to ask about a path that describes another machine.
+    /// </summary>
+    private static readonly char[] Separators = ['/', '\\'];
+
+    /// <summary>
     /// Reports whether a repository's id disagrees with the final segment of the root it
     /// was indexed from - the exact shape of the defect in issue #2617, where the id read
     /// <c>lattice</c> and the root read <c>/workspace/bucket4-merge</c>.
@@ -57,21 +64,36 @@ internal sealed class RepoContextIndexedRootReporter(
             return false;
         }
 
-        var segment = indexedRoot
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[^1];
+        // The root describes the filesystem the INDEX was built from, which is not
+        // necessarily the one this process runs on. Parsing it with Path.* binds the
+        // answer to the wrong platform: Path.DirectorySeparatorChar on Linux is '/', so
+        // @"C:\dev\lattice" contains no separator at all, the whole string reads as its
+        // own final segment, and every correctly-registered Windows repository is
+        // reported as a mismatch. Split on both separators unconditionally, and take
+        // case sensitivity from the root's own shape rather than the host's.
+        var segment = indexedRoot.TrimEnd(Separators).Split(Separators)[^1];
 
         if (segment.Length == 0)
         {
             return false;
         }
 
-        var comparison = OperatingSystem.IsWindows()
+        var comparison = IsWindowsStyleRoot(indexedRoot)
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
 
         return !segment.Equals(repoId, comparison);
     }
+
+    /// <summary>
+    /// Reports whether a root is spelled in the Windows style, so the comparison can
+    /// follow the case rules of the filesystem being DESCRIBED rather than the one this
+    /// process happens to run on. A drive-qualified or backslash-separated root is
+    /// case-insensitive; a POSIX root is not.
+    /// </summary>
+    private static bool IsWindowsStyleRoot(string indexedRoot) =>
+        indexedRoot.Contains('\\', StringComparison.Ordinal)
+        || (indexedRoot.Length >= 2 && indexedRoot[1] == ':' && char.IsAsciiLetter(indexedRoot[0]));
 
     /// <summary>
     /// Logs the resolved workspace roots and each registered repository's indexed root,

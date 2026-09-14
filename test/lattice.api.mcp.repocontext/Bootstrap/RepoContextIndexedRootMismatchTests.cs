@@ -57,6 +57,15 @@ public sealed class RepoContextIndexedRootMismatchTests
             "A trailing separator is a spelling of the same path, not a different tree.");
     }
 
+    /// <summary>
+    /// The regression arm for a defect this fixture found in its own detector: the first
+    /// implementation split on <c>Path.DirectorySeparatorChar</c>, so a Windows-style root
+    /// has NO separators when the predicate runs on Linux. The whole string then reads as
+    /// its own final segment and a correctly-registered repository is reported as a
+    /// mismatch. It passed on a Windows developer machine and failed in CI, which is the
+    /// same shape as the defect the detector exists to find: an answer that agrees with
+    /// the platform it was run on rather than with the tree it describes.
+    /// </summary>
     [Test]
     public void Reads_the_final_segment_of_a_windows_style_root()
     {
@@ -68,6 +77,31 @@ public sealed class RepoContextIndexedRootMismatchTests
             Assert.That(
                 RepoContextIndexedRootReporter.IsIdRootMismatch("lattice", @"C:\dev\worktrees\umbrella"),
                 Is.True);
+            Assert.That(
+                RepoContextIndexedRootReporter.IsIdRootMismatch("lattice", "C:/dev/lattice"),
+                Is.False,
+                "A drive-qualified root spelled with forward slashes is the same path.");
+        });
+    }
+
+    /// <summary>
+    /// Case sensitivity follows the filesystem being DESCRIBED, not the one the host runs.
+    /// Reading it from <c>OperatingSystem.IsWindows()</c> is right only when the two
+    /// happen to agree, which is exactly the assumption that broke the segment split.
+    /// </summary>
+    [Test]
+    public void Takes_case_sensitivity_from_the_roots_own_spelling()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                RepoContextIndexedRootReporter.IsIdRootMismatch("lattice", @"C:\dev\Lattice"),
+                Is.False,
+                "A Windows path is case-insensitive, so this is the same directory.");
+            Assert.That(
+                RepoContextIndexedRootReporter.IsIdRootMismatch("lattice", "/workspace/Lattice"),
+                Is.True,
+                "A POSIX path is case-sensitive, so these are two different directories.");
         });
     }
 
