@@ -91,6 +91,29 @@ public sealed class RepoContextProvenanceExitCodeScriptTests
             Assert.Ignore("git is not available on this host, so the exit-code suite cannot build its sandbox.");
         }
 
+        // The -File below is LOAD-BEARING, not a style choice. The check further down reads a
+        // SPECIFIC exit code (GitAbsentExitCode = 3, "git absent") and distinguishes it from
+        // every other non-zero, which it reads as a failing-assertion count. Measured:
+        //
+        //   pwsh -NoProfile -File <script>          script really exits 3  ->  3   faithful
+        //   pwsh -NoProfile -Command "& <script>"   script really exits 3  ->  1   COLLAPSED
+        //
+        // -Command reports 1 for EVERY non-zero, so changing this one word would turn a
+        // reported skip into "1 assertion failed", and a real count of 5 into 1 as well. Zero
+        // is the only value it preserves, so the whole loss falls on the readings anyone acts
+        // on, inside the required check.
+        //
+        // The inverse is equally real, and is why "always use -File" is NOT the lesson here:
+        // pwsh -File DISCARDS a trailing $LASTEXITCODE when a script ends without an explicit
+        // exit, reporting 0 for a script that had just left 7 behind. That is issue #2718,
+        // whose regression coverage is the very suite this fixture runs. -Command destroys a
+        // real failure; -File manufactures a success. Neither flag is safe on its own. What is
+        // safe is the PAIRING: a site that reads a specific value needs -File AND a callee
+        // that exits explicitly, which Test-ProvenanceExitCode.ps1 does.
+        //
+        // Nothing enforces any of this. It is prose. No test asserts the pairing, and a future
+        // edit that flips this flag, or that adds a specific-value read through -Command
+        // elsewhere, will not be caught by anything. Read it as a warning, not a guarantee.
         var psi = new ProcessStartInfo(shell!, $"-NoProfile -File \"{SuitePath}\"")
         {
             RedirectStandardOutput = true,

@@ -1,6 +1,7 @@
 using System.Diagnostics.Metrics;
 using System.Text;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -43,35 +44,20 @@ public sealed class StorageUsageGaugeIntegrationTests
     /// <summary>
     /// Scrapes one observable gauge for one tree. Returns <c>null</c> when the
     /// gauge reported no measurement for that tree at all - the distinction
-    /// that separates "never measured" from "measured and zero".
+    /// that separates "never measured" from "measured and zero" - and throws
+    /// when it reported more than one.
+    /// <para>
+    /// The loud failure matters most here. This fixture runs a
+    /// <see cref="TestCluster"/>, which hosts several silos in one process and
+    /// therefore several <see cref="LatticeStorageUsageMetrics"/> sinks, so it
+    /// is precisely the fixture in which one tree could be described by two
+    /// sinks at once. The reader this replaced kept the last measurement it
+    /// saw, so it resolved that contradiction by callback order and reported
+    /// the result as a confident reading (issue #3004).
+    /// </para>
     /// </summary>
     private static long? ReadGauge(string instrument, string tree)
-    {
-        long? found = null;
-        using var listener = new MeterListener
-        {
-            InstrumentPublished = (inst, l) =>
-            {
-                if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter) && inst.Name == instrument)
-                {
-                    l.EnableMeasurementEvents(inst);
-                }
-            },
-        };
-        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
-        {
-            foreach (var t in tags)
-            {
-                if (t.Key == LatticeMetrics.TagTree && (string?)t.Value == tree)
-                {
-                    found = value;
-                }
-            }
-        });
-        listener.Start();
-        listener.RecordObservableInstruments();
-        return found;
-    }
+        => GaugeScrape.ReadSingle(LatticeMetrics.Meter, instrument, LatticeMetrics.TagTree, tree);
 
     /// <summary>
     /// The headline end-to-end regression for issue #2693. Before any deep

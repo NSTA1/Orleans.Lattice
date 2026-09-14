@@ -237,7 +237,13 @@ public sealed class RepositoryWideGateEnrolmentTests
     /// is by file name via <see cref="TypeNameForPath"/>, the same rule the population
     /// detector uses, so a fixture cannot be visible to one and invisible to the other.
     /// </summary>
-    private static IReadOnlyList<string> SourceFilesForType(string typeName) =>
+    /// <remarks>
+    /// Exposed to the assembly so that <c>RepositoryWideGateRunnerTests</c> can check the
+    /// runner's own name-to-source resolution against this one rather than standing up a
+    /// second resolver. Two independent resolvers are two things that can disagree with the
+    /// table silently, which is the divergence the gate list exists to make impossible.
+    /// </remarks>
+    internal static IReadOnlyList<string> SourceFilesForType(string typeName) =>
         TestSourceFiles()
             .Where(p => string.Equals(TypeNameForPath(p), typeName, StringComparison.Ordinal))
             .ToList();
@@ -493,6 +499,24 @@ public sealed class RepositoryWideGateEnrolmentTests
             selfExclusionFired,
             selfExclusionFiredOnDelegationArm);
     }
+
+    /// <summary>
+    /// The fixtures the gate table is expected to name, reconstructed from the source scan
+    /// and the two recorded partitions rather than read from the table.
+    /// <para>
+    /// Exposed so that <see cref="RepositoryWideGateRunnerTests"/> can compare the runner
+    /// script's emitted run list against a derivation that never parses the table. Comparing
+    /// the script's markdown parse against this fixture's markdown parse would be two parses
+    /// of one file, which agree by construction whenever both are wrong in the same way; this
+    /// compares a parse against a scan, which does not.
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyCollection<string> ExpectedDocumentedFixtures() =>
+        ComputePopulation()
+            .ScanningFixtures
+            .Where(static name => !RecordedNonInstrumentScanners.ContainsKey(name))
+            .Concat(RecordedNonScanningDocumentedGates.Keys)
+            .ToHashSet(StringComparer.Ordinal);
 
     private sealed record DocumentedTable(
         IReadOnlyDictionary<string, string> Rows,
