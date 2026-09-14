@@ -115,6 +115,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     private readonly Serializer _serializer;
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly ILogger<EmbeddingRepoContextVectorIngestor> _logger;
+    private readonly RepoContextCoverageProbeReporter? _coverageProbeReporter;
 
     /// <summary>
     /// The symbol arm's per-repository gap-back-fill backoff, carried across
@@ -216,13 +217,15 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// <param name="serializer">The Orleans serializer used to decode symbol records during symbol embedding. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger used to record fail-closed fallbacks. Must not be <see langword="null"/>.</param>
     /// <param name="embeddingProvider">The embedding provider, or <see langword="null"/> when the host bound none (search then degrades to keyword recall).</param>
+    /// <param name="coverageProbeReporter">Meters whether the store's read-path access gate is standing ingestion coverage down, or <see langword="null"/> in a host that registered none.</param>
     /// <exception cref="ArgumentNullException"><paramref name="writer"/>, <paramref name="grainFactory"/>, <paramref name="serializer"/>, or <paramref name="logger"/> is null.</exception>
     public EmbeddingRepoContextVectorIngestor(
         RepoContextVectorWriter writer,
         IGrainFactory grainFactory,
         Serializer serializer,
         ILogger<EmbeddingRepoContextVectorIngestor> logger,
-        IEmbeddingProvider? embeddingProvider = null)
+        IEmbeddingProvider? embeddingProvider = null,
+        RepoContextCoverageProbeReporter? coverageProbeReporter = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -233,6 +236,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         _serializer = serializer;
         _logger = logger;
         _embeddingProvider = embeddingProvider;
+        _coverageProbeReporter = coverageProbeReporter;
     }
 
     /// <inheritdoc />
@@ -371,6 +375,23 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 changedFiles.Count,
                 unchangedFiles.Count);
         }
+
+        // The file arm's single coverage-resolution seam (issue #2964). Exactly one
+        // of the three outcomes is charged per pass, and this sits ABOVE both of this
+        // method's early returns, so a zero on any arm means the seam was reached and
+        // that outcome did not occur - never that the seam was skipped.
+        //
+        // probe_failed is recorded even though a failed probe is transient and
+        // self-clearing, because the gate check immediately above is CONJOINED to
+        // !coverageProbeFailed: while the probe is failing the gate-pruned arm cannot
+        // advance, so its zero would otherwise be indistinguishable from health.
+        _coverageProbeReporter?.Record(
+            RepoContextCoverageProbeArm.File,
+            coverageProbeFailed
+                ? RepoContextCoverageProbeOutcome.ProbeFailed
+                : coverageGatePruned
+                    ? RepoContextCoverageProbeOutcome.GatePruned
+                    : RepoContextCoverageProbeOutcome.Conclusive);
 
         // How this pass paid for detection (issue #2486). Logged rather than metered
         // so the change adds no instrument and therefore binds no dashboard or metrics
@@ -775,6 +796,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 {
                     firstProbeFailure ??= ex;
                     probeFailures++;
+                    _coverageProbeReporter?.Record(
+                        RepoContextCoverageProbeArm.Symbol,
+                        RepoContextCoverageProbeOutcome.ProbeFailed);
                     _logger.LogWarning(
                         ex,
                         "Repo {RepoId}: the embedding-coverage probe failed for a page of {Count} symbol(s); skipping "
@@ -796,6 +820,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // condition inside a transient one's diagnostics.
                 if (!embeddedMembers.AbsenceIsConclusive)
                 {
+                    _coverageProbeReporter?.Record(
+                        RepoContextCoverageProbeArm.Symbol,
+                        RepoContextCoverageProbeOutcome.GatePruned);
                     _logger.LogWarning(
                         "Repo {RepoId}: the embedding-coverage probe for a page of {Count} symbol(s) had "
                         + "{Pruned} key(s) removed by the store's read-path access gate, so absence from it "
@@ -808,6 +835,15 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     token = page.HasMore ? page.ContinuationToken : null;
                     continue;
                 }
+
+                // The symbol arm resolved coverage it can trust. Charged here rather
+                // than once per pass because this arm stands down PER PAGE, so a
+                // per-pass tally would hide a pass in which most pages were pruned
+                // (issue #2964). The three symbol arms therefore advance per page, and
+                // are not comparable with the file arm's per-pass tally.
+                _coverageProbeReporter?.Record(
+                    RepoContextCoverageProbeArm.Symbol,
+                    RepoContextCoverageProbeOutcome.Conclusive);
             }
 
             foreach (var record in page.Records)

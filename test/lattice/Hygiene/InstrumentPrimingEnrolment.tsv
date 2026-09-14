@@ -14,6 +14,7 @@ src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexSweepReporter.cs#_a
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexSweepReporter.cs#_armingAttempts	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnPartitioningReporter.cs#_partitioning	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnPartitioningReporter.cs#_repartitions	primed	
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextCoverageProbeReporter.cs#_probes	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextMemoryMarkerScanReporter.cs#_markerScans	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_annSearches	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactGatherFaults	unresolved	reason=dimension fault: no declaration found for fault
