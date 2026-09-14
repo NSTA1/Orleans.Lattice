@@ -176,6 +176,26 @@ public sealed class TenantMetricDimensionHygieneTests
         "SweepsCounter",
         "TreesMismatchedCounter",
         "TreesProbedCounter",
+        // orleans.lattice.wal.gc.scheduler.* - the six liveness instruments on the
+        // per-silo WAL GC scheduler (issue #3060). The scheduler is ONE hosted
+        // BackgroundService per silo, running one loop that sweeps every tree
+        // sequentially within a single pass. Whether that loop is alive, where it
+        // is parked, how long its pass took, how it terminated, and what its tree
+        // enumeration returned are all properties of THE SILO'S SCHEDULER rather
+        // than of any tenant: there is exactly one loop, so when it stops it stops
+        // for every tenant at the same instant. A tenant tag would partition a
+        // series that has one value, and worse, it would attribute a silo-wide
+        // stall to whichever tenant's tree happened to be in flight when the loop
+        // died, which is not a fact about that tenant. The per-tree work the loop
+        // performs is tenant-labelled elsewhere: a consumer asking whether its own
+        // tree was collected is served by orleans.lattice.wal.gc.passes and the
+        // tree-tagged wal.gc.* family. These six answer the strictly prior
+        // question, "is the sweeper running at all", which has no tenant.
+        "WalGcSchedulerEnumerations",
+        "WalGcSchedulerPassDuration",
+        "WalGcSchedulerPassesStarted",
+        "WalGcSchedulerTerminations",
+        "WalGcSchedulerWait",
         // orleans.lattice.wal.replay.permit_adaptations - memory-adaptive backpressure
         // on the per-silo WAL replay concurrency gate (issue #2781). The gate is a
         // single process-wide SemaphoreSlim shared by every leaf of every tree, so
