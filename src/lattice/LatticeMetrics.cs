@@ -2217,6 +2217,53 @@ public static class LatticeMetrics
             tags: null,
             advice: WalReplayPermitQueueWaitAdvice);
 
+    /// <summary>
+    /// Count of WAL GC starvation drives abandoned at
+    /// <see cref="LatticeOptions.StarvationDriveBudget"/> with their replay
+    /// permit forcibly released, tagged by tree (issue #3065).
+    /// <para>
+    /// <b>This is the sole discriminator for the fault it reports, and that is a
+    /// consequence of the fix rather than a design preference.</b> Before the
+    /// budget existed, a drive parked in host-supplied storage held its permit
+    /// for the life of the process, and the signature a reader used to recognise
+    /// it was <c>attempted</c> climbing while <c>undelivered</c> and
+    /// <c>drove_already_driving</c> climbed with it. A bounded drive reproduces
+    /// that signature exactly: the scheduler's touch abandons at the Orleans
+    /// response deadline, which is far below this budget, so every bounded drive
+    /// that outlives its caller emits one <c>undelivered</c> per cadence tick and
+    /// answers <c>AlreadyDriving</c> to each retry until it terminates. Those
+    /// arms therefore no longer separate "slow and recovering" from "wedged", and
+    /// this counter is what does.
+    /// </para>
+    /// <para>
+    /// <b>Zero-primed alongside <c>attempted</c> in the scheduler's
+    /// <c>PrimeRetentionSeries</c>, deliberately and not at the drive itself.</b>
+    /// Priming at the drive would mint the series only once a drive had been
+    /// entered, so an absent series would be equally consistent with "no drive
+    /// has ever run here" and with "this build is not deployed" - and that second
+    /// reading is the ambiguity this epic has lost the most time to, because a
+    /// counter present in source and absent from the running container makes
+    /// every downstream reading uninterpretable. Co-priming with an instrument
+    /// that is known to fire converts absence into a positive statement:
+    /// <c>attempted &gt; 0</c> with this series present and flat means measured
+    /// and never abandoned, while <c>attempted &gt; 0</c> with this series absent
+    /// means the build carrying the budget is not running here. Do not "tidy"
+    /// the priming back to the drive entry point; the co-presence is the point.
+    /// </para>
+    /// <para>
+    /// Tagged <c>tree</c> plus the universal derived <c>tenant</c> dimension,
+    /// which the leaf grain resolves from the same tree id the scheduler does, so
+    /// the zero the scheduler primes and the one the grain records share a single
+    /// series identity. It is a separate instrument rather than a new arm
+    /// on <see cref="WalGcBlockedLeafReactivations"/> because the verdict arms
+    /// there partition <c>attempted</c> by construction, and a grain-side arm
+    /// recorded on a different schedule would break that sum.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalReplayStarvationDriveAbandonments =
+        Meter.CreateCounter<long>("orleans.lattice.wal.replay.starvation_drive_abandonments",
+            description: "Count of WAL GC starvation drives abandoned at their configured budget with the replay permit forcibly released, tagged by tree. Zero-primed alongside the blocked-leaf 'attempted' arm, so an absent series means this build is not deployed rather than that no drive has been abandoned.");
+
     // ---- Issue #3044: permit waits that never terminate --------------------
     //
     // WalReplayPermitQueueWait records on exactly two arms and BOTH are
@@ -3849,24 +3896,35 @@ public static class LatticeMetrics
     /// <c>DriveOutcomeTag_arms_every_declared_starvation_drive_verdict</c>.
     /// Reachability is established by
     /// <c>ExecuteAsync_records_each_drive_verdict_on_its_own_arm_and_no_other</c>
-    /// as a 5x5 identity matrix on the same principle as the 4x4 above.
+    /// as a 6x6 identity matrix on the same principle as the 4x4 above.
     /// </para>
     /// <para>
     /// The check is deliberately one-directional - every terminal outcome must
     /// have an arm, not every arm must be a terminal outcome - because
     /// <c>attempted</c>, <c>healed</c>, <c>abandoned</c> and <c>rearmed</c> are
-    /// lifecycle events rather than members of that enum, as are the five drive
+    /// lifecycle events rather than members of that enum, as are the six drive
     /// verdicts, which belong to a different enum again. A symmetric check would
-    /// reject nine legitimate arms. The accepted cost is that the four
+    /// reject ten legitimate arms. The accepted cost is that the four
     /// lifecycle arms are unguarded in both directions: were <c>healed</c>
     /// dropped from the recording path, no fixture here would catch it. The
     /// general form that would cover them without re-introducing that arity
     /// mismatch is tracked as issue #2939.
     /// </para>
+    /// <para>
+    /// <b><c>drove_timed_out</c> (issue #3065) is armed here but is not the
+    /// instrument to read for the fault it names.</b> It records only when the
+    /// scheduler's touch outlives the drive, and the touch abandons at the
+    /// Orleans response deadline while the drive's budget is far longer - so in
+    /// the wedged case this arm is structurally silent and the grain-side
+    /// <see cref="WalReplayStarvationDriveAbandonments"/> is the discriminator.
+    /// It is a first-class arm regardless, because folding an abandoned drive
+    /// into <c>drove_no_advance</c> would report a timeout as an ordinary
+    /// no-op, which is the misfiling the enum's own contract forbids.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> WalGcBlockedLeafReactivations =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
-            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving, issue #2692) are what came of driving a starved leaf's replay forward. All thirteen are zero-primed per tree per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out, issues #2692 and #3065) are what came of driving a starved leaf's replay forward. All fourteen are zero-primed per tree per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
@@ -4542,6 +4600,37 @@ public static class LatticeMetrics
     /// </remarks>
     public static readonly KeyValuePair<string, object?> BlockedLeafReactivationDroveAlreadyDriving =
         new(TagOutcome, "drove_already_driving");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a drive abandoned at
+    /// <see cref="LatticeOptions.StarvationDriveBudget"/>, its replay permit
+    /// forcibly released and its in-flight latch cleared (issue #3065).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A first-class arm rather than a fold into
+    /// <see cref="BlockedLeafReactivationDroveNoAdvance"/>, because an abandoned
+    /// drive and a drive that ran to completion without advancing are different
+    /// events with different remedies: the first says storage did not answer
+    /// within the budget, the second says there was nothing to absorb. Reporting
+    /// the first as the second is the misfiling the verdict enum's contract
+    /// forbids, and <c>DriveOutcomeTag</c> throwing on an unmapped member is the
+    /// mechanism that forces this arm to exist.
+    /// </para>
+    /// <para>
+    /// <b>Structurally silent in the wedged case, and that is expected.</b> This
+    /// arm is recorded scheduler-side, from the value the touch returns; the
+    /// touch abandons at the Orleans response deadline, which is well below the
+    /// drive budget, so a drive that actually reaches its budget has already
+    /// been given up on by the caller that would have recorded this. It counts
+    /// abandonments the scheduler stayed to witness. The grain-side
+    /// <see cref="WalReplayStarvationDriveAbandonments"/> counts all of them and
+    /// is the arm to read when diagnosing a wedged gate.
+    /// </para>
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationDroveTimedOut =
+        new(TagOutcome, "drove_timed_out");
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a

@@ -1603,6 +1603,35 @@ internal sealed class LatticeWalGcScheduler(
         RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationAbandoned, treeTag, tenantTag, 0);
         RecordBlockedLeafReactivation(LatticeMetrics.BlockedLeafReactivationRearmed, treeTag, tenantTag, 0);
 
+        // Zero-prime the grain-side starvation-drive abandonment counter here,
+        // beside 'attempted', rather than at the drive that records it (issue
+        // #3065).
+        //
+        // This looks like the wrong file for it - the counter is emitted by
+        // BPlusLeafGrain, not by the scheduler - and the reason it is here is
+        // the whole value of the priming. Minted at the drive, the series would
+        // exist only once a drive had been entered, so an absent series would be
+        // equally consistent with "no drive has run on this silo" and with "this
+        // build is not deployed". This epic has lost more time to that second
+        // reading than to any other single cause: a zero-primed counter present
+        // in source and absent from the running container made every downstream
+        // reading uninterpretable, and there was no way to tell from the outside.
+        //
+        // Primed beside an instrument that is known to fire, absence becomes a
+        // positive statement. 'attempted' > 0 with this series present and flat
+        // reads as measured-and-never-abandoned; 'attempted' > 0 with this series
+        // absent reads as this build not being deployed. The deployment proof is
+        // free and it is the reason not to move this.
+        //
+        // Tagged tree-and-tenant, exactly as the leaf grain tags it at the
+        // recording site (it derives the same LatticeTenantLabel.ForTree from the
+        // same tree id). A prime whose tag set differs from the emitter's mints a
+        // series shape the emitter can never match, which is worse than not
+        // priming at all: the primed series stays at zero forever while the real
+        // one appears beside it, so the absence-is-a-deployment-proof reading
+        // above silently stops holding.
+        LatticeMetrics.WalReplayStarvationDriveAbandonments.Add(0, treeTag, tenantTag);
+
         // The four above are lifecycle events and are named individually because
         // there is no enum to derive them from. The terminal outcomes are primed
         // by walking the enum instead of by listing them (issue #2938), which
@@ -2496,6 +2525,7 @@ internal sealed class LatticeWalGcScheduler(
             LeafStarvationDriveOutcome.NoAdvance => LatticeMetrics.BlockedLeafReactivationDroveNoAdvance,
             LeafStarvationDriveOutcome.MemoryRefused => LatticeMetrics.BlockedLeafReactivationDroveMemoryRefused,
             LeafStarvationDriveOutcome.AlreadyDriving => LatticeMetrics.BlockedLeafReactivationDroveAlreadyDriving,
+            LeafStarvationDriveOutcome.TimedOut => LatticeMetrics.BlockedLeafReactivationDroveTimedOut,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(outcome),
                 outcome,
