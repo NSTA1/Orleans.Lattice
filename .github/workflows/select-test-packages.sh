@@ -365,6 +365,14 @@ fi
 #    seeded when a non-markdown file under src/<name>/, test/<name>/ or
 #    docs/<name>/ changed.
 #
+#    The `docs/<name>/` arm of that glob matches nothing on this tree, and says
+#    so deliberately rather than being deleted: every file under `docs/` is
+#    markdown, and markdown is discarded one statement earlier, so the arm is
+#    live only for a non-markdown docs asset (an image, a JSON fixture) that
+#    does not exist yet. Markdown docs that ARE test inputs are seeded by
+#    derivation in section 4c instead, because the lexical rule cannot tell a
+#    doc a fixture reads from one no test has ever opened (issue #2974).
+#
 #    Matching is by literal bash glob rather than the previous
 #    `grep -E "^(src|test|docs)/${name}/"`. Package names contain '.', which an
 #    ERE reads as "any character", so the old pattern was wider than intended;
@@ -377,6 +385,7 @@ declare -A seedNodeSet=()
 declare -A seedNodelessPackage=()
 declare -A seededByPath=()
 declare -A seededBySample=()
+declare -A seededByDoc=()
 
 # Directory -> the csproj declared directly in it, so a changed file can be
 # mapped to the project that actually compiles it by walking up its parents.
@@ -417,10 +426,18 @@ for name in "${packages[@]}"; do
         if [ -n "$OWNING_NODE" ]; then
           seedNodeSet["$OWNING_NODE"]=1
         else
-          # A changed file under the package that no csproj compiles (a
-          # docs/<name>/ asset, say). It cannot be reasoned about at node
-          # level, so fall back to this package's whole node set rather than
-          # expanding from nothing - never narrow on the unknown case.
+          # A changed file under the package that no csproj compiles. It cannot
+          # be reasoned about at node level, so fall back to this package's
+          # whole node set rather than expanding from nothing - never narrow on
+          # the unknown case.
+          #
+          # The reachable case is a package with no csproj at its own root:
+          # `src/lattice.explorer/` ships several assemblies from
+          # subdirectories, so a file directly at that root has no owning node.
+          # A `docs/<name>/` asset would also land here, but cannot today - the
+          # arm above discards `*.md` and `docs/` holds nothing else, which is
+          # why markdown doc dependencies are derived in 4c instead of seeded
+          # lexically here (issue #2974).
           seedNodelessPackage["$name"]=1
         fi
         ;;
@@ -588,6 +605,171 @@ if [ "$sampleDependentsOnly" = true ]; then
   exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# 4c. Doc -> test-project dependency seeding (issue #2974).
+#
+#     Section 4 skips `*.md` BEFORE its path match, so a changed file under
+#     `docs/<name>/` never reaches the seed. Eight markdown files under `docs/`
+#     are read as test INPUTS - `docs/lattice/metrics.md` by
+#     `MetricsDocCoverageTests`, `docs/lattice.dashboards/metrics-to-panel-map.md`
+#     by `DashboardJsonTests` and ~12 `*MetricsDocCoverageTests`, and so on. For
+#     those files 4b's sentence is true verbatim: a doc IS the body of a test,
+#     and skipping it leaves the gate's stated reason false for exactly the
+#     change it was reporting on.
+#
+#     WHAT THE SYMPTOM ACTUALLY IS, because it is not the obvious one and the
+#     obvious one is safe. A docs-ONLY change seeds nothing, so `seeded` is
+#     empty, so the no-match fallback below fans out to every package. That
+#     over-selects; it cannot miss a test. The hazard is the MIXED change: edit
+#     a doc together with any source file and the seed is non-empty, the
+#     fallback never fires, and the doc contributes nothing - so the package
+#     whose fixtures read it is silently absent. Measured on this tree before
+#     the fix: `src/lattice.storage.file/**` alone selects 2 packages, and
+#     adding `docs/lattice.explorer/what-the-explorer-remembers.md` still
+#     selects the same 2. The fallback is what masks the defect in the easy
+#     case and is absent in the dangerous one.
+#
+#     The edge is derived from the test sources rather than declared in a list,
+#     exactly as 4b derives the sample edge, so it cannot drift from them. A
+#     test source depends on a package's docs when it names that package in a
+#     DOC PATH SHAPE - the segment `docs`, a separator, then the package name -
+#     covering every spelling this tree uses:
+#
+#       "docs/lattice/metrics.md"                        (literal path)
+#       Path.Combine("docs", "lattice.api.mcp.repocontext")   (segments)
+#       <c>docs/lattice.dashboards/metrics-to-panel-map.md</c> (doc comment)
+#
+#     Keying on the PACKAGE rather than on the individual file is deliberate.
+#     One of those spellings is a directory plus a glob - `["*.md"]` - which no
+#     file-level key can express, and the script's own rule for the case it
+#     cannot resolve is to widen rather than narrow. A package-level key errs
+#     toward selecting a leg that had no doc dependency; a file-level key would
+#     err toward dropping one that did.
+#
+#     Matching on the path shape rather than the bare package name is not a
+#     detail, for the same reason 4b gives: `lattice` alone occurs in nearly
+#     every test source and would select the repository. The shape occurs only
+#     where a doc is genuinely addressed. A `docs/` path whose first segment is
+#     not a package - `docs/RELEASING.md`, `docs/crdt/` - resolves to no
+#     package and is skipped, so prose-only docs keep costing nothing.
+# ---------------------------------------------------------------------------
+declare -A isPackage=()
+for name in "${packages[@]}"; do
+  isPackage["$name"]=1
+done
+
+changedDocPackages=()
+declare -A changedDocPackageSet=()
+docSeededPackages=()
+
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  case "$f" in
+    docs/*/*.md)
+      rest="${f#docs/}"
+      candidate="${rest%%/*}"
+      if [ -n "${isPackage[$candidate]-}" ] && [ -z "${changedDocPackageSet[$candidate]-}" ]; then
+        changedDocPackageSet["$candidate"]=1
+        changedDocPackages+=("$candidate")
+      fi
+      ;;
+  esac
+done <<< "$changed"
+
+if [ ${#changedDocPackages[@]} -gt 0 ]; then
+  # One grep over the test sources, run only when a package-owned doc actually
+  # changed, so an ordinary source change pays nothing for this section.
+  docRefPattern="docs[\"']?[[:space:]]*[,/\\\\][[:space:]]*[\"']?[A-Za-z0-9._-]+"
+
+  declare -A docConsumerNodes=()
+  docRefCount=0
+  docSeedSuppressed=false
+
+  while IFS= read -r -d '' record; do
+    [ -n "$record" ] || continue
+    refFile="${record%%:*}"
+    refMatch="${record#*:}"
+    refName="${refMatch#docs}"
+    # Strip the separator run. The separator characters (quote, comma, slash,
+    # backslash, whitespace) are disjoint from the name characters, so this
+    # cannot eat into the name.
+    while [ -n "$refName" ]; do
+      case "$refName" in
+        [A-Za-z0-9_.-]*) break ;;
+        *) refName="${refName#?}" ;;
+      esac
+    done
+    [ -n "${isPackage[$refName]-}" ] || continue
+    owning_node "$refFile"
+    [ -n "$OWNING_NODE" ] || continue
+    case " ${docConsumerNodes[$refName]-} " in
+      *" $OWNING_NODE "*) ;;
+      *)
+        docConsumerNodes["$refName"]="${docConsumerNodes[$refName]-} ${OWNING_NODE}"
+        docRefCount=$((docRefCount + 1))
+        ;;
+    esac
+  done < <(grep -rzoHE "$docRefPattern" \
+             --include='*.cs' --include='*.csproj' --include='*.ps1' \
+             --include='*.json' --include='*.props' --include='*.targets' \
+             --include='*.runsettings' \
+             --exclude-dir=bin --exclude-dir=obj \
+             test || true)
+
+  # Assert the denominator rather than trusting the scan, for the same reason
+  # 4b does. This tree DOES contain docs-path references today, so a scan that
+  # resolves none of them is broken - a changed grep flag, a lost --include, a
+  # pattern that no longer matches how the paths are spelled - and the symptom
+  # would otherwise be a selection that is silently too narrow, which is
+  # indistinguishable from a doc that genuinely has no test dependent. Without
+  # this the remedy has the same failure mode as the defect it fixes.
+  if [ "$docRefCount" -eq 0 ]; then
+    echo "::error::select-test-packages.sh: the doc-dependency scan resolved 0 references from test/ to any docs/<package>/ path. This tree contains such references, so the scan is broken and a change to a doc that IS the body of a test would select no leg for it (issue #2974)." >&2
+    exit 1
+  fi
+
+  # Additive only: doc seeding must never SUPPRESS the zero-match fallback.
+  #
+  # At this point `seeded` and `seedNodeSet` hold exactly the non-doc seeds,
+  # because sections 4 and 4b are the only earlier writers. If they are empty
+  # the change is markdown-only, and markdown-only changes are pinned by the
+  # self-test's 5b arm to fall through to the fallback and fan out to every
+  # package - so seeding here would not merely be unnecessary, it would
+  # NARROW that case from every package to a derived set. Narrowing is the
+  # direction that fails silently: a doc reference this scan does not resolve
+  # would drop a leg that the fallback used to cover, and nothing would say so.
+  #
+  # Skipping the seed leaves the selection a strict superset of the previous
+  # behaviour on every input. The defect #2974 describes lives entirely in the
+  # MIXED change, where another file has already seeded, the fallback therefore
+  # does not fire, and the doc previously contributed nothing:
+  #
+  #   src/lattice.storage.file/FileStore.cs                      -> 2 packages
+  #   + docs/lattice.explorer/what-the-explorer-remembers.md     -> 2 packages
+  #
+  # That is the case this loop exists for, and it is the only one it changes.
+  if [ ${#seeded[@]} -eq 0 ] && [ ${#seedNodeSet[@]} -eq 0 ]; then
+    docSeedSuppressed=true
+  else
+    for d in "${changedDocPackages[@]}"; do
+      for node in ${docConsumerNodes[$d]-}; do
+        seedNodeSet["$node"]=1
+        owner="${ownerOf[$node]-}"
+        [ -n "$owner" ] || continue
+        if [ -z "${seededByPath[$owner]-}" ] && [ -z "${seededBySample[$owner]-}" ] \
+           && [ -z "${seededByDoc[$owner]-}" ]; then
+          seededByDoc["$owner"]=1
+          seeded+=("$owner")
+        fi
+        case " ${docSeededPackages[*]-} " in
+          *" $owner "*) ;;
+          *) docSeededPackages+=("$owner") ;;
+        esac
+      done
+    done
+  fi
+fi
+
 declare -A selectedSet=()
 declare -A reasonOf=()
 fallback=false
@@ -616,6 +798,8 @@ else
     selectedSet["$s"]=1
     if [ -n "${seededByPath[$s]-}" ]; then
       reasonOf["$s"]="changed"
+    elif [ -n "${seededByDoc[$s]-}" ]; then
+      reasonOf["$s"]="reads a changed doc"
     else
       reasonOf["$s"]="reads a changed sample"
     fi
@@ -669,6 +853,10 @@ emit_report() {
     if [ ${#sampleSeededPackages[@]} -gt 0 ]; then
       echo
       echo "Of those, \`${sampleSeededPackages[*]}\` was seeded because a changed sample (\`${changedSamples[*]}\`) is named by one of its test sources (#2653)."
+    fi
+    if [ ${#docSeededPackages[@]} -gt 0 ]; then
+      echo
+      echo "Of those, \`${docSeededPackages[*]}\` was seeded because a changed doc under \`docs/${changedDocPackages[*]}/\` is named by one of its test sources (#2974)."
     fi
   fi
   echo
