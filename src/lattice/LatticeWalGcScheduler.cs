@@ -648,7 +648,7 @@ internal sealed class LatticeWalGcScheduler(
     /// Every declared terminal outcome, cached once.
     /// </summary>
     /// <remarks>
-    /// Cached because the priming path walks it per tree per pass and
+    /// Cached because the priming path walks it once per tree and
     /// <see cref="Enum.GetValues{TEnum}"/> allocates a fresh array on each call.
     /// Derived from the enum rather than written out, so it cannot fall behind
     /// the type it describes - which is the failure this whole issue is about.
@@ -1206,6 +1206,15 @@ internal sealed class LatticeWalGcScheduler(
         TimeSpan interval,
         CancellationToken stoppingToken)
     {
+        // Reachability layer (issue #3075). Taken as the very first statement,
+        // above every exit below, so that every terminating path out of this
+        // method is accounted for against it. Advancing rather than priming is
+        // load-bearing: Add(0) is idempotent on a counter, so a primed series
+        // establishes only that the region was reached at least once and can
+        // never say it was reached on this pass - which is the question a flat
+        // wal.gc.interval or wal.gc.passes actually raises.
+        RecordPassReach(LatticeMetrics.ReachPassEntered);
+
         WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.Enumerating, tree: null, _time);
 
         IReadOnlyList<string> treeIds;
@@ -1223,6 +1232,8 @@ internal sealed class LatticeWalGcScheduler(
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
+            RecordPassReach(LatticeMetrics.ReachRegistryCancelled);
+
             // An orderly silo shutdown. Recorded rather than returned silently:
             // before this arm existed, this was the quietest of the three exits
             // from this method, emitting neither a log line nor a metric, so a
@@ -1258,6 +1269,7 @@ internal sealed class LatticeWalGcScheduler(
             // discrimination instead, which is where a reader who needs the
             // cause is already looking.
             RecordEnumeration(WalGcEnumerationOutcome.TimedOut);
+            RecordPassReach(LatticeMetrics.ReachRegistryTimedOut);
             var elapsed = _time.GetUtcNow() - enumerationStartedAt;
             logger.LogWarning(
                 "WAL GC scheduler abandoned the registry enumeration after {Elapsed} against a {Budget} budget, "
@@ -1304,6 +1316,7 @@ internal sealed class LatticeWalGcScheduler(
                 ex,
                 "WAL GC scheduler failed to enumerate trees ({ConsecutiveFaults} consecutive); will retry on the next tick.",
                 _consecutiveFaults);
+            RecordPassReach(LatticeMetrics.ReachRegistryFailed);
             var faultWait = Faulted(minInterval, interval);
             return new PassDecision(faultWait, BackoffCause.Faulted, faultWait);
         }
@@ -1331,12 +1344,24 @@ internal sealed class LatticeWalGcScheduler(
             var treeId = treeIds[i];
             if (stoppingToken.IsCancellationRequested)
             {
+                RecordPassReach(LatticeMetrics.ReachLoopCancelled);
                 return new PassDecision(minInterval, BackoffCause.Scheduled, minInterval);
             }
             if (string.IsNullOrEmpty(treeId))
             {
                 continue;
             }
+
+            // Recorded for every enumerated tree, due or not. Paired with
+            // tree_collected below: the difference between the two is the set
+            // skipped by the not-yet-due continue further down, which is the
+            // healthy majority on any given pass rather than a fault.
+            var seenTreeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+            LatticeMetrics.WalGcTreeReach.Add(
+                1,
+                seenTreeTag,
+                LatticeMetrics.ReachTreeSeen,
+                LatticeTenantLabel.ForTree(treeId));
 
             if (!_cadence.TryGetValue(treeId, out var cadence))
             {
@@ -1388,6 +1413,7 @@ internal sealed class LatticeWalGcScheduler(
             // No collectable tree is registered yet. Relax on the same schedule
             // a quiet tree would, so an empty silo costs nothing while a silo
             // whose first tree is about to register still picks it up promptly.
+            RecordPassReach(LatticeMetrics.ReachNoDueTree);
             var quietWait = Quiet(minInterval, interval);
             return new PassDecision(quietWait, BackoffCause.Empty, quietWait);
         }
@@ -1396,9 +1422,11 @@ internal sealed class LatticeWalGcScheduler(
         var wait = earliestDueTicks - _time.GetUtcNow().UtcTicks;
         if (wait <= 0)
         {
+            RecordPassReach(LatticeMetrics.ReachPassCompletedImmediate);
             return new PassDecision(TimeSpan.Zero, BackoffCause.Scheduled, minInterval);
         }
 
+        RecordPassReach(LatticeMetrics.ReachPassCompletedScheduled);
         return new PassDecision(
             TimeSpan.FromTicks(wait > interval.Ticks ? interval.Ticks : wait),
             BackoffCause.Scheduled,
@@ -1556,6 +1584,15 @@ internal sealed class LatticeWalGcScheduler(
     {
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        // Reachability layer (issue #3075), above every exit of this method and
+        // therefore above both wal.gc.passes and the wal.gc.interval record at
+        // the tail. This is the arm that licenses reading a flat interval or
+        // passes series as measured rather than as never-executed: without it,
+        // a pass that returned early here and a pass that ran and found nothing
+        // are the same absence. It must stay above PrimeRetentionSeries, whose
+        // own latch makes it silent from the second collection onward.
+        LatticeMetrics.WalGcTreeReach.Add(1, treeTag, LatticeMetrics.ReachTreeCollected, tenantTag);
 
         WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingPriming, treeId, _time);
 
@@ -2052,6 +2089,34 @@ internal sealed class LatticeWalGcScheduler(
         in KeyValuePair<string, object?> treeTag,
         in KeyValuePair<string, object?> tenantTag)
         => LatticeMetrics.WalGcPasses.Add(delta, treeTag, outcome, tenantTag);
+
+    /// <summary>
+    /// Records one pass-level arm of the WAL GC reachability layer (issue
+    /// #3075) under the reserved <see cref="LatticeMetrics.TreeNone"/> tree.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The sentinel is structurally required, not a convenience. Two of the
+    /// exits this layer covers are the <c>catch</c> arms of the tree-registry
+    /// enumeration itself: at those points obtaining the tree list is the
+    /// operation that failed, so there is no tree id to label the measurement
+    /// with and there never can be. The tenant is the reserved platform value
+    /// for the same reason - a pass belongs to the silo, not to any tenant.
+    /// </para>
+    /// <para>
+    /// Every arm advances by one. A zero-priming layer cannot answer the
+    /// question this one exists for: <c>Add(0)</c> is idempotent on a counter's
+    /// exported value, so primed-once and primed-continuously are
+    /// byte-identical, and a primed series therefore proves only that the
+    /// region was reached at least once - never that it was reached now.
+    /// </para>
+    /// </remarks>
+    private static void RecordPassReach(in KeyValuePair<string, object?> stage)
+        => LatticeMetrics.WalGcPassReach.Add(
+            1,
+            LatticeMetrics.TreeNoneTag,
+            stage,
+            LatticeTenantLabel.Platform);
 
     /// <summary>
     /// Maps the cursor-floor state of a pass that trimmed nothing onto the
@@ -2945,7 +3010,7 @@ internal sealed class LatticeWalGcScheduler(
     /// Every declared starvation-drive verdict, cached once.
     /// </summary>
     /// <remarks>
-    /// Cached because the priming path walks it per tree per pass and
+    /// Cached because the priming path walks it once per tree and
     /// <see cref="Enum.GetValues{TEnum}"/> allocates a fresh array on each call.
     /// Derived from the enum rather than written out, so it cannot fall behind
     /// the type it describes.

@@ -4030,7 +4030,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcBlockedLeafReactivations =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
-            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out, issues #2692 and #3065) are what came of driving a starved leaf's replay forward. All fourteen are zero-primed per tree per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out, issues #2692 and #3065) are what came of driving a starved leaf's replay forward. All fourteen are zero-primed once per tree per process, latched on the tree's first collection rather than repeated per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
@@ -4051,9 +4051,9 @@ public static class LatticeMetrics
     /// <para>
     /// Every arm is zero-primed, and primed twice over. Each tree mints all
     /// four arms under the reserved partition value
-    /// <see cref="PartitionNone"/> on every pass, above every early return, so
-    /// an absent series means the classifier is not running on this silo rather
-    /// than that nothing was classified. Each classified
+    /// <see cref="PartitionNone"/> on the first pass that collects it, above
+    /// every early return, so an absent series means the classifier is not
+    /// running on this silo rather than that nothing was classified. Each classified
     /// <c>(tree, partition)</c> then mints all four of its own arms before
     /// recording the one it resolved, so a zero on a state reads as
     /// measured-and-not-this-state rather than as silence. Absence on this
@@ -4067,7 +4067,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcBlockingPinStates =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocking_pin_state", unit: "{consumer}",
-            description: "Durable-pin state of each absent consumer blocking a WAL GC pass (issue #3042), tagged by tree, partition and status. 'checkpointed_uncovered' is repairable: the leaf durably checkpointed the partition but published an unusable pin because snapshot coverage is absent. 'never_checkpointed' is correct by design and has no repair: the leaf holds live data it has never checkpointed, so there is no WAL offset it could honestly claim. 'no_durable_state' is a fourth thing and not a flavour of either: the provider answered and reported nothing ever persisted for that leaf. 'unreadable' reports a failure of the classifier itself - an unparseable consumer id, no storage provider on this silo, or a read that threw - and is kept separate so a defect in the measurement is never rendered as a finding about the system. Classified by a direct storage-provider read that never activates the leaf, once per consumer per blocked episode. All four arms are zero-primed per tree per pass under partition 'none', and again per classified partition. Diagnostic only: it never changes what a pass is allowed to trim.");
+            description: "Durable-pin state of each absent consumer blocking a WAL GC pass (issue #3042), tagged by tree, partition and status. 'checkpointed_uncovered' is repairable: the leaf durably checkpointed the partition but published an unusable pin because snapshot coverage is absent. 'never_checkpointed' is correct by design and has no repair: the leaf holds live data it has never checkpointed, so there is no WAL offset it could honestly claim. 'no_durable_state' is a fourth thing and not a flavour of either: the provider answered and reported nothing ever persisted for that leaf. 'unreadable' reports a failure of the classifier itself - an unparseable consumer id, no storage provider on this silo, or a read that threw - and is kept separate so a defect in the measurement is never rendered as a finding about the system. Classified by a direct storage-provider read that never activates the leaf, once per consumer per blocked episode. All four arms are zero-primed once per tree per process under partition 'none', latched on the tree's first collection rather than repeated per pass, and again per classified partition. That priming establishes that the classifier is wired on this silo and nothing more: Add(0) is idempotent on a counter's exported value, so a primed series can never show that the region ran on any particular pass - see 'orleans.lattice.wal.gc.reach' for the advancing layer that can. Diagnostic only: it never changes what a pass is allowed to trim.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockingPinStates"/>.</summary>
     public const string WalGcBlockingPinStatesName = "orleans.lattice.wal.gc.blocking_pin_state";
@@ -4077,8 +4077,10 @@ public static class LatticeMetrics
     /// reachability priming of <see cref="WalGcBlockingPinStates"/>.
     /// <para>
     /// A real classification always carries the numeric partition it resolved.
-    /// This value is minted on every pass for every tree, whether or not the
-    /// tree is blocked, so that the instrument has a series on a silo where
+    /// This value is minted once per tree per process - on the first pass that
+    /// collects the tree, and again only if the tree is de-registered and
+    /// returns - whether or not the tree is blocked, so that the instrument has
+    /// a series on a silo where
     /// nothing has ever blocked - which is what makes an absent series a
     /// positive statement ("the classifier is not wired here") instead of an
     /// ambiguous one.
@@ -4128,6 +4130,271 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> BlockingPinUnreadable =
         new(TagStatus, "unreadable");
+
+    /// <summary>
+    /// How far each WAL GC scheduling pass actually got: the reachability layer
+    /// for every instrument sited inside the region that stops executing when
+    /// the scheduler degrades (issue #3075).
+    /// <para>
+    /// <b>The problem it solves.</b> <see cref="WalGcInterval"/> and
+    /// <see cref="WalGcPasses"/> are recorded inside <c>CollectTreeAsync</c>,
+    /// which a pass reaches only after clearing several earlier exits. When one
+    /// of those exits is taken the instruments simply do not advance, and a
+    /// series that exists and does not advance is byte-identical to one being
+    /// measured as zero. The usual remedy - site the instrument outside the
+    /// failing region - is unavailable, because the quantity being counted only
+    /// exists inside it.
+    /// </para>
+    /// <para>
+    /// <b>Why this counter advances rather than priming zeros.</b> A
+    /// zero-priming layer cannot answer the question. <c>Add(0)</c> is
+    /// idempotent on a counter's exported value, so a series primed once and a
+    /// series primed ten thousand times both read <c>0</c>; priming can
+    /// establish only that a region was reached <i>at least once</i>, never
+    /// that it was reached on this pass. Every arm here is incremented by one,
+    /// so a rate is observable: a non-zero rate proves the region is executing
+    /// <i>now</i>, a zero rate on a present series proves it <i>stopped</i>,
+    /// and an absent series proves the build is not deployed. That is a
+    /// three-way discrimination where priming gives two.
+    /// </para>
+    /// <para>
+    /// <b>The completeness invariant, and the bound it actually takes.</b>
+    /// Every terminating path out of a pass carries exactly one exit arm, so
+    /// <c>pass_entered</c> accounts for the seven exit arms
+    /// (<see cref="ReachRegistryCancelled"/>, <see cref="ReachRegistryFailed"/>,
+    /// <see cref="ReachRegistryTimedOut"/>,
+    /// <see cref="ReachLoopCancelled"/>, <see cref="ReachNoDueTree"/>,
+    /// <see cref="ReachPassCompletedImmediate"/> and
+    /// <see cref="ReachPassCompletedScheduled"/>). The relation is <b>not</b> an
+    /// equality in general:
+    /// <code>
+    /// 0 &lt;= pass_entered - (sum of exit arms) &lt;= concurrent passes in flight
+    /// </code>
+    /// and with a single scheduler loop that bound is one. <c>pass_entered</c>
+    /// is taken before the work and an exit arm after it, so a pass that is
+    /// running right now is legitimately counted in the first and not yet in
+    /// the second. Equality holds only at <b>quiescence</b> - after the
+    /// scheduler has stopped and its execute task has been awaited. A started
+    /// counter exceeding a completed counter by the in-flight set is
+    /// information, not a defect; it is a violation only where quiescence has
+    /// been independently established. Asserted as an equality anywhere else -
+    /// in a test that does not stop the scheduler, or in a production alert -
+    /// it flaps once per pass forever and is muted, at which point the guard is
+    /// gone and nothing says so.
+    /// </para>
+    /// <para>
+    /// <b>What the invariant guards.</b> It fails when the <i>population</i> of
+    /// exits changes, not when a known member changes: an early return added to
+    /// a pass without an arm unbalances the sum. That is strictly stronger than
+    /// counting occurrences of a pattern, which returns a clean number and
+    /// misses the siblings - occurrence-counting is what reported four exits
+    /// where the source has eight.
+    /// </para>
+    /// <para>
+    /// <b>Reading it.</b> The pass-level arms carry the reserved tree value
+    /// <see cref="TreeNone"/>, so any aggregation over the <see cref="TagTree"/>
+    /// dimension must filter <c>tree!="_none_"</c> or every pass is counted
+    /// alongside the trees it visited.
+    /// </para>
+    /// <para>
+    /// <b><see cref="ReachTreeSeen"/> and <see cref="ReachTreeCollected"/> are a
+    /// pair and neither half is interpretable alone.</b> Their difference is
+    /// the set of trees skipped because the adaptive interval had not elapsed.
+    /// That set is <i>expected to be large and non-zero</i> in a healthy
+    /// steady state - on any given pass most registered trees are not yet due -
+    /// so a large gap is the normal reading and not a fault. Read alone,
+    /// <c>tree_collected</c> understates coverage and <c>tree_seen</c>
+    /// overstates it; record and read both.
+    /// </para>
+    /// <para>
+    /// Diagnostic only - it never changes what a pass is allowed to trim.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcPassReach =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.pass.reach", unit: "{pass}",
+            description: "How far each WAL GC scheduling pass got, tagged by stage (issue #3075). Reachability layer for the instruments sited inside the region that stops executing: 'wal.gc.interval' and 'wal.gc.passes' are recorded inside CollectTreeAsync, so an exit taken above them leaves both silent and a non-advancing series is indistinguishable from a measured zero. Every arm advances by one rather than priming a zero, because Add(0) is idempotent on a counter and so priming can only ever establish that a region was reached at least once, never that it was reached on this pass: a non-zero rate here proves the region is executing now, a zero rate on a present series proves it stopped, and an absent series proves the build is not deployed. Every arm ('pass_entered', 'registry_cancelled', 'registry_timed_out', 'registry_failed', 'loop_cancelled', 'no_due_tree', 'pass_completed_immediate', 'pass_completed_scheduled') carries the reserved tree value '_none_' and the platform tenant sentinel, because a pass is a scheduler-wide event that spans the whole registry and no tree id or tenant is knowable at the two registry exits - enumerating the trees is the operation that failed. Query it without a tree or tenant filter; the per-tree half of the layer is the separate 'wal.gc.tree.reach'. 'pass_entered' accounts for the seven exit arms, but it is taken before the work and an exit arm after it, so the correct relation is 0 <= pass_entered - (sum of exit arms) <= passes in flight, which is one for a single scheduler loop; assert equality only at quiescence, and alert on the inequality or it will flap once per pass. That relation is the guard against an early return added without an arm. Diagnostic only: it never changes what a pass is allowed to trim.");
+
+    /// <summary>Canonical name of <see cref="WalGcPassReach"/>.</summary>
+    public const string WalGcPassReachName = "orleans.lattice.wal.gc.pass.reach";
+
+    /// <summary>
+    /// Per-tree half of the WAL GC reachability layer (issue #3075): how far a
+    /// pass got <i>for one tree</i>, tagged by stage.
+    /// <para>
+    /// <b>Why this is a separate instrument from
+    /// <see cref="WalGcPassReach"/> rather than two stages of one.</b> The two
+    /// halves have different attribution subjects, and an instrument may only
+    /// have one. A pass spans the entire registry, so it belongs to no tenant
+    /// and carries <see cref="LatticeTenantLabel.Platform"/>; a tree visit
+    /// belongs to exactly the tenant that owns the tree, exactly as its
+    /// siblings <see cref="WalGcPasses"/> and <see cref="WalGcInterval"/> do.
+    /// Emitting both under one instrument would split its series across two
+    /// attribution rules, so a tenant-scoped query would silently return the
+    /// per-tree arms and drop the pass-level ones - and dropping
+    /// <c>pass_entered</c> is precisely the reading that says whether the
+    /// scheduler ran at all. Deriving a tenant for a pass instead would satisfy
+    /// the same check by inventing an attribution that does not exist.
+    /// </para>
+    /// <para>
+    /// The split costs no analysis, because neither reading spans the two: the
+    /// completeness invariant is entirely pass-level, and the
+    /// <see cref="ReachTreeSeen"/>/<see cref="ReachTreeCollected"/> pair is
+    /// entirely per-tree.
+    /// </para>
+    /// <para>
+    /// Diagnostic only - it never changes what a pass is allowed to trim.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcTreeReach =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.tree.reach", unit: "{tree}",
+            description: "How far each WAL GC scheduling pass got for one tree, tagged by stage and tree (issue #3075). Per-tree half of the reachability layer for the instruments sited inside the region that stops executing: 'wal.gc.interval' and 'wal.gc.passes' are recorded inside CollectTreeAsync, so an exit taken above them leaves both silent and a non-advancing series is indistinguishable from a measured zero. Both arms advance by one rather than priming a zero, because Add(0) is idempotent on a counter and so priming can only ever establish that a region was reached at least once, never that it was reached on this pass. 'tree_seen' and 'tree_collected' are a pair and neither half is interpretable alone: their difference is the set of trees skipped because the adaptive interval had not elapsed, which is expected to be large and non-zero in a healthy steady state, so a large gap is the normal reading and not a fault. 'tree_collected' is the arm that licenses reading a flat 'wal.gc.interval' or 'wal.gc.passes' for that tree as measured rather than as never-executed. This instrument is tenant-derived like its siblings; the scheduler-wide half of the layer, which belongs to no tenant, is the separate 'wal.gc.pass.reach'. Diagnostic only: it never changes what a pass is allowed to trim.");
+
+    /// <summary>Canonical name of <see cref="WalGcTreeReach"/>.</summary>
+    public const string WalGcTreeReachName = "orleans.lattice.wal.gc.tree.reach";
+
+    /// <summary>
+    /// Reserved <see cref="TagTree"/> value carried by the pass-level arms of
+    /// <see cref="WalGcPassReach"/>, which describe a scheduling pass as a whole
+    /// rather than any one tree.
+    /// <para>
+    /// A sentinel is structurally required here rather than merely convenient.
+    /// Two of the exits the layer must cover are the <c>catch</c> arms of the
+    /// registry enumeration itself, and at those points the tree list is what
+    /// failed to be obtained - there is no tree id to label the measurement
+    /// with, and there never can be.
+    /// </para>
+    /// <para>
+    /// This is the <see cref="PartitionNone"/> convention applied to a second
+    /// dimension, not a second convention. It takes the underscore-delimited
+    /// form for a reason that is specific to this dimension: a partition is
+    /// numeric, so the bare value <c>none</c> cannot collide with a real one,
+    /// whereas a tree id is a caller-supplied string and a tree could
+    /// legitimately be named <c>none</c>. The underscore-delimited shape
+    /// matches the reserved
+    /// <see cref="LatticeTenantLabel.PlatformTenant"/> sentinel and the
+    /// <c>_lattice_</c> system tree namespace.
+    /// </para>
+    /// </summary>
+    public const string TreeNone = "_none_";
+
+    /// <summary>
+    /// The <see cref="TagTree"/> tag carrying <see cref="TreeNone"/>, frozen so
+    /// the pass-level arms allocate nothing per pass.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> TreeNoneTag =
+        new(TagTree, TreeNone);
+
+    /// <summary>
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> recorded as the
+    /// first statement of a pass, above every exit. It is the denominator the
+    /// other pass-level arms are read against.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReachPassEntered =
+        new(TagStage, "pass_entered");
+
+    /// <summary>
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass that
+    /// ended because enumerating the tree registry was cancelled - host
+    /// shutdown, not a fault.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReachRegistryCancelled =
+        new(TagStage, "registry_cancelled");
+
+    /// <summary>
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass that
+    /// ended because enumerating the tree registry threw. Kept distinct from
+    /// <see cref="ReachRegistryCancelled"/>: one is orderly shutdown and the
+    /// other is a fault, and a layer that merged them would report a wedged
+    /// registry as a clean stop.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReachRegistryFailed =
+        new(TagStage, "registry_failed");
+
+    /// <summary>
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass
+    /// that ended because the scheduler's own enumeration budget fired.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kept apart from <see cref="ReachRegistryFailed"/> for the reason the
+    /// scheduler keeps the two <c>catch</c> arms apart: a fault is a property
+    /// of the registry and a timeout is a property of the bound we chose, so
+    /// folding the second into the first would let a decision of ours present
+    /// as a finding about the system.
+    /// </para>
+    /// <para>
+    /// This arm was <b>missing</b> from the layer as first shipped, and the
+    /// way it was missed is the reason it is documented at length. The
+    /// <c>catch (TimeoutException)</c> it accounts for was inserted ahead of
+    /// the general fault arm by a later change, and an insertion is invisible
+    /// to every detector that reasons about the arms already present: the
+    /// balance relation sees only the exits a fixture drives, and no fixture
+    /// drove this one. The same insertion silently migrated an unrelated
+    /// file's fault tests onto the new arm. An exit added between two covered
+    /// exits is the cheapest coverage hole in the file to open and the most
+    /// expensive to notice.
+    /// </para>
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> ReachRegistryTimedOut =
+        new(TagStage, "registry_timed_out");
+
+    /// <summary>
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass
+    /// cancelled part-way through its tree loop, so an arbitrary suffix of the
+    /// registered trees went uncollected on that pass.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReachLoopCancelled =
+        new(TagStage, "loop_cancelled");
+
+    /// <summary>
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass that
+    /// completed its loop without finding a single collectable tree.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReachNoDueTree =
+        new(TagStage, "no_due_tree");
+
+    /// <summary>
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass that
+    /// ran to completion and found its successor already due, so the scheduler
+    /// does not sleep. Kept distinct from
+    /// <see cref="ReachPassCompletedScheduled"/> because a sustained rate here
+    /// is a scheduler running flat out, which is an operational state worth
+    /// seeing and costs one string to preserve.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReachPassCompletedImmediate =
+        new(TagStage, "pass_completed_immediate");
+
+    /// <summary>
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass that
+    /// ran to completion and scheduled its successor for a future due time -
+    /// the ordinary healthy exit.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReachPassCompletedScheduled =
+        new(TagStage, "pass_completed_scheduled");
+
+    /// <summary>
+    /// <see cref="TagStage"/> value on <see cref="WalGcTreeReach"/> for a tree the
+    /// pass enumerated and considered. Recorded per tree per pass, whether or
+    /// not the tree was due.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReachTreeSeen =
+        new(TagStage, "tree_seen");
+
+    /// <summary>
+    /// <see cref="TagStage"/> value on <see cref="WalGcTreeReach"/> for a tree
+    /// whose collection was actually entered, recorded above every exit of that
+    /// collection. This is the arm that licenses reading a flat
+    /// <see cref="WalGcInterval"/> or <see cref="WalGcPasses"/> as measured
+    /// rather than as never-executed.
+    /// <para>
+    /// <see cref="ReachTreeSeen"/> minus this arm is the population skipped
+    /// because its adaptive interval had not elapsed. That is the healthy
+    /// steady state, not a fault: on any given pass most registered trees are
+    /// not yet due.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReachTreeCollected =
+        new(TagStage, "tree_collected");
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on
