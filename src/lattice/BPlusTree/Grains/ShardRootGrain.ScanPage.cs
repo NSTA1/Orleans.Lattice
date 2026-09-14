@@ -491,7 +491,15 @@ internal sealed partial class ShardRootGrain
                 return partial;
             }
 
-            throw ScanPageStalled(walk, oce);
+            var stall = ScanPageStalled(walk, oce);
+
+            // Awaited before the throw rather than fired and forgotten, so the
+            // durable record the fault reports is committed by the time the
+            // caller sees it. Best-effort inside: a storage failure here must
+            // not replace the fault that names the wedge (issue #3016).
+            await FlushStrandedLeafRecoveryAsync();
+
+            throw stall;
         }
         catch
         {
@@ -851,6 +859,7 @@ internal sealed partial class ShardRootGrain
         var progress = ClassifyScanPageStall(walk);
         var stranded = progress == ScanPageLeafProgress.Stranded;
         var consecutive = _consecutiveZeroProgressStalls;
+        var applications = stranded ? state.State.StrandedScanRecoveries : 0;
 
         // Deliberately in the message and the typed slot only, never a metric
         // tag: leaf identity is unbounded cardinality, and the counter above is
@@ -878,12 +887,24 @@ internal sealed partial class ShardRootGrain
                 + "no leaf and named this same leaf, so the leaf is classified UNREADABLE rather "
                 + "than slow: retrying it unchanged has already been tried and did not differ. The "
                 + "coalesced read the retries were attaching to has been abandoned so the next "
-                + "attempt issues a fresh one; if this recurs with the count still climbing, the "
-                + "leaf activation itself is not answering."
+                + "attempt issues a fresh one."
             : consecutive > 1
                 ? $" This is the {consecutive}th consecutive ceiling fire on this shard that "
                     + "completed no leaf and named this same leaf."
                 : string.Empty;
+
+        // The did-the-remedy-take clause. The run above is bounded by this
+        // activation, and a freshly activated shard root holds no coalesced
+        // reads - so its eviction is a no-op and its stall reads identically to
+        // a first-ever stall however long the leaf has been unreadable. This
+        // count is durable precisely so that reading cannot recur (issue #3016).
+        var took = stranded && applications > 1
+            ? $" The recovery has now been applied to this leaf {applications} times across every "
+                + "activation of this shard root, so a fresh read was already issued on an earlier "
+                + "occasion and the leaf still did not answer: the fault is inside that leaf "
+                + "activation rather than in this shard root's read coalescing, and no further "
+                + "scan attempt will converge without the leaf being made readable."
+            : string.Empty;
 
         return new ScanPageStalledException(
             $"{walk.Operation} on shard {MyShardIndex} of tree '{TreeId}' exceeded the "
@@ -892,7 +913,7 @@ internal sealed partial class ShardRootGrain
             + $"{nameof(LatticeOptions.MaxScanPageDuration)} is sampled between leaf reads, so it "
             + "cannot stop a single await that never returns; the page fill is abandoned so the "
             + "shard stops being held and the operation can be retried from its last continuation "
-            + $"token.{run}", cause)
+            + $"token.{run}{took}", cause)
         {
             TreeId = TreeId ?? string.Empty,
             ShardIndex = MyShardIndex,
@@ -902,6 +923,7 @@ internal sealed partial class ShardRootGrain
             LeafInFlight = leafInFlight?.ToString(),
             ConsecutiveZeroProgressStalls = consecutive,
             LeafStranded = stranded,
+            StrandedRecoveryApplications = applications,
             TimeoutSeconds = walk.StallDuration.TotalSeconds,
         };
     }

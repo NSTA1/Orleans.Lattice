@@ -236,19 +236,126 @@ internal sealed partial class ShardRootGrain
     private void RecoverStrandedLeaf(GrainId leafId)
     {
         var abandoned = EvictScanPageLeafReads(leafId);
+        var applications = NoteStrandedLeafRecoveryApplied(leafId);
 
         logger.LogWarning(
             "Shard {Shard} of tree '{Tree}' has classified leaf {Leaf} unreadable after {Stalls} "
             + "consecutive scan-page ceiling fires that completed no leaf. {Abandoned} coalesced "
             + "read(s) for that leaf were abandoned so the next attempt issues a fresh read "
-            + "instead of attaching to the parked one; if the stranded arm of "
-            + "orleans.lattice.shard_root.scan_page.zero_progress_stalls keeps climbing after "
-            + "this, the leaf itself is not answering and the fault is inside that activation "
-            + "rather than in this shard root.",
+            + "instead of attaching to the parked one. This recovery has now been applied to this "
+            + "leaf {Applications} time(s) across every activation of this shard root; once that "
+            + "count exceeds one, an earlier attempt already issued a fresh read and the leaf "
+            + "still did not answer, so the fault is inside that leaf activation rather than in "
+            + "this shard root and no further scan attempt will converge.",
             MyShardIndex,
             TreeId,
             leafId,
             _consecutiveZeroProgressStalls,
-            abandoned);
+            abandoned,
+            applications);
+    }
+
+    /// <summary>
+    /// Records, <b>durably</b>, that the stranded-leaf recovery has been applied
+    /// to <paramref name="leafId"/>, and returns the resulting count for that
+    /// leaf across every activation of this shard root (issue #3016).
+    /// <para>
+    /// <b>Why this one quantity is persisted when the run that produces it is
+    /// not.</b> The consecutive run is evidence about the coalesced read this
+    /// activation is parked on, and the remedy it selects acts on that
+    /// activation's own map, so both are correctly activation-scoped -
+    /// persisting the run would strand a fresh activation's first stall on a
+    /// verdict reached about a read it never held. This count is evidence about
+    /// the <em>leaf</em>, and specifically about whether the remedy took. A
+    /// fresh activation holds no coalesced reads, so its eviction is
+    /// necessarily a no-op and its stall is byte-identical to a first-ever
+    /// stall; the observation "a fresh read was already issued and the leaf
+    /// still did not answer" is therefore one that no single activation can
+    /// ever make about itself. Keeping it in memory is what left the deployed
+    /// corpus in issue #3016 reporting 307 attempts that were indistinguishable
+    /// from healthy retry.
+    /// </para>
+    /// <para>
+    /// <b>Not cleared on the success path, deliberately.</b> Clearing would
+    /// have to happen on every settled page fill - the hot read path - to be
+    /// timely, and would put a storage write there to maintain a field that is
+    /// read only when a leaf strands. A stale record costs nothing: it is read
+    /// only by a later stranding, where "this leaf has been classified
+    /// unreadable before" remains true and remains the useful reading. A
+    /// different leaf stranding resets it, so the count always names the leaf
+    /// it is reported against.
+    /// </para>
+    /// <para>
+    /// The write itself is deferred to <see cref="FlushStrandedLeafRecoveryAsync"/>
+    /// because this runs inside the synchronous construction of the fault, which
+    /// must carry the new count in its typed slot before the persist can be
+    /// awaited.
+    /// </para>
+    /// </summary>
+    private int NoteStrandedLeafRecoveryApplied(GrainId leafId)
+    {
+        var id = leafId.ToString();
+        if (state.State.StrandedScanLeafId == id)
+        {
+            state.State.StrandedScanRecoveries++;
+        }
+        else
+        {
+            state.State.StrandedScanLeafId = id;
+            state.State.StrandedScanRecoveries = 1;
+        }
+
+        _strandedLeafRecoveryNeedsPersist = true;
+        return state.State.StrandedScanRecoveries;
+    }
+
+    /// <summary>
+    /// Set by <see cref="NoteStrandedLeafRecoveryApplied"/> when the in-memory
+    /// state has been advanced and the matching storage write is still owed.
+    /// </summary>
+    private bool _strandedLeafRecoveryNeedsPersist;
+
+    /// <summary>
+    /// Persists a pending stranded-leaf recovery record, immediately before the
+    /// fault that carries it is thrown. A no-op unless a recovery was applied on
+    /// this page fill, so the ordinary stall path and the entire success path
+    /// pay nothing.
+    /// <para>
+    /// <b>Best-effort by design.</b> This runs on a shard that is already
+    /// failing its page fills, and the value being written is diagnostic. A
+    /// storage write that throws here must not replace the
+    /// <see cref="ScanPageStalledException"/> - which names the actual wedge and
+    /// is what the caller retries on - with a storage fault that names the
+    /// symptom's bookkeeping. The in-memory advance survives the failed write
+    /// for this activation's remaining lifetime, so the count is still correct
+    /// for every fault raised until the activation ends, and a later stranding
+    /// re-attempts the write.
+    /// </para>
+    /// </summary>
+    private async Task FlushStrandedLeafRecoveryAsync()
+    {
+        if (!_strandedLeafRecoveryNeedsPersist)
+        {
+            return;
+        }
+
+        _strandedLeafRecoveryNeedsPersist = false;
+        try
+        {
+            await WriteShardStateAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Shard {Shard} of tree '{Tree}' could not persist the stranded-leaf recovery record "
+                + "for leaf {Leaf}. The count is still correct for the remaining lifetime of this "
+                + "activation and will be re-attempted on the next stranding, but if this "
+                + "activation ends first the record is lost and a later activation will report the "
+                + "next stranding of that leaf as its first.",
+                MyShardIndex,
+                TreeId,
+                state.State.StrandedScanLeafId);
+        }
     }
 }

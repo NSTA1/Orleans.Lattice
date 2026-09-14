@@ -166,6 +166,33 @@ public sealed class ScanPageStalledException : TimeoutException
     /// </para>
     /// </summary>
     [Id(8)] public bool LeafStranded { get; set; }
+
+    /// <summary>
+    /// How many times this shard root has applied the stranded-leaf recovery to
+    /// <see cref="LeafInFlight"/>, counting this occurrence, across <b>every
+    /// activation of the shard root</b> and not merely the current one
+    /// (issue #3016). Zero when the fire did not reach the classification.
+    /// <para>
+    /// <see cref="ConsecutiveZeroProgressStalls"/> and
+    /// <see cref="LeafStranded"/> together say that retrying <em>the read this
+    /// activation is parked on</em> has been tried and does not differ, and the
+    /// remedy for that is to stop waiting on it. This field answers the
+    /// question that remedy raises and nothing else can: <b>did dropping it
+    /// help?</b>
+    /// </para>
+    /// <para>
+    /// One means the recovery has just been applied for the first time; the
+    /// next attempt will issue a genuinely fresh read and may well succeed.
+    /// <b>Greater than one means it already did that and the leaf still did not
+    /// answer</b>, so the fault is inside the leaf activation rather than in the
+    /// shard root's coalescing, and no number of further scan attempts will
+    /// converge. That distinction cannot be drawn from within one activation,
+    /// because a freshly activated shard root holds no coalesced reads and its
+    /// eviction is a no-op - so its stall looks identical to a first-ever
+    /// stall no matter how long the leaf has been unreadable.
+    /// </para>
+    /// </summary>
+    [Id(9)] public int StrandedRecoveryApplications { get; set; }
 }
 
 /// <summary>
