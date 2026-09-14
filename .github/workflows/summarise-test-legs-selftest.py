@@ -114,7 +114,7 @@ def leg(leg_id: str, items: list[dict]) -> dict:
     return {"leg": {"id": leg_id, "name": f"leg {leg_id}", "estimate": 0.1}, "items": items}
 
 
-def run_aggregator(legs: list[dict]) -> tuple[int, str]:
+def run_aggregator(legs: list[dict], script: str | None = None) -> tuple[int, str]:
     """Invoke the unmodified script over a synthesised results directory."""
     work = tempfile.mkdtemp(prefix="summarise-selftest-")
     try:
@@ -123,13 +123,45 @@ def run_aggregator(legs: list[dict]) -> tuple[int, str]:
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle)
         completed = subprocess.run(
-            [sys.executable, SCRIPT, "--results-dir", work, "--expect-legs", str(len(legs))],
+            [sys.executable, script or SCRIPT,
+             "--results-dir", work, "--expect-legs", str(len(legs))],
             capture_output=True,
             text=True,
         )
         return completed.returncode, completed.stdout
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def perturbed_copy(work: str, old: str, new: str) -> str | None:
+    """Write a copy of the subject with one mutation applied.
+
+    Returns None when the pattern did not match exactly once, so a pattern that
+    has drifted out of date is a hard failure rather than a mutation that
+    silently did nothing and left the check passing for the wrong reason.
+
+    The original is opened only for reading. Nothing reverts it, because
+    nothing modifies it - which removes the failure mode where a revert does
+    not apply and a stale artefact is scored as green.
+    """
+    with open(SCRIPT, "r", encoding="utf-8", newline="") as handle:
+        source = handle.read()
+
+    # The subject may be stored with either line ending. A pattern written with
+    # '\n' matches nothing in a CRLF checkout, so take the separator from the
+    # file rather than assuming it.
+    eol = "\r\n" if "\r\n" in source else "\n"
+    old = old.replace("\n", eol)
+    new = new.replace("\n", eol)
+
+    if source.count(old) != 1:
+        return None
+
+    path = os.path.join(work, "perturbed.py")
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(source.replace(old, new))
+    return path
+
 
 
 def main() -> int:
@@ -264,6 +296,76 @@ def main() -> int:
         )
     else:
         passed("the aggregate rendered its report.")
+
+    # -----------------------------------------------------------------------
+    # D. SELF-VALIDATION. Can this suite fail at all?
+    #
+    # Cases A to C establish what the guard does. They do not establish that
+    # this file would notice if it stopped doing it - and a self-test that
+    # cannot redden is worth precisely as much as the untested guard it
+    # replaced. The mutations below are the answer to "name a change that
+    # would redden this assertion": they are named here, in the repository,
+    # and re-checked on every run, rather than performed by hand once and
+    # recorded in a commit message.
+    #
+    # Each mutation is applied to a COPY. The subject is never opened for
+    # writing, so there is no revert and therefore no revert that silently
+    # fails to apply.
+    #
+    # Skipped when the operator has already pointed SUMMARISE_TEST_LEGS at a
+    # deliberately broken script: perturbing an already-perturbed subject
+    # proves nothing.
+    # -----------------------------------------------------------------------
+    if os.environ.get("SUMMARISE_TEST_LEGS"):
+        print("  self-validation: skipped (SUMMARISE_TEST_LEGS overrides the subject)")
+    else:
+        mutations = [
+            (
+                "the guard renders its section but does not fail the run",
+                "    if silent:\n        ok = False\n",
+                "    if silent:\n        ok = ok\n",
+                [leg("leg-1", [
+                    item("pkgA", "shardX", "chaos", 0, "empty"),
+                    item("pkgA", "shardX", "coyote", 0, "empty"),
+                ])],
+                1,
+                "case A would still have passed against a guard that never fails the run",
+            ),
+            (
+                "the guard is re-keyed from the shard to the individual item",
+                'per_shard[(item["package"], item["shard"])] += item["executed"]',
+                'per_shard[(item["package"], item["shard"], item["tier"])] += item["executed"]',
+                [leg("leg-1", [
+                    item("pkgA", "shardX", "chaos", 0, "empty"),
+                    item("pkgA", "shardX", "deterministic", 355, "passed"),
+                ])],
+                0,
+                "case B would still have passed against a guard keyed on the wrong unit",
+            ),
+        ]
+
+        work = tempfile.mkdtemp(prefix="summarise-selftest-mutate-")
+        try:
+            for label, old, new, payload, unmutated_code, consequence in mutations:
+                check()
+                broken = perturbed_copy(work, old, new)
+                if broken is None:
+                    fail(
+                        f"the mutation '{label}' no longer matches the subject exactly "
+                        "once, so this suite's ability to fail is unproven; the pattern "
+                        "has drifted and must be updated alongside the script."
+                    )
+                    continue
+
+                mutated_code, _ = run_aggregator(payload, script=broken)
+                print(f"  self-validation ({label}): exit={mutated_code} "
+                      f"(unmutated {unmutated_code})")
+                if mutated_code == unmutated_code:
+                    fail(f"{consequence}, so that assertion is not testing what it claims.")
+                else:
+                    passed(f"reintroducing '{label}' reddens this suite.")
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
     # -----------------------------------------------------------------------
     # 0 (concluded). The population assertion, checked last so it counts every
