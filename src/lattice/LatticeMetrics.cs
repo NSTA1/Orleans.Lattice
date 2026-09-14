@@ -4830,6 +4830,68 @@ public static class LatticeMetrics
     public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafReadServedTag =
         new(TagOutcome, "served");
 
+    /// <summary>
+    /// Count of shard-root page-fill ceiling fires that made <b>zero</b>
+    /// progress - no leaf completed - tagged with whether the leaf they named
+    /// is merely slow this once or has now missed the ceiling on enough
+    /// consecutive attempts to be classified unreadable (issue #3016). Tagged
+    /// with <see cref="TagTree"/>, <see cref="TagShard"/> and
+    /// <see cref="TagOutcome"/>.
+    /// <para>
+    /// <b>This is the counter that separates a wedge from healthy retry, which
+    /// no other instrument here can do.</b> <see cref="ScanPageStalls"/> counts
+    /// fires and <see cref="ScanPageCeilingOutcomes"/> counts what was done
+    /// with the rows, and both report a scan that stalls at leaf 1 on the same
+    /// leaf 307 times running exactly as they report 307 stalls spread over 307
+    /// different leaves that each recovered. Those are opposite conditions: the
+    /// second is a busy tree making progress, the first is a corpus that cannot
+    /// converge at all and will not converge on its own however many times it is
+    /// retried. Reading them apart needs the <em>consecutiveness</em> of the
+    /// zero-progress fires on one leaf identity, which is a per-shard-root
+    /// quantity no counter can reconstruct after the fact.
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><c>slow</c> - a zero-progress fire whose leaf has not yet
+    ///   reached the consecutive-stall threshold. This is the expected reading
+    ///   for a leaf replaying a long WAL window from cold, or queued behind one
+    ///   slow call: it is a stall, and it is not evidence of a wedge.</item>
+    ///   <item><c>stranded</c> - the same leaf has now missed the ceiling on
+    ///   <c>StrandedLeafStallThreshold</c> consecutive attempts with nothing
+    ///   read on any of them. The leaf is classified unreadable and the
+    ///   recovery in <c>ShardRootGrain.StrandedLeaf.cs</c> has been applied.
+    ///   Any non-zero reading on this arm is actionable, and a
+    ///   <em>climbing</em> one means the recovery is being applied repeatedly
+    ///   and is not taking - the leaf is unreadable for a reason that lives
+    ///   inside the leaf rather than in the shard root's coalescing map.</item>
+    /// </list>
+    /// <para>
+    /// <b>Reading a zero.</b> Both arms are primed at zero from shard-root
+    /// activation through the same recorder the live path uses, so a zero is a
+    /// measured absence rather than an absent measurement. A zero on both arms
+    /// beside a climbing <see cref="ScanPageStalls"/> is a wiring fault, not a
+    /// clean shard: every discarded fire is classified, so the two totals move
+    /// together by construction whenever the fire named an in-flight leaf.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanPageZeroProgressStalls =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.zero_progress_stalls", unit: "{stall}",
+            description: "Count of shard-root page-fill ceiling fires that completed no leaf, by whether the named leaf is slow this once or has been classified unreadable after consecutive zero-progress stalls.");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>slow</c> (a zero-progress ceiling fire on
+    /// a leaf that has not yet reached the consecutive-stall threshold).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafSlowTag =
+        new(TagOutcome, "slow");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>stranded</c> (the same leaf has missed the
+    /// ceiling on enough consecutive zero-progress attempts to be classified
+    /// unreadable, and the stranded-leaf recovery has been applied).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafStrandedTag =
+        new(TagOutcome, "stranded");
+
 
     /// <summary>
     /// Count of client-side resilient scans

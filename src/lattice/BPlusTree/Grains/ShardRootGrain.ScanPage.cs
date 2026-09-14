@@ -445,6 +445,7 @@ internal sealed partial class ShardRootGrain
     {
         if (page.IsCompletedSuccessfully)
         {
+            NoteScanPageProgress();
             ScanPageWalkPool.Return(walk);
             return page;
         }
@@ -483,6 +484,10 @@ internal sealed partial class ShardRootGrain
 
             if (banked)
             {
+                // A banked page carries at least one row, so at least one leaf
+                // completed: the run of zero-progress fires is broken and the
+                // next fire starts a fresh count (issue #3016).
+                NoteScanPageProgress();
                 return partial;
             }
 
@@ -494,6 +499,7 @@ internal sealed partial class ShardRootGrain
             throw;
         }
 
+        NoteScanPageProgress();
         ScanPageWalkPool.Return(walk);
         return result;
     }
@@ -503,6 +509,7 @@ internal sealed partial class ShardRootGrain
         try
         {
             var result = await page.ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            NoteScanPageProgress();
             ScanPageWalkPool.Return(walk);
             return result;
         }
@@ -836,6 +843,15 @@ internal sealed partial class ShardRootGrain
         var leafInFlight = walk.LeafInFlight;
         RecordScanPageStall(1, PhaseTag(phase));
 
+        // Issue #3016. Classified here and nowhere else, because this is the
+        // one site that both knows the fire completed no leaf and knows which
+        // leaf it was parked on - and because a fire that banked its rows
+        // returns before reaching here, so no page that made progress can be
+        // mistaken for a wedge.
+        var progress = ClassifyScanPageStall(walk);
+        var stranded = progress == ScanPageLeafProgress.Stranded;
+        var consecutive = _consecutiveZeroProgressStalls;
+
         // Deliberately in the message and the typed slot only, never a metric
         // tag: leaf identity is unbounded cardinality, and the counter above is
         // already attributable by tree, shard and phase.
@@ -854,6 +870,21 @@ internal sealed partial class ShardRootGrain
                 + $"leaf {leaves + 1}{which}",
         };
 
+        // The wedge clause. A stall that is one of a run is a categorically
+        // different report from a stall that is the first of its kind, and the
+        // two were indistinguishable for the 307 attempts behind issue #3016.
+        var run = stranded
+            ? $" This is the {consecutive}th consecutive ceiling fire on this shard that completed "
+                + "no leaf and named this same leaf, so the leaf is classified UNREADABLE rather "
+                + "than slow: retrying it unchanged has already been tried and did not differ. The "
+                + "coalesced read the retries were attaching to has been abandoned so the next "
+                + "attempt issues a fresh one; if this recurs with the count still climbing, the "
+                + "leaf activation itself is not answering."
+            : consecutive > 1
+                ? $" This is the {consecutive}th consecutive ceiling fire on this shard that "
+                    + "completed no leaf and named this same leaf."
+                : string.Empty;
+
         return new ScanPageStalledException(
             $"{walk.Operation} on shard {MyShardIndex} of tree '{TreeId}' exceeded the "
             + $"{walk.StallDuration} page-fill ceiling "
@@ -861,7 +892,7 @@ internal sealed partial class ShardRootGrain
             + $"{nameof(LatticeOptions.MaxScanPageDuration)} is sampled between leaf reads, so it "
             + "cannot stop a single await that never returns; the page fill is abandoned so the "
             + "shard stops being held and the operation can be retried from its last continuation "
-            + "token.", cause)
+            + $"token.{run}", cause)
         {
             TreeId = TreeId ?? string.Empty,
             ShardIndex = MyShardIndex,
@@ -869,6 +900,8 @@ internal sealed partial class ShardRootGrain
             Phase = PhaseLabel(phase),
             LeavesVisited = leaves,
             LeafInFlight = leafInFlight?.ToString(),
+            ConsecutiveZeroProgressStalls = consecutive,
+            LeafStranded = stranded,
             TimeoutSeconds = walk.StallDuration.TotalSeconds,
         };
     }

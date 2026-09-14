@@ -131,6 +131,41 @@ public sealed class ScanPageStalledException : TimeoutException
     /// </para>
     /// </summary>
     [Id(6)] public string? LeafInFlight { get; set; }
+
+    /// <summary>
+    /// How many <em>consecutive</em> ceiling fires this shard root has now seen
+    /// that completed no leaf and named this same <see cref="LeafInFlight"/>,
+    /// counting this one. Zero when the fire made progress, named no leaf, or
+    /// named a different leaf from the previous fire (issue #3016).
+    /// <para>
+    /// <see cref="LeavesVisited"/> says a single attempt read nothing.
+    /// <b>This says the attempts are not making each other any more likely to
+    /// succeed</b>, which is the only quantity that separates a tree that is
+    /// busy from one that cannot converge. Both present identically per
+    /// attempt: the field exists because a caller reading one exception cannot
+    /// otherwise tell a leaf replaying a long WAL window from cold - which
+    /// recovers - from one that has failed the same read 307 times running,
+    /// which does not.
+    /// </para>
+    /// </summary>
+    [Id(7)] public int ConsecutiveZeroProgressStalls { get; set; }
+
+    /// <summary>
+    /// Whether <see cref="LeafInFlight"/> has been classified <b>unreadable</b>
+    /// by this shard root: it has now missed the ceiling on enough consecutive
+    /// zero-progress attempts that retrying it unchanged cannot be expected to
+    /// behave differently, so the stranded-leaf recovery was applied before
+    /// this exception was raised (issue #3016).
+    /// <para>
+    /// <see langword="false"/> is the ordinary reading for a stall and means
+    /// only "not yet": a slow leaf is expected to recover, and the first fires
+    /// against one are indistinguishable from the first fires against a wedged
+    /// one. <see langword="true"/> is a statement about the <em>sequence</em>
+    /// and is always actionable - it says a plain retry has already been tried
+    /// and has already failed to differ.
+    /// </para>
+    /// </summary>
+    [Id(8)] public bool LeafStranded { get; set; }
 }
 
 /// <summary>
