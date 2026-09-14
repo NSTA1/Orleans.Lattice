@@ -87,6 +87,35 @@ public sealed class AddRepoContextToolsTests
     }
 
     [Test]
+    public void AddRepoContextTools_registers_the_marker_scan_reporter_the_writer_takes_optionally()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            // The descriptor must be present, because the writer takes the reporter
+            // as an OPTIONAL constructor parameter: the container supplies the
+            // declared default for a parameter it cannot resolve rather than
+            // failing, so dropping this registration is not a startup error. It is a
+            // null reporter, an instrument that exists on no host at all, and a
+            // suite that stays green because every fixture passes one explicitly.
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(RepoContextMemoryMarkerScanReporter)),
+                Is.True,
+                "the marker-scan reporter must be registered, or the writer's optional "
+                + "parameter silently defaults to null and the instrument never exists");
+
+            // Resolvable, not merely described - a descriptor whose implementation
+            // cannot be constructed would satisfy the check above and still yield
+            // nothing at runtime.
+            Assert.That(provider.GetService<RepoContextMemoryMarkerScanReporter>(), Is.Not.Null);
+        });
+    }
+
+    [Test]
     public void AddRepoContextTools_does_not_offer_the_write_tools_by_default()
     {
         var services = new ServiceCollection();

@@ -236,6 +236,14 @@ internal sealed class RepoContextVectorWriter
     /// </summary>
     private readonly ConcurrentDictionary<string, MemoryKeyMarkerCursor> _memoryKeyScans = new();
 
+    /// <summary>
+    /// Reports how each walk of the marker range above ended, or <see langword="null"/>
+    /// when the host does not meter it. Whether the cursor actually converges is
+    /// otherwise observable only as the presence or absence of a log warning, and an
+    /// absence there cannot distinguish a scan that completed from one never reached.
+    /// </summary>
+    private readonly RepoContextMemoryMarkerScanReporter? _markerScanReporter;
+
     /// <summary>Creates the vector writer.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode and re-encode vector records. Must not be <see langword="null"/>.</param>
@@ -244,6 +252,8 @@ internal sealed class RepoContextVectorWriter
     /// <param name="reDeriver">The vector-plane self-healer that detects, meters, and re-derives a rebuildable vector tree that fell terminally off its write-ahead log. Must not be <see langword="null"/>.</param>
     /// <param name="annIndex">The approximate retrieval plane kept in step with every local mutation, or <see langword="null"/> when the host binds the exact scan and no index is maintained.</param>
     /// <param name="logger">Receives the membership probe's per-key accounting when a probe cannot account for every key it requested (issue #2287), or <see langword="null"/> to discard it.</param>
+    /// <param name="coverageDigest">The digest of embedded coverage kept in step with membership, or <see langword="null"/> when the host does not maintain one.</param>
+    /// <param name="markerScanReporter">Meters how each embedded-memory-key marker range walk ended, or <see langword="null"/> to leave the walk unmetered.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     public RepoContextVectorWriter(
         IGrainFactory grainFactory,
@@ -253,7 +263,8 @@ internal sealed class RepoContextVectorWriter
         RepoContextVectorPlaneReDeriver reDeriver,
         IRepoContextAnnIndex? annIndex = null,
         ILogger<RepoContextVectorWriter>? logger = null,
-        RepoContextCoverageDigestStore? coverageDigest = null)
+        RepoContextCoverageDigestStore? coverageDigest = null,
+        RepoContextMemoryMarkerScanReporter? markerScanReporter = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -267,6 +278,7 @@ internal sealed class RepoContextVectorWriter
         _reDeriver = reDeriver;
         _annIndex = annIndex;
         _coverageDigest = coverageDigest;
+        _markerScanReporter = markerScanReporter;
         _logger = logger ?? NullLogger<RepoContextVectorWriter>.Instance;
     }
 
@@ -826,6 +838,7 @@ internal sealed class RepoContextVectorWriter
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _memoryKeyScans[repoId] = new MemoryKeyMarkerCursor(keys, token, passes);
+                _markerScanReporter?.Record(RepoContextMemoryMarkerScanOutcome.Banked);
                 return new RepoContextMemoryKeyMarkers(keys, Complete: false, Passes: passes, Fault: ex);
             }
 
@@ -853,6 +866,16 @@ internal sealed class RepoContextVectorWriter
                 // The range is walked. Drop the cursor so the next call starts a
                 // fresh full walk and observes markers added or disabled since.
                 _memoryKeyScans.TryRemove(repoId, out _);
+
+                // Split on whether banked progress was consumed. Folding the two
+                // together would leave the resumable cursor unobservable exactly
+                // when it is working: "completed" would mean both "never needed to
+                // bank" and "banked and recovered", which answer opposite questions
+                // about whether the mechanism is live.
+                _markerScanReporter?.Record(
+                    passes > 1
+                        ? RepoContextMemoryMarkerScanOutcome.Resumed
+                        : RepoContextMemoryMarkerScanOutcome.Complete);
                 return new RepoContextMemoryKeyMarkers(keys, Complete: true, Passes: passes, Fault: null);
             }
 
