@@ -158,6 +158,29 @@ internal sealed class BoundedLeafWalk
     /// <summary>Leaves visited by this pass.</summary>
     internal int LeavesVisited => _budget.LeavesVisited;
 
+    /// <summary>
+    /// The key a pass abandoned <em>right now</em> could resume from, or
+    /// <see langword="null"/> when the leaf just processed declares no usable
+    /// boundary (issue 2807).
+    /// <para>
+    /// <see cref="ResumeFromInclusive"/> answers "where does the next pass
+    /// start", and is set only when this pass chose to stop. This answers the
+    /// different question a caller needs when something else stops it - the
+    /// shard-root page-fill ceiling, which abandons the walk mid-chain and
+    /// cannot <c>await</c> a boundary of its own. It is maintained on every
+    /// advance because the walk now reads the leaf's range on every leaf rather
+    /// than only at a yield point, so keeping it current costs no round trip
+    /// the walk was not already about to make on a yield.
+    /// </para>
+    /// <para>
+    /// It names the boundary past the leaf the caller has just finished with,
+    /// never the one about to be visited, so an aggregate accumulated up to
+    /// this point and a resume key taken from here describe the same prefix of
+    /// the chain.
+    /// </para>
+    /// </summary>
+    internal string? BankableResumeKey { get; private set; }
+
     /// <summary>The grain for <see cref="CurrentLeafId"/>.</summary>
     internal IBPlusLeafGrain CurrentLeaf =>
         _leaf ??= _grainFactory.GetGrain<IBPlusLeafGrain>(
@@ -185,6 +208,12 @@ internal sealed class BoundedLeafWalk
         var leaf = CurrentLeaf;
         _budget.RecordLeafVisited();
 
+        // The successor pointer and this leaf's bounds. The pass needs the
+        // first on every leaf; since issue 2807 it reads the second on every
+        // leaf as well, so that a walk abandoned by the shard-root page-fill
+        // ceiling still has a resume position to bank. The read used to be
+        // deferred to the yield point to save a round trip per leaf, which is
+        // exactly what left an abandoned walk with nothing.
         var next = await leaf.GetNextSiblingAsync();
         if (next is null)
         {
@@ -192,33 +221,32 @@ internal sealed class BoundedLeafWalk
             _leaf = null;
             Completed = true;
             ResumeFromInclusive = null;
+            BankableResumeKey = null;
             return false;
         }
+
+        var bounds = await leaf.GetKeyRangeAsync();
+
+        // The visited leaf's exclusive high bound is exactly where the next
+        // leaf begins, so re-descending onto it lands on the leaf that owns
+        // the rest of the chain - even if either leaf has split in the
+        // meantime, because a split only narrows a leaf's range and the
+        // descent follows whichever leaf now covers the key.
+        BankableResumeKey =
+            bounds.HighKeyExclusive is { } bound && IsAheadOfStart(bound) ? bound : null;
 
         // resultsCollected is 1 because the unit of progress here is a leaf
         // processed and a cursor advanced, not a row returned. These walks emit
         // no page for a caller to derive a continuation from, so the
         // forward-progress rule the page fills need does not apply; the resume
         // key below is what guarantees progress instead.
-        if (_budget.ShouldYield())
+        if (_budget.ShouldYield() && BankableResumeKey is { } high)
         {
-            // The visited leaf's exclusive high bound is exactly where the next
-            // leaf begins, so re-descending onto it lands on the leaf that owns
-            // the rest of the chain - even if either leaf has split in the
-            // meantime, because a split only narrows a leaf's range and the
-            // descent follows whichever leaf now covers the key.
-            //
-            // Read only when the budget wants to yield, so the common case pays
-            // no extra round trip per leaf.
-            var bounds = await leaf.GetKeyRangeAsync();
-            if (bounds.HighKeyExclusive is { } high && IsAheadOfStart(high))
-            {
-                _leafId = null;
-                _leaf = null;
-                Completed = false;
-                ResumeFromInclusive = high;
-                return false;
-            }
+            _leafId = null;
+            _leaf = null;
+            Completed = false;
+            ResumeFromInclusive = high;
+            return false;
         }
 
         _leafId = next;

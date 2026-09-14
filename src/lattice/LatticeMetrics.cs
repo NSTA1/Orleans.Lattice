@@ -4613,10 +4613,10 @@ public static class LatticeMetrics
     /// <summary>
     /// Count of <c>ShardRootGrain</c> page-fill ceiling fires, tagged with what
     /// the ceiling did with the work the walk had already done:
-    /// <see cref="TagOutcome"/> = <c>banked</c> (rows had been read, so they
-    /// were returned as a short page with <c>HasMore</c> set and the caller
-    /// resumes from the last one) or <c>discarded</c> (the fire caught the walk
-    /// with no rows to bank, so the call faulted with
+    /// <see cref="TagOutcome"/> = <c>banked</c> (the walk had completed work to
+    /// show, so it was returned as a short page and the caller resumes from it)
+    /// or <c>discarded</c> (the fire caught the walk with nothing to bank, so
+    /// the call faulted with
     /// <see cref="Orleans.Lattice.ScanPageStalledException"/>). Also tagged
     /// with <see cref="TagTree"/> and <see cref="TagShard"/>.
     /// <para>
@@ -4649,16 +4649,31 @@ public static class LatticeMetrics
     /// it.
     /// </para>
     /// <para>
-    /// <b>Cause 2: the operation cannot bank at all.</b> Banking requires two
-    /// things that only the key and entry paging operations have: the core
-    /// method must publish its accumulator through <c>BeginScanPageRows</c>, and
-    /// the return type must be <c>KeysPage</c> or <c>EntriesPage</c>, the only
-    /// two shapes <c>TryBankPartialScanPage</c> can construct. Every other
-    /// stall-guarded operation - the counting, any, range-delete, diagnostics,
-    /// storage-usage, projection-rebuild, materialiser-lag and snapshot-baseline
-    /// pages - fails both tests, so its fires record <c>discarded</c> however
-    /// many leaves had completed. On such a series <c>banked=0</c> is not a
-    /// statement about the walk at all.
+    /// <b>Cause 2: the operation cannot bank at all.</b> Two stall-guarded
+    /// operations still record <c>discarded</c> however many leaves had
+    /// completed, and both are deliberate rather than unwired.
+    /// <c>CaptureSnapshotBaselineAsync</c> has no meaningful partial - a
+    /// baseline covering part of a chain is not a baseline.
+    /// <c>DeleteRangeBoundedAsync</c> publishes its replication notification
+    /// after the walk, so a banked resume key would carry the caller past a
+    /// prefix whose tombstones were applied locally and never published,
+    /// orphaning that closure permanently; the fault is retried from the range
+    /// start instead, which re-publishes it. On those two series
+    /// <c>banked=0</c> is not a statement about the walk at all.
+    /// </para>
+    /// <para>
+    /// Before issue 2807 this cause covered ten of the sixteen guarded
+    /// operations, because banking required the core method to publish a row
+    /// accumulator through <c>BeginScanPageRows</c> and to return
+    /// <c>KeysPage</c> or <c>EntriesPage</c> - the only two shapes
+    /// <c>TryBankPartialScanPage</c> could construct - which the counting, any,
+    /// diagnostics, storage-usage, projection-rebuild and materialiser-lag
+    /// pages all failed. Those eight now publish a finished partial page at
+    /// each leaf boundary through <c>PublishScanPagePartial</c>, so their fires
+    /// bank. A dashboard or alert written against the older reading - that a
+    /// count-heavy or diagnostics-heavy tree necessarily shows a zero
+    /// <c>banked</c> arm - is measuring the old behaviour and will now
+    /// misreport.
     /// </para>
     /// <para>
     /// <b>Cause 3: every row read so far was filtered out.</b> Moved-away slots
@@ -4668,10 +4683,11 @@ public static class LatticeMetrics
     /// </para>
     /// <para>
     /// <b>The banked-to-discarded ratio is therefore mix-dependent and is not a
-    /// health signal on its own.</b> A shard whose scan traffic is mostly counts
-    /// and diagnostics reports a zero <c>banked</c> arm however healthy its leaf
-    /// reads are, while a shard serving key and entry pages reports a ratio that
-    /// does track first-leaf health. Comparing the ratio across trees compares
+    /// health signal on its own.</b> A shard whose scan traffic is dominated by
+    /// range deletes or snapshot baselines reports a zero <c>banked</c> arm
+    /// however healthy its leaf reads are, while a shard serving key, entry,
+    /// count and diagnostics pages reports a ratio that does track first-leaf
+    /// health. Comparing the ratio across trees compares
     /// their operation mixes as much as their leaf latency; separate the two
     /// before attributing a difference to either.
     /// </para>

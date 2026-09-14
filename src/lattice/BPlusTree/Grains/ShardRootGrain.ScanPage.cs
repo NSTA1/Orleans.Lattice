@@ -158,6 +158,40 @@ internal sealed partial class ShardRootGrain
         /// </summary>
         internal HashSet<int>? MovedAwaySlots;
 
+        /// <summary>
+        /// A complete, immutable partial result the core method has published
+        /// for the guard to hand back verbatim if the ceiling fires, or
+        /// <see langword="null"/> when the walk has reached no bankable
+        /// checkpoint (issue 2807).
+        /// <para>
+        /// This is the counterpart of <see cref="Accumulated"/> for the walks
+        /// whose result is an <em>aggregate</em> rather than a list of rows - a
+        /// count, an emptiness probe, a rollup. Those cannot be banked from raw
+        /// rows, because their partial-result contract expresses progress as a
+        /// <c>ResumeFromInclusive</c> key rather than as rows the caller can
+        /// derive a continuation from, and that key is a leaf boundary the
+        /// guard has no way to obtain: resolving one is an <c>await</c> on the
+        /// very shard whose unresponsiveness is the reason the ceiling fired.
+        /// </para>
+        /// <para>
+        /// So the core method publishes the whole page instead, at each leaf
+        /// boundary where it holds both its running aggregate and a usable
+        /// resume key - which it obtains from the
+        /// <c>GetKeyRangeAsync</c> the walk now makes on every leaf. The
+        /// guard then needs no per-operation knowledge at all: it type-checks
+        /// what was published and returns it.
+        /// </para>
+        /// <para>
+        /// Publishing a <em>value</em> rather than a live accumulator is what
+        /// makes this safe against the abandoned walk, which keeps running
+        /// until its own stand-down. Each published page is an immutable
+        /// snapshot, so the one the guard reads is whichever checkpoint the
+        /// walk had last completed and cannot be mutated under serialization -
+        /// the copy <see cref="Accumulated"/> needs is unnecessary here.
+        /// </para>
+        /// </summary>
+        internal object? BankedPartial;
+
         private CancellationTokenSource? _deadline;
 
         /// <summary>Whether the hard stall ceiling is armed for this call.</summary>
@@ -186,6 +220,7 @@ internal sealed partial class ShardRootGrain
             LeafInFlightOrdinal = 0;
             Accumulated = null;
             MovedAwaySlots = null;
+            BankedPartial = null;
             if (!bounds.IsStallGuarded)
             {
                 // Drop any source inherited from a previous call on this POOLED
@@ -235,6 +270,7 @@ internal sealed partial class ShardRootGrain
             LeafInFlightOrdinal = 0;
             Accumulated = null;
             MovedAwaySlots = null;
+            BankedPartial = null;
             return true;
         }
     }
@@ -374,13 +410,15 @@ internal sealed partial class ShardRootGrain
     /// </para>
     /// <para>
     /// What abandoning must not mean is that the work is thrown away
-    /// (issue 2585). The rows the walk had already read are banked as an
+    /// (issues 2585, 2807). The rows the walk had already read are banked as an
     /// ordinary short page by <see cref="TryBankPartialScanPage{T}"/> whenever
-    /// there is at least one of them, and only a fire that caught the walk with
-    /// nothing to show still faults. Without that, the ceiling is a livelock
-    /// rather than a bound: the retry it invites re-walks the same leaves, hits
-    /// the same ceiling and discards the same work, so a page that cannot fill
-    /// in one attempt cannot fill in any number of them.
+    /// there is at least one of them; a walk that accumulates an aggregate
+    /// rather than rows publishes a finished partial page at each leaf boundary
+    /// instead, and that is banked the same way. Only a fire that caught the
+    /// walk with nothing to show still faults. Without that, the ceiling is a
+    /// livelock rather than a bound: the retry it invites re-walks the same
+    /// leaves, hits the same ceiling and discards the same work, so a page that
+    /// cannot fill in one attempt cannot fill in any number of them.
     /// </para>
     /// <para>
     /// What abandoning must <em>not</em> mean is that the walk carries on
@@ -476,27 +514,44 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Turns the rows an abandoned walk had already collected into an ordinary
+    /// Turns the work an abandoned walk had already done into an ordinary
     /// short page, so that a ceiling fire costs the caller a page boundary
-    /// rather than the whole attempt (issue 2585).
+    /// rather than the whole attempt (issues 2585, 2807).
     /// <para>
-    /// The banked page is not a new shape. A page carrying rows,
-    /// <c>HasMore = true</c> and no <c>ResumeFromKey</c> is exactly what the
-    /// cooperative <see cref="LatticeOptions.MaxScanPageDuration"/> budget
-    /// already emits when a leaf declares no usable boundary, and every cursor
-    /// in <c>LatticeGrain</c> already advances past it by taking the last row's
+    /// Two carriers reach it, and neither is a new wire shape. A page fill
+    /// publishes its row accumulator through
+    /// <see cref="BeginScanPageRows{TRow}"/> and this method assembles the page
+    /// around it; an aggregate walk has no rows to accumulate, so it publishes
+    /// a finished, immutable page through
+    /// <see cref="PublishScanPagePartial{T}"/> at each leaf boundary and this
+    /// method hands the most recent one back verbatim. The second carrier
+    /// exists because the first cannot be generalised: this method would
+    /// otherwise have to know how to construct every guarded operation's page,
+    /// which is precisely why banking reached only the six page fills and left
+    /// the other ten guarded operations discarding unconditionally.
+    /// </para>
+    /// <para>
+    /// For the row carrier, a page carrying rows, <c>HasMore = true</c> and no
+    /// <c>ResumeFromKey</c> is exactly what the cooperative
+    /// <see cref="LatticeOptions.MaxScanPageDuration"/> budget already emits
+    /// when a leaf declares no usable boundary, and every cursor in
+    /// <c>LatticeGrain</c> already advances past it by taking the last row's
     /// key as its next continuation token. That is why the fix needs no wire
     /// format change and no caller change: it reuses a contract the callers
     /// have always had to honour.
     /// </para>
     /// <para>
-    /// No <c>ResumeFromKey</c> is computed, deliberately. The resume key is a
-    /// leaf <em>boundary</em>, obtained from a further
-    /// <c>GetKeyRangeAsync</c> call - another await, on the very shard whose
-    /// unresponsiveness is the reason we are here - and it is an inclusive
-    /// lower bound, so handing back the last banked key as one would re-serve
-    /// that row. The caller's exclusive last-key continuation is both correct
-    /// and already implemented.
+    /// No <c>ResumeFromKey</c> is computed here, deliberately. The resume key
+    /// is a leaf <em>boundary</em>, and this method cannot <c>await</c> the
+    /// further <c>GetKeyRangeAsync</c> that would yield one - the shard whose
+    /// unresponsiveness brought us here is the shard it would have to ask. It
+    /// is also an inclusive lower bound, so handing back the last banked key as
+    /// one would re-serve that row. The caller's exclusive last-key
+    /// continuation is both correct and already implemented. The aggregate
+    /// walks have no rows and so no such continuation to fall back on, which is
+    /// why they resolve their boundary <em>in the walk</em>, where the leaf is
+    /// already activated and its range is a <c>Task.FromResult</c> off state
+    /// the walk has in hand.
     /// </para>
     /// <para>
     /// <b>Returning <see langword="false"/> for an empty accumulator is
@@ -508,18 +563,48 @@ internal sealed partial class ShardRootGrain
     /// caller would catch. It is also what keeps the fix from trading one
     /// livelock for another: because a banked page always carries at least one
     /// row, the caller's continuation token strictly advances on every
-    /// attempt, so a finite tree still terminates.
+    /// attempt, so a finite tree still terminates. The published carrier obeys
+    /// the same rule from the other end - a partial is only ever published at a
+    /// boundary the walk has passed, and never with a null resume key - so its
+    /// caller's cursor strictly advances too.
+    /// </para>
+    /// <para>
+    /// Two guarded operations publish nothing and still fault on a ceiling
+    /// fire, both deliberately.
+    /// <c>CaptureSnapshotBaselineAsync</c> has no meaningful partial: a
+    /// baseline covering some of the chain is not a baseline.
+    /// <c>DeleteRangeBoundedAsync</c> has one it must not bank, because its
+    /// replication notification is published after the loop: a resume key past
+    /// a prefix whose tombstones were applied but never published would orphan
+    /// that closure permanently, where today's fault has the caller retry from
+    /// the range start and re-publish it. Both exclusions are about side
+    /// effects and shape, not about the boundary being unavailable - the
+    /// distinction the survey behind issue 2807 did not draw.
     /// </para>
     /// <para>
     /// Copying the accumulator is likewise required. The abandoned walk keeps
     /// appending until its own stand-down observes the same deadline, so
     /// handing out the live list would let Orleans serialise a collection while
-    /// it is being mutated.
+    /// it is being mutated. The published carrier needs no copy for the mirror
+    /// image of that reason: each publication is a finished, immutable page
+    /// that the walk replaces rather than mutates.
     /// </para>
     /// </summary>
     private bool TryBankPartialScanPage<T>(ScanPageWalk walk, out T banked)
     {
         banked = default!;
+
+        // Issue 2807: the aggregate walks publish a finished partial page at
+        // each leaf boundary they reach, so the guard hands it back without
+        // knowing anything about the operation that built it. Checked first
+        // because a walk publishes either a partial or an accumulator, never
+        // both, and the type test is the cheaper of the two.
+        if (walk.BankedPartial is T published)
+        {
+            banked = published;
+            return true;
+        }
+
         if (walk.Accumulated is null)
         {
             return false;
@@ -566,6 +651,58 @@ internal sealed partial class ShardRootGrain
         var rows = new List<TRow>(pageSize);
         scan.Accumulated = rows;
         return rows;
+    }
+
+    /// <summary>
+    /// Publishes a finished partial page for the guard to bank if the ceiling
+    /// fires (issue 2807), replacing any earlier checkpoint from this walk.
+    /// <para>
+    /// Call it at a leaf boundary, with the aggregate the walk has accumulated
+    /// up to and including the leaf just completed, and a
+    /// <c>ResumeFromInclusive</c> that is that leaf's exclusive high bound. The
+    /// two must be consistent or the banked answer is wrong in the one way this
+    /// whole mechanism must not be: a resume key naming a leaf already folded
+    /// into the aggregate makes the caller's next batch count it twice, which
+    /// is precisely the hazard <see cref="ShardCountPage"/>'s own contract
+    /// calls out. Never publish against the leaf whose read is in flight.
+    /// </para>
+    /// <para>
+    /// A page must never be published with a null resume key. For these
+    /// operations "no resume key" is the wire signal for <em>complete</em>, so
+    /// banking one would convert a loud, retriable
+    /// <see cref="ScanPageStalledException"/> into a silently wrong answer -
+    /// an undercount or a populated shard reported empty. It is the same rule
+    /// that makes <see cref="TryBankPartialScanPage{T}"/> refuse an empty row
+    /// accumulator, for the same reason.
+    /// </para>
+    /// </summary>
+    private static void PublishScanPagePartial<T>(ScanPageWalk scan, T partial) =>
+        scan.BankedPartial = partial;
+
+    /// <summary>
+    /// The key a walk may resume from once it has finished with the leaf whose
+    /// <paramref name="bounds"/> these are, or <see langword="null"/> when the
+    /// leaf declares no usable boundary.
+    /// <para>
+    /// The leaf's exclusive high bound is exactly where the next leaf begins.
+    /// A high bound outside the walk's own <c>[lowerBound, upperBound)</c> is
+    /// not a position this walk can resume from, and when there is no safe key
+    /// the caller must keep walking rather than stop, because stopping without
+    /// a resume position would silently truncate - the "only stop where you can
+    /// resume" rule the range-delete and page-fill bounds also follow.
+    /// </para>
+    /// </summary>
+    private static string? ResumeKeyFrom(
+        in LeafKeyRange bounds, string? lowerBound, string? upperBound)
+    {
+        if (bounds.HighKeyExclusive is { } high
+            && (lowerBound is null || string.CompareOrdinal(high, lowerBound) > 0)
+            && (upperBound is null || string.CompareOrdinal(high, upperBound) < 0))
+        {
+            return high;
+        }
+
+        return null;
     }
 
     /// <summary>
