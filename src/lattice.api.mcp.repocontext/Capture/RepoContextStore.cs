@@ -1425,15 +1425,40 @@ internal sealed partial class RepoContextStore
         var embeddedVectorCount = await ReadEmbeddedVectorCountAsync(repoId, cancellationToken)
             .ConfigureAwait(false);
 
+        // The indexed root is read from the durable index request rather than the marker
+        // node, because the request is the authority for how the repository was actually
+        // walked - the structural records are addressed relative to it. The marker node
+        // never carried it, which is precisely why this listing could report a healthy
+        // repository under an id that described a different tree (issue #2617): the root
+        // was known to the drift report, which refuses a path "outside the indexed root
+        // of repository '<root>'", and to nothing a caller reads first.
+        var indexedRoot = await ReadIndexedRootAsync(repoId).ConfigureAwait(false);
+
         return new RepoContextRepoSummary
         {
             RepoId = repoId,
+            IndexedRoot = indexedRoot,
             LastIngested = lastIngested,
             FileCount = fileCount,
             EmbeddedVectorCount = embeddedVectorCount.Count,
             EmbeddedVectorCountPending = embeddedVectorCount.Pending,
             IndexedCommit = indexedCommit,
         };
+    }
+
+    /// <summary>
+    /// Reads the resolved root a repository was last indexed from, or
+    /// <see langword="null"/> when it has no persisted index request - a repository that
+    /// was never onboarded, or one whose index was reset (the reset path clears the
+    /// request, so a null root is the same "no information yet" answer the reset's other
+    /// three nulls carry, not a failure to read one).
+    /// </summary>
+    private async Task<string?> ReadIndexedRootAsync(string repoId)
+    {
+        var request = await _grainFactory
+            .GetGrain<IRepoIndexJobGrain>(repoId).GetRequestAsync().ConfigureAwait(false);
+
+        return string.IsNullOrWhiteSpace(request?.RepoRoot) ? null : request.RepoRoot;
     }
 
     /// <summary>

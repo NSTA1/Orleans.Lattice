@@ -138,6 +138,34 @@ cd samples/RepoContextContainer
 pwsh -File ./scripts/Assert-ContainerProvenance.ps1
 ```
 
+### The workspace check is partly opt-in, and says so when it is not asked
+
+Check 7 adjudicates the tree the container actually indexes. Its STRUCTURAL arms
+run unconditionally - there is a `/workspace` mount, it is a bind rather than an
+anonymous volume, and its source is absolute - because none of those can be wrong
+on a correct deployment, so they cost nothing and they keep the check non-vacuous.
+
+Its two IDENTITY arms cannot be defaulted, because the correct values are absolute
+host paths that differ per machine and a default derived from the checkout would
+encode a layout guess and refuse correct deployments. Ask for them explicitly:
+
+```bash
+pwsh -File ./scripts/Assert-ContainerProvenance.ps1 `
+  -ExpectedWorkspaceRoot 'C:\dev\copilot-worktrees\lattice' `
+  -ExpectedRepositoryRoot 'C:\dev\copilot-worktrees\lattice\bucket4' `
+  -IndexedRoot '/workspace/bucket4'
+```
+
+An arm that was not asked prints `<NOT ESTABLISHED ...>` rather than nothing, so
+an unasked question never reads as a passed one. Once asked, it FAILS CLOSED:
+naming `-ExpectedRepositoryRoot` without `-IndexedRoot` is a dissent, not a skip.
+
+`-IndexedRoot` is supplied rather than fetched deliberately. The script speaks
+`docker` and `git`; reading it from the running store would put an authenticated
+MCP transport inside a provenance checker, which widens what a provenance failure
+can mean. Read it from `repocontext_list_repos`, which reports `indexedRoot` per
+repository (#2617), and pass it in.
+
 ### What its exit code means
 
 The script's exit status is part of its contract, so automation can gate on it
@@ -145,7 +173,7 @@ The script's exit status is part of its contract, so automation can gate on it
 
 | Code | Meaning |
 | --- | --- |
-| `0` | all six provenance checks agree |
+| `0` | all seven provenance checks agree |
 | `1` | unexpected error: the script itself failed and reached NO verdict |
 | `2` | provenance REFUSED: at least one check dissented |
 | `3` | the container could not be interrogated (not running, or docker unreachable) |

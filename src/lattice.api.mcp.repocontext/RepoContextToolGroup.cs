@@ -545,10 +545,19 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Name = "repocontext_list_repos",
                 Title = "List registered repositories",
                 Description =
-                    "Lists every repository currently registered in the context store, each with its "
+                    "Lists every repository currently registered in the context store, each with the "
+                    + "filesystem root it was indexed from, its "
                     + "last-ingested marker and recorded file count, in ascending id order. Use it to discover "
                     + "which repositories under the mounted workspace are queryable before recalling, scanning, "
-                    + "searching, or removing one. It enumerates committed, materialised structural records, "
+                    + "searching, or removing one. Read 'indexedRoot' before you trust an id: an id does not "
+                    + "imply the tree it is about, because a repository's id defaults to the final segment of "
+                    + "the path it was registered from, so a git worktree registered from the wrong workspace "
+                    + "root indexes under the BASE repository's id while every record in it describes the "
+                    + "worktree. In that state the marker, the file count and search ranking are all genuinely "
+                    + "healthy and none of them is about the tree you mean, so the root is the only field that "
+                    + "distinguishes it - check that it is the repository you intend rather than a worktree or "
+                    + "a sibling. It is absent for a repository that was never indexed or whose index was "
+                    + "reset. It enumerates committed, materialised structural records, "
                     + "which is a different source from the live progress counters 'repocontext_index_status' "
                     + "reports: a repository still in its first ingest can already show status 'Running' there "
                     + "while it is absent here - and not yet answering scan or search - until its structural "

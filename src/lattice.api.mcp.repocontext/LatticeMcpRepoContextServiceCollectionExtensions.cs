@@ -272,6 +272,16 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, RepoContextIndexingCadenceReporter>());
 
+        // Surface what the box is actually about, once the host is up: the canonicalised
+        // workspace roots and every registered repository's indexed root. A repository id
+        // defaults to the final segment of the path it was registered from, so it LOOKS
+        // like it names the tree while guaranteeing nothing, and a stack composed from a
+        // git worktree can index that worktree under the base repository's id with every
+        // health signal green. See issue #2617. Registered unconditionally: it reads and
+        // logs, catches its own failures, and never affects startup.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, RepoContextIndexedRootReporter>());
+
         services.TryAddSingleton<IRepoContextSemanticIndex>(sp =>
         {
             var exact = sp.GetRequiredService<ExactKnnSemanticIndex>();

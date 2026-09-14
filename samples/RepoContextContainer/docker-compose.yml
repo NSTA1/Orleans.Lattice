@@ -490,10 +490,10 @@ services:
       # `down`, `ps` and `logs`.
       #
       # Set it to an ABSOLUTE path outside every git checkout and worktree. The
-      # provenance check verifies that (check 5 of 5 in
+      # provenance check verifies that (check 5 of 7 in
       # scripts/Assert-ContainerProvenance.ps1), keyed on the ARCHIVE path
       # alone - never on the compose directory, which is legitimately a worktree
-      # and which check 2 of 5 requires to be one.
+      # and which check 2 of 7 requires to be one.
       #
       # Do NOT point it inside the /data volume or at a path that resolves under
       # it. The host detects that and says so at startup, because an archive

@@ -230,7 +230,7 @@ function ConvertFrom-ProvenanceDuration {
 
 <#
 .SYNOPSIS
-	Check 1 of 5. The container was composed from the checkout the operator means.
+	Check 1 of 7. The container was composed from the checkout the operator means.
 
 .DESCRIPTION
 	`docker compose up` reads its OWN working directory's compose files, whatever
@@ -778,6 +778,201 @@ function Get-ArchiveDurabilityViolation {
 
 <#
 .SYNOPSIS
+	Refuses a stack whose read path - the `/workspace` bind the container indexes
+	out of - cannot be shown to be the tree the operator believes it is.
+
+.DESCRIPTION
+	Check 5 guards the WRITE path. This guards the READ path, and it exists
+	because issue #2617 established that the read path had no observable signal
+	at all: a git worktree indexed under the BASE repository's id produced a
+	listing indistinguishable from a correct index of the base repository. Every
+	record was internally consistent, the ingest was genuinely healthy, and the
+	answers were about a different tree.
+
+	Nothing in checks 1 to 6 looks at `/workspace`. Check 1 adjudicates the
+	directory compose was invoked from, which is NOT the directory the container
+	reads: `REPO_PATH` is a separate setting carried by an untracked `.env`, so
+	the two are independent inputs and the first being right says nothing about
+	the second. That is the same two-independent-inputs shape the whole script
+	was written for, one seam further in.
+
+	Arms, in order, each returning on the first violation because a later arm's
+	reading is meaningless once an earlier one has failed:
+
+	  - The MOUNT EXISTS. Nothing bound at the destination means the container
+	    indexes nothing, which is the non-vacuity guard for this check itself.
+	  - The MOUNT IS A BIND. A named volume at `/workspace` is a copy that
+	    diverges from the host tree silently.
+	  - The SOURCE IS ABSOLUTE. A relative bind source resolves against the
+	    directory compose was invoked from, so which tree is indexed becomes a
+	    function of where the operator was standing - the identical defect issue
+	    #2627 found on the archive path.
+	  - The SOURCE IS THE EXPECTED ROOT, when the caller names one.
+	  - A REGISTERED INDEXED ROOT IS THE EXPECTED REPOSITORY, when the caller
+	    names one.
+
+	BOTH IDENTITY ARMS ARE OPT-IN, AND THAT IS DELIBERATE. The expected values
+	are absolute host paths that differ on every machine; deriving a default from
+	`-ExpectedCheckout` would encode a guess about the operator's directory
+	layout and refuse correct deployments that happen to be arranged otherwise.
+	An arm the caller did not ask for is REPORTED as not established rather than
+	counted as agreement - it never contributes a silent pass.
+
+	Once an identity arm IS asked for, it fails closed. Naming
+	-ExpectedRepositoryRoot without supplying an examinable indexed-root reading
+	is a violation, not a pass: a check that cannot look must not report clean.
+
+	The indexed-root reading is taken from `repocontext_list_repos`, whose
+	`indexedRoot` field was added by this same change. The reading and the check
+	arrive together because neither is any use alone - the field with no check is
+	a value nobody compares, and the check with no field has nothing to read.
+#>
+function Get-WorkspaceProvenanceViolation {
+	[CmdletBinding()]
+	[OutputType([string[]])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $WorkspaceDestination,
+		[AllowNull()] [AllowEmptyString()] [string] $WorkspaceSource,
+		[AllowNull()] [AllowEmptyString()] [string] $WorkspaceMountType,
+		# The host directory the operator believes is bound at the destination.
+		# A PARAMETER, never a literal: there is no absolute path that is correct
+		# on more than one machine, and a hardcoded one would either refuse every
+		# host but its author's or be quietly relaxed until it adjudicated
+		# nothing.
+		[AllowNull()] [AllowEmptyString()] [string] $ExpectedWorkspaceRoot,
+		# The host directory the operator believes is registered and indexed.
+		[AllowNull()] [AllowEmptyString()] [string] $ExpectedRepositoryRoot,
+		# Container-side roots as `repocontext_list_repos` reports them, for
+		# example '/workspace/lattice'. Mapped back through the bind before they
+		# are compared: a container path and a host path are different
+		# namespaces, and comparing them directly would be a category error that
+		# happened to pass whenever the mount was an identity.
+		[AllowNull()] [string[]] $IndexedRoots,
+		# Defaults to FALSE for the same reason check 5's git reading does. A
+		# caller that has not positively obtained the listing has not established
+		# anything about it, and must not obtain a clean verdict by omission.
+		[bool] $IndexedRootsExaminable = $false,
+		[bool] $CaseSensitive = $false
+	)
+
+	$violations = [System.Collections.Generic.List[string]]::new()
+	$destination = if ([string]::IsNullOrWhiteSpace($WorkspaceDestination)) { '/workspace' } else { $WorkspaceDestination.Trim() }
+
+	if ([string]::IsNullOrWhiteSpace($WorkspaceSource)) {
+		$violations.Add("nothing is mounted at '$destination', so the container has no tree to index and every answer it serves is about something other than your repository")
+		return , $violations.ToArray()
+	}
+
+	$source = ConvertFrom-DockerDesktopHostPath -Path $WorkspaceSource
+
+	if (-not [string]::IsNullOrWhiteSpace($WorkspaceMountType) -and $WorkspaceMountType.Trim() -ine 'bind') {
+		$violations.Add("'$destination' is a '$($WorkspaceMountType.Trim())' mount sourced from '$source', not a bind mount; the container then indexes a COPY that stops tracking the host tree the moment either side changes, and reports a healthy index of it")
+		return , $violations.ToArray()
+	}
+
+	if (-not (Test-ProvenancePathIsAbsolute -Path $source)) {
+		$violations.Add("the workspace bound at '$destination' resolved to the relative source '$source'; a relative bind source is resolved against the directory 'docker compose' was invoked from, so WHICH TREE IS INDEXED is a function of where the operator was standing")
+		return , $violations.ToArray()
+	}
+
+	if (-not [string]::IsNullOrWhiteSpace($ExpectedWorkspaceRoot)) {
+		$expectedRoot = ConvertFrom-DockerDesktopHostPath -Path $ExpectedWorkspaceRoot
+		if (-not (Test-ProvenancePathsEqual -Left $source -Right $expectedRoot -CaseSensitive $CaseSensitive)) {
+			$violations.Add("the workspace bound at '$destination' is sourced from '$source', not the expected '$expectedRoot'; the container is indexing a different tree from the one you believe, and nothing in its answers says so")
+			return , $violations.ToArray()
+		}
+	}
+
+	if ([string]::IsNullOrWhiteSpace($ExpectedRepositoryRoot)) {
+		return , $violations.ToArray()
+	}
+
+	if (-not $IndexedRootsExaminable) {
+		$violations.Add("an expected repository root was named ('$ExpectedRepositoryRoot') but no indexed-root reading was obtained, so WHICH TREE IS REGISTERED cannot be established; call 'repocontext_list_repos' and pass its 'indexedRoot' values. This is reported rather than passed over, because a check that cannot look must not report clean")
+		return , $violations.ToArray()
+	}
+
+	$roots = @($IndexedRoots | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+	if ($roots.Count -eq 0) {
+		$violations.Add("an expected repository root was named ('$ExpectedRepositoryRoot') but the container has NO repository registered with an indexed root; an empty listing and a listing of the wrong tree are different failures, and this is the first")
+		return , $violations.ToArray()
+	}
+
+	$expectedRepository = ConvertFrom-DockerDesktopHostPath -Path $ExpectedRepositoryRoot
+	$hostRoots = [System.Collections.Generic.List[string]]::new()
+	foreach ($root in $roots) {
+		$hostRoots.Add((ConvertTo-WorkspaceHostPath -ContainerPath $root -WorkspaceDestination $destination -WorkspaceSource $source))
+	}
+
+	$matched = $false
+	foreach ($hostRoot in $hostRoots) {
+		if (Test-ProvenancePathsEqual -Left $hostRoot -Right $expectedRepository -CaseSensitive $CaseSensitive) {
+			$matched = $true
+			break
+		}
+	}
+
+	if (-not $matched) {
+		$rendered = ($roots | ForEach-Object { "'$_'" }) -join ', '
+		$renderedHost = ($hostRoots | ForEach-Object { "'$_'" }) -join ', '
+		$violations.Add("no registered repository is indexed from the expected root '$expectedRepository'. The container reports $rendered, which maps through the '$destination' bind to $renderedHost. THIS IS ISSUE #2617's STATE: the repository id can read exactly as you expect while every record it serves describes a different tree, and no other field in the listing distinguishes the two")
+	}
+
+	return , $violations.ToArray()
+}
+
+<#
+.SYNOPSIS
+	Maps a container-side path under the workspace mount back to its host path.
+
+.DESCRIPTION
+	The indexed root a container reports is a CONTAINER path
+	('/workspace/lattice'); the root an operator expects is a HOST path
+	('C:\dev\lattice'). They are different namespaces and are only comparable
+	through the bind that relates them. Comparing them directly would agree
+	whenever the mount happened to be an identity and disagree meaninglessly
+	otherwise, which is worse than not comparing at all.
+
+	A path that is not under the destination is returned unchanged: it is not
+	the mount's to translate, and inventing a host path for it would fabricate
+	the very reading the caller is trying to check.
+#>
+function ConvertTo-WorkspaceHostPath {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $ContainerPath,
+		[AllowNull()] [AllowEmptyString()] [string] $WorkspaceDestination,
+		[AllowNull()] [AllowEmptyString()] [string] $WorkspaceSource
+	)
+
+	$path = ConvertTo-ProvenancePath -Path $ContainerPath
+	$destination = ConvertTo-ProvenancePath -Path $WorkspaceDestination
+
+	# The SOURCE is kept in its original spelling. ConvertTo-ProvenancePath
+	# normalises to backslashes for COMPARISON, which is right for deciding
+	# equality and wrong for building a path a human will read: it would render
+	# every Linux host path with Windows separators in the refusal message.
+	$rawSource = if ($null -eq $WorkspaceSource) { '' } else { $WorkspaceSource.Trim() }
+	$rawPath = if ($null -eq $ContainerPath) { '' } else { $ContainerPath.Trim() }
+
+	if ($path -eq '' -or $destination -eq '' -or $rawSource -eq '') { return $rawPath }
+
+	$trimmedSource = $rawSource.TrimEnd('/', '\')
+	if ($trimmedSource -eq '') { $trimmedSource = $rawSource }
+
+	if ($path -ieq $destination) { return $trimmedSource }
+
+	$prefix = $destination.TrimEnd('\') + '\'
+	if (-not $path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $rawPath }
+
+	$relative = $path.Substring($prefix.Length)
+	$separator = if ($rawSource.Contains('\')) { '\' } else { '/' }
+	return ($trimmedSource + $separator + $relative.Replace('\', $separator))
+}
+
+<#
+.SYNOPSIS
 	Reports whether check 2's comparison is a value compared against itself.
 
 .DESCRIPTION
@@ -905,14 +1100,15 @@ function Get-ImageBuildCommitResolution {
 
 <#
 .SYNOPSIS
-	Check 6 of 6. The IMAGE the container is executing was built from the
+	Check 6 of 7. The IMAGE the container is executing was built from the
 	expected commit.
 
 .DESCRIPTION
-	The check the other five do not make, and the one the script's name implies.
+	The check the other six do not make, and the one the script's name implies.
 	Checks 1 and 2 adjudicate a CHECKOUT; check 3 adjudicates whether a container
 	is stale relative to what its own tag resolves to NOW. None of them reads the
-	image's own account of what went into it, so all five were green during
+	image's own account of what went into it, so all five checks that existed then
+	were green during
 	bucket-4 gate run 4 while eleven hours of measurement were taken against an
 	image built 45 commits behind the commit the gate named (issue #2686).
 
@@ -1041,7 +1237,7 @@ function Get-BuildProvenanceViolation {
 
 <#
 .SYNOPSIS
-	Runs all six checks over a set of readings and returns a full report.
+	Runs all seven checks over a set of readings and returns a full report.
 
 .DESCRIPTION
 	Returns an object carrying BOTH the violations and every value that was
@@ -1128,6 +1324,27 @@ function Get-ContainerProvenanceReport {
 		$buildArguments['ImageIsLocallyBuilt'] = [bool] $Readings['ImageIsLocallyBuilt']
 	}
 	$violations.AddRange([string[]] (Get-BuildProvenanceViolation @buildArguments))
+
+	# Check 7 is handed ONLY workspace readings and the two expected roots. Like
+	# checks 5 and 6 it is kept away from the compose working directory: the
+	# tree the container READS is a different input from the directory compose
+	# was invoked from, and a parameter list that cannot see the latter cannot
+	# be keyed on it by a later edit that assumes they are the same.
+	$workspaceArguments = @{
+		WorkspaceDestination   = $(if ($Readings.ContainsKey('WorkspaceDestination')) { $Readings['WorkspaceDestination'] } else { '' })
+		WorkspaceSource        = $(if ($Readings.ContainsKey('WorkspaceSource')) { $Readings['WorkspaceSource'] } else { '' })
+		WorkspaceMountType     = $(if ($Readings.ContainsKey('WorkspaceMountType')) { $Readings['WorkspaceMountType'] } else { '' })
+		ExpectedWorkspaceRoot  = $(if ($Readings.ContainsKey('ExpectedWorkspaceRoot')) { $Readings['ExpectedWorkspaceRoot'] } else { '' })
+		ExpectedRepositoryRoot = $(if ($Readings.ContainsKey('ExpectedRepositoryRoot')) { $Readings['ExpectedRepositoryRoot'] } else { '' })
+		IndexedRoots           = [string[]] @(if ($Readings.ContainsKey('IndexedRoots')) { $Readings['IndexedRoots'] } else { @() })
+		CaseSensitive          = $CaseSensitive
+	}
+	# Absent means FALSE, matching the check's own default. The identity arm must
+	# not become satisfiable by leaving a reading out.
+	if ($Readings.ContainsKey('IndexedRootsExaminable')) {
+		$workspaceArguments['IndexedRootsExaminable'] = [bool] $Readings['IndexedRootsExaminable']
+	}
+	$violations.AddRange([string[]] (Get-WorkspaceProvenanceViolation @workspaceArguments))
 
 	$isSelfReferential = Test-GitProvenanceIsSelfReferential `
 		-ExpectedCheckout $ExpectedCheckout `
