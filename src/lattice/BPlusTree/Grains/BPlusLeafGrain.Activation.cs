@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -159,8 +160,9 @@ internal sealed partial class BPlusLeafGrain
     /// ceiling, never more, for <b>any</b> sequence of inputs.
     /// </para>
     /// <para>
-    /// This matters beyond tidiness. Issues #2278/#2279 settled that the core
-    /// library must not silently defeat an operator's
+    /// This matters beyond tidiness. The dispositions reached on issues
+    /// #2278/#2279 left the core library declining to silently defeat an
+    /// operator's
     /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> or
     /// <c>DOTNET_PROCESSOR_COUNT</c>, and a reviewer who remembers that will reach
     /// for the objection on sight. A dynamic floor <b>beneath</b> the configured
@@ -168,12 +170,73 @@ internal sealed partial class BPlusLeafGrain
     /// process may take, and this mechanism declines headroom the heap cannot
     /// currently afford. It never takes headroom the operator did not grant.
     /// (Issue #2816 later narrowed the <c>DOTNET_PROCESSOR_COUNT</c> half of that
-    /// ruling on the same reasoning - the default ceiling is now the lesser of
-    /// that figure and the enforced container CPU grant, which can only lower it -
-    /// but the principle stated here is unchanged.)
+    /// disposition on the same reasoning - the default ceiling is now the lesser
+    /// of that figure and the enforced container CPU grant, which can only lower
+    /// it - but the principle stated here is unchanged. Read the citation note on
+    /// <see cref="ResolveDefaultReplayCeiling"/> before quoting #2279 for any of
+    /// this: what that issue itself says, and what this file has attributed to it,
+    /// are not the same text.)
     /// </para>
     /// </summary>
     private static int _withheldReplayPermits;
+
+    /// <summary>
+    /// Publishes the <b>live</b> withheld-permit level - the running value of
+    /// <see cref="_withheldReplayPermits"/> - as an observable gauge.
+    /// <para>
+    /// This exists because the two counter arms of
+    /// <c>orleans.lattice.wal.replay.permit_adaptations_total</c> cannot, on their
+    /// own, show what a restart destroyed. The level is derivable from them as
+    /// <c>withheld - restored</c>, but both are process-lifetime counters: when
+    /// the process dies with adaptation in force, they reset to zero together and
+    /// the difference silently becomes zero too. Nothing in the series marks the
+    /// discontinuity, so a reader cannot distinguish "the gate had adapted and the
+    /// restart threw that away" from "the gate never adapted", which is exactly
+    /// the ambiguity issue #2784 was filed against.
+    /// </para>
+    /// <para>
+    /// A gauge supplies the missing <b>boundary</b> rather than a new number. The
+    /// last sample before the gap is the level that was discarded; the step to
+    /// zero across the gap is the discard itself. That is the reading a successor
+    /// process cannot produce for itself - it has no access to its predecessor's
+    /// static - so it has to be published continuously by the process that holds
+    /// the state, not emitted once by the one that inherits none of it.
+    /// </para>
+    /// <para>
+    /// It is deliberately <b>not</b> a substitute for the counters. A gauge is
+    /// sampled, so a withhold and its matching restore landing between two scrapes
+    /// are invisible to it and visible to them; the counters remain the record of
+    /// how often the mechanism fired. This series answers only "how much headroom
+    /// is being declined right now".
+    /// </para>
+    /// <para>
+    /// Tagged with the platform tenant label and <b>nothing else</b>, matching its
+    /// sibling counter. There is no <c>tree</c> tag because the gate is a
+    /// process-wide static: every tree activating on this silo draws permits from
+    /// the same pool, so a per-tree series would report the same figure under many
+    /// names and invite a reader to sum them.
+    /// </para>
+    /// <para>
+    /// Declared <b>below</b> <see cref="_withheldReplayPermits"/>, which its
+    /// callback reads. Instrument publication runs a class's static initialiser
+    /// re-entrantly and part-way through, so any field declared beneath the
+    /// instrument is still null or default at that moment. The ordering is the
+    /// rule, not a preference.
+    /// </para>
+    /// </summary>
+    private static readonly ObservableGauge<int> WithheldReplayPermitsGauge =
+        LatticeMetrics.Meter.CreateObservableGauge(
+            LatticeMetrics.WalReplayPermitsWithheldName,
+            static () => new Measurement<int>(
+                Volatile.Read(ref _withheldReplayPermits),
+                LatticeTenantLabel.Platform),
+            unit: "{permit}",
+            description:
+                "Replay permits currently withheld from the WAL replay concurrency gate by memory "
+                + "backpressure. Equal to the live difference between the withheld and restored arms of "
+                + "orleans.lattice.wal.replay.permit_adaptations_total, published directly so that the "
+                + "step to zero across a process restart marks adaptation the restart discarded (issue "
+                + "#2784).");
 
     /// <summary>
     /// Test-only view of <see cref="_withheldReplayPermits"/>.
@@ -373,12 +436,25 @@ internal sealed partial class BPlusLeafGrain
     /// <c>Math.Min(Environment.ProcessorCount, ContainerCpuGrant.Read())</c>,
     /// treating an unreadable or unlimited quota as <em>unknown</em> and
     /// therefore as no constraint at all, rather than as zero. This reverses the
-    /// ruling on issue #2279, which declined to read the quota here at all, and
-    /// the reversal is worth stating plainly because the earlier reasoning is
-    /// otherwise sound and would be re-derived by the next reader.
+    /// earlier behaviour of this site, which declined to read the quota here at
+    /// all, and the reversal is worth stating plainly because the earlier
+    /// reasoning is otherwise sound and would be re-derived by the next reader.
     /// </para>
     /// <para>
-    /// #2279 argued that <c>DOTNET_PROCESSOR_COUNT</c> is a documented, supported
+    /// <b>Citation note (issue #2784).</b> The reasoning set out below was, until
+    /// that issue, attributed here to issue #2279. It is not in that issue's text.
+    /// The chain runs: a code comment stated the argument; issue #2816 cited the
+    /// comment; issue #2821's change carried the attribution into this summary;
+    /// and by then it read as a settled ruling with an issue number behind it. The
+    /// argument is repeated below on its merits because it is a good argument and
+    /// the next reader would otherwise re-derive it - but it is presented as
+    /// reasoning, not as a citation, because nobody has been able to point at
+    /// where #2279 makes it. The one reference retained below names the
+    /// <em>disposition</em> that issue reached, which is a matter of record.
+    /// </para>
+    /// <para>
+    /// The argument runs thus. <c>DOTNET_PROCESSOR_COUNT</c> is a documented,
+    /// supported
     /// override, so library code reaching past it would silently defeat an
     /// operator instruction every other .NET subsystem obeys and leave the
     /// process holding two conflicting beliefs about its own CPU count. That
@@ -390,15 +466,16 @@ internal sealed partial class BPlusLeafGrain
     /// whatever the process believes. The thread pool, the GC heap count, and
     /// every other subsystem keep reading the overridden figure untouched, so no
     /// second belief about the CPU count is introduced anywhere: this is one
-    /// admission gate declining to admit more CPU-bound work than the cgroup will
-    /// run in parallel.
+    /// admission gate declining to admit more concurrent replays than the cgroup
+    /// will schedule in parallel.
     /// </para>
     /// <para>
-    /// The conflation #2279 made is between <em>how many threads to run</em> -
+    /// The conflation that reasoning made is between <em>how many threads to
+    /// run</em> -
     /// which is properly the operator's call, and which the override rightly
-    /// settles - and <em>how many concurrent CPU-bound replays to admit</em>,
+    /// settles - and <em>how many concurrent replays to admit</em>,
     /// which is bounded by the CPU the cgroup will actually schedule and is not a
-    /// matter of belief. The remedy #2279 prescribed (pin
+    /// matter of belief. The remedy #2279's disposition prescribed (pin
     /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> on a
     /// constrained host) is still available, still takes precedence, and is still
     /// the right tool for a deliberate value; it is simply not an acceptable
@@ -407,6 +484,34 @@ internal sealed partial class BPlusLeafGrain
     /// process. The same shape was settled for the memory half of this gate on
     /// issue #2788: prefer the container's grant when the runtime's figure
     /// exceeds it, and treat unreadable or unlimited as unknown.
+    /// </para>
+    /// <para>
+    /// <b>The ceiling is CPU-derived; the resource that exhausts first is memory
+    /// (issue #2784).</b> Both inputs to this default are CPU quantities, and
+    /// until #2784 this file asserted in two places that a whole-window WAL replay
+    /// is "CPU bound". That is false, and it was falsified by measurement rather
+    /// than argument: issues #2781/#2804 built an adaptive gate on the premise,
+    /// and issue #2862 recorded a run in which the premise's consequence - 625
+    /// managed <c>OutOfMemoryException</c> in 31 minutes, the process dying twice -
+    /// arrived without the CPU-derived ceiling ever binding. Each permit admits a
+    /// whole-window, multi-MiB-buffered replay, so the gate is a memory admission
+    /// gate sized by a CPU figure. The adaptive layer of #2862 makes the system
+    /// survive that mismatch; it does not make the default correct, and #2784
+    /// remains open on the default itself.
+    /// </para>
+    /// <para>
+    /// <b>Why no memory-derived default is offered here.</b> Deriving one needs a
+    /// per-replay byte figure to divide the heap ceiling by, and this repository
+    /// does not contain one. The nearest candidate,
+    /// <see cref="LatticeOptions.WalReplaySliceBudget"/>, is denominated in
+    /// <em>entries</em>, and an entry has no fixed width. Guessing the divisor
+    /// fails in both directions and neither failure is visible from inside the
+    /// process: too small a figure collapses the ceiling to one permit and
+    /// serialises every activation on the silo, while too large a figure yields a
+    /// bound above the CPU-derived one, is therefore never the minimum, and
+    /// becomes a dead clause that looks like a memory bound while being none. The
+    /// missing figure is the blocker, and it is recorded here so the next reader
+    /// knows the gap is measurement and not attention.
     /// </para>
     /// <para>
     /// Two deliberate non-decisions. The grant's ceiling rounding is left alone:
@@ -467,7 +572,11 @@ internal sealed partial class BPlusLeafGrain
         if (sizedHere)
         {
             LogResolvedReplayConcurrencyGate(
-                max, options.WalMaterialiserMaxConcurrentReplays, containerCpuGrant, loggerAccessor);
+                max,
+                options.WalMaterialiserMaxConcurrentReplays,
+                containerCpuGrant,
+                static () => ReplayHeapPressure.Read().CeilingBytes,
+                loggerAccessor);
 
             // Zero-prime every arm of the backpressure counter (issue #2781,
             // discipline of #2764, trigger split of #2883). This is the one site
@@ -592,15 +701,31 @@ internal sealed partial class BPlusLeafGrain
     /// Calling the emitter directly is deterministic and tests the property that
     /// can actually regress.
     /// </para>
+    /// <para>
+    /// The heap ceiling arrives as a <see cref="Func{TResult}"/> for two separate
+    /// reasons, and both matter. It is <b>invoked after</b> the level check, so a
+    /// host with information logging disabled pays nothing for a figure it will
+    /// not print - the same discipline the logger accessor already follows. And it
+    /// is invoked <b>inside</b> the existing swallow, because a probe of the
+    /// process heap is environmental code on the leaf activation path: issue #2256
+    /// established here that observability must not be able to fail the path it
+    /// observes, and a heap read is no more exempt from that than a logging sink.
+    /// </para>
     /// </summary>
     internal static void LogResolvedReplayConcurrencyGate(
-        int max, int configured, int? containerCpuGrant, Func<ILogger?> loggerAccessor)
+        int max,
+        int configured,
+        int? containerCpuGrant,
+        Func<long> heapCeilingAccessor,
+        Func<ILogger?> loggerAccessor)
     {
         try
         {
             var logger = loggerAccessor();
             if (logger is null || !logger.IsEnabled(LogLevel.Information))
                 return;
+
+            var heapCeilingBytes = heapCeilingAccessor();
 
             logger.LogInformation(
                 "Leaf WAL replay concurrency gate sized to {MaxConcurrentReplays} permit(s) for this silo. "
@@ -609,18 +734,27 @@ internal sealed partial class BPlusLeafGrain
                 + "Environment.ProcessorCount and the enforced container CPU grant), "
                 + "Environment.ProcessorCount reports {ProcessorCount}, and the container CPU grant read "
                 + "from the cgroup filesystem is {ContainerCpuGrant}. Each permit admits one whole-window "
-                + "WAL replay, which is CPU bound, so a ceiling above the CPU this process can actually obtain "
+                + "WAL replay, so a ceiling above the CPU this process can actually obtain "
                 + "oversubscribes it. Environment.ProcessorCount honours a container CPU quota only while "
                 + "DOTNET_PROCESSOR_COUNT does not override it, which is why the default takes the minimum "
                 + "rather than trusting the runtime figure alone; an explicit "
                 + "WalMaterialiserMaxConcurrentReplays still takes precedence over both. The gate is sized "
-                + "once per process and is never re-created or topped up.",
+                + "once per process and is never re-created or topped up. Note that both figures above are "
+                + "CPU quantities while a whole-window replay exhausts the managed heap first, so the "
+                + "resolved heap ceiling this gate is measured against is {ReplayHeapCeilingBytes}; that "
+                + "dimension mismatch is issue #2784, and the measurements establishing the binding "
+                + "resource are issues #2781, #2804 and #2862.",
                 max,
                 configured,
                 // grant-exempt: reporting the resolved processor count in a diagnostic, not sizing a pool.
                 Environment.ProcessorCount,
                 containerCpuGrant?.ToString(CultureInfo.InvariantCulture)
-                    ?? "unreadable or unlimited, so it did not constrain the ceiling");
+                    ?? "unreadable or unlimited, so it did not constrain the ceiling",
+                heapCeilingBytes > 0
+                    ? string.Create(
+                        CultureInfo.InvariantCulture, $"{heapCeilingBytes} byte(s)")
+                    : "unknown, so heap occupancy yields no verdict and the adaptive layer cannot "
+                        + "engage on it");
         }
         catch
         {

@@ -1851,6 +1851,37 @@ public static class LatticeMetrics
             description: "Adaptations to the per-silo WAL replay concurrency gate under memory pressure, tagged by outcome, and on the withheld arm by the trigger (fault or occupancy) that withheld. Zero-primed on all three arms when the gate is sized. The restored arm carries no trigger because withheld permits are fungible, so a per-trigger level is not derivable.");
 
     /// <summary>
+    /// The name of the observable gauge reporting the number of replay permits
+    /// <b>currently</b> withheld from the per-silo WAL replay concurrency gate
+    /// (issue #2784). The counterpart level to
+    /// <see cref="WalReplayPermitAdaptations"/>, which is the history.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The instrument itself is <b>not</b> declared here. It is built in
+    /// <c>BPlusLeafGrain.Activation.cs</c>, beside the process-wide static count
+    /// its callback reads, because an observable gauge must be declared below
+    /// every piece of static state that callback touches and that state does not
+    /// live on this class.
+    /// </para>
+    /// <para>
+    /// The name is nevertheless exported <b>here</b>, as a constant, and that is a
+    /// requirement rather than a convenience. The dashboard drift guard resolves a
+    /// panel's metric token against two populations: instruments a snapshot
+    /// <c>MeterListener</c> can see, and the <c>public const string ...Name</c>
+    /// fields on this class. An instrument whose factory runs only when its
+    /// declaring type is first touched is in <b>neither</b> population, so a panel
+    /// referencing it fails the guard as an unknown token even though the
+    /// instrument is perfectly correct. Exporting the name is what puts it in the
+    /// second population. The same convention already carries
+    /// <see cref="CoordinatorPhaseTickConsecutiveFailuresGaugeName"/> and
+    /// <see cref="LeafResidencyBudgetBytesName"/>, whose instruments are likewise
+    /// declared outside this class.
+    /// </para>
+    /// </remarks>
+    public const string WalReplayPermitsWithheldName = "orleans.lattice.wal.replay.permits_withheld";
+
+    /// <summary>
     /// Tag marking a replay permit queue wait that ended in the permit being
     /// <b>acquired</b>, on <see cref="WalReplayPermitQueueWait"/>.
     /// </summary>
