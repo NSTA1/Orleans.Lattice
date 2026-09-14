@@ -96,6 +96,60 @@ internal sealed partial class ShardRootGrain
         long tombstones = 0;
         string? resumeFrom = null;
 
+        // One page shape for both the returned result and any partial the
+        // ceiling banks (issue 2807). Building them separately is how a banked
+        // page quietly loses the shard-level facts - depth, hotness, the
+        // lifecycle flags - that only a first batch carries and that the
+        // fan-out driver takes from the first page it receives: the counts
+        // would still look right while the report came back hollow.
+        async Task<ShardDiagnosticsPage> BuildPageAsync(string? resumeAt)
+        {
+            if (resuming)
+            {
+                // Only the counts are meaningful on a resumed batch; see
+                // ShardDiagnosticsPage.
+                return new ShardDiagnosticsPage
+                {
+                    Report = new ShardDiagnosticReport
+                    {
+                        LiveKeys = liveKeys,
+                        Tombstones = tombstones,
+                    },
+                    ResumeFromInclusive = resumeAt,
+                };
+            }
+
+            // Synchronous off activation-scoped counters, so this costs no
+            // round trip and cannot itself park the walk.
+            var hotness = await GetHotnessAsync();
+            var opsPerSec = hotness.Window.TotalSeconds > 0
+                ? (hotness.Reads + hotness.Writes) / hotness.Window.TotalSeconds
+                : 0.0;
+            var ratio = (liveKeys + tombstones) > 0
+                ? (double)tombstones / (liveKeys + tombstones)
+                : 0.0;
+
+            return new ShardDiagnosticsPage
+            {
+                Report = new ShardDiagnosticReport
+                {
+                    // ShardIndex stamped by caller.
+                    Depth = depth,
+                    RootIsLeaf = rootIsLeaf,
+                    LiveKeys = liveKeys,
+                    Tombstones = tombstones,
+                    TombstoneRatio = ratio,
+                    OpsPerSecond = opsPerSec,
+                    Reads = hotness.Reads,
+                    Writes = hotness.Writes,
+                    HotnessWindow = hotness.Window,
+                    SplitInProgress = splitInProgress,
+                    BulkOperationPending = bulkPending,
+                },
+                ResumeFromInclusive = resumeAt,
+            };
+        }
+
         if (rootNodeId is null)
         {
             // No root yet - empty shard.
@@ -188,53 +242,20 @@ internal sealed partial class ShardRootGrain
                 }
 
                 if (!await walk.MoveNextAsync()) break;
+
+                // Bankable checkpoint (issue 2807): the counts cover exactly
+                // the leaves up to this boundary and the next batch resumes at
+                // it, so the ceiling costs a batch rather than the walk.
+                if (walk.BankableResumeKey is { } boundary)
+                {
+                    PublishScanPagePartial(scan, await BuildPageAsync(boundary));
+                }
             }
 
             resumeFrom = walk.ResumeFromInclusive;
         }
 
-        if (resuming)
-        {
-            // Only the counts are meaningful on a resumed batch; see
-            // ShardDiagnosticsPage.
-            return new ShardDiagnosticsPage
-            {
-                Report = new ShardDiagnosticReport
-                {
-                    LiveKeys = liveKeys,
-                    Tombstones = tombstones,
-                },
-                ResumeFromInclusive = resumeFrom,
-            };
-        }
-
-        var hotness = await GetHotnessAsync();
-        var opsPerSec = hotness.Window.TotalSeconds > 0
-            ? (hotness.Reads + hotness.Writes) / hotness.Window.TotalSeconds
-            : 0.0;
-        var ratio = (liveKeys + tombstones) > 0
-            ? (double)tombstones / (liveKeys + tombstones)
-            : 0.0;
-
-        return new ShardDiagnosticsPage
-        {
-            Report = new ShardDiagnosticReport
-            {
-                // ShardIndex stamped by caller.
-                Depth = depth,
-                RootIsLeaf = rootIsLeaf,
-                LiveKeys = liveKeys,
-                Tombstones = tombstones,
-                TombstoneRatio = ratio,
-                OpsPerSecond = opsPerSec,
-                Reads = hotness.Reads,
-                Writes = hotness.Writes,
-                HotnessWindow = hotness.Window,
-                SplitInProgress = splitInProgress,
-                BulkOperationPending = bulkPending,
-            },
-            ResumeFromInclusive = resumeFrom,
-        };
+        return await BuildPageAsync(resumeFrom);
     }
 
     /// <inheritdoc />
@@ -433,6 +454,20 @@ internal sealed partial class ShardRootGrain
                 walk.CurrentLeafId!.Value.GetGuidKey(), cancellationToken));
 
             if (!await walk.MoveNextAsync()) break;
+
+            // Bankable checkpoint (issue 2807). A banked page always carries a
+            // resume key, which is exactly what keeps the caller's re-anchor
+            // guard correct: RefreshLeafByteFootprintsBoundedAsync re-anchors
+            // its running totals only on a page whose ResumeFromInclusive is
+            // null, so a partial can never be mistaken for a whole-shard sweep.
+            if (walk.BankableResumeKey is { } boundary)
+            {
+                PublishScanPagePartial(scan, new ShardStorageUsagePage
+                {
+                    Usage = usage,
+                    ResumeFromInclusive = boundary,
+                });
+            }
         }
 
         return new ShardStorageUsagePage

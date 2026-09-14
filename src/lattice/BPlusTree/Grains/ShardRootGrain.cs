@@ -1879,6 +1879,18 @@ internal sealed partial class ShardRootGrain(
         // Published per batch: the union across batches is the same tombstone
         // closure the single unbounded notification carried, so replication
         // apply still reproduces it without re-evaluating the predicate.
+        //
+        // This post-loop publish is also why this walk deliberately publishes
+        // NO bankable partial for the page-fill ceiling (issue 2807), unlike
+        // every other bounded walk on this grain. Banking one would hand the
+        // caller a resume key past a prefix whose tombstones were applied
+        // locally but whose notification never reached here, so the caller
+        // would resume beyond it and the replication closure for that prefix
+        // would be orphaned permanently. Today's ceiling fault is instead
+        // self-healing: the caller sees ScanPageStalledException, retries from
+        // startInclusive, and re-publishes the whole closure - a repeated
+        // tombstone being idempotent. A cheaper walk is not worth trading a
+        // loud retry for a silent divergence.
         await PublishDeleteRangeAsync(startInclusive, endExclusive, matchedKeys);
         RecordRecordsWritten(totalDeleted);
         return new ShardRangeDeletePage { Deleted = totalDeleted, ResumeFromInclusive = resumeFrom };
@@ -1985,19 +1997,22 @@ internal sealed partial class ShardRootGrain(
             total += leafCount;
             scan.Budget.RecordLeafVisited();
 
+            // This leaf's bounds, read unconditionally rather than only when
+            // something needs them. Three things want them - the past-range
+            // early exit, the yield point, and since issue 2807 the bankable
+            // checkpoint - and each used to pay its own round trip, so making
+            // the read unconditional costs nothing on a sterile or yielding
+            // leaf and one Task.FromResult-backed call on a productive one.
+            var bounds = await leaf.GetKeyRangeAsync();
+
             // Past-range early exit (issue 1971). Without this a narrow range
-            // still costs a walk to the end of the shard's chain. The bounds
-            // probe is paid only when a leaf contributed nothing, so a
-            // productive leaf keeps its single-call cost and only a sterile run
-            // pays for the check that ends it.
-            if (leafCount == 0 && endExclusive is not null)
+            // still costs a walk to the end of the shard's chain.
+            if (leafCount == 0
+                && endExclusive is not null
+                && bounds.LowKeyInclusive is { } low
+                && string.CompareOrdinal(low, endExclusive) >= 0)
             {
-                var probe = await leaf.GetKeyRangeAsync();
-                if (probe.LowKeyInclusive is { } low
-                    && string.CompareOrdinal(low, endExclusive) >= 0)
-                {
-                    break;
-                }
+                break;
             }
 
             // Resume by KEY, never by leaf grain id: grains are virtual, so a
@@ -2009,7 +2024,7 @@ internal sealed partial class ShardRootGrain(
             // truncating - the same "only stop where you can resume" rule the
             // range-delete and page-fill bounds follow.
             //
-            // The next sibling is resolved FIRST so a resume key is only ever
+            // The next sibling is read FIRST so a resume key is only ever
             // returned when there is genuinely more chain to walk. Yielding one
             // from the last leaf would make the caller re-descend to a leaf it
             // has already counted, which - unlike a range delete, where a
@@ -2018,11 +2033,22 @@ internal sealed partial class ShardRootGrain(
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (scan.Budget.ShouldYield())
+            var boundary = ResumeKeyFrom(bounds, startInclusive, endExclusive);
+            if (boundary is not null)
             {
-                if (await TryResolveResumeKeyAsync(leaf, startInclusive, endExclusive) is { } high)
+                // Bankable checkpoint (issue 2807). `total` covers exactly the
+                // leaves up to this boundary and the next batch resumes at it,
+                // so a ceiling fire from here costs the caller a batch boundary
+                // rather than the whole attempt. Published against the leaf
+                // just completed, never the one whose read is in flight, or the
+                // resumed batch would re-count it.
+                PublishScanPagePartial(
+                    scan,
+                    new ShardCountPage { Count = total, ResumeFromInclusive = boundary });
+
+                if (scan.Budget.ShouldYield())
                 {
-                    resumeFrom = high;
+                    resumeFrom = boundary;
                     break;
                 }
             }
@@ -2061,31 +2087,6 @@ internal sealed partial class ShardRootGrain(
         if (!IsLeafGrainId(resolved))
             resolved = await DescendToLeafForKeyAsync(resolved, resumeFromInclusive);
         return resolved;
-    }
-
-    /// <summary>
-    /// Returns the key a bounded walk should resume after this leaf from, or
-    /// <see langword="null"/> when the leaf declares no usable high bound.
-    /// <para>
-    /// The leaf's exclusive high bound is exactly where the next leaf begins.
-    /// When there is no safe key to resume from the caller must keep walking
-    /// rather than stop, because stopping without a resume position would
-    /// silently truncate - the "only stop where you can resume" rule the
-    /// range-delete and page-fill bounds also follow.
-    /// </para>
-    /// </summary>
-    private static async Task<string?> TryResolveResumeKeyAsync(
-        IBPlusLeafGrain leaf, string? lowerBound, string? upperBound)
-    {
-        var bounds = await leaf.GetKeyRangeAsync();
-        if (bounds.HighKeyExclusive is { } high
-            && (lowerBound is null || string.CompareOrdinal(high, lowerBound) > 0)
-            && (upperBound is null || string.CompareOrdinal(high, upperBound) < 0))
-        {
-            return high;
-        }
-
-        return null;
     }
 
     /// <inheritdoc />
@@ -2138,6 +2139,7 @@ internal sealed partial class ShardRootGrain(
                 return new ShardAnyPage { Found = true };
             scan.Budget.RecordLeafVisited();
 
+            var bounds = await leaf.GetKeyRangeAsync();
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) return new ShardAnyPage { Found = false };
 
@@ -2146,11 +2148,21 @@ internal sealed partial class ShardRootGrain(
             // output to strand a caller with, so the forward-progress rule the
             // page fills need does not apply. A resume key is still only
             // emitted when a next leaf exists, so the walk cannot stall.
-            if (scan.Budget.ShouldYield())
+            var boundary = ResumeKeyFrom(bounds, resumeFromInclusive, null);
+            if (boundary is not null)
             {
-                if (await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null) is { } high)
+                // Bankable checkpoint (issue 2807): every leaf up to this
+                // boundary has been read and none held a live key, which is
+                // exactly what this page says. Banking it is what stops the
+                // ceiling turning an emptiness probe over a long tombstoned
+                // chain into a walk that can never finish.
+                PublishScanPagePartial(
+                    scan,
+                    new ShardAnyPage { Found = false, ResumeFromInclusive = boundary });
+
+                if (scan.Budget.ShouldYield())
                 {
-                    return new ShardAnyPage { Found = false, ResumeFromInclusive = high };
+                    return new ShardAnyPage { Found = false, ResumeFromInclusive = boundary };
                 }
             }
 
@@ -2247,14 +2259,28 @@ internal sealed partial class ShardRootGrain(
             }
             scan.Budget.RecordLeafVisited();
 
+            var bounds = await leaf.GetKeyRangeAsync();
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (scan.Budget.ShouldYield())
+            var boundary = ResumeKeyFrom(bounds, resumeFromInclusive, null);
+            if (boundary is not null)
             {
-                if (await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null) is { } high)
+                // Bankable checkpoint (issue 2807). The moved-away slot set has
+                // to ride along or a banked page loses rows silently: a
+                // strongly consistent caller re-asks the split's new owner for
+                // exactly the slots reported here, so a page that banks the
+                // count and drops the slots reports success and omits them.
+                PublishScanPagePartial(scan, new ShardCountWithMovedAwayPage
                 {
-                    resumeFrom = high;
+                    Count = total,
+                    MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                    ResumeFromInclusive = boundary,
+                });
+
+                if (scan.Budget.ShouldYield())
+                {
+                    resumeFrom = boundary;
                     break;
                 }
             }
@@ -2345,28 +2371,35 @@ internal sealed partial class ShardRootGrain(
             }
             scan.Budget.RecordLeafVisited();
 
+            // Read unconditionally, for the reason set out on
+            // CountBoundedCoreAsync: the past-range probe, the yield point and
+            // the bankable checkpoint (issue 2807) all want this leaf's bounds,
+            // and each used to pay its own round trip.
+            var bounds = await leaf.GetKeyRangeAsync();
+
             // Past-range early exit (issue 1971): a bounded range must not cost
-            // a walk to the end of the chain. The probe is paid only when a
-            // leaf yielded no in-range keys at all, so a productive leaf keeps
-            // its single-call cost.
-            if (keys.Count == 0 && endExclusive is not null)
+            // a walk to the end of the chain.
+            if (keys.Count == 0
+                && endExclusive is not null
+                && bounds.LowKeyInclusive is { } low
+                && string.CompareOrdinal(low, endExclusive) >= 0)
             {
-                var probe = await leaf.GetKeyRangeAsync();
-                if (probe.LowKeyInclusive is { } low
-                    && string.CompareOrdinal(low, endExclusive) >= 0)
-                {
-                    break;
-                }
+                break;
             }
 
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (scan.Budget.ShouldYield())
+            var boundary = ResumeKeyFrom(bounds, startInclusive, endExclusive);
+            if (boundary is not null)
             {
-                if (await TryResolveResumeKeyAsync(leaf, startInclusive, endExclusive) is { } high)
+                PublishScanPagePartial(
+                    scan,
+                    new ShardCountPage { Count = total, ResumeFromInclusive = boundary });
+
+                if (scan.Budget.ShouldYield())
                 {
-                    resumeFrom = high;
+                    resumeFrom = boundary;
                     break;
                 }
             }
