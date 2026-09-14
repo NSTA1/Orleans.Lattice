@@ -262,7 +262,7 @@ The `orleans.lattice.tag_index.reconcile.*` family is emitted by the background 
 | `orleans.lattice.replication.ship.duration` | histogram (ms) | `tree` | Ship duration p50/p95/p99 |
 | `orleans.lattice.replication.apply.duration` | histogram (ms) | `tree` | Apply duration p50/p95/p99 |
 | `orleans.lattice.replication.apply.lag` | histogram (ms) | `tree` | Apply lag p50/p95/p99 |
-| `orleans.lattice.replication.apply.dependency_wait_ms` | histogram (ms) | `tree` | Dependency wait p95 |
+| `orleans.lattice.replication.apply.dependency_wait` | histogram (ms) | `tree` | Dependency wait p95 |
 | `orleans.lattice.replication.wal.entries_shipped` | counter | `tree` | WAL throughput |
 | `orleans.lattice.wal.entries_trimmed` | counter | `tree` | WAL throughput |
 | `orleans.lattice.replication.dead_letter.enqueued` | counter | `tree` | Dead-letter churn |
