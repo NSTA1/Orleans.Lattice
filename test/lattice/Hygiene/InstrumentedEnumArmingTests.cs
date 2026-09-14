@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
+using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Tests.Hygiene;
 
@@ -89,10 +92,19 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// <item><description>
 /// <b>Scope is the core assembly.</b> <see cref="InstrumentedEnumAttribute"/> is
 /// <see langword="internal"/>, so it can only mark enums in
-/// <c>Orleans.Lattice</c>. That is a stated limit, not a defect: widening it to
-/// <see langword="public"/> would put a test-only marker on the shipped surface of
-/// every consuming package, and no other package currently tags a metric from an
-/// enum. <see cref="Every_structurally_instrumented_enum_carries_the_marker"/> is
+/// <c>Orleans.Lattice</c>. That is a stated limit, not a defect, but the size of
+/// what it leaves uncovered is <b>measured rather than recalled</b>: see
+/// <see cref="Enums_outside_the_core_assembly_that_tag_a_metric_match_the_recorded_population"/>,
+/// which scans <c>src/</c> and fails when that population drifts.
+/// <para>
+/// An earlier revision of this paragraph justified the limit by asserting that no
+/// other package tagged a metric from an enum. That was false when it was written
+/// (issue #2988), and the way it survived is the point: it was the one sentence in
+/// a fixture whose whole doctrine is that its arguments are executed, that nothing
+/// executed. A stale premise replaced by a fresher premise would expire the same
+/// way, so the count is now computed and asserted instead of stated.
+/// </para>
+/// <see cref="Every_structurally_instrumented_enum_carries_the_marker"/> is
 /// what stops the marker being under-applied <i>inside</i> that scope - and it
 /// earned that role on its first run, catching a fourth instrumented enum that a
 /// deliberate manual survey of this very question had missed.
@@ -258,6 +270,183 @@ public sealed class InstrumentedEnumArmingTests
 
         Assert.That(unmarked, Is.Empty, string.Join(Environment.NewLine, unmarked));
     }
+
+    /// <summary>
+    /// The population of enums outside the core assembly that tag a metric, held as
+    /// an exact set so that it cannot drift silently.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the executable replacement for a prose claim that was already false
+    /// when it was written (issue #2988). It is deliberately an <b>equality</b> and
+    /// not a lower bound, which is the opposite choice from
+    /// <see cref="KnownMarkedEnums"/>, and the asymmetry is intended: marking more
+    /// core enums is the behaviour this fixture wants to encourage, so a lower bound
+    /// is right there. Here, a <i>new</i> unguarded enum outside core is exactly the
+    /// drift the sentence failed to notice, so growth must be as loud as shrinkage.
+    /// </para>
+    /// <para>
+    /// Recorded as (package, mapping method, enum) rather than as a bare count. A
+    /// count would redden on drift but would not say what moved, and a reader would
+    /// then have to re-derive the population by hand - which is how the original
+    /// claim came to be trusted in the first place.
+    /// </para>
+    /// </remarks>
+    private static readonly string[] RecordedOutsideCoreTagMappings =
+    [
+        "lattice.api.mcp.repocontext Tag(RepoContextMemoryRestoreOutcome)",
+        "lattice.backup KindTag(BackupKind)",
+    ];
+
+    /// <summary>
+    /// Every enum outside the core assembly that is mapped to a metric tag is
+    /// accounted for. These enums are <b>not</b> covered by any other arm of this
+    /// fixture: the marker is <see langword="internal"/> to <c>Orleans.Lattice</c>,
+    /// so they cannot carry it, and reflection here cannot see them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Source scanning rather than reflection is a deliberate choice, not a
+    /// convenience. <c>Orleans.Lattice.Tests</c> does not reference every package
+    /// that declares an instrument - it references <c>Orleans.Lattice.Backup</c> but
+    /// not <c>Orleans.Lattice.Api.Mcp.RepoContext</c> - so a reflection-based census
+    /// would silently under-report exactly the packages it failed to reference, and
+    /// would do so in the same shape as the defect this assertion exists to prevent.
+    /// A source scan is independent of the assembly graph.
+    /// </para>
+    /// <para>
+    /// <b>What this does not claim.</b> It quantifies over the same structural shape
+    /// the rest of this fixture uses - a static method taking one enum and returning
+    /// a tag. An enum reported as a metric tag through <c>const string</c> values at
+    /// the emission site has no such method and is not counted here, so this
+    /// population is a lower bound on "enums that influence a tag" while being exact
+    /// for "enums with a tag-mapping method". That gap is real and is recorded in
+    /// issue #2988 rather than papered over.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Enums_outside_the_core_assembly_that_tag_a_metric_match_the_recorded_population()
+    {
+        var found = SourceTagMappings(insideCore: false)
+            .OrderBy(static m => m, StringComparer.Ordinal)
+            .ToList();
+
+        var recorded = RecordedOutsideCoreTagMappings
+            .OrderBy(static m => m, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(
+            found,
+            Is.EqualTo(recorded),
+            "The set of enums outside the core assembly that map to a metric tag has changed.\n"
+            + $"found:    {string.Join(" | ", found)}\n"
+            + $"recorded: {string.Join(" | ", recorded)}\n"
+            + "If an entry was added, that enum's members are NOT held exhaustively armed by any "
+            + "gate - the marker is internal to Orleans.Lattice and cannot be applied from another "
+            + "package without widening this fixture's three assembly bindings and its "
+            + "core-only instrument-name check (issue #2988). Record it here deliberately, so the "
+            + "gap stays counted rather than becoming folklore.");
+    }
+
+    /// <summary>
+    /// Anti-vacuity for the source scan. The same pattern, applied to the core
+    /// assembly's sources, must find the mappings reflection already proves are
+    /// there.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This control is not load-bearing today, and saying so is the point.</b>
+    /// Measured: breaking the scan pattern reddens
+    /// <see cref="Enums_outside_the_core_assembly_that_tag_a_metric_match_the_recorded_population"/>
+    /// as well, because the recorded set is currently non-empty, so an empty scan
+    /// fails that equality on its own.
+    /// </para>
+    /// <para>
+    /// It becomes the only guard at the moment the outside-core population is driven
+    /// to <b>zero</b> - which is the intended end state of issue #2988. A recorded
+    /// set of zero compared against a scan that matches nothing is a constant
+    /// compared against itself, and it would report a clean repository no matter what
+    /// the source said. Holding the pattern to a population reflection enumerates
+    /// from metadata, rather than from text, is what keeps that emptiness a
+    /// measurement instead of an artefact.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void The_source_scan_pattern_finds_the_core_mappings_reflection_already_proves()
+    {
+        var scanned = SourceTagMappings(insideCore: true)
+            .Select(static m => m[(m.IndexOf('(') + 1)..].TrimEnd(')'))
+            .ToList();
+
+        Assert.That(
+            scanned,
+            Is.SupersetOf(MarkedEnums.Value.Select(static t => t.Name)),
+            "The source scan did not find every enum that reflection reports as marked in the core "
+            + "assembly, so the pattern does not match this repository's code and any outside-core "
+            + "result it produces is meaningless.\n"
+            + $"scanned: {string.Join(", ", scanned.OrderBy(static s => s, StringComparer.Ordinal))}");
+    }
+
+    /// <summary>
+    /// Scans <c>src/</c> for static methods that take a single enum and return a
+    /// metric tag, returning <c>"package Method(EnumName)"</c> for each.
+    /// </summary>
+    /// <param name="insideCore">
+    /// When <see langword="true"/>, restricts the scan to <c>src/lattice/</c>, the
+    /// core assembly; when <see langword="false"/>, excludes it.
+    /// </param>
+    private static IReadOnlyList<string> SourceTagMappings(bool insideCore)
+    {
+        var root = HygieneRepository.FindRepoRoot();
+        var src = Path.Combine(root, "src");
+        var files = HygieneRepository.EnumerateFiles(src, "*.cs").ToList();
+
+        var enumNames = new HashSet<string>(StringComparer.Ordinal);
+        var texts = new List<(string Package, string Text)>();
+
+        foreach (var file in files)
+        {
+            var relative = Path.GetRelativePath(src, file).Replace('\\', '/');
+            var package = relative.Split('/')[0];
+            if (package.Equals("lattice", StringComparison.Ordinal) != insideCore)
+            {
+                continue;
+            }
+
+            var text = File.ReadAllText(file);
+            texts.Add((package, text));
+
+            foreach (Match m in EnumDeclaration.Matches(text))
+            {
+                enumNames.Add(m.Groups[1].Value);
+            }
+        }
+
+        var mappings = new List<string>();
+
+        foreach (var (package, text) in texts)
+        {
+            foreach (Match m in TagMappingMethod.Matches(text))
+            {
+                var parameter = m.Groups[2].Value;
+                var simple = parameter[(parameter.LastIndexOf('.') + 1)..];
+                if (enumNames.Contains(simple))
+                {
+                    mappings.Add($"{package} {m.Groups[1].Value}({simple})");
+                }
+            }
+        }
+
+        return mappings.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static readonly Regex EnumDeclaration = new(
+        @"\benum\s+(\w+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex TagMappingMethod = new(
+        @"static\s+KeyValuePair<string,\s*object\?>\s+(\w+)\s*\(\s*([\w\.]+)\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Anti-vacuity. A repository-wide gate that silently matches nothing reports
