@@ -9,23 +9,33 @@ using Orleans.Runtime;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Pins the dirty-set head-of-line block described in issue 2926.
+/// Pins the remedy for the dirty-set head-of-line block described in issue 2926.
 /// <para>
-/// In <c>TombstoneCompactionGrain.ProcessShardAsync</c> the dirty-set fast
-/// path wraps each leaf in a bare <c>catch { RecordSkippedLeaf(...); throw; }</c>
-/// that re-throws <em>before</em> <c>dirtyIndex++</c>, and the only call to
-/// <c>ClearDirtyLeavesUpToAsync</c> sits on the full-completion branch. A
-/// single un-compactable leaf at the head of the list therefore aborts every
-/// pass, never advances the index, never drains the watermark, and starves
-/// every leaf behind it.
+/// The defect these tests originally characterised: the dirty-set fast path
+/// wrapped each leaf in a bare <c>catch { RecordSkippedLeaf(...); throw; }</c>
+/// that re-threw <em>before</em> <c>dirtyIndex++</c>, while the only call to
+/// <c>ClearDirtyLeavesUpToAsync</c> sat on the full-completion branch. A
+/// single un-compactable leaf at the head of the list therefore aborted every
+/// pass, never advanced the index, never drained the watermark, and starved
+/// every leaf behind it for the life of the process.
 /// </para>
 /// <para>
-/// The tests below encode the behaviour as it stands today, deliberately, so
-/// that the defect is pinned rather than merely described. They are
-/// <em>characterisation</em> tests: when a remedy for 2926 lands, they must be
-/// re-derived from the chosen semantics rather than edited until they pass.
-/// The assertion each one would carry under a correct implementation is stated
-/// beside it.
+/// The remedy is <b>skip-and-retain</b>, and the two halves are inseparable.
+/// Skipping alone is worse than the defect: completing the shard calls
+/// <c>ClearDirtyLeavesUpToAsync(advance)</c>, which discards every mark at or
+/// below the watermark - the blocker's included - so the one leaf the exercise
+/// exists to reclaim becomes the one leaf silently forgotten while the shard
+/// reports clean success. So before the walk moves past a blocker, its dirty
+/// mark is re-raised strictly above that watermark, and the drain's existing
+/// strictly-greater preservation rule then retains exactly the skipped leaves.
+/// </para>
+/// <para>
+/// These began as <em>characterisation</em> tests written against the unfixed
+/// code (PR 2934) and have been re-derived here from the remedy's semantics,
+/// not edited until they passed. The flip the original fixture named in this
+/// doc comment - <c>await leaves[1].Received().CompactTombstonesAsync(...)</c>,
+/// which then failed with <c>ReceivedCallsException</c> - is now asserted
+/// positively below.
 /// </para>
 /// </summary>
 public partial class TombstoneCompactionGrainTests
@@ -114,20 +124,20 @@ public partial class TombstoneCompactionGrainTests
     }
 
     /// <summary>
-    /// The defect. A throwing head leaf starves the leaf behind it across every
-    /// pass, and the shard is abandoned without the watermark ever draining.
+    /// The remedy. A throwing head leaf no longer starves the leaf behind it:
+    /// the walk advances past the blocker in the same pass, and the shard
+    /// completes rather than burning a shard-scoped retry on a leaf-scoped
+    /// fault.
     /// <para>
-    /// Under a correct implementation the third assertion below would instead be
-    /// <c>await leaves[1].Received().CompactTombstonesAsync(...)</c>: the second
-    /// pass would reach the leaf behind the blocker. Substituting that assertion
-    /// today fails with
-    /// <c>ReceivedCallsException : Expected to receive a call matching
-    /// CompactTombstonesAsync(any TimeSpan). Actually received no matching
-    /// calls.</c>, which is the executable demonstration of issue 2926.
+    /// The ordering clause is the load-bearing one. The blocker's mark must be
+    /// re-raised <em>before</em> the drain runs, because the drain discards
+    /// everything at or below the watermark. Asserting both calls happened is
+    /// not enough - in the opposite order the drain would discard the very
+    /// mark the retain then re-raises against a watermark already passed.
     /// </para>
     /// </summary>
     [Test]
-    public async Task DirtySet_head_of_line_failure_starves_every_leaf_behind_it()
+    public async Task DirtySet_head_of_line_failure_no_longer_starves_the_leaves_behind_it()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
         var advance = HybridLogicalClock.Tick(default);
@@ -140,45 +150,63 @@ public partial class TombstoneCompactionGrainTests
 
         await grain.BeginCompactionStateAsync(startFromShard: 0);
 
-        // Pass 1: the blocker throws. ProcessNextShardAsync converts the
-        // shard-level exception into retry bookkeeping (ShardRetries -> 1)
-        // and restores the pre-batch cursor.
-        await grain.ProcessNextShardAsync();
-        Assert.That(state.State.NextShardIndex, Is.EqualTo(0),
-            "the shard still holds its retry budget after one failure");
-
-        // Pass 2: the same list is re-nominated from index 0 and the blocker
-        // throws again. MaxRetriesPerShard is 1, so the budget is now spent.
+        // One pass is now enough: the blocker throws, is skipped, and the walk
+        // continues to the leaf behind it.
         await grain.ProcessNextShardAsync();
 
-        await leaves[0].Received(2).CompactTombstonesAsync(Arg.Any<TimeSpan>());
+        await leaves[0].Received(1).CompactTombstonesAsync(Arg.Any<TimeSpan>());
 
-        // THE DEFECT. Two full passes over a two-leaf dirty set and the second
-        // leaf was never once reached, because dirtyIndex never advances past
-        // the throwing head.
-        await leaves[1].DidNotReceive().CompactTombstonesAsync(Arg.Any<TimeSpan>());
+        // THE FLIP. This is the assertion PR 2934 named as the one a remedy
+        // must make true, and which failed with ReceivedCallsException against
+        // the unfixed code.
+        await leaves[1].Received(1).CompactTombstonesAsync(Arg.Any<TimeSpan>());
 
-        // And the watermark never drains, so the shard root still believes both
-        // leaves are dirty and will nominate the identical list again.
-        await shardRoot.DidNotReceive().ClearDirtyLeavesUpToAsync(Arg.Any<HybridLogicalClock>());
+        // The blocker's signal survives: re-raised strictly above the watermark
+        // this pass drains to, so the drain below cannot discard it.
+        await shardRoot.Received(1).RetainDirtyLeafAsync(blocker, advance);
+        await shardRoot.DidNotReceive().RetainDirtyLeafAsync(behind, Arg.Any<HybridLogicalClock>());
 
-        // The shard is abandoned outright once the budget is spent. Note the
-        // arity mismatch this exposes: MaxRetriesPerShard is a *shard*-scoped
-        // budget being consumed by a single *leaf*-scoped fault.
-        Assert.That(state.State.NextShardIndex, Is.EqualTo(1),
-            "the whole shard is skipped once one leaf exhausts the shard budget");
+        // And the drain still fires, so the leaves that DID compact are cleared.
+        await shardRoot.Received(1).ClearDirtyLeavesUpToAsync(advance);
+
+        // Retain strictly precedes drain. Reversed, the blocker would be
+        // discarded and silently forgotten - the failure mode that makes naive
+        // skipping worse than the original stall.
+        Received.InOrder(() =>
+        {
+            shardRoot.RetainDirtyLeafAsync(blocker, advance);
+            shardRoot.ClearDirtyLeavesUpToAsync(advance);
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.NextShardIndex, Is.EqualTo(1),
+                "the shard completed rather than being abandoned");
+            Assert.That(state.State.ShardRetries, Is.Zero,
+                "a leaf-scoped fault no longer spends the shard-scoped retry budget");
+            Assert.That(state.State.CurrentShardDirtyLeaves, Is.Null,
+                "a completed shard does not retain its leaf list for the next pass");
+        });
     }
 
     /// <summary>
-    /// The skip emissions raised by a starved dirty set are attributed to the
+    /// The skip emissions raised by a blocked leaf are attributed to the
     /// dirty-set path and never to the chain walk. This is the path partition
     /// only; it makes no claim about the order in which the dirty set is
     /// walked, which is dictionary-ordered and not positionally meaningful.
+    /// <para>
+    /// It also pins the <em>loudness</em> half of the remedy. Now that a
+    /// blocked leaf no longer stalls its shard, this counter is the only
+    /// signal that a specific leaf is wedged, so it must still fire on a pass
+    /// that otherwise reports clean success. A remedy that silenced it while
+    /// the shard went green would be the exact "improves every observable
+    /// while degrading the thing being measured" trade the design refuses.
+    /// </para>
     /// </summary>
     [Test]
     public async Task DirtySet_head_of_line_skips_are_attributed_to_the_dirty_set_path()
     {
-        var (grain, _, _, grainFactory, _) = CreateGrain();
+        var (grain, state, _, grainFactory, _) = CreateGrain();
         var advance = HybridLogicalClock.Tick(default);
         var blocker = GrainId.Create("leaf", Guid.NewGuid().ToString());
         var behind = GrainId.Create("leaf", Guid.NewGuid().ToString());
@@ -206,22 +234,136 @@ public partial class TombstoneCompactionGrainTests
         listener.Start();
 
         await grain.BeginCompactionStateAsync(startFromShard: 0);
-        await grain.ProcessNextShardAsync();
+
+        // One pass now walks the whole shard, so the blocker is visited and
+        // skipped exactly once rather than once per starved retry.
         await grain.ProcessNextShardAsync();
 
         Assert.That(visited, Is.Not.Empty,
-            "the starved passes must emit at least one visited measurement");
+            "the pass must emit at least one visited measurement");
 
         static string? TagValue(KeyValuePair<string, object?>[] tags, string key)
             => tags.FirstOrDefault(t => t.Key == key).Value as string;
 
         var skipped = visited.Where(t => TagValue(t, LatticeMetrics.TagOutcome) == "skipped").ToList();
-        Assert.That(skipped, Has.Count.EqualTo(2),
-            "one skip per pass - the blocker is re-visited and re-skipped every time");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.NextShardIndex, Is.EqualTo(1),
+                "the shard completed, so this is the clean-success case the skip must survive");
+            Assert.That(skipped, Has.Count.EqualTo(1),
+                "the blocker is skipped once per pass, and the pass now covers the whole shard");
+        });
 
         Assert.That(skipped.All(t => TagValue(t, LatticeMetrics.TagPath) == LatticeMetrics.PathDirtySet),
-            Is.True, "every starved skip is attributed to the dirty-set path");
+            Is.True, "every skip is attributed to the dirty-set path");
         Assert.That(skipped.Any(t => TagValue(t, LatticeMetrics.TagPath) == LatticeMetrics.PathWalk),
-            Is.False, "no starved skip may be attributed to the legacy chain walk");
+            Is.False, "no skip may be attributed to the legacy chain walk");
+    }
+
+    /// <summary>
+    /// Captures the tag sets of every <c>outcome=skipped</c> measurement on the
+    /// compaction leaves-visited counter for the lifetime of the returned
+    /// handle. Shared by the fault arms, which since issue 2926 must assert on
+    /// this counter directly: a skipped leaf no longer fails its shard, so the
+    /// counter is the only remaining observable.
+    /// </summary>
+    private static SkippedLeafCapture CaptureSkippedLeafTags() => new();
+
+    private static string? TriggerTagOf(KeyValuePair<string, object?>[] tags)
+        => tags.FirstOrDefault(t => t.Key == LatticeMetrics.TagTrigger).Value as string;
+
+    private sealed class SkippedLeafCapture
+        : IReadOnlyList<KeyValuePair<string, object?>[]>, IDisposable
+    {
+        private readonly List<KeyValuePair<string, object?>[]> _skipped = [];
+        private readonly MeterListener _listener;
+
+        internal SkippedLeafCapture()
+        {
+            _listener = new MeterListener
+            {
+                InstrumentPublished = (inst, l) =>
+                {
+                    if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter)
+                        && inst.Name == "orleans.lattice.compaction.leaves.visited")
+                    {
+                        l.EnableMeasurementEvents(inst);
+                    }
+                }
+            };
+            _listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+            {
+                if (value <= 0) return;
+                var copy = tags.ToArray();
+                if (copy.Any(t => t.Key == LatticeMetrics.TagOutcome && (t.Value as string) == "skipped"))
+                {
+                    lock (_skipped) _skipped.Add(copy);
+                }
+            });
+            _listener.Start();
+        }
+
+        public int Count { get { lock (_skipped) return _skipped.Count; } }
+
+        public KeyValuePair<string, object?>[] this[int index]
+        {
+            get { lock (_skipped) return _skipped[index]; }
+        }
+
+        public IEnumerator<KeyValuePair<string, object?>[]> GetEnumerator()
+        {
+            lock (_skipped) return _skipped.ToList().GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => GetEnumerator();
+
+        public void Dispose() => _listener.Dispose();
+    }
+
+    /// <summary>
+    /// The refusal clause. When the blocker's mark cannot be re-raised above
+    /// the watermark, advancing past it would let the drain discard it, so the
+    /// fault is re-raised instead and the pre-2926 head-of-line stall stands.
+    /// A loud stall beats a quiet omission.
+    /// <para>
+    /// This is the one path on which a leaf-scoped fault still reaches the
+    /// shard, and it is deliberate: it is precisely the case where the safe
+    /// alternative is unavailable.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task DirtySet_blocker_whose_mark_cannot_be_retained_fails_the_batch_without_draining()
+    {
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        var advance = HybridLogicalClock.Tick(default);
+        var blocker = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        var behind = GrainId.Create("leaf", Guid.NewGuid().ToString());
+
+        var (shardRoot, leaves) = SetupShardWithDirtyLeavesWhere(
+            grainFactory, 0, advance, i => i == 0, blocker, behind);
+        shardRoot.RetainDirtyLeafAsync(Arg.Any<GrainId>(), Arg.Any<HybridLogicalClock>())
+            .Returns(_ => Task.FromException(
+                new InvalidOperationException("shard root unavailable")));
+        SetupShardWithLeaves(grainFactory, 1);
+
+        await grain.BeginCompactionStateAsync(startFromShard: 0);
+        await grain.ProcessNextShardAsync();
+
+        // The drain is the thing being defended. It must not run, because
+        // running it would discard the mark the retain failed to lift.
+        await shardRoot.DidNotReceive().ClearDirtyLeavesUpToAsync(Arg.Any<HybridLogicalClock>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ShardRetries, Is.EqualTo(1),
+                "the batch failed, so the shard retry policy applies as it did before 2926");
+            Assert.That(state.State.NextShardIndex, Is.Zero,
+                "and the coordinator stays on the shard rather than advancing past it");
+        });
+
+        // The walk stopped at the blocker, exactly as it did before the remedy.
+        await leaves[1].DidNotReceive().CompactTombstonesAsync(Arg.Any<TimeSpan>());
     }
 }
