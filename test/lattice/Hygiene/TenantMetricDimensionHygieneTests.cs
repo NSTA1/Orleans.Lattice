@@ -365,6 +365,21 @@ public sealed class TenantMetricDimensionHygieneTests
         // is a measured absence rather than a restore path that never ran - the same
         // reason the nonempty arm exists on _corpusCoverage.
         "_restores",
+        // repocontext.bootstrap.symbol_walk - passes of the symbol arm's range walk,
+        // partitioned by whether the pass closed a circuit outright, closed one after
+        // consuming progress banked by an earlier faulted pass, or banked a page fault
+        // to resume from next pass, issue #2953. Sentinel for the same reason as
+        // _markerScans: every repository's symbols live in the one shared symbol tree,
+        // separated only by key prefix, so LatticeTenantLabel.ForTree would resolve to
+        // the same constant for every repository on the host - one undiscriminating
+        // series that nevertheless reads as a tenant attribution. The outcome tag
+        // carries the whole signal, and all three arms are pre-minted so that a zero on
+        // the resumed arm is a measured absence rather than a missing series. That
+        // distinction is the instrument's entire purpose: at the tree, a walk that
+        // resumed banked progress is byte-identical to one that silently restarted from
+        // the head, so without a discriminator the re-drive this instrument exists to
+        // observe would be unfalsifiable in the deployment it was found in.
+        "_symbolWalks",
         // repocontext.retrieval.unavailable - vector-plane fault episodes. Same reason:
         // the plane is unavailable for the whole process, not for one tenant.
         "_unavailable",
