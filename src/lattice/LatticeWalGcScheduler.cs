@@ -781,7 +781,7 @@ internal sealed class LatticeWalGcScheduler(
             // skipped by the not-yet-due continue further down, which is the
             // healthy majority on any given pass rather than a fault.
             var seenTreeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
-            LatticeMetrics.WalGcReach.Add(
+            LatticeMetrics.WalGcTreeReach.Add(
                 1,
                 seenTreeTag,
                 LatticeMetrics.ReachTreeSeen,
@@ -875,7 +875,7 @@ internal sealed class LatticeWalGcScheduler(
         // a pass that returned early here and a pass that ran and found nothing
         // are the same absence. It must stay above PrimeRetentionSeries, whose
         // own latch makes it silent from the second collection onward.
-        LatticeMetrics.WalGcReach.Add(1, treeTag, LatticeMetrics.ReachTreeCollected, tenantTag);
+        LatticeMetrics.WalGcTreeReach.Add(1, treeTag, LatticeMetrics.ReachTreeCollected, tenantTag);
 
         // Zero-prime the WAL-retention series a reader has to interpret an
         // absence on. A Counter publishes no series until its first Add, so a
@@ -1299,7 +1299,7 @@ internal sealed class LatticeWalGcScheduler(
     /// </para>
     /// </remarks>
     private static void RecordPassReach(in KeyValuePair<string, object?> stage)
-        => LatticeMetrics.WalGcReach.Add(
+        => LatticeMetrics.WalGcPassReach.Add(
             1,
             LatticeMetrics.TreeNoneTag,
             stage,

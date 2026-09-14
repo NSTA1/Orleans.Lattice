@@ -3906,16 +3906,51 @@ public static class LatticeMetrics
     /// Diagnostic only - it never changes what a pass is allowed to trim.
     /// </para>
     /// </summary>
-    public static readonly Counter<long> WalGcReach =
-        Meter.CreateCounter<long>("orleans.lattice.wal.gc.reach", unit: "{pass}",
-            description: "How far each WAL GC scheduling pass got, tagged by stage and tree (issue #3075). Reachability layer for the instruments sited inside the region that stops executing: 'wal.gc.interval' and 'wal.gc.passes' are recorded inside CollectTreeAsync, so an exit taken above them leaves both silent and a non-advancing series is indistinguishable from a measured zero. Every arm advances by one rather than priming a zero, because Add(0) is idempotent on a counter and so priming can only ever establish that a region was reached at least once, never that it was reached on this pass: a non-zero rate here proves the region is executing now, a zero rate on a present series proves it stopped, and an absent series proves the build is not deployed. Pass-level arms ('pass_entered', 'registry_cancelled', 'registry_failed', 'loop_cancelled', 'no_due_tree', 'pass_completed_immediate', 'pass_completed_scheduled') carry the reserved tree value '_none_' because the two registry exits occur before any tree id is knowable - enumerating the trees is the operation that failed - so filter tree!=\"_none_\" before aggregating over trees. Per-tree arms ('tree_seen', 'tree_collected') are a pair and neither half is interpretable alone: their difference is the set of trees not yet due, which is expected to be large and non-zero in a healthy steady state. 'pass_entered' accounts for the six exit arms, but it is taken before the work and an exit arm after it, so the correct relation is 0 <= pass_entered - (sum of exit arms) <= passes in flight, which is one for a single scheduler loop; assert equality only at quiescence, and alert on the inequality or it will flap once per pass. That relation is the guard against an early return added without an arm. Diagnostic only: it never changes what a pass is allowed to trim.");
+    public static readonly Counter<long> WalGcPassReach =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.pass.reach", unit: "{pass}",
+            description: "How far each WAL GC scheduling pass got, tagged by stage (issue #3075). Reachability layer for the instruments sited inside the region that stops executing: 'wal.gc.interval' and 'wal.gc.passes' are recorded inside CollectTreeAsync, so an exit taken above them leaves both silent and a non-advancing series is indistinguishable from a measured zero. Every arm advances by one rather than priming a zero, because Add(0) is idempotent on a counter and so priming can only ever establish that a region was reached at least once, never that it was reached on this pass: a non-zero rate here proves the region is executing now, a zero rate on a present series proves it stopped, and an absent series proves the build is not deployed. Every arm ('pass_entered', 'registry_cancelled', 'registry_failed', 'loop_cancelled', 'no_due_tree', 'pass_completed_immediate', 'pass_completed_scheduled') carries the reserved tree value '_none_' and the platform tenant sentinel, because a pass is a scheduler-wide event that spans the whole registry and no tree id or tenant is knowable at the two registry exits - enumerating the trees is the operation that failed. Query it without a tree or tenant filter; the per-tree half of the layer is the separate 'wal.gc.tree.reach'. 'pass_entered' accounts for the six exit arms, but it is taken before the work and an exit arm after it, so the correct relation is 0 <= pass_entered - (sum of exit arms) <= passes in flight, which is one for a single scheduler loop; assert equality only at quiescence, and alert on the inequality or it will flap once per pass. That relation is the guard against an early return added without an arm. Diagnostic only: it never changes what a pass is allowed to trim.");
 
-    /// <summary>Canonical name of <see cref="WalGcReach"/>.</summary>
-    public const string WalGcReachName = "orleans.lattice.wal.gc.reach";
+    /// <summary>Canonical name of <see cref="WalGcPassReach"/>.</summary>
+    public const string WalGcPassReachName = "orleans.lattice.wal.gc.pass.reach";
+
+    /// <summary>
+    /// Per-tree half of the WAL GC reachability layer (issue #3075): how far a
+    /// pass got <i>for one tree</i>, tagged by stage.
+    /// <para>
+    /// <b>Why this is a separate instrument from
+    /// <see cref="WalGcPassReach"/> rather than two stages of one.</b> The two
+    /// halves have different attribution subjects, and an instrument may only
+    /// have one. A pass spans the entire registry, so it belongs to no tenant
+    /// and carries <see cref="LatticeTenantLabel.Platform"/>; a tree visit
+    /// belongs to exactly the tenant that owns the tree, exactly as its
+    /// siblings <see cref="WalGcPasses"/> and <see cref="WalGcInterval"/> do.
+    /// Emitting both under one instrument would split its series across two
+    /// attribution rules, so a tenant-scoped query would silently return the
+    /// per-tree arms and drop the pass-level ones - and dropping
+    /// <c>pass_entered</c> is precisely the reading that says whether the
+    /// scheduler ran at all. Deriving a tenant for a pass instead would satisfy
+    /// the same check by inventing an attribution that does not exist.
+    /// </para>
+    /// <para>
+    /// The split costs no analysis, because neither reading spans the two: the
+    /// completeness invariant is entirely pass-level, and the
+    /// <see cref="ReachTreeSeen"/>/<see cref="ReachTreeCollected"/> pair is
+    /// entirely per-tree.
+    /// </para>
+    /// <para>
+    /// Diagnostic only - it never changes what a pass is allowed to trim.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcTreeReach =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.tree.reach", unit: "{tree}",
+            description: "How far each WAL GC scheduling pass got for one tree, tagged by stage and tree (issue #3075). Per-tree half of the reachability layer for the instruments sited inside the region that stops executing: 'wal.gc.interval' and 'wal.gc.passes' are recorded inside CollectTreeAsync, so an exit taken above them leaves both silent and a non-advancing series is indistinguishable from a measured zero. Both arms advance by one rather than priming a zero, because Add(0) is idempotent on a counter and so priming can only ever establish that a region was reached at least once, never that it was reached on this pass. 'tree_seen' and 'tree_collected' are a pair and neither half is interpretable alone: their difference is the set of trees skipped because the adaptive interval had not elapsed, which is expected to be large and non-zero in a healthy steady state, so a large gap is the normal reading and not a fault. 'tree_collected' is the arm that licenses reading a flat 'wal.gc.interval' or 'wal.gc.passes' for that tree as measured rather than as never-executed. This instrument is tenant-derived like its siblings; the scheduler-wide half of the layer, which belongs to no tenant, is the separate 'wal.gc.pass.reach'. Diagnostic only: it never changes what a pass is allowed to trim.");
+
+    /// <summary>Canonical name of <see cref="WalGcTreeReach"/>.</summary>
+    public const string WalGcTreeReachName = "orleans.lattice.wal.gc.tree.reach";
 
     /// <summary>
     /// Reserved <see cref="TagTree"/> value carried by the pass-level arms of
-    /// <see cref="WalGcReach"/>, which describe a scheduling pass as a whole
+    /// <see cref="WalGcPassReach"/>, which describe a scheduling pass as a whole
     /// rather than any one tree.
     /// <para>
     /// A sentinel is structurally required here rather than merely convenient.
@@ -3946,7 +3981,7 @@ public static class LatticeMetrics
         new(TagTree, TreeNone);
 
     /// <summary>
-    /// <see cref="TagStage"/> value on <see cref="WalGcReach"/> recorded as the
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> recorded as the
     /// first statement of a pass, above every exit. It is the denominator the
     /// other pass-level arms are read against.
     /// </summary>
@@ -3954,7 +3989,7 @@ public static class LatticeMetrics
         new(TagStage, "pass_entered");
 
     /// <summary>
-    /// <see cref="TagStage"/> value on <see cref="WalGcReach"/> for a pass that
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass that
     /// ended because enumerating the tree registry was cancelled - host
     /// shutdown, not a fault.
     /// </summary>
@@ -3962,7 +3997,7 @@ public static class LatticeMetrics
         new(TagStage, "registry_cancelled");
 
     /// <summary>
-    /// <see cref="TagStage"/> value on <see cref="WalGcReach"/> for a pass that
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass that
     /// ended because enumerating the tree registry threw. Kept distinct from
     /// <see cref="ReachRegistryCancelled"/>: one is orderly shutdown and the
     /// other is a fault, and a layer that merged them would report a wedged
@@ -3972,7 +4007,7 @@ public static class LatticeMetrics
         new(TagStage, "registry_failed");
 
     /// <summary>
-    /// <see cref="TagStage"/> value on <see cref="WalGcReach"/> for a pass
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass
     /// cancelled part-way through its tree loop, so an arbitrary suffix of the
     /// registered trees went uncollected on that pass.
     /// </summary>
@@ -3980,14 +4015,14 @@ public static class LatticeMetrics
         new(TagStage, "loop_cancelled");
 
     /// <summary>
-    /// <see cref="TagStage"/> value on <see cref="WalGcReach"/> for a pass that
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass that
     /// completed its loop without finding a single collectable tree.
     /// </summary>
     public static readonly KeyValuePair<string, object?> ReachNoDueTree =
         new(TagStage, "no_due_tree");
 
     /// <summary>
-    /// <see cref="TagStage"/> value on <see cref="WalGcReach"/> for a pass that
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass that
     /// ran to completion and found its successor already due, so the scheduler
     /// does not sleep. Kept distinct from
     /// <see cref="ReachPassCompletedScheduled"/> because a sustained rate here
@@ -3998,7 +4033,7 @@ public static class LatticeMetrics
         new(TagStage, "pass_completed_immediate");
 
     /// <summary>
-    /// <see cref="TagStage"/> value on <see cref="WalGcReach"/> for a pass that
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass that
     /// ran to completion and scheduled its successor for a future due time -
     /// the ordinary healthy exit.
     /// </summary>
@@ -4006,7 +4041,7 @@ public static class LatticeMetrics
         new(TagStage, "pass_completed_scheduled");
 
     /// <summary>
-    /// <see cref="TagStage"/> value on <see cref="WalGcReach"/> for a tree the
+    /// <see cref="TagStage"/> value on <see cref="WalGcTreeReach"/> for a tree the
     /// pass enumerated and considered. Recorded per tree per pass, whether or
     /// not the tree was due.
     /// </summary>
@@ -4014,7 +4049,7 @@ public static class LatticeMetrics
         new(TagStage, "tree_seen");
 
     /// <summary>
-    /// <see cref="TagStage"/> value on <see cref="WalGcReach"/> for a tree
+    /// <see cref="TagStage"/> value on <see cref="WalGcTreeReach"/> for a tree
     /// whose collection was actually entered, recorded above every exit of that
     /// collection. This is the arm that licenses reading a flat
     /// <see cref="WalGcInterval"/> or <see cref="WalGcPasses"/> as measured

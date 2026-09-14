@@ -189,6 +189,18 @@ public sealed class TenantMetricDimensionHygieneTests
         // tenant-scoped consumer asking whether its own tree is failing to activate
         // is served by leaf.activation_failures, which is tree-tagged and tenant-
         // labelled.
+        // orleans.lattice.wal.gc.pass.reach - the scheduler-wide half of the WAL GC
+        // reachability layer (issue #3075). A pass spans the ENTIRE tree registry, so
+        // it is not an event that belongs to any one tenant, and two of the exits the
+        // layer must cover are the catch arms of the registry enumeration itself -
+        // obtaining the tree list is the operation that failed there, so neither a tree
+        // id nor the tenant it would resolve to exists at that point, and never can.
+        // Deriving a tenant here would mean inventing an attribution rather than
+        // reporting one. The per-tree half of the layer, wal.gc.tree.reach, IS
+        // tenant-derived exactly like its siblings wal.gc.passes and wal.gc.interval;
+        // splitting the two apart is what lets each carry one honest attribution rule
+        // instead of one instrument splitting its series across both.
+        "WalGcPassReach",
         "WalReplayPermitAdaptations",
         "WriteFailures",
         // repocontext.retrieval.ann.search - every approximate-plane outcome, tagged by

@@ -59,7 +59,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Sum(m => m.Value);
 
     private static InstrumentRecorder PassLevelReach() =>
-        new(LatticeMetrics.WalGcReach, LatticeMetrics.TreeNone);
+        new(LatticeMetrics.WalGcPassReach, LatticeMetrics.TreeNone);
 
     // ------------------------------------------------------- pass-level arms
 
@@ -296,7 +296,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(Report(0)));
 
         using var passLevel = PassLevelReach();
-        using var perTree = new InstrumentRecorder(LatticeMetrics.WalGcReach, tree);
+        using var perTree = new InstrumentRecorder(LatticeMetrics.WalGcTreeReach, tree);
         var scheduler = CreateScheduler(FactoryWithTrees(tree), gc, Adaptive(), time);
         await StartAndRunFirstPassAsync(scheduler, time);
         await scheduler.StopAsync(CancellationToken.None);
@@ -356,7 +356,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns<Task<LatticeWalGcReport>>(_ => throw new InvalidOperationException("tree is wedged"));
 
-        using var reach = new InstrumentRecorder(LatticeMetrics.WalGcReach, tree);
+        using var reach = new InstrumentRecorder(LatticeMetrics.WalGcTreeReach, tree);
         var scheduler = CreateScheduler(FactoryWithTrees(tree), gc, Adaptive(), time);
         await StartAndRunFirstPassAsync(scheduler, time);
         await scheduler.StopAsync(CancellationToken.None);
@@ -386,7 +386,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         gc.RunOnceAsync(busy, Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(Report(5)));
         gc.RunOnceAsync(quiet, Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(Report(0)));
 
-        using var quietReach = new InstrumentRecorder(LatticeMetrics.WalGcReach, quiet);
+        using var quietReach = new InstrumentRecorder(LatticeMetrics.WalGcTreeReach, quiet);
         var scheduler = CreateScheduler(FactoryWithTrees(busy, quiet), gc, Adaptive(), time);
 
         // Pass 1 collects both. The busy tree holds the floor; the quiet one
@@ -422,7 +422,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(Report(5)));
 
-        using var reach = new InstrumentRecorder(LatticeMetrics.WalGcReach, tree);
+        using var reach = new InstrumentRecorder(LatticeMetrics.WalGcTreeReach, tree);
         var scheduler = CreateScheduler(FactoryWithTrees(tree), gc, Adaptive(), time);
         await StartAndRunFirstPassAsync(scheduler, time);
         await TickAsync(time);
