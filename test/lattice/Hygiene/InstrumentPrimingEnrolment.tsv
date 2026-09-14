@@ -2,12 +2,12 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | none
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
-src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	none	
+src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension (unread-tag-argument:Tag(outcome), LatticeTenantLabel.Platform): tag argument(s) Tag(outcome), LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
-src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseCancellations	none	
-src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseCancelledDiscardedMs	none	
+src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseCancellations	unresolved	reason=dimension (unread-tag-argument:phaseTag, LatticeTenantLabel.Platform): tag argument(s) phaseTag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseCancelledDiscardedMs	unresolved	reason=dimension (unread-tag-argument:phaseTag, LatticeTenantLabel.Platform): tag argument(s) phaseTag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_corpusCoverage	primed	
-src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_terminalDenials	none	
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_terminalDenials	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_slices	anchored	dimension=cause; total=faulted; assertedBy=The_tally_the_reporter_reads_back_agrees_with_the_causes_recorded
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexLoadReporter.cs#_loads	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexSweepReporter.cs#_annSweeps	anchored	dimension=cause; total=faulted; assertedBy=The_cause_partition_sums_to_the_faulted_arm
@@ -21,41 +21,41 @@ src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalLatencyReporter.cs
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalLatencyReporter.cs#_stageDuration	unresolved	reason=dimension stage: no declaration found for stage
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalReadinessState.cs#_readySeconds	unresolved	reason=dimension phase: no declaration found for phaseTag
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalReadinessState.cs#_unavailable	unresolved	reason=unrecognised value expression: NormalizeCause(cause)
-src/lattice.api.mcp.repocontext/Retrieval/RepoContextVectorPlaneReDeriver.cs#_counter	none	
-src/lattice.api.mcp.repocontext/Usage/RepoContextUsageRecorder.cs#_callsCounter	none	
-src/lattice.api.mcp.repocontext/Usage/RepoContextUsageRecorder.cs#_replacedCounter	none	
-src/lattice.api.mcp.repocontext/Usage/RepoContextUsageRecorder.cs#_responseCounter	none	
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextVectorPlaneReDeriver.cs#_counter	unresolved	reason=dimension (unread-tag-argument:new(TreeTagKey, treeName), new(OutcomeTagKey, OutcomeRefused), LatticeTenantLabel.ForTree(treeName)): tag argument(s) new(TreeTagKey, treeName), new(OutcomeTagKey, OutcomeRefused), LatticeTenantLabel.ForTree(treeName) are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.api.mcp.repocontext/Usage/RepoContextUsageRecorder.cs#_callsCounter	unresolved	reason=dimension (unread-tag-argument:tag, LatticeTenantLabel.Platform): tag argument(s) tag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.api.mcp.repocontext/Usage/RepoContextUsageRecorder.cs#_replacedCounter	unresolved	reason=dimension (unread-tag-argument:tag, LatticeTenantLabel.Platform): tag argument(s) tag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.api.mcp.repocontext/Usage/RepoContextUsageRecorder.cs#_responseCounter	unresolved	reason=dimension (unread-tag-argument:tag, LatticeTenantLabel.Platform): tag argument(s) tag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.auth/AuthSnapshotGaugeRegistry.cs#(unassigned:LatticeAuthMetrics.SnapshotAgeName)	none	
 src/lattice.auth/AuthSnapshotGaugeRegistry.cs#(unassigned:LatticeAuthMetrics.SnapshotEpochName)	none	
 src/lattice.auth/AuthSnapshotGaugeRegistry.cs#(unassigned:LatticeAuthMetrics.SnapshotSubjectsName)	none	
-src/lattice.auth/LatticeAuthMetrics.cs#DecisionDuration	none	
-src/lattice.auth/LatticeAuthMetrics.cs#Decisions	none	
-src/lattice.auth/LatticeAuthMetrics.cs#SnapshotRebuilds	none	
-src/lattice.backup/BackupMetrics.cs#CrossTreeFenceDrainWaitMilliseconds	none	
-src/lattice.backup/BackupMetrics.cs#CrossTreeFenceDrainedInFlight	none	
-src/lattice.backup/BackupMetrics.cs#CrossTreeFenceRetries	none	
+src/lattice.auth/LatticeAuthMetrics.cs#DecisionDuration	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.auth/LatticeAuthMetrics.cs#Decisions	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.auth/LatticeAuthMetrics.cs#SnapshotRebuilds	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/BackupMetrics.cs#CrossTreeFenceDrainWaitMilliseconds	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/BackupMetrics.cs#CrossTreeFenceDrainedInFlight	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/BackupMetrics.cs#CrossTreeFenceRetries	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.backup/BackupMetrics.cs#CrossTreeFenceSelections	unresolved	reason=dimension tree_count: no declaration found for Count
-src/lattice.backup/LatticeBackupMetrics.cs#BackupArtifacts	none	
-src/lattice.backup/LatticeBackupMetrics.cs#BackupBytes	none	
-src/lattice.backup/LatticeBackupMetrics.cs#BackupEntries	none	
-src/lattice.backup/LatticeBackupMetrics.cs#BytesProcessed	none	
-src/lattice.backup/LatticeBackupMetrics.cs#CaptureDuration	none	
+src/lattice.backup/LatticeBackupMetrics.cs#BackupArtifacts	unresolved	reason=dimension (unread-tag-argument:kindTag, tenantTag): tag argument(s) kindTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/LatticeBackupMetrics.cs#BackupBytes	unresolved	reason=dimension (unread-tag-argument:kindTag, tenantTag): tag argument(s) kindTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/LatticeBackupMetrics.cs#BackupEntries	unresolved	reason=dimension (unread-tag-argument:kindTag, tenantTag): tag argument(s) kindTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/LatticeBackupMetrics.cs#BytesProcessed	unresolved	reason=dimension (unread-tag-argument:kindTag, tenantTag): tag argument(s) kindTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/LatticeBackupMetrics.cs#CaptureDuration	unresolved	reason=dimension (unread-tag-argument:kindTag, tenantTag): tag argument(s) kindTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.backup/LatticeBackupMetrics.cs#CaptureFailures	unresolved	reason=dimension phase: no declaration found for phase
 src/lattice.backup/LatticeBackupMetrics.cs#CaptureRetries	unresolved	reason=dimension reason: no declaration found for reason
-src/lattice.backup/LatticeBackupMetrics.cs#Captures	none	
-src/lattice.backup/LatticeBackupMetrics.cs#EntriesProcessed	none	
-src/lattice.backup/LatticeBackupMetrics.cs#IncrementalLagAge	none	
-src/lattice.backup/LatticeBackupMetrics.cs#IncrementalLagEntries	none	
+src/lattice.backup/LatticeBackupMetrics.cs#Captures	unresolved	reason=dimension (unread-tag-argument:kindTag, tenantTag): tag argument(s) kindTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/LatticeBackupMetrics.cs#EntriesProcessed	unresolved	reason=dimension (unread-tag-argument:kindTag, tenantTag): tag argument(s) kindTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/LatticeBackupMetrics.cs#IncrementalLagAge	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/LatticeBackupMetrics.cs#IncrementalLagEntries	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.backup/LatticeBackupMetrics.cs#InventoryCatalogBytes	none	
 src/lattice.backup/LatticeBackupMetrics.cs#InventoryChainDepth	none	
 src/lattice.backup/LatticeBackupMetrics.cs#InventoryCount	none	
 src/lattice.backup/LatticeBackupMetrics.cs#InventoryNewestAge	none	
 src/lattice.backup/LatticeBackupMetrics.cs#InventoryOldestAge	none	
-src/lattice.backup/LatticeBackupMetrics.cs#RestoreDuration	none	
-src/lattice.backup/LatticeBackupMetrics.cs#RestoreEntriesApplied	none	
+src/lattice.backup/LatticeBackupMetrics.cs#RestoreDuration	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/LatticeBackupMetrics.cs#RestoreEntriesApplied	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.backup/LatticeBackupMetrics.cs#RestoreFailures	unresolved	reason=dimension phase: no declaration found for phase
-src/lattice.backup/LatticeBackupMetrics.cs#RetentionBytesReclaimed	none	
-src/lattice.backup/LatticeBackupMetrics.cs#RetentionPruned	none	
+src/lattice.backup/LatticeBackupMetrics.cs#RetentionBytesReclaimed	unresolved	reason=dimension (unread-tag-argument:scopeTag, LatticeTenantLabel.Platform): tag argument(s) scopeTag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.backup/LatticeBackupMetrics.cs#RetentionPruned	unresolved	reason=dimension (unread-tag-argument:scopeTag, LatticeTenantLabel.Platform): tag argument(s) scopeTag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.backup/LatticeBackupMetrics.cs#SchedulerFailures	unresolved	reason=dimension scope: no declaration found for scopeKey
 src/lattice.backup/LatticeBackupMetrics.cs#SchedulerOverruns	unresolved	reason=dimension scope: no declaration found for scopeKey
 src/lattice.backup/LatticeBackupMetrics.cs#SchedulerSkipped	unresolved	reason=dimension scope: no declaration found for scopeKey
@@ -65,24 +65,24 @@ src/lattice.grainindex/GrainIndexMetrics.cs#BackfillPercentComplete	none
 src/lattice.grainindex/GrainIndexMetrics.cs#BackfillProcessed	none	
 src/lattice.grainindex/GrainIndexMetrics.cs#BackfillState	none	
 src/lattice.grainindex/GrainIndexMetrics.cs#BackfillTotal	none	
-src/lattice.grainindex/GrainIndexMetrics.cs#Entries	none	
-src/lattice.grainindex/GrainIndexMetrics.cs#GrainsEnrolled	none	
-src/lattice.grainindex/GrainIndexMetrics.cs#ProjectionDuration	none	
-src/lattice.grainindex/GrainIndexMetrics.cs#WriteFailures	none	
-src/lattice.membership/LatticeMembershipMetrics.cs#DirectorySearchDuration	none	
-src/lattice.membership/LatticeMembershipMetrics.cs#DirectorySearchHits	none	
-src/lattice.membership/LatticeMembershipMetrics.cs#DirectorySearchMisses	none	
-src/lattice.membership/LatticeMembershipMetrics.cs#ResolutionCacheHits	none	
-src/lattice.membership/LatticeMembershipMetrics.cs#ResolutionCacheMisses	none	
+src/lattice.grainindex/GrainIndexMetrics.cs#Entries	unresolved	reason=dimension (unread-tag-argument:byte[]>(key, (byte[])value.Clone())): tag argument(s) byte[]>(key, (byte[])value.Clone()) are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.grainindex/GrainIndexMetrics.cs#GrainsEnrolled	unresolved	reason=dimension (unread-tag-argument:indexTag, pathTag, LatticeTenantLabel.Platform): tag argument(s) indexTag, pathTag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.grainindex/GrainIndexMetrics.cs#ProjectionDuration	unresolved	reason=dimension (unread-tag-argument:indexTag, LatticeTenantLabel.Platform): tag argument(s) indexTag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.grainindex/GrainIndexMetrics.cs#WriteFailures	unresolved	reason=dimension (unread-tag-argument:indexTag, pathTag, LatticeTenantLabel.Platform): tag argument(s) indexTag, pathTag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.membership/LatticeMembershipMetrics.cs#DirectorySearchDuration	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.membership/LatticeMembershipMetrics.cs#DirectorySearchHits	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.membership/LatticeMembershipMetrics.cs#DirectorySearchMisses	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.membership/LatticeMembershipMetrics.cs#ResolutionCacheHits	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.membership/LatticeMembershipMetrics.cs#ResolutionCacheMisses	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.replication.grpc/LatticeReplicationGrpcMetrics.cs#InsecureChannel	unresolved	reason=dimension peer: no declaration found for peerClusterId
-src/lattice.replication/LatticeReplicationMetrics.cs#ApplyBufferBytes	none	
-src/lattice.replication/LatticeReplicationMetrics.cs#ApplyBufferedEntries	none	
-src/lattice.replication/LatticeReplicationMetrics.cs#ApplyCausalViolationsBlocked	none	
-src/lattice.replication/LatticeReplicationMetrics.cs#ApplyDependencyWaitMs	none	
+src/lattice.replication/LatticeReplicationMetrics.cs#ApplyBufferBytes	unresolved	reason=dimension (unread-tag-argument:_treeShardTags): tag argument(s) _treeShardTags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.replication/LatticeReplicationMetrics.cs#ApplyBufferedEntries	unresolved	reason=dimension (unread-tag-argument:_treeShardTags): tag argument(s) _treeShardTags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.replication/LatticeReplicationMetrics.cs#ApplyCausalViolationsBlocked	unresolved	reason=dimension (unread-tag-argument:_treeTags): tag argument(s) _treeTags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.replication/LatticeReplicationMetrics.cs#ApplyDependencyWaitMs	unresolved	reason=dimension (unread-tag-argument:_treeTags): tag argument(s) _treeTags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.replication/LatticeReplicationMetrics.cs#ApplyDuration	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice.replication/LatticeReplicationMetrics.cs#ApplyFifoViolations	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice.replication/LatticeReplicationMetrics.cs#ApplyLag	unresolved	reason=dimension tree: no declaration found for TreeId
-src/lattice.replication/LatticeReplicationMetrics.cs#ApplyParallelRuns	none	
+src/lattice.replication/LatticeReplicationMetrics.cs#ApplyParallelRuns	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapBytesReceived	unresolved	reason=dimension tree: no declaration found for treeName
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapDuration	unresolved	reason=dimension tree: no declaration found for treeName
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapEntriesReceived	unresolved	reason=dimension tree: no declaration found for treeName
@@ -112,9 +112,9 @@ src/lattice.replication/LatticeReplicationMetrics.cs#MerkleWalkAborted	unresolve
 src/lattice.replication/LatticeReplicationMetrics.cs#MerkleWalkLocalised	unresolved	reason=unrecognised value expression: depth.ToString(CultureInfo.InvariantCulture)
 src/lattice.replication/LatticeReplicationMetrics.cs#PeerFellOffLog	unresolved	reason=dimension tree: no declaration found for treeName
 src/lattice.replication/LatticeReplicationMetrics.cs#PeerFellOffLogSuppressed	unresolved	reason=dimension tree: no declaration found for treeName
-src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentEntriesElided	none	
-src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentHwmAdvances	none	
-src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentManifestExchanges	none	
+src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentEntriesElided	unresolved	reason=dimension (unread-tag-argument:treeTag, peerTag, tenantTag): tag argument(s) treeTag, peerTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentHwmAdvances	unresolved	reason=dimension (unread-tag-argument:treeTag, peerTag, tenantTag): tag argument(s) treeTag, peerTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentManifestExchanges	unresolved	reason=dimension (unread-tag-argument:treeTag, peerTag, tenantTag): tag argument(s) treeTag, peerTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.replication/LatticeReplicationMetrics.cs#SagaCompensations	primed	
 src/lattice.replication/LatticeReplicationMetrics.cs#SagaFenceDuration	unresolved	reason=dimension tree: no declaration found for tree
 src/lattice.replication/LatticeReplicationMetrics.cs#SagaParticipantAborts	unresolved	reason=dimension reason: no declaration found for reason
@@ -168,53 +168,53 @@ src/lattice/BPlusTree/Grains/LeafResidencyMetrics.cs#(unassigned:LatticeMetrics.
 src/lattice/BPlusTree/Grains/LeafResidencyMetrics.cs#(unassigned:LatticeMetrics.LeafResidencyResidentBytesName)	none	
 src/lattice/BPlusTree/Grains/LeafSnapshotCaptureConcurrencyCensus.cs#_peakGauge	none	
 src/lattice/BPlusTree/Grains/SnapshotPinCensus.cs#(unassigned:LatticeMetrics.SnapshotPinsGaugeName)	none	
-src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#OrphanRowsRemovedCounter	none	
-src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#SweepDurationHistogram	none	
-src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#SweepsCounter	none	
-src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#TreesMismatchedCounter	none	
-src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#TreesProbedCounter	none	
+src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#OrphanRowsRemovedCounter	unresolved	reason=dimension (unread-tag-argument:indexTags): tag argument(s) indexTags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#SweepDurationHistogram	unresolved	reason=dimension (unread-tag-argument:indexTags): tag argument(s) indexTags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#SweepsCounter	unresolved	reason=dimension (unread-tag-argument:outcomeTags): tag argument(s) outcomeTags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#TreesMismatchedCounter	unresolved	reason=dimension (unread-tag-argument:indexTags): tag argument(s) indexTags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#TreesProbedCounter	unresolved	reason=dimension (unread-tag-argument:indexTags): tag argument(s) indexTags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/BPlusTree/Grains/WalSaturationSignal.cs#(unassigned:LatticeMetrics.WalSaturationStateGaugeName)	none	
 src/lattice/LatticeAdmissionMetrics.cs#(unassigned:LatticeMetrics.AdmissionEstimatedBytesName)	none	
 src/lattice/LatticeAdmissionMetrics.cs#(unassigned:LatticeMetrics.AdmissionLiveKeysName)	none	
 src/lattice/LatticeAdmissionMetrics.cs#(unassigned:LatticeMetrics.AdmissionOverAdvisoryName)	none	
 src/lattice/LatticeAdmissionMetrics.cs#(unassigned:LatticeMetrics.AdmissionUtilizationName)	none	
 src/lattice/LatticeMetrics.cs#ActivationReadyTimeouts	unresolved	reason=dimension tree: no declaration found for TreeId
-src/lattice/LatticeMetrics.cs#AdmissionRejected	none	
-src/lattice/LatticeMetrics.cs#AdmissionWouldReject	none	
+src/lattice/LatticeMetrics.cs#AdmissionRejected	unresolved	reason=dimension (unread-tag-argument:StageTagTree, LatticeMetrics.DimensionKeys, StageTagTenant): tag argument(s) StageTagTree, LatticeMetrics.DimensionKeys, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#AdmissionWouldReject	unresolved	reason=dimension (unread-tag-argument:StageTagTree, LatticeMetrics.DimensionKeys, StageTagTenant): tag argument(s) StageTagTree, LatticeMetrics.DimensionKeys, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#AtomicActionCompleted	unresolved	reason=dimension outcome: no declaration found for outcomeTag
 src/lattice/LatticeMetrics.cs#AtomicActionDuration	unresolved	reason=dimension outcome: no declaration found for outcomeTag
 src/lattice/LatticeMetrics.cs#AtomicActionStep	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#AtomicWriteBatchSize	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#AtomicWriteCompleted	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#AtomicWriteDuration	unresolved	reason=dimension tree: no declaration found for TreeId
-src/lattice/LatticeMetrics.cs#CacheHits	none	
-src/lattice/LatticeMetrics.cs#CacheMisses	none	
-src/lattice/LatticeMetrics.cs#CompactionLeavesVisited	none	
+src/lattice/LatticeMetrics.cs#CacheHits	unresolved	reason=dimension (unread-tag-argument:CacheTreeTag(), CacheTenantTag()): tag argument(s) CacheTreeTag(), CacheTenantTag() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#CacheMisses	unresolved	reason=dimension (unread-tag-argument:CacheTreeTag(), CacheTenantTag()): tag argument(s) CacheTreeTag(), CacheTenantTag() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#CompactionLeavesVisited	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { noopTreeTag, LatticeMetrics.OutcomeNoop, noopTrig, noopPath, noopTenantTag, }): tag argument(s) new System.Diagnostics.TagList { noopTreeTag, LatticeMetrics.OutcomeNoop, noopTrig, noopPath, noopTenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#CompactionPassDuration	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#CompactionShardDirtyLeaves	unresolved	reason=dimension tree: no declaration found for physicalTreeId
 src/lattice/LatticeMetrics.cs#CompactionShardRetries	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#CompactionShardSkipped	unresolved	reason=dimension tree: no declaration found for TreeId
-src/lattice/LatticeMetrics.cs#CompressionDictionaryTrainedBytesIn	none	
-src/lattice/LatticeMetrics.cs#CompressionDictionaryTrainedBytesOut	none	
-src/lattice/LatticeMetrics.cs#CompressionDictionaryTrainingRuns	none	
+src/lattice/LatticeMetrics.cs#CompressionDictionaryTrainedBytesIn	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#CompressionDictionaryTrainedBytesOut	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#CompressionDictionaryTrainingRuns	unresolved	reason=dimension (unread-tag-argument:LatticeMetrics.OutcomeSkippedCadence, LatticeTenantLabel.Platform): tag argument(s) LatticeMetrics.OutcomeSkippedCadence, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#ConfigChanged	primed	
 src/lattice/LatticeMetrics.cs#CoordinatorCompleted	unresolved	reason=bounded domain found, enrolment not yet chosen
-src/lattice/LatticeMetrics.cs#CoordinatorPhaseTickFailures	none	
+src/lattice/LatticeMetrics.cs#CoordinatorPhaseTickFailures	unresolved	reason=dimension (unread-tag-argument:PhaseTickFailureTags()): tag argument(s) PhaseTickFailureTags() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteCompleted	unresolved	reason=dimension outcome: no declaration found for outcomeTag
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteDuration	unresolved	reason=dimension outcome: no declaration found for outcomeTag
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteParticipants	unresolved	reason=dimension outcome: no declaration found for outcomeTag
 src/lattice/LatticeMetrics.cs#DigestPublishTimeouts	unresolved	reason=unrecognised value expression: state.State.TreeId ?? string.Empty
 src/lattice/LatticeMetrics.cs#EventsDropped	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#EventsPublished	unresolved	reason=unrecognised value expression: evt.Kind.ToString()
-src/lattice/LatticeMetrics.cs#ExistsDuration	none	
-src/lattice/LatticeMetrics.cs#GetDuration	none	
-src/lattice/LatticeMetrics.cs#GetManyDuration	none	
-src/lattice/LatticeMetrics.cs#GetManyStageDuration	none	
-src/lattice/LatticeMetrics.cs#GetStageDuration	none	
-src/lattice/LatticeMetrics.cs#GetWithVersionDuration	none	
-src/lattice/LatticeMetrics.cs#GrainCallDuration	none	
-src/lattice/LatticeMetrics.cs#GrainCallOutstandingDepth	none	
-src/lattice/LatticeMetrics.cs#LeafAccessModelLeaves	none	
+src/lattice/LatticeMetrics.cs#ExistsDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree, StageTagTenant): tag argument(s) stageTagTree, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#GetDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree, StageTagTenant): tag argument(s) stageTagTree, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#GetManyDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree, StageTagTenant): tag argument(s) stageTagTree, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#GetManyStageDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree, LatticeMetrics.StageRouteTag, StageTagTenant): tag argument(s) stageTagTree, LatticeMetrics.StageRouteTag, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#GetStageDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree, LatticeMetrics.StageRouteTag, StageTagTenant): tag argument(s) stageTagTree, LatticeMetrics.StageRouteTag, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#GetWithVersionDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree, StageTagTenant): tag argument(s) stageTagTree, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#GrainCallDuration	unresolved	reason=dimension (unread-tag-argument:tag, faulted ? FaultedOutcome : CompletedOutcome, LatticeTenantLabel.Platform): tag argument(s) tag, faulted ? FaultedOutcome : CompletedOutcome, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#GrainCallOutstandingDepth	unresolved	reason=dimension (unread-tag-argument:tag, LatticeTenantLabel.Platform): tag argument(s) tag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#LeafAccessModelLeaves	unresolved	reason=dimension (unread-tag-argument:LeafAccessMetricTags()): tag argument(s) LeafAccessMetricTags() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafActivationCursorPublishFailures	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#LeafActivationFailures	unresolved	reason=dimension tree: no declaration found for failedTreeId
 src/lattice/LatticeMetrics.cs#LeafActivationOverBudgetReplays	unresolved	reason=dimension tree: no declaration found for treeId
@@ -222,149 +222,149 @@ src/lattice/LatticeMetrics.cs#LeafActivationReplays	unresolved	reason=dimension 
 src/lattice/LatticeMetrics.cs#LeafActivationStalledReplays	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#LeafBisectRefusals	unresolved	reason=unrecognised value expression: DetachSeamTag(seam)
 src/lattice/LatticeMetrics.cs#LeafByteOverflows	unresolved	reason=dimension tree: no declaration found for treeId
-src/lattice/LatticeMetrics.cs#LeafCachePreWarmDurationMs	none	
-src/lattice/LatticeMetrics.cs#LeafCachePreWarmed	none	
+src/lattice/LatticeMetrics.cs#LeafCachePreWarmDurationMs	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#LeafCachePreWarmed	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafColdReplayLoop	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#LeafCommitDuration	unresolved	reason=dimension tree: unrecognised value expression: state.State.TreeId ?? string.Empty
-src/lattice/LatticeMetrics.cs#LeafCommitInFlight	none	
-src/lattice/LatticeMetrics.cs#LeafCompactionDuration	none	
+src/lattice/LatticeMetrics.cs#LeafCommitInFlight	unresolved	reason=dimension (unread-tag-argument:LeafTreeTag(), LeafTenantTag()): tag argument(s) LeafTreeTag(), LeafTenantTag() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#LeafCompactionDuration	unresolved	reason=dimension (unread-tag-argument:treeTag, trig, tenantTag): tag argument(s) treeTag, trig, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafDeactivationCheckpointDelta	unresolved	reason=unrecognised value expression: reason.ReasonCode.ToString()
 src/lattice/LatticeMetrics.cs#LeafDeferredTerminalsDroppedAtCap	unresolved	reason=dimension tree: no declaration found for treeId
-src/lattice/LatticeMetrics.cs#LeafDigestPublishes	none	
+src/lattice/LatticeMetrics.cs#LeafDigestPublishes	unresolved	reason=dimension (unread-tag-argument:LeafTreeTag(), LatticeMetrics.PathCoalescedScheduledTag, LeafTenantTag()): tag argument(s) LeafTreeTag(), LatticeMetrics.PathCoalescedScheduledTag, LeafTenantTag() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafReplayBarrierOutcomes	primed	
 src/lattice/LatticeMetrics.cs#LeafResidencySheds	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#LeafScanDuration	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#LeafSnapshotCaptureConcurrentEntries	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#LeafSnapshotCaptureDeclines	unresolved	reason=dimension tree: no declaration found for treeId
-src/lattice/LatticeMetrics.cs#LeafSnapshotCaptureDuration	none	
-src/lattice/LatticeMetrics.cs#LeafSnapshotCaptures	none	
+src/lattice/LatticeMetrics.cs#LeafSnapshotCaptureDuration	unresolved	reason=dimension (unread-tag-argument:treeTag, outcome, tenantTag): tag argument(s) treeTag, outcome, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#LeafSnapshotCaptures	unresolved	reason=dimension (unread-tag-argument:treeTag, outcome, tenantTag): tag argument(s) treeTag, outcome, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafSnapshotCoverageRepairs	unresolved	reason=dimension tree: no declaration found for treeId
-src/lattice/LatticeMetrics.cs#LeafSnapshotHydrationAdmissions	none	
+src/lattice/LatticeMetrics.cs#LeafSnapshotHydrationAdmissions	unresolved	reason=dimension (unread-tag-argument:treeTag, queued ? LatticeMetrics.SnapshotHydrationQueued : LatticeMetrics.SnapshotHydrationAdmittedImmediately, tenantTa (truncated)): tag argument(s) treeTag, queued ? LatticeMetrics.SnapshotHydrationQueued : LatticeMetrics.SnapshotHydrationAdmittedImmediately, tenantTa (truncated) are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafSnapshotLoadFailures	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#LeafSnapshotSegmentPeakBytes	none	
 src/lattice/LatticeMetrics.cs#LeafSnapshotSegmentReads	unresolved	reason=dimension outcome: tag passed as a prebuilt KeyValuePair static (LatticeMetrics.SnapshotSegmentLoaded/Missing/Failed), so no tag key is visible at the emission site. The domain is bounded and zero-primed (loaded/missing/failed), so a none row here would launder a parser blind spot into a negative claim.
-src/lattice/LatticeMetrics.cs#LeafSnapshotSegmentedHydrations	none	
+src/lattice/LatticeMetrics.cs#LeafSnapshotSegmentedHydrations	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafSplitAttempts	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#LeafSplitCompletionOldestAge	none	
 src/lattice/LatticeMetrics.cs#LeafSplitCompletionsInFlight	none	
 src/lattice/LatticeMetrics.cs#LeafSplits	unresolved	reason=unrecognised value expression: state.State.TreeId ?? string.Empty
 src/lattice/LatticeMetrics.cs#LeafTombstoneRatio	unresolved	reason=unrecognised value expression: context.GrainId.ToString()
-src/lattice/LatticeMetrics.cs#LeafTombstonesCreated	none	
-src/lattice/LatticeMetrics.cs#LeafTombstonesExpired	none	
-src/lattice/LatticeMetrics.cs#LeafTombstonesReaped	none	
+src/lattice/LatticeMetrics.cs#LeafTombstonesCreated	unresolved	reason=dimension (unread-tag-argument:LeafTreeTag(), LeafTenantTag()): tag argument(s) LeafTreeTag(), LeafTenantTag() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#LeafTombstonesExpired	unresolved	reason=dimension (unread-tag-argument:treeTag, trig, tenantTag): tag argument(s) treeTag, trig, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#LeafTombstonesReaped	unresolved	reason=dimension (unread-tag-argument:treeTag, trig, tenantTag): tag argument(s) treeTag, trig, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafUnresolvedPrepareLedgerBeyondCap	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#LeafWriteDuration	unresolved	reason=bounded domain found, enrolment not yet chosen
-src/lattice/LatticeMetrics.cs#LockAcquireWait	none	
+src/lattice/LatticeMetrics.cs#LockAcquireWait	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LockAcquired	unresolved	reason=bounded domain found, enrolment not yet chosen
-src/lattice/LatticeMetrics.cs#LockLeaseReclaimed	none	
-src/lattice/LatticeMetrics.cs#LockReleased	none	
+src/lattice/LatticeMetrics.cs#LockLeaseReclaimed	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#LockReleased	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#MaterialiserDrainLag	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#MaterialiserLaggingConsumers	unresolved	reason=dimension tree: no declaration found for treeId
-src/lattice/LatticeMetrics.cs#MaterialiserPinAdvances	none	
+src/lattice/LatticeMetrics.cs#MaterialiserPinAdvances	unresolved	reason=dimension (unread-tag-argument:_treeTagPair, offsetAdvanced ? LatticeMetrics.OutcomePinOffsetAdvanced : frontierAdvanced ? LatticeMetrics.OutcomePinFro (truncated)): tag argument(s) _treeTagPair, offsetAdvanced ? LatticeMetrics.OutcomePinOffsetAdvanced : frontierAdvanced ? LatticeMetrics.OutcomePinFro (truncated) are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#MaterialiserPinDurableWriteLatency	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#MaterialiserPinDurableWrites	unresolved	reason=dimension tree: no declaration found for TreeTag
 src/lattice/LatticeMetrics.cs#MaterialiserPinReportsShed	unresolved	reason=dimension tree: no declaration found for shedTreeId
 src/lattice/LatticeMetrics.cs#ObserverDuration	unresolved	reason=dimension tree: no declaration found for TreeId
-src/lattice/LatticeMetrics.cs#ProviderCommitDuration	none	
-src/lattice/LatticeMetrics.cs#ProviderIdempotentReplays	none	
-src/lattice/LatticeMetrics.cs#ProviderPhase2BatchSize	none	
-src/lattice/LatticeMetrics.cs#ProviderPhase2CommitTimeouts	none	
-src/lattice/LatticeMetrics.cs#ProviderPhaseOneTransientRetries	none	
+src/lattice/LatticeMetrics.cs#ProviderCommitDuration	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { treeTag, shardTag, LatticeMetrics.PhasePhase1Tag, _pipelinePhaseTwoTag, tenantTag, }): tag argument(s) new System.Diagnostics.TagList { treeTag, shardTag, LatticeMetrics.PhasePhase1Tag, _pipelinePhaseTwoTag, tenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#ProviderIdempotentReplays	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { treeTag, shardTag, LatticeMetrics.PhasePhase1Tag, tenantTag, }): tag argument(s) new System.Diagnostics.TagList { treeTag, shardTag, LatticeMetrics.PhasePhase1Tag, tenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#ProviderPhase2BatchSize	unresolved	reason=dimension (unread-tag-argument:_treeTag, _shardTag, _tenantTag): tag argument(s) _treeTag, _shardTag, _tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#ProviderPhase2CommitTimeouts	unresolved	reason=dimension (unread-tag-argument:_treeTag, _shardTag, _tenantTag): tag argument(s) _treeTag, _shardTag, _tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#ProviderPhaseOneTransientRetries	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { treeTag, shardTag, LatticeMetrics.PhasePhase1Tag, tenantTag, }): tag argument(s) new System.Diagnostics.TagList { treeTag, shardTag, LatticeMetrics.PhasePhase1Tag, tenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#ProviderRetryAttempts	unresolved	reason=unrecognised value expression: status.ToString(CultureInfo.InvariantCulture)
 src/lattice/LatticeMetrics.cs#ProviderRetryExhausted	unresolved	reason=unrecognised value expression: ResolveProviderStatusTag(rfe)
 src/lattice/LatticeMetrics.cs#ProviderRetryShortCircuited	unresolved	reason=unrecognised value expression: SaturatedResponse.SyntheticStatus.ToString(CultureInfo.Invar...
-src/lattice/LatticeMetrics.cs#SagaBroadcastDuration	none	
+src/lattice/LatticeMetrics.cs#SagaBroadcastDuration	unresolved	reason=dimension (unread-tag-argument:sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag): tag argument(s) sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#SagaBroadcastLeafDuration	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#SagaBroadcastShardDuration	unresolved	reason=dimension tree: no declaration found for TreeId
-src/lattice/LatticeMetrics.cs#SagaBroadcastShardStageDuration	none	
+src/lattice/LatticeMetrics.cs#SagaBroadcastShardStageDuration	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { stageTagTree, stageTagShard, LatticeMetrics.StageResolveTag, stageTagTenant, }): tag argument(s) new System.Diagnostics.TagList { stageTagTree, stageTagShard, LatticeMetrics.StageResolveTag, stageTagTenant, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#SagaCheckpointDuration	unresolved	reason=dimension phase: no declaration found for phase
-src/lattice/LatticeMetrics.cs#SagaFanoutSize	none	
-src/lattice/LatticeMetrics.cs#SagaPerKeyDuration	none	
-src/lattice/LatticeMetrics.cs#SagaPrepareDuration	none	
+src/lattice/LatticeMetrics.cs#SagaFanoutSize	unresolved	reason=dimension (unread-tag-argument:sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag): tag argument(s) sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#SagaPerKeyDuration	unresolved	reason=dimension (unread-tag-argument:sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag): tag argument(s) sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#SagaPrepareDuration	unresolved	reason=dimension (unread-tag-argument:sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag): tag argument(s) sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#SagaReminderDuration	unresolved	reason=bounded domain found, enrolment not yet chosen
-src/lattice/LatticeMetrics.cs#SagaTerminalDecisionDuration	none	
+src/lattice/LatticeMetrics.cs#SagaTerminalDecisionDuration	unresolved	reason=dimension (unread-tag-argument:sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag): tag argument(s) sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#SagaWaitSerialGap	none	
 src/lattice/LatticeMetrics.cs#ScanPageCeilingOutcomes	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ScanPageLeafReadOutcomes	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ScanPageStalls	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ScanStallFutilityOutcomes	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ScanStallResumptions	unresolved	reason=dimension tree: no declaration found for treeId
-src/lattice/LatticeMetrics.cs#SetDuration	none	
-src/lattice/LatticeMetrics.cs#SetManyDuration	none	
-src/lattice/LatticeMetrics.cs#SetManyStageDuration	none	
-src/lattice/LatticeMetrics.cs#SetStageDuration	none	
+src/lattice/LatticeMetrics.cs#SetDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree, StageTagTenant): tag argument(s) stageTagTree, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#SetManyDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree, StageTagTenant): tag argument(s) stageTagTree, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#SetManyStageDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree, LatticeMetrics.StageGateTag, StageTagTenant): tag argument(s) stageTagTree, LatticeMetrics.StageGateTag, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#SetStageDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree, LatticeMetrics.StageGateTag, StageTagTenant): tag argument(s) stageTagTree, LatticeMetrics.StageGateTag, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#ShardConsolidationsCommitted	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ShardDigestReads	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ShardForwardTimeouts	unresolved	reason=dimension tree: no declaration found for TreeId
-src/lattice/LatticeMetrics.cs#ShardHealingBacklog	none	
-src/lattice/LatticeMetrics.cs#ShardHealingDecisions	none	
-src/lattice/LatticeMetrics.cs#ShardReads	none	
-src/lattice/LatticeMetrics.cs#ShardRecordsWritten	none	
+src/lattice/LatticeMetrics.cs#ShardHealingBacklog	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#ShardHealingDecisions	unresolved	reason=dimension (unread-tag-argument:treeTag, DecisionTag(decision), tenantTag): tag argument(s) treeTag, DecisionTag(decision), tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#ShardReads	unresolved	reason=dimension (unread-tag-argument:GetMetricTags()): tag argument(s) GetMetricTags() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#ShardRecordsWritten	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#ShardRootFlushRetriesSuspended	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ShardRootReshardCompleted	unresolved	reason=dimension tree: no declaration found for TreeId
-src/lattice/LatticeMetrics.cs#ShardRootReshardInFlight	none	
-src/lattice/LatticeMetrics.cs#ShardRootReshardInitiated	none	
+src/lattice/LatticeMetrics.cs#ShardRootReshardInFlight	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#ShardRootReshardInitiated	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#ShardRootReshardRejected	primed	
 src/lattice/LatticeMetrics.cs#ShardRootSetManyLeafRpcDuration	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ShardRootSetManyLocalApplyDuration	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ShardRootSetManyShadowForwardDuration	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ShardSplitsCommitted	unresolved	reason=dimension tree: no declaration found for TreeId
-src/lattice/LatticeMetrics.cs#ShardWrites	none	
-src/lattice/LatticeMetrics.cs#SnapshotReplayDuration	none	
-src/lattice/LatticeMetrics.cs#SnapshotReplayEntries	none	
-src/lattice/LatticeMetrics.cs#SplitAdmissionDeferred	none	
-src/lattice/LatticeMetrics.cs#SplitCandidatesSuppressed	none	
-src/lattice/LatticeMetrics.cs#SplitInFlight	none	
+src/lattice/LatticeMetrics.cs#ShardWrites	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#SnapshotReplayDuration	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#SnapshotReplayEntries	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#SplitAdmissionDeferred	unresolved	reason=dimension (unread-tag-argument:treeTag, LatticeMetrics.SplitDeferredClusterCapReasonTag, tenantTag): tag argument(s) treeTag, LatticeMetrics.SplitDeferredClusterCapReasonTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#SplitCandidatesSuppressed	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#SplitInFlight	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#SplitRetroactiveForwardDuration	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#SplitRetroactiveForwardEntries	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#StoragePolicyBytesReclaimed	unresolved	reason=dimension tree: no declaration found for treeName
 src/lattice/LatticeMetrics.cs#StoragePolicyTrimTriggered	unresolved	reason=dimension tree: no declaration found for treeName
-src/lattice/LatticeMetrics.cs#StorageWalCompressionSkipped	none	
-src/lattice/LatticeMetrics.cs#StorageWalStoredBytes	none	
-src/lattice/LatticeMetrics.cs#StorageWalUncompressedBytes	none	
+src/lattice/LatticeMetrics.cs#StorageWalCompressionSkipped	unresolved	reason=dimension (unread-tag-argument:treeTag, LatticeMetrics.ReasonCompressionDisabled, tenantTag): tag argument(s) treeTag, LatticeMetrics.ReasonCompressionDisabled, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#StorageWalStoredBytes	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#StorageWalUncompressedBytes	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#TreeLifecycle	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ViewAggregationApplied	none	
 src/lattice/LatticeMetrics.cs#ViewAggregationRejected	none	
 src/lattice/LatticeMetrics.cs#ViewApplied	none	
 src/lattice/LatticeMetrics.cs#ViewApplyLag	none	
-src/lattice/LatticeMetrics.cs#ViewAtomicStagingBackstop	none	
+src/lattice/LatticeMetrics.cs#ViewAtomicStagingBackstop	unresolved	reason=dimension (unread-tag-argument:ViewTag, ViewTenantTag): tag argument(s) ViewTag, ViewTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#ViewBacklogDepth	none	
-src/lattice/LatticeMetrics.cs#ViewCrossTreeJointViolation	none	
+src/lattice/LatticeMetrics.cs#ViewCrossTreeJointViolation	unresolved	reason=dimension (unread-tag-argument:ViewTag, ViewTenantTag): tag argument(s) ViewTag, ViewTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#ViewKeyCollisions	none	
 src/lattice/LatticeMetrics.cs#ViewLagBudgetEviction	none	
 src/lattice/LatticeMetrics.cs#ViewSourceBackpressure	unresolved	reason=unrecognised value expression: saturation.ToString().ToLowerInvariant()
 src/lattice/LatticeMetrics.cs#WalAppendAdmissionSaturationRefusals	unresolved	reason=dimension tree: no declaration found for treeId
-src/lattice/LatticeMetrics.cs#WalAppendAdmissionTimeouts	none	
-src/lattice/LatticeMetrics.cs#WalAppendAdmissionWait	none	
-src/lattice/LatticeMetrics.cs#WalAppendBatchBytes	none	
-src/lattice/LatticeMetrics.cs#WalAppendBatchEntries	none	
+src/lattice/LatticeMetrics.cs#WalAppendAdmissionTimeouts	unresolved	reason=dimension (unread-tag-argument:treeTagWriter, partitionTagWriter, tenantTagWriter): tag argument(s) treeTagWriter, partitionTagWriter, tenantTagWriter are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalAppendAdmissionWait	unresolved	reason=dimension (unread-tag-argument:treeTagWriter, partitionTagWriter, tenantTagWriter): tag argument(s) treeTagWriter, partitionTagWriter, tenantTagWriter are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalAppendBatchBytes	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, }): tag argument(s) new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalAppendBatchEntries	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, }): tag argument(s) new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalAppendDispatchTimeouts	unresolved	reason=dimension tree: no declaration found for TreeId
-src/lattice/LatticeMetrics.cs#WalAppendDispatched	none	
+src/lattice/LatticeMetrics.cs#WalAppendDispatched	unresolved	reason=dimension (unread-tag-argument:treeTagWriter, partitionTagWriter, tenantTagWriter): tag argument(s) treeTagWriter, partitionTagWriter, tenantTagWriter are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalAppendDrainReleases	unresolved	reason=dimension tree: no declaration found for TreeId
-src/lattice/LatticeMetrics.cs#WalAppendInFlight	none	
-src/lattice/LatticeMetrics.cs#WalAppendPendingDispatches	none	
-src/lattice/LatticeMetrics.cs#WalAppendProviderDuration	none	
-src/lattice/LatticeMetrics.cs#WalAppendQueueDepth	none	
-src/lattice/LatticeMetrics.cs#WalAppendTurnWait	none	
+src/lattice/LatticeMetrics.cs#WalAppendInFlight	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, }): tag argument(s) new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalAppendPendingDispatches	unresolved	reason=dimension (unread-tag-argument:treeTagWriter, partitionTagWriter, tenantTagWriter): tag argument(s) treeTagWriter, partitionTagWriter, tenantTagWriter are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalAppendProviderDuration	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, }): tag argument(s) new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalAppendQueueDepth	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, }): tag argument(s) new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalAppendTurnWait	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, }): tag argument(s) new System.Diagnostics.TagList { _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag, _tenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalEntriesTrimmed	unresolved	reason=dimension tree: no declaration found for treeName
-src/lattice/LatticeMetrics.cs#WalFlushPreflightTimeouts	none	
-src/lattice/LatticeMetrics.cs#WalGcBacklogBytes	none	
-src/lattice/LatticeMetrics.cs#WalGcBacklogBytesUnavailable	none	
-src/lattice/LatticeMetrics.cs#WalGcBlockedLeafReactivations	none	
-src/lattice/LatticeMetrics.cs#WalGcInterval	none	
+src/lattice/LatticeMetrics.cs#WalFlushPreflightTimeouts	unresolved	reason=dimension (unread-tag-argument:_treeTag, _shardTag, _tenantTag): tag argument(s) _treeTag, _shardTag, _tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalGcBacklogBytes	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalGcBacklogBytesUnavailable	unresolved	reason=dimension (unread-tag-argument:treeTag, byteCeiling is null ? LatticeMetrics.ReasonBytePolicyDisabled : LatticeMetrics.ReasonByteProviderUnsupported, t (truncated)): tag argument(s) treeTag, byteCeiling is null ? LatticeMetrics.ReasonBytePolicyDisabled : LatticeMetrics.ReasonByteProviderUnsupported, t (truncated) are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalGcBlockedLeafReactivations	unresolved	reason=dimension (unread-tag-argument:treeTag, outcome, tenantTag): tag argument(s) treeTag, outcome, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalGcInterval	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalGcOffsetFloorUnavailable	unresolved	reason=dimension tree: no declaration found for treeName
-src/lattice/LatticeMetrics.cs#WalGcPasses	none	
-src/lattice/LatticeMetrics.cs#WalReplayPermitAdaptations	none	
+src/lattice/LatticeMetrics.cs#WalGcPasses	unresolved	reason=dimension (unread-tag-argument:treeTag, outcome, tenantTag): tag argument(s) treeTag, outcome, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalReplayPermitAdaptations	unresolved	reason=dimension (unread-tag-argument:LatticeMetrics.PermitAdaptationWithheld, trigger, LatticeTenantLabel.Platform): tag argument(s) LatticeMetrics.PermitAdaptationWithheld, trigger, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalReplayPermitQueueWait	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#WalReplaySliceNarrowings	unresolved	reason=dimension tree: no declaration found for _treeId
-src/lattice/LatticeMetrics.cs#WalSaturationTransitions	none	
-src/lattice/LatticeMetrics.cs#WalShardDeactivateInFlight	none	
-src/lattice/LatticeMetrics.cs#WalShardDispatchDuration	none	
-src/lattice/LatticeMetrics.cs#WalShardDispatchEntries	none	
-src/lattice/LatticeMetrics.cs#WalShardDrainBudgetExpirations	none	
-src/lattice/LatticeMetrics.cs#WalShardDrainBudgetForceFaultedSlots	none	
-src/lattice/LatticeMetrics.cs#WalShardPendingSegments	none	
-src/lattice/LatticeMetrics.cs#WalShardStartFlushCalls	none	
+src/lattice/LatticeMetrics.cs#WalSaturationTransitions	unresolved	reason=dimension (unread-tag-argument:tags.ToArray()): tag argument(s) tags.ToArray() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalShardDeactivateInFlight	unresolved	reason=dimension (unread-tag-argument:_treeTag, _shardTag, _tenantTag): tag argument(s) _treeTag, _shardTag, _tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalShardDispatchDuration	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { treeTag, shardTag, walPartitionsTag, walMaxPendingTag, tenantTag, }): tag argument(s) new System.Diagnostics.TagList { treeTag, shardTag, walPartitionsTag, walMaxPendingTag, tenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalShardDispatchEntries	unresolved	reason=dimension (unread-tag-argument:new System.Diagnostics.TagList { treeTag, shardTag, walPartitionsTag, walMaxPendingTag, tenantTag, }): tag argument(s) new System.Diagnostics.TagList { treeTag, shardTag, walPartitionsTag, walMaxPendingTag, tenantTag, } are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalShardDrainBudgetExpirations	unresolved	reason=dimension (unread-tag-argument:_treeTag, _shardTag, _tenantTag): tag argument(s) _treeTag, _shardTag, _tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalShardDrainBudgetForceFaultedSlots	unresolved	reason=dimension (unread-tag-argument:_treeTag, _shardTag, _tenantTag): tag argument(s) _treeTag, _shardTag, _tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalShardPendingSegments	unresolved	reason=dimension (unread-tag-argument:_treeTag, _shardTag, _tenantTag): tag argument(s) _treeTag, _shardTag, _tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalShardStartFlushCalls	unresolved	reason=dimension (unread-tag-argument:_treeTag, _shardTag, _tenantTag): tag argument(s) _treeTag, _shardTag, _tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WarmUpDurationMs	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#WarmUpInvocations	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeStorageUsageMetrics.cs#(unassigned:LatticeMetrics.StorageLeafStateBytesName)	none	
