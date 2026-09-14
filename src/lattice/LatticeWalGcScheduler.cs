@@ -610,7 +610,7 @@ internal sealed class LatticeWalGcScheduler(
     /// Every declared terminal outcome, cached once.
     /// </summary>
     /// <remarks>
-    /// Cached because the priming path walks it per tree per pass and
+    /// Cached because the priming path walks it once per tree and
     /// <see cref="Enum.GetValues{TEnum}"/> allocates a fresh array on each call.
     /// Derived from the enum rather than written out, so it cannot fall behind
     /// the type it describes - which is the failure this whole issue is about.
@@ -2600,7 +2600,7 @@ internal sealed class LatticeWalGcScheduler(
     /// Every declared starvation-drive verdict, cached once.
     /// </summary>
     /// <remarks>
-    /// Cached because the priming path walks it per tree per pass and
+    /// Cached because the priming path walks it once per tree and
     /// <see cref="Enum.GetValues{TEnum}"/> allocates a fresh array on each call.
     /// Derived from the enum rather than written out, so it cannot fall behind
     /// the type it describes.
