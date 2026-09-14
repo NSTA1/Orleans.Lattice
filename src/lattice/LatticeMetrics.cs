@@ -1949,9 +1949,220 @@ public static class LatticeMetrics
     /// never as evidence that no activation waited.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Explicit bucket boundaries for <see cref="WalReplayPermitQueueWait"/>
+    /// (issue #3044), in milliseconds.
+    /// <para>
+    /// Without them the histogram is exported with no bucket series at all, so
+    /// the only readable statistic is a mean - and a mean over a handful of
+    /// samples cannot distinguish a gate that is uniformly slow from one that is
+    /// fast except for a few pathological holds. Those two have different causes
+    /// and different remedies, so collapsing them loses the distinction the
+    /// instrument exists to draw.
+    /// </para>
+    /// <para>
+    /// The boundaries span sub-millisecond to half an hour because the observed
+    /// range genuinely does: a warm resume on an idle gate returns in under a
+    /// millisecond, while a real queue wait has been measured in minutes. Two
+    /// boundaries are chosen rather than merely spaced - <c>30000</c> is the
+    /// Orleans response deadline, so the bucket above it isolates waits that
+    /// outlived the caller that was waiting on them, and <c>1000</c> separates
+    /// "queued behind someone" from "queued behind a replay".
+    /// </para>
+    /// <para>
+    /// <b>Declared above the histogram that consumes it, and that ordering is
+    /// load-bearing.</b> Static field initialisers run in declaration order, and
+    /// the <c>advice</c> parameter is nullable, so an advice field declared
+    /// below its histogram is read as <c>null</c> and the histogram is built
+    /// with no buckets at all. Nothing throws and every test that does not
+    /// inspect bucket boundaries still passes - the failure is silent and
+    /// presents as the exact bucketless export this field exists to fix. This is
+    /// the same ordering hazard the <c>Meter</c>-above-instruments rule guards,
+    /// arriving through a different field.
+    /// </para>
+    /// </summary>
+    private static readonly InstrumentAdvice<double> WalReplayPermitQueueWaitAdvice = new()
+    {
+        HistogramBucketBoundaries =
+        [
+            1d, 5d, 10d, 50d, 100d, 500d, 1_000d, 5_000d,
+            15_000d, 30_000d, 60_000d, 300_000d, 900_000d, 1_800_000d,
+        ],
+    };
+
     public static readonly Histogram<double> WalReplayPermitQueueWait =
         Meter.CreateHistogram<double>("orleans.lattice.wal.replay.permit_queue_wait", unit: "ms",
-            description: "Wall-clock ms an activation spent queued on the per-silo WAL replay concurrency gate, tagged by tree and by outcome (acquired or canceled).");
+            description: "Wall-clock ms an activation spent queued on the per-silo WAL replay concurrency gate, tagged by tree and by outcome (acquired or canceled).",
+            tags: null,
+            advice: WalReplayPermitQueueWaitAdvice);
+
+    // ---- Issue #3044: permit waits that never terminate --------------------
+    //
+    // WalReplayPermitQueueWait records on exactly two arms and BOTH are
+    // terminal: `acquired` after the semaphore is entered, `canceled` from the
+    // catch around the wait. A wait that never returns records on neither, so
+    // the instrument built to measure gate contention is structurally silent
+    // about the single state that matters most - an activation parked on the
+    // gate indefinitely. That state is not an edge case; it is what a saturated
+    // gate looks like from the inside, and it is invisible precisely when the
+    // gate is worst.
+    //
+    // No amount of priming reaches it. A primed `canceled` arm reading zero says
+    // "no cancellation completed", which is true and irrelevant while a wait is
+    // still in flight. The missing observable is a level, not a terminal event,
+    // so it needs a gauge.
+    //
+    // These two name that state as a measurement rather than a threshold, in the
+    // shape issue #2967 established for wedged split completions: the count of
+    // waits currently parked, and the age of the oldest. No constant is encoded
+    // here - "stuck" is read off the age climbing, a judgement made against real
+    // data rather than guessed in code.
+
+    /// <summary>
+    /// Live registry of activations currently queued on the per-silo WAL replay
+    /// concurrency gate, keyed by a process-unique token and carrying the tree
+    /// whose leaf is activating and the monotonic timestamp the wait began.
+    /// Declared above the gauges that read it so their observation callbacks can
+    /// never see it uninitialised.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, (string Tree, long StartTimestamp)>
+        WalReplayPermitWaitsInFlightRegistry = new();
+
+    /// <summary>
+    /// Trees that have entered the permit queue at least once in this process,
+    /// so <see cref="WalReplayPermitWaitsInFlight"/> can keep reporting an
+    /// explicit zero for them once their waits drain.
+    /// <para>
+    /// This is what makes a zero on that gauge <b>admissible</b>. Without it an
+    /// idle tree has no series, and "no activation is queued" is byte-identical
+    /// to "the instrument never ran" - the exact ambiguity that made the
+    /// terminal arms unusable as evidence. Bounded by the number of trees the
+    /// process has ever activated a leaf for, which is small and does not grow
+    /// with traffic. Declared above the gauges that read it.
+    /// </para>
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte>
+        WalReplayPermitWaitObservedTrees = new(StringComparer.Ordinal);
+
+    private static long _walReplayPermitWaitToken;
+
+    /// <summary>
+    /// Registers an activation as queued on the replay permit gate for the
+    /// duration of the returned scope. Disposing it deregisters the wait; a
+    /// scope that is never disposed - an activation suspended forever on the
+    /// gate - keeps its entry live, which is precisely the state
+    /// <see cref="WalReplayPermitWaitsInFlight"/> and
+    /// <see cref="WalReplayPermitWaitOldestAge"/> exist to make observable.
+    /// </summary>
+    /// <param name="treeId">The tree whose leaf is activating.</param>
+    public static WalReplayPermitWaitScope EnterWalReplayPermitWait(string? treeId)
+    {
+        var tree = treeId ?? string.Empty;
+        WalReplayPermitWaitObservedTrees.TryAdd(tree, 0);
+        var token = System.Threading.Interlocked.Increment(ref _walReplayPermitWaitToken);
+        WalReplayPermitWaitsInFlightRegistry[token] = (tree, System.Diagnostics.Stopwatch.GetTimestamp());
+        return new WalReplayPermitWaitScope(token);
+    }
+
+    /// <summary>
+    /// Disposable scope returned by <see cref="EnterWalReplayPermitWait"/>.
+    /// Removes its registry entry on <see cref="Dispose"/>. A value type so the
+    /// mass-reactivation path takes no per-wait heap allocation.
+    /// </summary>
+    public readonly struct WalReplayPermitWaitScope : IDisposable
+    {
+        private readonly long _token;
+
+        internal WalReplayPermitWaitScope(long token) => _token = token;
+
+        /// <summary>Deregisters the in-flight permit wait this scope tracks.</summary>
+        public void Dispose() => WalReplayPermitWaitsInFlightRegistry.TryRemove(_token, out _);
+    }
+
+    /// <summary>
+    /// Per-tree count of activations currently queued on the per-silo WAL replay
+    /// concurrency gate (issue #3044). Reports an explicit <c>0</c> for any tree
+    /// that has queued at least once in this process, so a zero is a measured
+    /// zero rather than an absent series.
+    /// </summary>
+    public static readonly ObservableGauge<long> WalReplayPermitWaitsInFlight =
+        Meter.CreateObservableGauge("orleans.lattice.wal.replay.permit_waits_in_flight",
+            ObserveWalReplayPermitWaitsInFlight, unit: "{activation}",
+            description: "Activations currently queued on the per-silo WAL replay concurrency gate, tagged by tree. Reports an explicit zero for any tree that has queued at least once in this process, so a zero is measured rather than absent. Read with permit_wait.oldest_age: the terminal arms of permit_queue_wait cannot name a wait that is still in flight.");
+
+    /// <summary>Canonical name of <see cref="WalReplayPermitWaitsInFlight"/>.</summary>
+    public const string WalReplayPermitWaitsInFlightName = "orleans.lattice.wal.replay.permit_waits_in_flight";
+
+    /// <summary>
+    /// Per-tree age in seconds of the oldest activation currently queued on the
+    /// replay permit gate (issue #3044), or no series for a tree with none
+    /// queued.
+    /// <para>
+    /// Deliberately not zero-primed, unlike its sibling count: the age of the
+    /// oldest waiter when there is no waiter is not zero, it is undefined, and
+    /// fabricating a zero would report the healthiest possible value for the
+    /// emptiest possible state. The count is the instrument that answers
+    /// "is anyone queued"; this one answers "for how long" and is meaningful
+    /// only when the answer to the first is yes.
+    /// </para>
+    /// </summary>
+    public static readonly ObservableGauge<double> WalReplayPermitWaitOldestAge =
+        Meter.CreateObservableGauge("orleans.lattice.wal.replay.permit_wait.oldest_age",
+            ObserveWalReplayPermitWaitOldestAge, unit: "s",
+            description: "Age in seconds of the oldest activation currently queued on the per-silo WAL replay concurrency gate, tagged by tree (no series when none is queued). A climbing value is an activation parked on a saturated gate; a value near zero is healthy contention.");
+
+    /// <summary>Canonical name of <see cref="WalReplayPermitWaitOldestAge"/>.</summary>
+    public const string WalReplayPermitWaitOldestAgeName = "orleans.lattice.wal.replay.permit_wait.oldest_age";
+
+    private static IEnumerable<Measurement<long>> ObserveWalReplayPermitWaitsInFlight()
+    {
+        var counts = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var tree in WalReplayPermitWaitObservedTrees.Keys)
+        {
+            counts[tree] = 0;
+        }
+
+        foreach (var entry in WalReplayPermitWaitsInFlightRegistry)
+        {
+            counts.TryGetValue(entry.Value.Tree, out var current);
+            counts[entry.Value.Tree] = current + 1;
+        }
+
+        foreach (var kv in counts)
+        {
+            yield return new Measurement<long>(
+                kv.Value,
+                new KeyValuePair<string, object?>(TagTree, kv.Key),
+                LatticeTenantLabel.ForTree(kv.Key));
+        }
+    }
+
+    private static IEnumerable<Measurement<double>> ObserveWalReplayPermitWaitOldestAge()
+    {
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        var oldestStart = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var entry in WalReplayPermitWaitsInFlightRegistry)
+        {
+            if (!oldestStart.TryGetValue(entry.Value.Tree, out var start) || entry.Value.StartTimestamp < start)
+            {
+                oldestStart[entry.Value.Tree] = entry.Value.StartTimestamp;
+            }
+        }
+
+        foreach (var kv in oldestStart)
+        {
+            var seconds = (now - kv.Value) / (double)System.Diagnostics.Stopwatch.Frequency;
+            if (seconds < 0)
+            {
+                seconds = 0;
+            }
+
+            yield return new Measurement<double>(
+                seconds,
+                new KeyValuePair<string, object?>(TagTree, kv.Key),
+                LatticeTenantLabel.ForTree(kv.Key));
+        }
+    }
 
     /// <summary>
     /// Counter of activation-time replay slice narrowings: the number of times a

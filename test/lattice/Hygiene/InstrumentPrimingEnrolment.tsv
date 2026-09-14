@@ -359,6 +359,8 @@ src/lattice/LatticeMetrics.cs#WalGcOffsetFloorUnavailable	unresolved	reason=dime
 src/lattice/LatticeMetrics.cs#WalGcPasses	unresolved	reason=dimension (unread-tag-argument:treeTag, outcome, tenantTag): tag argument(s) treeTag, outcome, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalReplayPermitAdaptations	unresolved	reason=dimension (unread-tag-argument:LatticeMetrics.PermitAdaptationWithheld, trigger, LatticeTenantLabel.Platform): tag argument(s) LatticeMetrics.PermitAdaptationWithheld, trigger, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalReplayPermitQueueWait	unresolved	reason=dimension tree: no declaration found for treeId
+src/lattice/LatticeMetrics.cs#WalReplayPermitWaitOldestAge	none	
+src/lattice/LatticeMetrics.cs#WalReplayPermitWaitsInFlight	none	
 src/lattice/LatticeMetrics.cs#WalReplaySliceNarrowings	unresolved	reason=dimension tree: no declaration found for _treeId
 src/lattice/LatticeMetrics.cs#WalSaturationTransitions	unresolved	reason=dimension (unread-tag-argument:tags.ToArray()): tag argument(s) tags.ToArray() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalShardDeactivateInFlight	unresolved	reason=dimension (unread-tag-argument:_treeTag, _shardTag, _tenantTag): tag argument(s) _treeTag, _shardTag, _tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read

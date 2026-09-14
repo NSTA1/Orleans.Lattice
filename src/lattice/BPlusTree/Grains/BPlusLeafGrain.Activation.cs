@@ -806,6 +806,14 @@ internal sealed partial class BPlusLeafGrain
         // mass-reactivation path, and the ticks are a struct pair with no
         // allocation and no clock-adjustment sensitivity.
         var queuedAt = Stopwatch.GetTimestamp();
+
+        // Issue #3044. Both arms below are terminal, so a wait that never
+        // returns records on neither and the histogram is silent about exactly
+        // the state a saturated gate produces. The scope registers this wait as
+        // in flight for its duration and is disposed in the finally, so it
+        // covers both terminal paths AND leaves the entry live for a wait that
+        // has no terminal path - which is the observable being added.
+        var permitWaitScope = LatticeMetrics.EnterWalReplayPermitWait(state.State.TreeId);
         try
         {
             await gate.WaitAsync(cancellationToken);
@@ -814,6 +822,10 @@ internal sealed partial class BPlusLeafGrain
         {
             RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitCanceled);
             throw;
+        }
+        finally
+        {
+            permitWaitScope.Dispose();
         }
 
         RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitAcquired);
