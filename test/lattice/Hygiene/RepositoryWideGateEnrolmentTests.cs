@@ -237,7 +237,13 @@ public sealed class RepositoryWideGateEnrolmentTests
     /// is by file name via <see cref="TypeNameForPath"/>, the same rule the population
     /// detector uses, so a fixture cannot be visible to one and invisible to the other.
     /// </summary>
-    private static IReadOnlyList<string> SourceFilesForType(string typeName) =>
+    /// <remarks>
+    /// Exposed to the assembly so that <c>RepositoryWideGateRunnerTests</c> can check the
+    /// runner's own name-to-source resolution against this one rather than standing up a
+    /// second resolver. Two independent resolvers are two things that can disagree with the
+    /// table silently, which is the divergence the gate list exists to make impossible.
+    /// </remarks>
+    internal static IReadOnlyList<string> SourceFilesForType(string typeName) =>
         TestSourceFiles()
             .Where(p => string.Equals(TypeNameForPath(p), typeName, StringComparison.Ordinal))
             .ToList();

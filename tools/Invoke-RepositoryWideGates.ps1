@@ -66,6 +66,16 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# The gate set spans more than one test project, so it must be enumerated first and the
+# projects allowed to follow from it. Scoping to a project and enumerating within it reaches
+# only the gates that happen to live there - which is the six-of-eleven failure this runner
+# exists to close, in a shape that looks like a complete run. -Project therefore qualifies an
+# explicitly named fixture set only, and is refused on the derived path rather than ignored,
+# so a run that appears to have been narrowed cannot silently have been repository-wide.
+if ($PSBoundParameters.ContainsKey('Project') -and -not $PSBoundParameters.ContainsKey('Fixture')) {
+    throw 'The -Project parameter is only meaningful with -Fixture. The repository-wide run derives its projects from the gate table, because the gates do not all live in one project.'
+}
+
 $InstructionsRelativePath = '.github/instructions/testing.instructions.md'
 $TableHeaderPrefix = '| fixture | project |'
 

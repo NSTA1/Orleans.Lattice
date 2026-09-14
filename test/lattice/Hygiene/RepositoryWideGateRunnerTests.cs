@@ -83,6 +83,9 @@ public sealed class RepositoryWideGateRunnerTests
 
     private static string RepoRoot => HygieneRepository.FindRepoRoot();
 
+    private static readonly Regex NamespaceDeclaration =
+        new(@"^\s*namespace\s+([\w\.]+)", RegexOptions.Multiline | RegexOptions.Compiled);
+
     private static string RunnerPath =>
         Path.Combine(RepoRoot, RunnerRelativePath.Replace('/', Path.DirectorySeparatorChar));
 
@@ -443,6 +446,71 @@ public sealed class RepositoryWideGateRunnerTests
                 + "list's source, so the instructions must send the reader to the command "
                 + "rather than invite them to compose filters by hand - which is what "
                 + "produced a six-of-eleven run by a worker who had read the table.");
+    }
+
+    /// <summary>
+    /// The runner's name-to-source resolution must agree, gate for gate, with the resolution
+    /// the enrolment gate already uses.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The runner is a shell script and the enrolment gate is C#, so the two cannot literally
+    /// share a function. What they must not do is <i>disagree</i>. Two independent resolvers
+    /// are two things that can each drift from the table without the other noticing, and the
+    /// entire premise of the gate list is that the documented set and the executed set cannot
+    /// diverge. So the second implementation is permitted only while it is checked against
+    /// the first, which is what this does: the script's answer is read out of its real emitted
+    /// run list, and compared against <c>SourceFilesForType</c>.
+    /// </para>
+    /// <para>
+    /// This is also a known-answer test for the script's resolver, in the direction that
+    /// matters. A resolver that silently fails to find a source file still produces a
+    /// runnable filter - the bare-name fallback - so its failure mode is a filter that works
+    /// and is merely loose, not an error. Comparing against an independently-derived answer
+    /// is the only thing that distinguishes those two.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Runner_resolves_each_gate_to_the_same_source_the_enrolment_gate_does()
+    {
+        var entries = EmitRunList();
+
+        Assert.Multiple(() =>
+        {
+            foreach (var entry in entries)
+            {
+                var sources = RepositoryWideGateEnrolmentTests.SourceFilesForType(entry.Fixture);
+
+                Assert.That(
+                    sources,
+                    Is.Not.Empty,
+                    $"The enrolment gate resolves no source file for {entry.Fixture}, so the "
+                        + "runner is running a gate the gate list cannot see.");
+
+                var declared = sources
+                    .Select(File.ReadAllText)
+                    .Select(static text => NamespaceDeclaration.Match(text))
+                    .Where(static match => match.Success)
+                    .Select(static match => match.Groups[1].Value)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+
+                Assert.That(
+                    declared,
+                    Has.Length.EqualTo(1),
+                    $"{entry.Fixture} resolves to {declared.Length} distinct namespaces "
+                        + $"({string.Join(", ", declared)}), so there is no single answer for "
+                        + "the runner to agree with.");
+
+                Assert.That(
+                    entry.Filter,
+                    Is.EqualTo($"FullyQualifiedName~{declared[0]}.{entry.Fixture}."),
+                    $"The runner resolved {entry.Fixture} to a filter that does not match the "
+                        + "namespace the enrolment gate's own resolver finds for it. The two "
+                        + "name-resolution paths have diverged, which is exactly the failure "
+                        + "the single-source rule exists to prevent.");
+            }
+        });
     }
 
     /// <summary>
