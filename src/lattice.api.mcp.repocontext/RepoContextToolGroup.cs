@@ -96,9 +96,15 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     Title = "Repository-context health",
                     Description =
                         "Reports whether the Orleans.Lattice repository-context surface is registered and "
-                        + "reachable for the current authenticated caller. Returns success only when the caller "
-                        + "cleared the fail-closed authorization gate, so an agent can confirm the surface is "
-                        + "wired end to end before attempting the capture, maintenance, and retrieval tools. "
+                        + "reachable for the current authenticated caller, and whether retrieval can actually "
+                        + "serve. Returns success only when the caller cleared the fail-closed authorization "
+                        + "gate. 'available' reports reachability and authorization ONLY: it stays true on a "
+                        + "host whose vector plane cannot serve, because capture, recall, and scan still work. "
+                        + "Read 'retrievalReady' and 'retrievalPhase' for retrieval capability. 'retrievalPhase' "
+                        + "discriminates the two reasons a host answers keyword recall: 'keyword_only' is an "
+                        + "intended keyword-only deployment and IS ready, while 'building' is a plane that "
+                        + "cannot serve and is NOT - treat its search results as degraded and incomplete. "
+                        + "This is the same readiness signal the host's /health/ready endpoint reads. "
                         + "Read-only.",
                     ReadOnly = true,
                     Destructive = false,
