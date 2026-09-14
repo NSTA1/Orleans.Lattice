@@ -3304,57 +3304,63 @@ internal sealed partial class BPlusLeafGrain(
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var result = new List<LwwEntry>(Cache.Count);
-        // NOT YET converted to a bounded windowed walk, unlike the sibling
-        // GetLiveEntriesAsync directly above (issue #2368). The difference is
-        // the Cache.GetMergeMode(key) call in the loop body: it is a
-        // key-addressed accessor, and a key-addressed accessor trims the
-        // resident footprint protecting only the ONE block it touched. Under a
-        // windowed walk that block is not the window, so the trim can evict a
-        // block of the window currently being enumerated - structurally
-        // modifying the dictionary under the enumerator.
+        // Converted to a bounded windowed walk (issue #2834), matching the
+        // sibling GetLiveEntriesAsync directly above. This was the last
+        // whole-cache read seam on the leaf that could be converted at the call
+        // site; the residue that remains is documented on the seams themselves.
         //
-        // Buffering the window and looking the merge modes up afterwards does
-        // not rescue it either: EvictBlock drops the evicted rows' entries from
-        // the merge-mode map, so a post-eviction lookup returns null where a
-        // mode exists and the answer changes rather than merely costing more.
+        // The conversion turns on WHICH merge-mode accessor the loop body uses,
+        // and getting that wrong reintroduces two distinct faults:
         //
-        // THE BLOCKER THIS COMMENT USED TO RECORD HAS SINCE BEEN REMOVED, and
-        // the sentence recording it has been deleted rather than left to
-        // mislead. It read "converting this seam needs a ranged merge-mode
-        // accessor, or a window pin, on the cache - not a call-site change".
-        // That was true when #2839 wrote it, and it stayed true for twelve
-        // seconds: #2835 landed at 08:07:36 against 08:07:24 and added
-        // LeafEntryCache.GetMergeModeWithoutHydrating, which reads the
-        // merge-mode side-map directly and never hydrates, touches, or trims.
-        // Called inline on a key an EnumerateRange walk has just yielded - so
-        // resident by construction - it avoids both hazards above: nothing
-        // trims under the enumerator, and nothing is looked up after an
-        // eviction could have dropped it.
+        //   1. Cache.GetMergeMode(key) is a key-addressed accessor and ends in
+        //      TrimToBudget, which protects only the ONE block it touched.
+        //      Under a windowed walk that block is not the window, so the trim
+        //      can evict a block of the window currently being enumerated -
+        //      structurally modifying the dictionary under the enumerator.
+        //   2. Buffering the window and looking the modes up afterwards does
+        //      not rescue it either: EvictBlock drops the evicted rows' entries
+        //      from the merge-mode map, so a post-eviction lookup returns null
+        //      where a mode exists and the ANSWER changes rather than merely
+        //      the cost.
         //
-        // So converting this seam IS now a call-site change, and the pattern to
-        // copy is GetFullScanWindowsWithoutHydrating() plus a per-window
-        // EnumerateRange with an inline GetMergeModeWithoutHydrating, exactly
-        // as BPlusLeafGrain.FrozenBaseline.cs already does for this same
-        // reason. It is unconverted here because nobody has done it, NOT
-        // because the cache lacks the surface - do not re-derive a blocker from
-        // the two paragraphs above, which explain why the naive conversion is
-        // unsound and not why a conversion is impossible (issue #2864).
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        // Cache.GetMergeModeWithoutHydrating (added by #2835) avoids both: it
+        // reads the merge-mode side-map directly and never hydrates, touches or
+        // trims, and it is called inline on a key the walk has just yielded, so
+        // the row is resident by construction. This is the same pattern
+        // BPlusLeafGrain.FrozenBaseline.cs uses, for the same reason.
+        //
+        // What the conversion buys: the whole-cache view called HydrateAll,
+        // which ends in DetachSnapshot and is irreversible for the activation.
+        // A leaf divides cheaply only while its frame is attached, so reading
+        // every live raw entry - an ordinary read, nothing to do with splitting
+        // - permanently forfeited the bounded division for that activation.
+        //
+        // What it does NOT buy, and must not be read as buying: a bound on peak
+        // residency when the hydration budget is not smaller than the leaf. The
+        // windows are only as sheddable as TrimToBudget makes them, and an
+        // operator who raises LeafHydrationResidentBytes towards MaxLeafBytes
+        // gets a walk that is windowed in shape and whole-leaf in cost
+        // (issue #2836). LatticeOptionsResolver warns about that configuration;
+        // the frame itself is retained either way since #2843.
+        foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            if (pendingKeys.TryGetValue(key, out var pending))
+            foreach (var (key, lww) in Cache.EnumerateRange(windowStart, windowEnd))
             {
-                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
-                if (status == TxStatus.Committed)
+                if (pendingKeys.TryGetValue(key, out var pending))
                 {
-                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
-                        result.Add(new LwwEntry(key, pending.value));
-                    continue;
+                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    if (status == TxStatus.Committed)
+                    {
+                        if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                            result.Add(new LwwEntry(key, pending.value));
+                        continue;
+                    }
+                    // InFlight or Aborted - fall through to Entries
+                    // (pre-saga visibility). See GetWithPendingAsync.
                 }
-                // InFlight or Aborted - fall through to Entries
-                // (pre-saga visibility). See GetWithPendingAsync.
+                if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
+                result.Add(new LwwEntry(key, lww, Cache.GetMergeModeWithoutHydrating(key)));
             }
-            if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
-            result.Add(new LwwEntry(key, lww, Cache.GetMergeMode(key)));
         }
         foreach (var (key, pending) in pendingKeys)
         {

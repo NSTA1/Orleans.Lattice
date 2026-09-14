@@ -248,6 +248,56 @@ internal sealed class LatticeOptionsResolver(
     private static readonly ConcurrentDictionary<string, byte> WarnedClampedLeafBatchSizeTrees = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Trees for which a "leaf hydration budget does not bound a splittable
+    /// leaf" advisory has already been logged. Re-resolving the same tree must
+    /// not spam the log on every grain activation; the advisory is
+    /// informational and nothing is clamped.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, byte> WarnedHydrationBudgetTrees = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether <paramref name="options"/> configures a leaf hydration residency
+    /// budget that cannot bound the peak footprint of a leaf large enough to be
+    /// split on bytes (issue #2836).
+    /// <para>
+    /// The leaf's read, digest and freeze seams walk bounded key windows rather
+    /// than the whole-cache view. Windowing bounds the peak only because
+    /// <c>LeafEntryCache.TrimToBudget</c> can evict a window once the walk has
+    /// moved past it, and it evicts only while the resident footprint exceeds
+    /// the budget. A budget that is unbounded, or that is not materially
+    /// smaller than the leaf, therefore evicts nothing: the walk is windowed in
+    /// shape and whole-leaf in cost, and since issue #2843 retained the frame
+    /// across a completed ranged hydration the frame's bytes sit on top of a
+    /// fully resident leaf rather than being released by the detach that used
+    /// to follow. The degradation is silent - every converted seam still
+    /// returns the right answer, and a fixture whose corpus exceeds the budget
+    /// cannot observe the regime at all.
+    /// </para>
+    /// <para>
+    /// Three conjuncts, each load-bearing. Partial hydration off means there is
+    /// no frame and no windowing to undermine. A disarmed byte bound
+    /// (<c>MaxLeafBytes</c> of 0) means leaves split on key count alone, so
+    /// there is no byte threshold to compare a budget against. And the
+    /// comparison itself is a tenth of the threshold - "within roughly an order
+    /// of magnitude" - written as a division rather than
+    /// <c>budget * 10 &gt;= threshold</c> so an extreme configured budget
+    /// cannot overflow the multiplication and silently invert the test.
+    /// </para>
+    /// </summary>
+    /// <param name="options">The silo-wide configured options for the tree.</param>
+    internal static bool LeafHydrationBudgetUnderminesWindowing(LatticeOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!options.LeafPartialHydrationEnabled || options.MaxLeafBytes <= 0)
+        {
+            return false;
+        }
+
+        return options.LeafHydrationResidentBytes <= 0
+            || options.LeafHydrationResidentBytes >= options.MaxLeafBytes / 10;
+    }
+
+    /// <summary>
     /// Fast-path resolver for the WAL <see cref="LatticeOptions.WalPartitions"/>
     /// pin only. Returns the cached value when present; on a miss, performs the
     /// one-shot registry lookup, caches the resulting pin, and returns it.
@@ -732,6 +782,26 @@ internal sealed class LatticeOptionsResolver(
             }
         }
 
+        // Leaf hydration residency budget against the byte-split threshold
+        // (issue #2836). Advisory only, with a one-shot warning per tree per
+        // process; the configuration is legitimate and nothing is clamped.
+        if (LeafHydrationBudgetUnderminesWindowing(baseOptions)
+            && WarnedHydrationBudgetTrees.TryAdd(treeId, 0))
+        {
+            _logger.LogWarning(
+                "Tree {TreeId} has LeafHydrationResidentBytes={ResidentBytes} configured against " +
+                "MaxLeafBytes={MaxLeafBytes}. The leaf read and fold seams walk bounded key windows " +
+                "to keep peak residency below the budget, but a window is only sheddable when " +
+                "TrimToBudget can actually evict it - which it cannot when the budget is unbounded " +
+                "(0) or is not materially smaller than the leaf. In that regime those walks are " +
+                "windowed in shape and whole-leaf in cost, and the retained snapshot frame is " +
+                "additive on top, so a leaf approaching the split threshold costs more resident " +
+                "memory than it did before, not less. This is a performance advisory, not a " +
+                "correctness one: lower LeafHydrationResidentBytes well below MaxLeafBytes to " +
+                "restore the bound, or accept the cost deliberately on a host with ample memory.",
+                treeId, baseOptions.LeafHydrationResidentBytes, baseOptions.MaxLeafBytes);
+        }
+
         var resolved = new ResolvedLatticeOptions
         {
             // Structural pins are sourced from the registry entry, not from
@@ -807,4 +877,12 @@ internal sealed class LatticeOptionsResolver(
     /// </summary>
     internal static void ResetWarnedClampedLeafBatchSizeTreesForTests() =>
         WarnedClampedLeafBatchSizeTrees.Clear();
+
+    /// <summary>
+    /// Test-only seam to reset the per-process "leaf hydration budget does not
+    /// bound a splittable leaf" advisory memo so multiple test cases can each
+    /// observe the warning behaviour independently.
+    /// </summary>
+    internal static void ResetWarnedHydrationBudgetTreesForTests() =>
+        WarnedHydrationBudgetTrees.Clear();
 }

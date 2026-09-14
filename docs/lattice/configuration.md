@@ -557,6 +557,8 @@ The default sits above the mean payload leaf measured on the reference deploymen
 
 **When an operator would change it:** raise it on a read-heavy tree with very large leaves whose working set is being evicted and re-read; set it to `0` when memory is plentiful and the re-read cost matters more than the footprint.
 
+**Interaction with `MaxLeafBytes`:** the leaf read, digest and freeze seams walk bounded key windows rather than the whole cache, and that bounds peak residency only because eviction can shed a window once the walk has moved past it. Eviction only runs while the resident footprint exceeds this budget, so a budget that is unbounded (`0`) or is not materially smaller than `MaxLeafBytes` sheds nothing: those walks stay windowed in shape and become whole-leaf in cost. The lazy hydration frame is retained across a completed ranged hydration rather than released, so in that regime the frame's bytes sit on top of a fully resident leaf. The degradation is silent - every seam still returns the same answer - so the silo logs a one-shot advisory per tree naming both configured values when this budget is unbounded or is at or above a tenth of `MaxLeafBytes`. It is a performance advisory, not a rejection: the configuration is legitimate on a host with ample memory, and nothing is clamped. To restore the bound, set this budget well below `MaxLeafBytes`.
+
 ### `LeafPartialHydrationEnabled`
 
 Whether a leaf activating from a binary snapshot attaches the frame as a lazily hydrated backing store instead of decoding every row up front (default: `true`).
