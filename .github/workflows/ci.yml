@@ -267,6 +267,34 @@ jobs:
       # or an inline code span, so those regions are removed before matching. A
       # gate whose predicate is broader than the one it stands in for reports a
       # state the system does not have.
+      #
+      # TWO SURFACES, ONE PREDICATE (issue #3024). A closing keyword can be
+      # written in the pull-request BODY or in a COMMIT MESSAGE, and GitHub
+      # honours both once the commit reaches the default branch. This gate
+      # originally read the body alone, so the commit-message half was
+      # unguarded - caught in the state this gate exists to prevent, where the
+      # step name implies cover the predicate does not provide.
+      #
+      # Both arms call the SAME honoured() above rather than each carrying its
+      # own matcher. That is deliberate: two parsers that must agree will drift,
+      # and the divergence would appear as one arm accepting what the other
+      # rejects, on a gate whose whole value is that its predicate matches
+      # GitHub's.
+      #
+      # SCOPE of the commit arm is the pull request's OWN commits, by explicit
+      # range, never a fixed count back from HEAD - the same enumeration the
+      # branch/trailer guard above uses, for the same reason (on a pull_request
+      # event HEAD is the synthetic merge commit, and a fixed count would scan
+      # the base's settled history or miss the PR's own).
+      #
+      # WHAT THIS ARM DOES NOT COVER, stated because measuring it was the whole
+      # reason for the change. Across the 200 merged member pull requests on
+      # this epic's integration branch, ZERO carried a closing keyword in their
+      # own commits and THREE carried one in the squash message composed at
+      # merge time. A squash message does not exist until the merge button is
+      # pressed, so no pull-request-time check can read it - this arm closes a
+      # real and previously unguarded surface, but it is not the surface those
+      # three came from, and it must not be reported as covering them.
       - name: Guard - inert closing keywords
         # The `github.event_name` term is load-bearing, not belt-and-braces. On
         # a push `github.event.pull_request.base.ref` is EMPTY, and an empty
@@ -282,10 +310,15 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # The PR's own commits, addressed by explicit range. Taken from the
+          # event rather than from HEAD, which on a pull_request event is the
+          # synthetic merge commit and not a commit this pull request adds.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           python3 <<'PY'
-          import os, re, sys
+          import os, re, subprocess, sys
 
           keywords = r"close[sd]?|fix(?:e[sd])?|resolve[sd]?"
           target = r"(?:#\d+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#\d+|https?://\S+?/issues/\d+)"
@@ -337,24 +370,121 @@ jobs:
 
           base = os.environ.get("BASE_REF", "")
           default = os.environ.get("DEFAULT_BRANCH", "")
-          hits = honoured(os.environ.get("PR_BODY") or "")
 
-          if not hits:
-              print(f"OK: matcher self-test passed, and no closing keyword GitHub would "
-                    f"honour appears in a PR targeting '{base}' rather than '{default}'.")
+          def commit_messages():
+              """The pull request's own commits, as (sha, full message).
+
+              Returns None - never an empty list - when the range cannot be
+              resolved, so that "could not look" stays distinguishable from
+              "looked and found nothing". Those two are the same string to a
+              caller that only counts hits, and conflating them is how a gate
+              comes to report a clean result over a population it never read."""
+              base_sha = os.environ.get("BASE_SHA", "")
+              head_sha = os.environ.get("HEAD_SHA", "")
+              if not base_sha or not head_sha:
+                  return None
+
+              def rev_list():
+                  return subprocess.run(["git", "rev-list", base_sha + ".." + head_sha],
+                                        capture_output=True, text=True)
+
+              listed = rev_list()
+              if listed.returncode != 0:
+                  # Same fallback, for the same reason, as the branch/trailer
+                  # guard above: on a shallow or partial checkout one end of the
+                  # range may be absent, and fetching it is the difference
+                  # between scanning the commits and scanning none of them.
+                  subprocess.run(["git", "fetch", "--no-tags", "--quiet", "origin",
+                                  base_sha, head_sha], capture_output=True, text=True)
+                  listed = rev_list()
+                  if listed.returncode != 0:
+                      return None
+
+              collected = []
+              for sha in listed.stdout.split():
+                  # %B is the FULL message, subject and body. Every closing
+                  # keyword found in this repository's own history sat in a
+                  # commit BODY, so a subject-only read would have scanned past
+                  # all of them while reporting a count that looked like work.
+                  shown = subprocess.run(["git", "log", "-1", "--format=%B", sha],
+                                         capture_output=True, text=True)
+                  if shown.returncode != 0:
+                      return None
+                  collected.append((sha, shown.stdout))
+              return collected
+
+          def offenders(messages):
+              """(sha, hits) per message carrying a reference GitHub would act
+              on - the SAME honoured() the body arm uses, never a second copy."""
+              return [(sha, honoured(text)) for sha, text in messages if honoured(text)]
+
+          # ANTI-VACUITY CONTROL for the commit arm specifically. The planted
+          # probes above prove honoured() still discriminates; they cannot prove
+          # that anything still calls it with a commit message. This control
+          # drives the real scanner over planted messages, so an arm that has
+          # quietly stopped reporting is caught even while the predicate itself
+          # is perfectly healthy. Mutating offenders() to return [] reddens
+          # here, which is the specific failure the probes above cannot see.
+          controls = [("<control-honoured>", "chore: tidy\n\nCloses #1\n"),
+                      ("<control-code-span>", "chore: tidy\n\n`Closes #1`\n"),
+                      ("<control-fenced>", "chore: tidy\n\n```\nCloses #1\n```\n")]
+          flagged = sorted(sha for sha, _ in offenders(controls))
+          if flagged != ["<control-honoured>"]:
+              print("::error::This gate's commit-message scanner is broken: over planted "
+                    "control messages it flagged " + repr(flagged) + " rather than exactly "
+                    "['<control-honoured>']. Until that is fixed the commit arm cannot "
+                    "detect anything, so a pass from it is not evidence of a clean "
+                    "pull request.")
+              sys.exit(1)
+
+          messages = commit_messages()
+          if messages is None:
+              print("::error::This gate could not enumerate this pull request's own "
+                    "commits (BASE_SHA..HEAD_SHA), so its commit-message arm read "
+                    "nothing. That is failed rather than passed deliberately: an "
+                    "unread population and a clean one are indistinguishable in the "
+                    "result, and reporting the first as the second is precisely the "
+                    "defect this gate exists to prevent.")
+              sys.exit(1)
+          if not messages:
+              print("::error::BASE_SHA..HEAD_SHA resolved to zero commits, so the "
+                    "commit-message arm had nothing to scan. Every pull request adds at "
+                    "least one commit, so this is a broken range rather than a clean "
+                    "pull request, and is reported as a failure for that reason.")
+              sys.exit(1)
+
+          body_hits = honoured(os.environ.get("PR_BODY") or "")
+          commit_hits = offenders(messages)
+
+          if not body_hits and not commit_hits:
+              print(f"OK: matcher and commit-scanner self-tests passed, {len(messages)} "
+                    f"commit message(s) scanned, and no closing keyword GitHub would "
+                    f"honour appears in the body or in a commit of a PR targeting "
+                    f"'{base}' rather than '{default}'.")
               sys.exit(0)
 
-          print(f"::error::This pull request targets '{base}', not the default branch "
-                f"'{default}', so GitHub will NOT honour its closing keyword(s): "
-                + "; ".join(sorted(set(hits)))
-                + ". The reference is inert - this PR will merge, read as correct, and "
-                  "leave the issue open. Reword it to 'Refs #N' here, and put the "
-                  "'Closes #N' on the integration pull request that targets "
-                  f"'{default}'. Verify that one with: gh pr view <n> --json "
-                  "closingIssuesReferences (read the command's output, not the body). "
-                  "If a keyword above is only being discussed rather than used, put it "
-                  "in a code span or fenced block, which is also what stops GitHub "
-                  "acting on it.")
+          remedy = ("The reference is inert - this PR will merge, read as correct, and "
+                    "leave the issue open. Reword it to 'Refs #N' here, and put the "
+                    "'Closes #N' on the integration pull request that targets "
+                    f"'{default}'. Verify that one with: gh pr view <n> --json "
+                    "closingIssuesReferences (read the command's output, not the body). "
+                    "If a keyword above is only being discussed rather than used, put it "
+                    "in a code span or fenced block, which is also what stops GitHub "
+                    "acting on it.")
+
+          if body_hits:
+              print(f"::error::This pull request targets '{base}', not the default branch "
+                    f"'{default}', so GitHub will NOT honour the closing keyword(s) in its "
+                    "BODY: " + "; ".join(sorted(set(body_hits))) + ". " + remedy)
+
+          for sha, hits in commit_hits:
+              print(f"::error::Commit {sha[:9]} of this pull request carries closing "
+                    f"keyword(s) GitHub will not honour, because this PR targets '{base}' "
+                    f"rather than the default branch '{default}': "
+                    + "; ".join(sorted(set(hits)))
+                    + ". A keyword in a commit message is doubly inert - GitHub ignores "
+                      "it at this base, and reviewing the PR body will not reveal it. "
+                    + remedy)
           sys.exit(1)
           PY
 
@@ -672,6 +802,22 @@ jobs:
       # aggregator.
       - name: Self-test the leg aggregator
         run: python3 .github/workflows/summarise-test-legs-selftest.py
+
+      # The closing-keyword gate is an inline heredoc, so nothing in this
+      # repository could execute it until this self-test existed: its only
+      # exercise was the pull request it happened to be guarding, whose verdict
+      # is the thing in question. This script extracts that heredoc from
+      # ci.yml unmodified and drives BOTH arms - body and commit message -
+      # against real temporary git repositories, including a mutation suite in
+      # which each mutation names the defect it reintroduces and the case that
+      # must change verdict.
+      #
+      # Ungated for the same reason as the two self-tests above: pure Python
+      # plus git, under a few seconds, and a pull request touching only
+      # `.github/workflows/**` sets `code` and `nonSample` false, so no other
+      # step in this job would validate a change to the gate.
+      - name: Self-test the closing-keyword guard
+        run: python3 .github/workflows/closing-keyword-guard-selftest.py
 
       # A samples-only change selects no package leg, because `nonSample`
       # carries '!samples/**'. That was sound while every sample was
