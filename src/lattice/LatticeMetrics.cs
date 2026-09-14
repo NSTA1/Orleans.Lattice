@@ -546,7 +546,8 @@ public static class LatticeMetrics
         yield return new Measurement<long>(
             1,
             new KeyValuePair<string, object?>(TagVersion, BuildVersion),
-            new KeyValuePair<string, object?>(TagSha, BuildCommitSha));
+            new KeyValuePair<string, object?>(TagSha, BuildCommitSha),
+            LatticeTenantLabel.Platform);
     }
 
     // --- Shard-level counters (ShardRootGrain) -----------------------------------

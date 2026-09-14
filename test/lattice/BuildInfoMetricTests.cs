@@ -29,6 +29,49 @@ namespace Orleans.Lattice.Tests;
 [Category("Unit")]
 public sealed class BuildInfoMetricTests
 {
+    /// <summary>
+    /// The measurement carries the derived <c>tenant</c> dimension, pinned to the
+    /// platform sentinel.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every instrument in this repository must carry the derived <c>tenant</c>
+    /// label so a telemetry query is byte-identical on a tenancy-on and a
+    /// tenancy-off cluster. Build identity is a property of the process, which no
+    /// tenant owns, so the correct value is the platform sentinel rather than a
+    /// tree-derived one.
+    /// </para>
+    /// <para>
+    /// This duplicates no coverage. <c>TenantMetricDimensionHygieneTests</c> is a
+    /// static scan of the source text at the emission site; this arm observes the
+    /// measurement actually produced at runtime. A site can satisfy the scanner and
+    /// still emit something else, so the two check different populations.
+    /// </para>
+    /// <para>
+    /// The sentinel is a single constant value, so it adds no cardinality. That is
+    /// what keeps it compatible with this instrument's rule that its tag set stays
+    /// bounded: cardinality on an info gauge multiplies across every other series a
+    /// reader joins it against, and a constant multiplies by one.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Build_info_carries_the_platform_tenant_dimension()
+    {
+        string? tenant = null;
+        using (var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.BuildInfo,
+            l => l.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+                tenant = Tag(tags, LatticeTenantLabel.TagTenant))))
+        {
+            listener.RecordObservableInstruments();
+        }
+
+        Assert.That(tenant, Is.EqualTo(LatticeTenantLabel.PlatformTenant),
+            $"build identity is a property of the process, so it must carry the '{LatticeTenantLabel.TagTenant}' dimension "
+            + $"pinned to the '{LatticeTenantLabel.PlatformTenant}' sentinel; without it the series is invisible to every "
+            + "tenant-scoped telemetry query, which is the one place a deployment check is read from");
+    }
+
     private static List<(long Value, string? Version, string? Sha)> ObserveBuildInfo()
     {
         var captured = new List<(long, string?, string?)>();
