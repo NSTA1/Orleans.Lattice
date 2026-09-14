@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests;
 
@@ -24,31 +25,15 @@ public sealed class LatticeStorageUsageMetricsTests
         SampledAt = DateTimeOffset.UtcNow,
     };
 
+    /// <summary>
+    /// Scrapes one observable gauge for one tree. Returns <c>null</c> when the
+    /// gauge reported no measurement for that tree at all - the distinction
+    /// that separates "never measured" from "measured and zero" - and throws
+    /// when it reported more than one, rather than silently keeping the last
+    /// (issue #3004).
+    /// </summary>
     private static long? Read(string instrument, string tree)
-    {
-        long? found = null;
-        using var listener = new MeterListener
-        {
-            InstrumentPublished = (inst, l) =>
-            {
-                if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter) && inst.Name == instrument)
-                    l.EnableMeasurementEvents(inst);
-            },
-        };
-        listener.SetMeasurementEventCallback<long>((inst, value, tags, _) =>
-        {
-            foreach (var t in tags)
-            {
-                if (t.Key == LatticeMetrics.TagTree && (string?)t.Value == tree)
-                {
-                    found = value;
-                }
-            }
-        });
-        listener.Start();
-        listener.RecordObservableInstruments();
-        return found;
-    }
+        => GaugeScrape.ReadSingle(LatticeMetrics.Meter, instrument, LatticeMetrics.TagTree, tree);
 
     [Test]
     public void Publish_surfaces_byte_gauges_for_the_tree()
@@ -392,6 +377,61 @@ public sealed class LatticeStorageUsageMetricsTests
             Assert.That(Read(LatticeMetrics.StorageWalBytesName, treeB), Is.EqualTo(20),
                 "a tree published through the second instance must be observed too");
         });
+    }
+
+    /// <summary>
+    /// The cross-instance determinism regression for issue #3004, asserted in
+    /// <b>both</b> sink-construction orders.
+    /// <para>
+    /// Models the real race: a tree's deep report lands on one silo's sink
+    /// while the cluster-wide background poller seeds a WAL-only entry for the
+    /// same tree on another silo's sink. Both sinks then hold that tree and
+    /// disagree about its depth, so the process-wide gauge used to emit a 1
+    /// <i>and</i> a 0 for one series and let the reader pick by iteration
+    /// order.
+    /// </para>
+    /// <para>
+    /// Running both construction orders is what makes this a determinism
+    /// assertion rather than a single lucky draw: <c>Instances</c> is iterated
+    /// in construction order, so the two cases exercise the two orders in which
+    /// the contradicting measurements could arrive. Either one alone would pass
+    /// against a reader that simply preferred the first, or the last.
+    /// </para>
+    /// </summary>
+    [TestCase(true, TestName = "Deep_published_gauge_is_deterministic_when_two_instances_disagree(deep sink first)")]
+    [TestCase(false, TestName = "Deep_published_gauge_is_deterministic_when_two_instances_disagree(wal-only sink first)")]
+    public void Deep_published_gauge_is_deterministic_when_two_instances_disagree(bool deepSinkConstructedFirst)
+    {
+        LatticeStorageUsageMetrics deepSink;
+        LatticeStorageUsageMetrics walOnlySink;
+        if (deepSinkConstructedFirst)
+        {
+            deepSink = new LatticeStorageUsageMetrics();
+            walOnlySink = new LatticeStorageUsageMetrics();
+        }
+        else
+        {
+            walOnlySink = new LatticeStorageUsageMetrics();
+            deepSink = new LatticeStorageUsageMetrics();
+        }
+
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        deepSink.Publish(Report(tree, wal: 10, snap: 20, leaf: 30));
+        walOnlySink.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = tree,
+            WalRetainedBytes = 10,
+            Partial = false,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+
+        // Read throws rather than collapsing, so a pre-fix producer fails here
+        // by naming both measurements instead of reporting whichever arrived
+        // last as though it were the reading.
+        Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.EqualTo(1),
+            "a tree measured deeply by any sink is deeply measured; one sink holding only the "
+            + "cheap WAL-only entry is no evidence that another has not measured it");
     }
 
     [Test]

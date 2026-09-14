@@ -185,6 +185,29 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
         }
     }
 
+    /// <summary>
+    /// Unions the per-tree depth flag across every live sink instance,
+    /// resolving a disagreement deterministically in favour of
+    /// <see langword="true"/>.
+    /// <para>
+    /// Several sinks can hold an entry for one tree in a single process: the
+    /// cluster-wide background poller seeds one through <see cref="PublishWal"/>
+    /// (depth <see langword="false"/>) while the deep report lands on another
+    /// through <see cref="Publish"/> (depth <see langword="true"/>). Yielding
+    /// per instance emitted <b>both</b> a 1 and a 0 for that one tree, leaving
+    /// the reader to resolve the contradiction by iteration order - which
+    /// surfaced as an intermittent, load-sensitive
+    /// <c>Expected: 1, But was: 0</c> (issue #3004).
+    /// </para>
+    /// <para>
+    /// Preferring <see langword="true"/> is the answer to the question the
+    /// gauge actually asks - <i>has a deep measurement landed for this tree?</i>
+    /// - and one sink holding only the cheap WAL-only entry is no evidence that
+    /// another has not measured it. The byte gauges need no equivalent fold:
+    /// the deep surfaces skip an entry that is not deeply measured, so the sink
+    /// that took the measurement is the only one that contributes.
+    /// </para>
+    /// </summary>
     private static IEnumerable<Measurement<long>> ObserveAllDeepPublished()
     {
         LatticeStorageUsageMetrics[] snapshot;
@@ -192,12 +215,24 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
         {
             snapshot = Instances.ToArray();
         }
+
+        var deepByTree = new Dictionary<string, bool>(StringComparer.Ordinal);
         foreach (var instance in snapshot)
         {
-            foreach (var measurement in instance.ObserveDeepPublished())
+            foreach (var (treeId, deepMeasured) in instance.ObserveDeepPublished())
             {
-                yield return measurement;
+                deepByTree[treeId] = deepByTree.TryGetValue(treeId, out var seen)
+                    ? seen || deepMeasured
+                    : deepMeasured;
             }
+        }
+
+        foreach (var kv in deepByTree)
+        {
+            yield return new Measurement<long>(
+                kv.Value ? 1L : 0L,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
+                LatticeTenantLabel.ForTree(kv.Key));
         }
     }
 
@@ -355,12 +390,19 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     }
 
     /// <summary>
-    /// Observes the 0/1 depth flag for every live, non-stale, non-partial tree:
-    /// 1 once a deep report has landed, 0 while only the cheap WAL-only path
-    /// has run. A tree that has never been published at all contributes no
-    /// measurement, so "never seen" stays distinct from "seen WAL-only".
+    /// Yields the per-tree depth flag for every live, non-stale, non-partial
+    /// tree this sink holds: <see langword="true"/> once a deep report has
+    /// landed, <see langword="false"/> while only the cheap WAL-only path has
+    /// run. A tree that has never been published at all yields nothing, so
+    /// "never seen" stays distinct from "seen WAL-only".
+    /// <para>
+    /// Returns the tree id and flag rather than a finished
+    /// <see cref="Measurement{T}"/> so the caller can fold the flags of several
+    /// sinks that hold the same tree into one measurement; see
+    /// <see cref="ObserveAllDeepPublished"/>.
+    /// </para>
     /// </summary>
-    private IEnumerable<Measurement<long>> ObserveDeepPublished()
+    private IEnumerable<(string TreeId, bool DeepMeasured)> ObserveDeepPublished()
     {
         var cutoff = _time.GetUtcNow() - StalenessHorizon;
         foreach (var kv in _reports)
@@ -374,10 +416,7 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
                 continue;
             }
 
-            yield return new Measurement<long>(
-                deepMeasured ? 1L : 0L,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
-                LatticeTenantLabel.ForTree(kv.Key));
+            yield return (kv.Key, deepMeasured);
         }
     }
 
