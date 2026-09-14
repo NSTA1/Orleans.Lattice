@@ -693,6 +693,16 @@ function Get-AttributionVerdict {
 	Absent is rendered as `<absent>` rather than as an empty field. An empty
 	field beside a name reads as a value that happens to be blank, and this
 	whole issue is a case of absent and empty being confused.
+
+	DECLARATION_STATUS records whether the declared half was acquired at all,
+	and DECLARATION_RESOLVED records HOW MANY keys it came back with. Both are
+	written, because the first is a verdict and the second is its denominator:
+	a resolution that succeeds and returns nothing still reports Available, so
+	a reader given only the status cannot tell a populated declaration from an
+	empty one. DECLARATION_RESOLVED renders a count only when the status is
+	Available, and otherwise repeats the declared column's placeholder - `0 of
+	9` is a finding when resolution ran and an artefact when it did not, and
+	printing the same digits for both would rebuild the confusion.
 #>
 function Format-DeployManifest {
 	[CmdletBinding()]
@@ -727,7 +737,6 @@ function Format-DeployManifest {
 	$reason = if ($Manifest.PSObject.Properties.Name -contains 'DeclarationReason') { [string] $Manifest.DeclarationReason } else { '' }
 	$lines += "DECLARATION_STATUS=$status"
 	$lines += "DECLARATION_REASON=$(if ([string]::IsNullOrWhiteSpace($reason)) { '<none>' } else { $reason })"
-	$lines += ''
 
 	# `<absent>` asserts the key is not declared. That is only true when the
 	# declaration was actually read, so when it was not, the declared column renders
@@ -737,6 +746,25 @@ function Format-DeployManifest {
 		'Unreadable' { '<unreadable>' }
 		default { '<not-resolved>' }
 	}
+
+	# The STATUS is a verdict; this is its denominator. A status of Available says
+	# resolution was attempted and succeeded - it does NOT say how many keys came
+	# back, and an empty-but-successful resolution reports Available over nine
+	# `<absent>` rows. That is not hypothetical: it is exactly what the #2983
+	# mutation test reproduced, where the assertion on the STATUS passed against a
+	# reading that had resolved nothing and only the count caught it.
+	#
+	# Rendered with the same placeholder discipline as the declared column, because
+	# `0 of 9` from a resolution that ran is a finding, while `0 of 9` from one that
+	# never ran is an artefact of not looking. Printing the same digits for both
+	# would rebuild the conflation this line exists to prevent.
+	$resolvedCount = 0
+	foreach ($record in $Manifest.Records) {
+		if ($null -ne $record.Declared -and $record.Declared.Length -gt 0) { $resolvedCount++ }
+	}
+	$totalCount = @($Manifest.Records).Count
+	$lines += "DECLARATION_RESOLVED=$(if ($status -eq 'Available') { "$resolvedCount of $totalCount" } else { $declaredPlaceholder })"
+	$lines += ''
 
 	foreach ($record in $Manifest.Records) {
 		$declared = if ($null -eq $record.Declared -or $record.Declared.Length -eq 0) { $declaredPlaceholder } else { $record.Declared }
@@ -782,6 +810,11 @@ function Read-DeployManifest {
 	# historical `<absent>` into a positive finding it never was.
 	$declarationStatus = $script:DeclarationNotAttempted
 	$declarationReason = 'no DECLARATION_STATUS recorded; manifest predates #2983'
+	# Deliberately $null rather than 0. A manifest that never recorded a count is
+	# not a manifest that resolved nothing, and a reader that cannot distinguish
+	# the two will score an unmeasured baseline as a measured-and-empty one.
+	$declarationResolved = $null
+	$declarationTotal = $null
 
 	foreach ($variable in @(Get-AttributionVariable) + @(Get-AttributionGrant)) {
 		$attribution[$variable.Name] = $variable
@@ -825,6 +858,18 @@ function Read-DeployManifest {
 			continue
 		}
 
+		if ($trimmed.StartsWith('DECLARATION_RESOLVED=')) {
+			$value = $trimmed.Substring('DECLARATION_RESOLVED='.Length)
+			# Only an `<n> of <m>` reading is a measurement. Any placeholder leaves
+			# both halves $null, so a caller asking "how many resolved" gets "not
+			# measured" rather than a number it would treat as one.
+			if ($value -match '^\s*(\d+)\s+of\s+(\d+)\s*$') {
+				$declarationResolved = [int] $Matches[1]
+				$declarationTotal = [int] $Matches[2]
+			}
+			continue
+		}
+
 		$parts = $trimmed -split '\|'
 
 		if ($parts.Count -ne 3 -or -not $parts[1].StartsWith('declared=') -or -not $parts[2].StartsWith('effective=')) {
@@ -856,6 +901,8 @@ function Read-DeployManifest {
 		DeclarationStatus = $declarationStatus
 		DeclarationReason = $declarationReason
 		DeclarationAvailable = ($declarationStatus -eq $script:DeclarationAvailable)
+		DeclarationResolvedCount = $declarationResolved
+		DeclarationRecordCount = $declarationTotal
 		ProcessorCount = [pscustomobject]@{
 			Resolved = $resolved
 			Source = $source
