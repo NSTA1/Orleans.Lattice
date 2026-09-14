@@ -1655,6 +1655,69 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, partition, status) (increase(orleans_lattice_wal_gc_blocking_pin_state_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\",status=~\"checkpointed_uncovered|never_checkpointed|no_durable_state|unreadable\"}[$__range]))", "legendFormat": "{{tree}} p{{partition}} {{status}}" }
       ]
+    },
+    {
+      "id": 30601,
+      "title": "WAL GC scheduler phase age - where the silo sweep loop is parked - issue #3060",
+      "description": "Age, in seconds, of the phase the silo's WAL GC scheduler loop is currently in (orleans.lattice.wal.gc.scheduler.phase_age). THE QUESTION THIS ANSWERS: every other WAL GC series is per tree and is emitted by work the loop performs, so when the loop itself stops they all simply stop changing - which is byte-identical to a healthy silo with nothing to collect. A counter cannot close that gap, because a stopped loop and a quiet one both report a flat line. This is a GAUGE because the failure is a LOCATION problem rather than an EVENT problem: the useful fact is not how many things happened but WHERE the loop is and for HOW LONG. EXACTLY ONE SERIES IS LIVE AT A TIME, the phase the loop is actually in, because a loop is in one phase; publishing a stale age for the ten phases it is not in would leave a reader to pick the live number out of eleven climbing ones and a dashboard to chart ten fictions. That is also why the phase dimension is deliberately NOT zero-primed. It needs no priming: an ObservableGauge reports from its declaration site on every scrape whether or not the scheduler ever ran, which makes this series the BUILD-VERSION WITNESS for the whole six-instrument set - if it is absent the build predates the instruments, and if it is present while the five counters and histograms are not, that is a wiring fault rather than an idle silo. READ IT AS: an age exceeding the cadence the scheduler selected (see the selected-versus-actual panel) is a stalled sweep, and the phase arm names where it stalled. Climbing without bound on collecting.* names the offending tree in the tree tag; on enumerating the tree registry is not answering; on waiting the inter-pass delay itself did not return; a permanent reading on unstarted means ExecuteAsync was never entered, and on disabled means WalGcInterval is set to zero or less, which is a correct exit that on every other instrument is indistinguishable from a wedge. THIS PANEL DOES NOT MEASURE COLLECTION AND MUST NOT BE READ AS DOING SO: it removes the confound that a stopped loop and an idle one look alike, which is a precondition for interpreting the per-tree panels above, not a verdict on them.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 260 },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (phase, tree) (orleans_lattice_wal_gc_scheduler_phase_age{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "{{phase}} {{tree}}" }
+      ]
+    },
+    {
+      "id": 30602,
+      "title": "WAL GC scheduler pass heartbeat (ops/s) - issue #3060",
+      "description": "Rate at which the silo's WAL GC scheduler loop BEGINS a pass (orleans.lattice.wal.gc.scheduler.passes_started). Counted as a heartbeat ABOVE the tree-registry enumeration, so it advances even on a pass that dies at its first await. That siting is the entire point: the pre-existing orleans.lattice.wal.gc.passes is emitted per tree AFTER enumeration succeeds, so it is structurally silent on exactly the failures that stop the loop, and a loop failing before it reaches any tree produces the same absent series as a loop that is not running. Untagged by tree, because the loop is one per silo and a pass that failed before enumerating has no tree ids to tag with. READ IT AGAINST THE PHASE AGE PANEL: a heartbeat that keeps climbing while every per-tree wal.gc.* series is frozen is a loop that is ALIVE AND FAILING, which needs a different remedy from a loop that has STOPPED - and before this counter existed those two states produced byte-identical scrapes. Zero-primed as the first statement of ExecuteAsync, above the disabled return and above the startup delay, so a flat zero here is a measured zero about a silo that reached the loop, while an absent series means the build lacks the instrument.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 267 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (instance) (rate(orleans_lattice_wal_gc_scheduler_passes_started_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "id": 30603,
+      "title": "WAL GC scheduler loop terminations by reason over range - issue #3060",
+      "description": "Totals (not a rate) of orleans.lattice.wal.gc.scheduler.terminations over the selected range, by reason. A BackgroundService that returns from ExecuteAsync NEVER RUNS AGAIN for the life of the process and the host reports nothing about it, so ANY non-zero value on this panel is a PERMANENT end to silo-wide WAL collection until that silo restarts - this belongs on an alert, not only on a chart. disabled = WalGcInterval is zero or less, a correct exit which on every other instrument in the system is indistinguishable from a wedge. cancelled = an orderly host shutdown, which is not a fault and must not be alerted on. faulted = the loop body threw; it is recorded and then rethrown, so the host's configured exception behaviour is unchanged by the instrumentation. All three arms are zero-primed by WALKING THE ENUM rather than a hand-written list, so a reason added later cannot ship unarmed, and each arm carries a positive control that drives the loop into that termination and observes it advance - which is what makes the zeros the other arms report earned rather than assumed. A totals panel rather than a rate panel because a termination happens at most once per process, and a 5 m rate window renders that single event as a flat zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 267 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (reason) (increase(orleans_lattice_wal_gc_scheduler_terminations_total{cluster=~\"$cluster\",instance=~\"$silo\",reason=~\"disabled|cancelled|faulted\"}[$__range]))", "legendFormat": "{{reason}}" }
+      ]
+    },
+    {
+      "id": 30604,
+      "title": "WAL GC scheduler enumeration outcome by arm over range - issue #3060",
+      "description": "Totals (not a rate) of orleans.lattice.wal.gc.scheduler.enumerations over the selected range, by outcome arm. This is the outcome of the tree-registry enumeration that OPENS each pass, and it is the first thing that can go wrong after the loop starts. succeeded = at least one non-blank tree id came back. faulted = the registry threw, which before this instrument existed was swallowed into a debug log and left no trace on any scrape at any level. cancelled = an orderly silo shutdown, not a fault. empty and all_blank ARE DELIBERATELY SEPARATE ARMS: a registry that answers with ids which are all blank REPORTS SUCCESS, RETURNS CONTENT, AND COLLECTS NOTHING, so on every other series in the system it presents exactly as an idle silo, and folding it into empty would hide the one arm that distinguishes a misconfigured registry from a quiet one. timed_out = the scheduler's own bound firing, kept apart from faulted so that A FAILURE OF THE MEASUREMENT IS NEVER REPORTED AS A FAILURE OF THE SUBJECT. All six arms are zero-primed by walking the enum, and each carries a positive control that drives the scheduler into that outcome and observes the arm advance, so a zero on any arm is a measured zero rather than an undriven code path. A totals panel rather than a rate panel because on a healthy silo every arm but succeeded is expected to read zero for the life of the process, and a rate window renders the rare event that matters as a flat line.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 274 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (increase(orleans_lattice_wal_gc_scheduler_enumerations_total{cluster=~\"$cluster\",instance=~\"$silo\",outcome=~\"succeeded|faulted|cancelled|empty|all_blank|timed_out\"}[$__range]))", "legendFormat": "{{outcome}}" }
+      ]
+    },
+    {
+      "id": 30605,
+      "title": "WAL GC scheduler selected wait versus actual pass duration (p95) - issue #3060",
+      "description": "The two halves of the scheduler's cadence, charted together because NEITHER IS INTERPRETABLE ALONE. orleans.lattice.wal.gc.scheduler.wait is the interval the loop CHOSE before its next pass, observed once per pass at the delay site so it is recorded even when the pass reached no tree. orleans.lattice.wal.gc.scheduler.pass_duration is how long a pass ACTUALLY took, recorded in a finally so a pass that faults, is cancelled, or is abandoned at a bound is measured too - that population's duration is itself the diagnosis, and siting the record on the success path would discard exactly the sample worth having. WHY BOTH: the wait is sited on the scheduler's DECISION and therefore cannot observe anything that happens AFTER the decision. A silo whose per-tree touches all end at the Orleans default 30 s response timeout selects the interval floor on every pass while the wall period is twice that, so the wait reads a flat, healthy-looking floor throughout and the stretch is invisible on it. DIVERGENCE BETWEEN THE TWO SERIES IS THE SIGNATURE of a loop whose passes are being stretched by something the cadence policy never saw. Read the wait's own shape as well: the adaptive cadence returns to the configured minimum ONLY after a fully successful pass, so every other exit relaxes geometrically toward the ceiling, and that climbing ladder is the one POSITIVE signature an alive-but-failing loop emits - every other series such a loop touches is frozen exactly as a stopped loop leaves them. Neither histogram is zero-primed, deliberately: the empty state of a duration distribution is UNDEFINED rather than zero, and a primed 0 s sample would corrupt every quantile on this panel. Their liveness is anchored instead to the pass heartbeat, with exactly one observation per started pass asserted by fixture - and that anchor is checkable directly from a scrape, because the _count series is emitted even where bucket series are not. THE MEAN TARGETS ARE THE ONES THAT RENDER EVERYWHERE. Measured against the deployment scrape this issue was raised from: that exporter emits NO histogram bucket series at all (zero _bucket series and zero histogram TYPE declarations across 16089 scraped lines), so every quantile target in this bundle is empty there and only the _sum over _count mean is readable. The p95 targets are kept for deployments whose exporter does emit buckets, and are labelled so an empty line is not misread as a dead instrument.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 274 },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (instance) (rate(orleans_lattice_wal_gc_scheduler_wait_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (instance) (rate(orleans_lattice_wal_gc_scheduler_wait_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "selected wait mean" },
+        { "refId": "C", "expr": "sum by (instance) (rate(orleans_lattice_wal_gc_scheduler_pass_duration_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (instance) (rate(orleans_lattice_wal_gc_scheduler_pass_duration_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "actual pass duration mean" },
+        { "refId": "D", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_gc_scheduler_wait_seconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "selected wait p95 (bucket exporters only)" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_gc_scheduler_pass_duration_seconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "actual pass duration p95 (bucket exporters only)" }
+      ]
     }
   ]
 }
