@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using System.Reflection;
 using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice;
@@ -410,6 +411,143 @@ public static class LatticeMetrics
     /// </para>
     /// </remarks>
     public static readonly Meter Meter = new(MeterName);
+
+    // --- Process identity (deployment liveness) ----------------------------------
+
+    /// <summary>Tag key for the Orleans.Lattice package version the running process was built from.</summary>
+    public const string TagVersion = "version";
+
+    /// <summary>
+    /// Tag key for the full 40-character git commit sha the running process was
+    /// built from.
+    /// </summary>
+    public const string TagSha = "sha";
+
+    /// <summary>
+    /// Value reported for <see cref="TagVersion"/> or <see cref="TagSha"/> when the
+    /// running assembly carries no usable build stamp.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Reported as an explicit sentinel rather than an empty string or an absent
+    /// series, so "this build cannot identify itself" stays distinguishable from
+    /// "nothing is publishing build identity at all". The two have different
+    /// causes - a build-system regression versus an undeployed image - and an
+    /// absent series cannot tell them apart.
+    /// </para>
+    /// <para>
+    /// <b>This value must never reach a real deployment</b>, because an info gauge
+    /// carrying a placeholder is worse than one that is missing: it reads as a
+    /// working detector while identifying nothing. It survives here only as a
+    /// last-resort degradation, and
+    /// <c>BuildInfoMetricTests.Build_info_sha_is_a_full_forty_character_sha</c>
+    /// fails outright on it, so a build configuration that stops stamping
+    /// <c>SourceRevisionId</c> reddens in CI rather than shipping a gauge that
+    /// lies quietly.
+    /// </para>
+    /// </remarks>
+    public const string BuildMetadataUnknown = "unknown";
+
+    /// <summary>Canonical name of <see cref="BuildInfo"/>.</summary>
+    public const string BuildInfoName = "orleans.lattice.build.info";
+
+    /// <summary>
+    /// The version and commit sha the running assembly was compiled from, resolved
+    /// once at type initialisation.
+    /// </summary>
+    /// <remarks>
+    /// Declared above <see cref="BuildVersion"/>, <see cref="BuildCommitSha"/> and
+    /// <see cref="BuildInfo"/>, all of which read it. See the remarks on
+    /// <see cref="Meter"/> for why declaration order is load-bearing for anything
+    /// an observable callback reaches.
+    /// </remarks>
+    private static readonly (string Version, string Commit) BuildIdentity = ResolveBuildIdentity();
+
+    /// <summary>
+    /// Package version of the running Orleans.Lattice assembly, or
+    /// <see cref="BuildMetadataUnknown"/> when the assembly carries no informational
+    /// version.
+    /// </summary>
+    public static readonly string BuildVersion = BuildIdentity.Version;
+
+    /// <summary>
+    /// Full 40-character git commit sha the running Orleans.Lattice assembly was
+    /// compiled from, or <see cref="BuildMetadataUnknown"/> when the build carried no
+    /// source-revision stamp.
+    /// </summary>
+    /// <remarks>
+    /// Sourced from the <c>+&lt;sha&gt;</c> build-metadata suffix the SDK appends to
+    /// <see cref="AssemblyInformationalVersionAttribute"/> from <c>SourceRevisionId</c>.
+    /// This is a <b>compile-time</b> stamp, so it identifies the image rather than the
+    /// checkout the process happens to be running beside.
+    /// </remarks>
+    public static readonly string BuildCommitSha = BuildIdentity.Commit;
+
+    /// <summary>
+    /// Constant <c>1</c> carrying the identity of the running build as tags
+    /// (<see cref="TagVersion"/>, <see cref="TagSha"/>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This instrument answers a question no other instrument in the estate can.</b>
+    /// "Is the build under test actually the build that is running?" is a property of
+    /// the <i>process</i>, not of any feature. Every other instrument here reports
+    /// something a feature did, so each one is silent until that feature is exercised -
+    /// which makes every one of them unusable as a deployment signal. Before this
+    /// instrument existed, the only way to answer the question from a scrape was to
+    /// pick some feature metric and hope it had fired, which conflates "the image did
+    /// not deploy" with "the code deployed and that feature was simply never reached".
+    /// Those are opposite conclusions drawn from byte-identical evidence.
+    /// </para>
+    /// <para>
+    /// It therefore emits <b>exactly one measurement, unconditionally, on every
+    /// collection</b>, from process start, with no registry to populate and no work to
+    /// wait for. It has no empty state to prime: absence of this series means the
+    /// process is not running or is not exporting at all, and means nothing else. That
+    /// is the entire point, and it is why this gauge is deliberately not modelled on
+    /// any of its neighbours.
+    /// </para>
+    /// <para>
+    /// The value carries no information and is always <c>1</c>; all of the content is
+    /// in the tags. This is the conventional shape for an info-style metric, and it
+    /// makes the series safe to join against in a query.
+    /// </para>
+    /// </remarks>
+    public static readonly ObservableGauge<long> BuildInfo =
+        Meter.CreateObservableGauge(BuildInfoName, ObserveBuildInfo, unit: "{build}",
+            description: "Always 1, tagged with the version and full commit sha the running process was built from. Process-scoped deployment liveness: emitted unconditionally from process start, so its absence means the process is not running or not exporting, and never that a feature went unexercised.");
+
+    private static (string Version, string Commit) ResolveBuildIdentity()
+    {
+        var informational = typeof(LatticeMetrics).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+
+        if (string.IsNullOrWhiteSpace(informational))
+        {
+            return (BuildMetadataUnknown, BuildMetadataUnknown);
+        }
+
+        var plus = informational.IndexOf('+');
+        if (plus < 0)
+        {
+            return (informational, BuildMetadataUnknown);
+        }
+
+        var version = informational[..plus];
+        var commit = informational[(plus + 1)..];
+
+        return (
+            string.IsNullOrWhiteSpace(version) ? BuildMetadataUnknown : version,
+            string.IsNullOrWhiteSpace(commit) ? BuildMetadataUnknown : commit);
+    }
+
+    private static IEnumerable<Measurement<long>> ObserveBuildInfo()
+    {
+        yield return new Measurement<long>(
+            1,
+            new KeyValuePair<string, object?>(TagVersion, BuildVersion),
+            new KeyValuePair<string, object?>(TagSha, BuildCommitSha));
+    }
 
     // --- Shard-level counters (ShardRootGrain) -----------------------------------
 

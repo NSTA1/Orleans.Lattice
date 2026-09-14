@@ -32,6 +32,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 
 | Instrument | Type | Tags | Dashboard | Panel(s) |
 |------------|------|------|-----------|----------|
+| `orleans.lattice.build.info` | observable gauge (`{build}`) | `version`, `sha` | Overview | Deployed build (version / commit) |
 | `orleans.lattice.shard.reads` | counter (`{op}`, **per-operation**) | `tree`, `shard`, `tenant` | Overview | Cluster throughput (ops/s) |
 | `orleans.lattice.shard.writes` | counter (`{op}`, **per-operation**) | `tree`, `shard`, `tenant` | Overview | Cluster throughput (ops/s), Per-tree write throughput (operations/s and records/s) |
 | `orleans.lattice.shard.records_written` | counter (`{record}`, **per-record**) | `tree`, `shard`, `tenant` | Overview | Per-tree write throughput (operations/s and records/s) |
