@@ -171,8 +171,19 @@ public sealed partial class RepoContextAnnIndexSweepServiceTests
         await sweep.StartAsync(Ct);
         try
         {
-            var counted = await WaitForAsync(() => sweep.Reporter.Read().Arming.Faulted >= 1, Ct);
-            Assert.That(counted, Is.True, "a failing arming call must be counted per repository");
+            // Wait for both arms this test asserts on, not just the faulted one. The
+            // sweep walks its repositories sequentially and "alpha" sorts before the
+            // healthy one, so the faulted arm is observable strictly before the armed
+            // arm, and waiting only on it lets the assertion below race the sweep.
+            // The Received() check does not close that window either: NSubstitute
+            // records a call at invocation, whereas the armed arm is recorded only
+            // after TryArmAsync returns. The sibling test above already waits on the
+            // full pair it asserts; this is the same wait.
+            var counted = await WaitForAsync(
+                () => sweep.Reporter.Read() is { Arming.Faulted: >= 1, Arming.Armed: >= 1 }, Ct);
+            Assert.That(counted, Is.True,
+                "a failing arming call must be counted per repository, and the healthy "
+                + "repository behind it must still reach the armed arm");
 
             await healthy.Received().EnsureBuildingAsync(Arg.Any<EmbeddingSpaceTag>());
 
