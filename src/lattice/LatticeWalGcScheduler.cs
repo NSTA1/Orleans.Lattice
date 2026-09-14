@@ -1,7 +1,12 @@
+using System.Globalization;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
+using Orleans.Runtime;
+using Orleans.Storage;
 
 namespace Orleans.Lattice;
 
@@ -82,7 +87,8 @@ internal sealed class LatticeWalGcScheduler(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILogger<LatticeWalGcScheduler> logger,
     TimeProvider? timeProvider = null,
-    BPlusTree.Grains.SnapshotPinCensus? snapshotPins = null) : BackgroundService
+    BPlusTree.Grains.SnapshotPinCensus? snapshotPins = null,
+    [FromKeyedServices(LatticeOptions.StorageProviderName)] IGrainStorage? leafStateStorage = null) : BackgroundService
 {
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
@@ -473,7 +479,8 @@ internal sealed class LatticeWalGcScheduler(
         DateTimeOffset? AbandonedAt = null,
         int Cycles = 0,
         int Refunds = 0,
-        long HealEpochAtAbandonment = 0);
+        long HealEpochAtAbandonment = 0,
+        bool PinStateClassified = false);
 
     /// <summary>
     /// What a single reactivation touch established about the blocking leaf.
@@ -1176,6 +1183,24 @@ internal sealed class LatticeWalGcScheduler(
             RecordBlockedLeafReactivation(ReactivationOutcomeTag(outcome), treeTag, tenantTag, 0);
         }
 
+        // Zero-prime the blocking-pin classifier at tree level (issue #3042).
+        //
+        // This instrument is tagged by partition, and a partition is only known
+        // once a blocking consumer has been parsed - so the per-(tree,
+        // partition) priming done at classification time cannot answer the
+        // prior question a reader asks first: "is the classifier running here
+        // at all?" On a tree that has never blocked there would be no series of
+        // any shape, which is equally consistent with a silo that predates this
+        // build. That is the exact ambiguity #3042 exists to remove, so leaving
+        // it would reproduce the defect one level up from where it was fixed.
+        //
+        // The reserved PartitionNone value carries that reachability claim and
+        // nothing else. It is minted here, at the top of CollectTreeAsync above
+        // every early return, so a minted zero says a GC pass ran and evaluated
+        // this tree; a real classification always carries its numeric
+        // partition, so the two can never be confused in a query.
+        PrimeBlockingPinStates(LatticeMetrics.PartitionNone, treeTag, tenantTag);
+
         // Issue #2692 Half B. The drive verdicts are primed on the same footing
         // and for the same reason: 'drove_lifted' is the series a reader will
         // query to decide whether the sweep repairs anything, so its absence
@@ -1458,6 +1483,16 @@ internal sealed class LatticeWalGcScheduler(
         // budgets map, so it has to be written back. Budgets is a reference and
         // mutates in place; the observation is a record struct and does not.
         _blockedConsumers[treeId] = observation;
+
+        // Classify each blocker's durable-pin state (issue #3042). Placed after
+        // admission so every blocker has a budget to latch the result on, and
+        // before the reactivation machinery below so the classification is
+        // recorded even for a tree whose blockers all rotate faster than the
+        // minimum block age and are therefore never touched - that population is
+        // invisible to every attempt-derived signal, and it is the one a reader
+        // most needs classified.
+        await ClassifyBlockingPinsAsync(treeId, blockingConsumerIds, budgets, treeTag, tenantTag, stoppingToken)
+            .ConfigureAwait(false);
 
         PruneBlockedConsumerBudgets(budgets, now);
 
@@ -1921,6 +1956,77 @@ internal sealed class LatticeWalGcScheduler(
         LatticeMetrics.WalGcBlockedLeafReactivations.Add(delta, treeTag, outcome, tenantTag);
 
     /// <summary>
+    /// Every member of <see cref="WalGcBlockingPinState"/>, walked when priming
+    /// <see cref="LatticeMetrics.WalGcBlockingPinStates"/> so the priming is
+    /// exhaustive by construction rather than by anyone remembering to extend a
+    /// list. A member added later is primed without a code change here, and if
+    /// it has no arm the mapping throws on the first pass instead of reporting
+    /// an uncounted state as a measured zero (the failure mode issue #2938
+    /// found three times over on the sibling instrument).
+    /// </summary>
+    private static readonly WalGcBlockingPinState[] AllBlockingPinStates =
+        Enum.GetValues<WalGcBlockingPinState>();
+
+    /// <summary>
+    /// Maps a classified blocking-pin state onto the
+    /// <see cref="LatticeMetrics.WalGcBlockingPinStates"/> arm that names it.
+    /// </summary>
+    /// <remarks>
+    /// Throws on an unmapped member rather than falling back to a catch-all.
+    /// A catch-all would let a newly added state be counted under an existing
+    /// arm, which on this instrument is worse than not counting it at all: every
+    /// arm here is read as evidence about whether a block is repairable, and a
+    /// misfiled state is a wrong answer rather than a missing one.
+    /// </remarks>
+    internal static KeyValuePair<string, object?> BlockingPinStateTag(WalGcBlockingPinState state) =>
+        state switch
+        {
+            WalGcBlockingPinState.CheckpointedUncovered => LatticeMetrics.BlockingPinCheckpointedUncovered,
+            WalGcBlockingPinState.NeverCheckpointed => LatticeMetrics.BlockingPinNeverCheckpointed,
+            WalGcBlockingPinState.NoDurableState => LatticeMetrics.BlockingPinNoDurableState,
+            WalGcBlockingPinState.Unreadable => LatticeMetrics.BlockingPinUnreadable,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(state),
+                state,
+                "No " + LatticeMetrics.WalGcBlockingPinStatesName + " arm is armed for this blocking-pin state. "
+                    + "Add one rather than letting the state be counted under another arm: every arm on this "
+                    + "instrument is read as evidence about whether a block is repairable, so a misfiled state "
+                    + "is a wrong answer rather than a missing one."),
+        };
+
+    /// <summary>
+    /// Records one classified blocking consumer against
+    /// <see cref="LatticeMetrics.WalGcBlockingPinStates"/>.
+    /// </summary>
+    private static void RecordBlockingPinState(
+        WalGcBlockingPinState state,
+        string partition,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag,
+        long delta = 1) =>
+        LatticeMetrics.WalGcBlockingPinStates.Add(
+            delta,
+            treeTag,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+            BlockingPinStateTag(state),
+            tenantTag);
+
+    /// <summary>
+    /// Zero-primes every <see cref="LatticeMetrics.WalGcBlockingPinStates"/>
+    /// arm for one <c>(tree, partition)</c>.
+    /// </summary>
+    private static void PrimeBlockingPinStates(
+        string partition,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag)
+    {
+        for (var i = 0; i < AllBlockingPinStates.Length; i++)
+        {
+            RecordBlockingPinState(AllBlockingPinStates[i], partition, treeTag, tenantTag, 0);
+        }
+    }
+
+    /// <summary>
     /// Maps a leaf's starvation-drive verdict onto the
     /// <see cref="LatticeMetrics.WalGcBlockedLeafReactivations"/> outcome arm
     /// that names it (issue #2692 Half B).
@@ -2097,9 +2203,25 @@ internal sealed class LatticeWalGcScheduler(
     /// would be worse than leaving the tree blocked, so an unrecognised id is
     /// treated as unresolvable rather than guessed at.
     /// </remarks>
-    private bool TryResolveLeafGrainId(string treeId, string consumerId, out GrainId leafGrainId)
+    private bool TryResolveLeafGrainId(string treeId, string consumerId, out GrainId leafGrainId) =>
+        TryResolveLeafGrainId(treeId, consumerId, out leafGrainId, out _);
+
+    /// <summary>
+    /// Parses a materialiser consumer id back into the grain id of the leaf
+    /// that published it <i>and</i> the WAL partition the pin belongs to.
+    /// </summary>
+    /// <remarks>
+    /// The partition is the half <see cref="TryResolveLeafGrainId(string, string, out GrainId)"/>
+    /// discards, and it is exactly what the blocking-pin classifier needs: the
+    /// leaf's durable checkpoint is per-partition, so a classification that did
+    /// not know which partition blocked would have to guess one. A consumer id
+    /// carrying no suffix is partition <c>0</c>, matching the legacy
+    /// single-partition shape the unsuffixed form exists for.
+    /// </remarks>
+    private bool TryResolveLeafGrainId(string treeId, string consumerId, out GrainId leafGrainId, out int partition)
     {
         leafGrainId = default;
+        partition = 0;
 
         var expectedStart = $"{BPlusTree.Grains.ILeafCursorReporter.MaterialiserConsumerIdPrefix}{treeId}_";
         if (!consumerId.StartsWith(expectedStart, StringComparison.Ordinal))
@@ -2121,14 +2243,183 @@ internal sealed class LatticeWalGcScheduler(
             var lastSeparator = remainder.LastIndexOf('_');
             if (lastSeparator > 0
                 && remainder.AsSpan(lastSeparator + 1).Length > 0
-                && ulong.TryParse(remainder.AsSpan(lastSeparator + 1), out _))
+                && ulong.TryParse(remainder.AsSpan(lastSeparator + 1), out var parsedPartition))
             {
                 remainder = remainder[..lastSeparator];
+                partition = parsedPartition > int.MaxValue ? int.MaxValue : (int)parsedPartition;
             }
         }
 
         return GrainId.TryParse(remainder, out leafGrainId);
     }
+
+    /// <summary>
+    /// Classifies which durable-pin state each blocking consumer is in, without
+    /// activating the leaf (issue #3042).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this cannot ask the leaf.</b> The population being measured is
+    /// precisely the population that will not activate - a leaf that could be
+    /// activated would report a cursor, be <i>present</i> in the registry, and
+    /// therefore be skipped by the floor before its pin was ever evaluated, so
+    /// it could not have been the blocker. An instrument that needed the leaf
+    /// live would measure only leaves that are not the problem, which is the
+    /// same error as the coverage repair it exists to adjudicate. The read
+    /// therefore goes straight to the storage provider, following the
+    /// precedent set by <c>LeafCursorReporter.DirectStoreSlotAsync</c> - a path
+    /// that exists specifically as the fallback for when the grain cannot be
+    /// called.
+    /// </para>
+    /// <para>
+    /// <b>Cost.</b> A leaf's durable state carries its projection, so this is
+    /// not a cheap read. It is charged once per consumer per blocked episode,
+    /// not once per pass: the result is latched on the consumer's budget, which
+    /// lives on the episode observation and is discarded with it when the tree
+    /// unblocks. A tree blocked for an hour at the cadence floor therefore pays
+    /// for one read per blocker, not one per pass. The latch is deliberately
+    /// not refreshed while an episode runs - a classification that changed would
+    /// mean the leaf wrote durable state, which requires an activation, which
+    /// would clear the block and end the episode.
+    /// </para>
+    /// <para>
+    /// <b>Diagnostic only.</b> Nothing here feeds the trim predicate. A pass
+    /// reclaims exactly the entries it would have reclaimed had this method not
+    /// run, and a throw is swallowed into the <c>unreadable</c> arm rather than
+    /// failing the pass.
+    /// </para>
+    /// </remarks>
+    private async Task ClassifyBlockingPinsAsync(
+        string treeId,
+        IReadOnlyList<string> blockingConsumerIds,
+        Dictionary<string, ConsumerReactivationBudget> budgets,
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag,
+        CancellationToken stoppingToken)
+    {
+        for (var i = 0; i < blockingConsumerIds.Count; i++)
+        {
+            if (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var consumerId = blockingConsumerIds[i];
+            if (!budgets.TryGetValue(consumerId, out var budget) || budget.PinStateClassified)
+            {
+                continue;
+            }
+
+            // Latch before the read, not after. A read that throws must still
+            // count exactly once - retrying it every pass would turn a single
+            // unreadable leaf into an unbounded stream of storage calls on a
+            // tree that is, by construction, blocked indefinitely.
+            budgets[consumerId] = budget with { PinStateClassified = true };
+
+            var resolved = TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition);
+            var partitionTag = resolved
+                ? partition.ToString(CultureInfo.InvariantCulture)
+                : LatticeMetrics.PartitionUnknown;
+
+            var state = resolved
+                ? await ReadBlockingPinStateAsync(leafGrainId, partition, stoppingToken).ConfigureAwait(false)
+                : WalGcBlockingPinState.Unreadable;
+
+            // Prime this partition's other arms before recording the one that
+            // resolved, so a reader sees a measured zero on the states that did
+            // not apply rather than an absence they have to interpret.
+            PrimeBlockingPinStates(partitionTag, treeTag, tenantTag);
+            RecordBlockingPinState(state, partitionTag, treeTag, tenantTag);
+
+            logger.LogInformation(
+                "WAL GC classified blocking pin {Consumer} on tree {Tree} partition {Partition} as {PinState}. This is diagnostic only and does not change what the pass may trim.",
+                consumerId,
+                treeId,
+                partitionTag,
+                state);
+        }
+    }
+
+    /// <summary>
+    /// Reads one leaf's persisted projection checkpoint for a partition
+    /// directly from the storage provider and maps it onto a
+    /// <see cref="WalGcBlockingPinState"/>. Never activates the leaf.
+    /// </summary>
+    private async Task<WalGcBlockingPinState> ReadBlockingPinStateAsync(
+        GrainId leafGrainId,
+        int partition,
+        CancellationToken stoppingToken)
+    {
+        if (leafStateStorage is null)
+        {
+            // No storage provider on this silo. That is a property of the
+            // measurement, not of the leaf, so it is reported as unreadable
+            // rather than as an absence of durable state.
+            return WalGcBlockingPinState.Unreadable;
+        }
+
+        try
+        {
+            var grainState = new GrainState<LeafNodeState>(new LeafNodeState());
+            await leafStateStorage.ReadStateAsync(LeafStateName, leafGrainId, grainState)
+                .ConfigureAwait(false);
+
+            if (!grainState.RecordExists || grainState.State is null)
+            {
+                return WalGcBlockingPinState.NoDurableState;
+            }
+
+            return ClassifyCheckpoint(grainState.State, partition);
+        }
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+        {
+            logger.LogDebug(
+                ex,
+                "WAL GC could not read durable state for leaf {Leaf} to classify its blocking pin; counting it as unreadable. The pass is unaffected - this read is diagnostic only.",
+                leafGrainId);
+
+            return WalGcBlockingPinState.Unreadable;
+        }
+    }
+
+    /// <summary>
+    /// Maps a leaf's persisted projection checkpoint for one partition onto the
+    /// two states that describe a real leaf.
+    /// </summary>
+    /// <remarks>
+    /// The per-partition array is the authority when present. When it is absent
+    /// the state predates multi-partition replay, and the scalar slot holds
+    /// partition <c>0</c>'s checkpoint only - so partition <c>0</c> reads the
+    /// scalar and any higher partition has genuinely never been checkpointed
+    /// under that layout. A partition beyond the persisted array's length is the
+    /// same case: the leaf has never written a checkpoint there.
+    /// </remarks>
+    internal static WalGcBlockingPinState ClassifyCheckpoint(LeafNodeState state, int partition)
+    {
+        var byPartition = state.ProjectionCheckpointOffsetsByPartition;
+
+        var checkpoint = byPartition is not null
+            ? (partition >= 0 && partition < byPartition.Length ? byPartition[partition] : -1L)
+            : (partition == 0 ? state.ProjectionCheckpointOffset : -1L);
+
+        // >= 0 means the leaf durably applied up to that offset, so there is a
+        // WAL offset it could honestly claim and the unusable pin is the
+        // coverage half of min(checkpoint, covered) being absent - repairable.
+        // < 0 is the sentinel for "nothing applied", and the blocking pin is
+        // then correct by design rather than a defect.
+        return checkpoint >= 0
+            ? WalGcBlockingPinState.CheckpointedUncovered
+            : WalGcBlockingPinState.NeverCheckpointed;
+    }
+
+    /// <summary>
+    /// Durable state name of <c>BPlusLeafGrain</c>'s persisted
+    /// <see cref="LeafNodeState"/>, as declared by its
+    /// <c>[PersistentState("leaf", ...)]</c> injection. The classifier reads
+    /// the same slot the grain would, which is what makes a direct read
+    /// equivalent to asking the leaf.
+    /// </summary>
+    private const string LeafStateName = "leaf";
 
     /// <summary>
     /// One tree's adaptive cadence state.
