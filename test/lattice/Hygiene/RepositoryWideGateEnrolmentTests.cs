@@ -181,6 +181,27 @@ public sealed class RepositoryWideGateEnrolmentTests
             .Where(p => string.Equals(TypeNameForPath(p), typeName, StringComparison.Ordinal))
             .ToList();
 
+    /// <summary>
+    /// True for a line that is wholly a comment, by the three comment forms this
+    /// repository actually uses: <c>//</c>, an XML doc <c>///</c>, and a line within a
+    /// block comment.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately line-level rather than a comment stripper. Parsing C# text for
+    /// comment extents is exactly the unreliability <see cref="TypeNameForPath"/> avoids,
+    /// and the conservative direction matters: a line this misclassifies as code can only
+    /// make the anchor check <i>weaker</i> (it admits a match it should have rejected),
+    /// never redden a correct row. A trailing comment on a code line is treated as code
+    /// for the same reason.
+    /// </remarks>
+    private static bool IsCommentLine(string line)
+    {
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("//", StringComparison.Ordinal)
+            || trimmed.StartsWith("*", StringComparison.Ordinal)
+            || trimmed.StartsWith("/*", StringComparison.Ordinal);
+    }
+
     private sealed record Population(
         IReadOnlySet<string> ScanningFixtures,
         IReadOnlySet<string> NonFixtureScanners,
@@ -700,6 +721,14 @@ public sealed class RepositoryWideGateEnrolmentTests
     /// stating that a gate keys on <c>PlatformSentinelInstruments</c> is making a claim
     /// that a rename can falsify without touching the table, and nothing noticed.
     /// <para>
+    /// The anchor must appear on a <b>non-comment</b> line. Matching the whole file text
+    /// was the first form of this check and it was too weak: a perturbation planting
+    /// <c>AspNetCore</c> - a word appearing only in that fixture's prose - resolved
+    /// cleanly and the gate stayed green. Since a rename very often leaves a stale comment
+    /// carrying the old name, the prose-satisfiable form would have gone quiet on the
+    /// exact drift it exists to catch.
+    /// </para>
+    /// <para>
     /// This is deliberately narrower than the column's full meaning, and the gap is stated
     /// rather than papered over: a cell carrying no backticked symbol is not checked by
     /// this assertion at all. Claiming otherwise would be the same false credibility the
@@ -727,10 +756,15 @@ public sealed class RepositoryWideGateEnrolmentTests
                 continue;
             }
 
-            var text = string.Join("\n", sources.Select(File.ReadAllText));
+            var codeLines = sources
+                .SelectMany(File.ReadAllLines)
+                .Where(static l => !IsCommentLine(l))
+                .ToList();
+
             foreach (var anchor in anchors)
             {
-                if (!Regex.IsMatch(text, @"\b" + Regex.Escape(anchor) + @"\b"))
+                var pattern = @"\b" + Regex.Escape(anchor) + @"\b";
+                if (!codeLines.Any(l => Regex.IsMatch(l, pattern)))
                 {
                     unresolved.Add($"{fixture} -> `{anchor}`");
                 }
@@ -740,13 +774,15 @@ public sealed class RepositoryWideGateEnrolmentTests
         Assert.That(
             unresolved,
             Is.Empty,
-            "These enrolment-column cells name a code symbol that does not appear in the "
-                + "fixture they describe. Backticks in that column declare the enclosed "
-                + "text to be a symbol of that fixture, so an unresolved anchor means the "
-                + "description has drifted from the code - the row still reads as an "
-                + "accurate account of what the gate enrols while naming something that no "
-                + "longer exists. Either update the cell to the current name, or unbacktick "
-                + "the word if it was meant as prose: "
+            "These enrolment-column cells name a code symbol that does not appear on a "
+                + "non-comment line of the fixture they describe. Backticks in that column "
+                + "declare the enclosed text to be a symbol of that fixture, so an "
+                + "unresolved anchor means the description has drifted from the code - the "
+                + "row still reads as an accurate account of what the gate enrols while "
+                + "naming something that no longer exists. A match in prose does not "
+                + "count, because a rename that leaves a stale comment behind is precisely "
+                + "the drift this checks for. Either update the cell to the current name, "
+                + "or unbacktick the word if it was meant as prose: "
                 + string.Join(", ", unresolved));
     }
 
