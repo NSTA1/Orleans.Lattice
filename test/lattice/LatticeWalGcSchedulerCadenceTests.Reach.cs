@@ -1,4 +1,5 @@
 using NSubstitute;
+using Orleans.Lattice.Testing.Hygiene;
 using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests;
@@ -43,10 +44,17 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     /// than counted from a pattern: occurrence-counting reported four exits
     /// where the source has eight, missing both <c>continue</c> statements.
     /// </summary>
+    /// <remarks>
+    /// <c>registry_timed_out</c> was absent from the layer as first shipped,
+    /// and this list is not the thing that will catch the next one like it -
+    /// see <c>Every_terminating_path_out_of_a_pass_carries_a_reach_arm</c>,
+    /// which reads the source rather than this array.
+    /// </remarks>
     private static readonly string[] EveryPassExitArm =
     [
         "registry_cancelled",
         "registry_failed",
+        "registry_timed_out",
         "loop_cancelled",
         "no_due_tree",
         "pass_completed_immediate",
@@ -437,5 +445,273 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 "a tree held at the floor is due on every pass, so its collection arm must advance with "
                     + "them rather than latching on the first.");
         });
+    }
+
+    // --------------------------------------------------- the inserted-exit arm
+
+    [Test]
+    public async Task A_registry_that_times_out_records_an_exit_distinct_from_one_that_throws()
+    {
+        // The arm that was MISSING from this layer as first shipped, and the
+        // reason the structural guard below exists.
+        //
+        // The scheduler catches TimeoutException ahead of the general fault
+        // arm, because a fault is a property of the registry and a timeout is
+        // a property of the bound we chose. That catch was inserted between
+        // two arms this layer already covered, and an insertion is invisible
+        // to every detector that reasons about the arms already present - the
+        // balance relation sees only the exits a fixture drives, and no
+        // fixture drove this one.
+        //
+        // The second assertion is the load-bearing half. Asserting only that
+        // registry_timed_out advances would still pass if both catch arms
+        // recorded it, which is precisely the conflation the split exists to
+        // prevent.
+        var time = new VirtualTimeProvider();
+        var gc = Substitute.For<ILatticeWalGc>();
+        gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(Report(0)));
+
+        var factory = FactoryFor(() => throw new TimeoutException("registry fan-out did not complete"));
+
+        using var reach = PassLevelReach();
+        var scheduler = CreateScheduler(factory, gc, Adaptive(), time);
+        await StartAndRunFirstPassAsync(scheduler, time);
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SumOfStage(reach, "registry_timed_out"), Is.GreaterThanOrEqualTo(1),
+                "a pass that abandoned the registry on its own budget must say so, because every "
+                    + "per-tree instrument below it is silent and silence is what this layer qualifies.");
+            Assert.That(SumOfStage(reach, "registry_failed"), Is.Zero,
+                "our own bound firing is a decision of ours, not a finding about the registry. An arm "
+                    + "that absorbed it into registry_failed would report a timeout we chose as a "
+                    + "wedged registry.");
+            Assert.That(SumOfStage(reach, "pass_entered"), Is.GreaterThanOrEqualTo(1),
+                "the entry arm is taken above the registry call, so it must survive the budget firing.");
+        });
+    }
+
+    [Test]
+    public void Every_terminating_path_out_of_a_pass_carries_a_reach_arm()
+    {
+        // The guard that would have caught the missing registry_timed_out arm,
+        // and the one the balance relation structurally cannot be.
+        //
+        // The balance relation quantifies over the exits a FIXTURE DRIVES, so
+        // an exit no fixture drives contributes neither an entry nor an exit
+        // and the relation stays green with the hole open. That is not a
+        // weakness of the assertion, it is the scope of it - and it is why the
+        // arm list in this file is not the detector either: a list enumerates
+        // what someone remembered, and the defect is always the one nobody did.
+        //
+        // This reads the SOURCE instead. It fails when the POPULATION of
+        // terminating paths changes, whether or not any fixture can reach the
+        // new one, which is the only predicate that covers an exit inserted
+        // between two covered exits.
+        //
+        // Scope, stated so it is not mistaken for more than it is:
+        //   - `return` only. A `continue` terminates a TREE VISIT, not a pass,
+        //     and the tree_seen/tree_collected pair accounts for those; the
+        //     difference between that pair IS the not-yet-due population.
+        //   - Only RunPassCoreAsync. The wrapper takes no exit of its own.
+        var source = File.ReadAllLines(Path.Combine(
+            HygieneRepository.FindRepoRoot(),
+            "src", "lattice", "LatticeWalGcScheduler.cs"));
+
+        var start = Array.FindIndex(source, l => l.Contains("private async Task<PassDecision> RunPassCoreAsync("));
+        Assert.That(start, Is.GreaterThanOrEqualTo(0),
+            "RunPassCoreAsync was not found. This guard reads the source by signature, so a rename "
+                + "must update it rather than silently disable it.");
+
+        var (bodyStart, bodyEnd) = EnclosingBlock(source, start);
+
+        var uncovered = new List<string>();
+        var terminators = 0;
+        for (var i = bodyStart; i <= bodyEnd; i++)
+        {
+            if (!System.Text.RegularExpressions.Regex.IsMatch(source[i], @"^\s*return\b"))
+            {
+                continue;
+            }
+
+            terminators++;
+            if (!PathIsAccountedFor(source, i, bodyStart))
+            {
+                uncovered.Add($"line {i + 1}: {source[i].Trim()}");
+            }
+        }
+
+        // Vacuity guard. A scan that matched nothing would report a clean
+        // result for a file it never read, which is the shape of failure this
+        // whole layer exists to make impossible.
+        Assert.That(terminators, Is.GreaterThanOrEqualTo(7),
+            "the scan found fewer terminating paths than the arms this layer declares, so it is not "
+                + "reading the method it claims to read.");
+
+        Assert.That(uncovered, Is.Empty,
+            "every terminating path out of a pass must record a reach arm before it returns. An exit "
+                + "added without one is a silent hole: the pass ends, the per-tree instruments below "
+                + "it stay silent, and nothing distinguishes that silence from a healthy idle silo.");
+    }
+
+    /// <summary>
+    /// Walks backwards from <paramref name="returnLine"/> through the block
+    /// that encloses it, reporting whether a <c>RecordPassReach</c> call is
+    /// taken on the same path.
+    /// </summary>
+    /// <remarks>
+    /// Nesting is tracked so that a call inside a sibling block cannot be
+    /// credited to this path: walking backwards, <c>}</c> enters a nested
+    /// block and <c>{</c> leaves one, and the walk stops when it would leave
+    /// the enclosing block entirely.
+    /// </remarks>
+    private static bool PathIsAccountedFor(string[] source, int returnLine, int bodyStart)
+    {
+        var depth = 0;
+        for (var i = returnLine - 1; i >= bodyStart; i--)
+        {
+            var line = source[i];
+            if (depth == 0 && line.Contains("RecordPassReach("))
+            {
+                return true;
+            }
+
+            depth += line.Count(c => c == '}') - line.Count(c => c == '{');
+            if (depth < 0)
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    [Test]
+    public void The_entry_arm_is_the_first_statement_of_the_pass_body()
+    {
+        // A SOURCE guard for a placement no fixture in this harness can
+        // defend, and it is written that way deliberately rather than dressed
+        // up as a behavioural proof.
+        //
+        // Relocating pass_entered into RunPassAsync (the wrapper) used to
+        // redden five arms here. It now reddens NONE, and the reason is a
+        // change nobody made to this layer: the wrapper calls the body exactly
+        // once, so entry-in-the-wrapper and entry-in-the-body currently emit
+        // an identical series. The hazard did not go away, it went LATENT -
+        // the moment the wrapper gains a retry, one entry would be counted
+        // against two exits and the completeness relation would run negative,
+        // which is the one direction the inequality cannot absorb.
+        //
+        // A behavioural arm that cannot distinguish the two placements would
+        // be a green clause proving nothing. A source assertion can, so the
+        // defence moves register rather than being dropped and quietly
+        // recorded as an uncoverable gap.
+        var source = File.ReadAllLines(Path.Combine(
+            HygieneRepository.FindRepoRoot(),
+            "src", "lattice", "LatticeWalGcScheduler.cs"));
+
+        var declaration = Array.FindIndex(
+            source, l => l.Contains("private async Task<PassDecision> RunPassCoreAsync("));
+        Assert.That(declaration, Is.GreaterThanOrEqualTo(0),
+            "RunPassCoreAsync was not found, so this guard is not reading the method it names.");
+
+        var (bodyStart, bodyEnd) = EnclosingBlock(source, declaration);
+
+        var firstStatement = -1;
+        for (var i = bodyStart; i <= bodyEnd; i++)
+        {
+            var line = source[i].Trim();
+            if (line.Length == 0 || line.StartsWith("//", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            firstStatement = i;
+            break;
+        }
+
+        Assert.That(firstStatement, Is.GreaterThanOrEqualTo(0),
+            "the pass body scanned as empty, so this guard is vacuous rather than satisfied.");
+
+        Assert.That(
+            source[firstStatement].Contains("RecordPassReach(LatticeMetrics.ReachPassEntered)"),
+            Is.True,
+            "the entry arm must be the first statement of the pass body, above every exit it is "
+                + "counted against. Taken in the wrapper instead it would survive a retry that the "
+                + "exits do not, and one entry against two exits drives the completeness relation "
+                + $"negative. First statement was: {source[firstStatement].Trim()}");
+    }
+
+    [Test]
+    public void The_collected_arm_is_taken_above_the_priming_latch()
+    {
+        // The gap this fixture carried as a DOCUMENTED HOLE until the entry-arm
+        // guard above showed which register could close it.
+        //
+        // tree_collected must be emitted above PrimeRetentionSeries, because
+        // that method latches on _primedTrees and is silent from a tree's
+        // second collection onward. Sited below it the arm would still fire -
+        // it is a different instrument - but it would sit under a latch that a
+        // later refactor could easily widen, and the comment asserting the
+        // ordering would be the only thing holding it.
+        //
+        // No fixture in this harness can tell the two placements apart: both
+        // emit once per collection today, so the behavioural arms are green
+        // either way. That is why this was reported as an uncovered placement
+        // rather than as a passing arm. A source assertion CAN tell them
+        // apart, so the ordering is now checked rather than merely asserted in
+        // prose next to the line it describes.
+        var source = File.ReadAllLines(Path.Combine(
+            HygieneRepository.FindRepoRoot(),
+            "src", "lattice", "LatticeWalGcScheduler.cs"));
+
+        var collected = Array.FindIndex(
+            source, l => l.Contains("LatticeMetrics.ReachTreeCollected"));
+        var priming = Array.FindIndex(
+            source, l => l.Contains("PrimeRetentionSeries(treeId, treeTag, tenantTag);"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(collected, Is.GreaterThanOrEqualTo(0),
+                "the tree_collected emission was not found, so this guard is vacuous.");
+            Assert.That(priming, Is.GreaterThanOrEqualTo(0),
+                "the PrimeRetentionSeries call was not found, so this guard is vacuous.");
+        });
+
+        Assert.That(collected, Is.LessThan(priming),
+            "tree_collected must be recorded above PrimeRetentionSeries. That method latches per "
+                + "tree per process, so an arm sited below it inherits a guard which is silent from "
+                + "the second collection onward - and no behavioural fixture here can see the "
+                + $"difference. collected at line {collected + 1}, priming at line {priming + 1}.");
+    }
+
+    /// <summary>
+    /// Returns the inclusive line range of the block opened at or after
+    /// <paramref name="declaration"/>.
+    /// </summary>
+    private static (int Start, int End) EnclosingBlock(string[] source, int declaration)
+    {
+        var depth = 0;
+        var opened = false;
+        var start = declaration;
+        for (var i = declaration; i < source.Length; i++)
+        {
+            var opens = source[i].Count(c => c == '{');
+            var closes = source[i].Count(c => c == '}');
+            if (!opened && opens > 0)
+            {
+                opened = true;
+                start = i + 1;
+            }
+
+            depth += opens - closes;
+            if (opened && depth <= 0)
+            {
+                return (start, i);
+            }
+        }
+
+        return (start, source.Length - 1);
     }
 }

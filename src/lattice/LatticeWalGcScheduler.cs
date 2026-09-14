@@ -119,7 +119,7 @@ internal sealed class LatticeWalGcScheduler(
     /// dropped once the registry stops reporting it, so a deleted tree cannot
     /// leak an entry for the life of the silo.
     /// <para>
-    /// This and the two fields below are confined to the single
+    /// This and the fields below are confined to the single
     /// <see cref="ExecuteAsync"/> loop - the only thing that ever runs a pass -
     /// so they need no synchronisation.
     /// </para>
@@ -127,13 +127,51 @@ internal sealed class LatticeWalGcScheduler(
     private readonly Dictionary<string, TreeCadence> _cadence = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Wait applied when a pass observed no collectable tree at all - an empty
-    /// registry, a registry that faulted, or a registry reporting only blank
-    /// ids. Relaxes on each such pass exactly as a per-tree interval does, so a
-    /// silo whose registry is briefly unavailable during startup retries soon
+    /// Wait applied when a pass <b>succeeded</b> at reading the registry and
+    /// observed no collectable tree - an empty registry, or one reporting only
+    /// blank ids. Relaxes on each such pass exactly as a per-tree interval does,
+    /// so a silo whose first tree is about to register still picks it up promptly
     /// while a permanently empty one settles at the configured ceiling.
+    /// <para>
+    /// Before issue #3064 this field also absorbed the <i>faulted</i> case, which
+    /// is why it kept saying "or a registry that faulted". Those two are opposites:
+    /// an empty registry is a correct observation that nothing needs doing, and
+    /// relaxing all the way to <see cref="LatticeOptions.WalGcInterval"/> is right;
+    /// a faulted enumeration is the absence of any observation, and relaxing to the
+    /// same ceiling means an hour of blindness after the fault clears. The faulted
+    /// case now has its own, far tighter ladder in <see cref="_faultWait"/>.
+    /// </para>
     /// </summary>
     private TimeSpan _quietWait;
+
+    /// <summary>
+    /// Wait applied when a pass <b>failed</b> to read the registry at all (issue
+    /// #3064). A separate ladder from <see cref="_quietWait"/>, capped at
+    /// <see cref="FaultRetryCeiling"/> rather than the configured GC interval.
+    /// <para>
+    /// The cap is the entire point. A faulted pass has learned nothing, so the
+    /// wait it picks is the operator's blindness window: the scheduler cannot
+    /// notice the fault clearing until it next tries. Sharing the quiet ceiling
+    /// made that window an hour, and the fault that motivated this issue cleared
+    /// long before the scheduler looked again - the subsystem was healthy and idle
+    /// at the same time, with nothing emitted to say so.
+    /// </para>
+    /// <para>
+    /// Reset to the floor by any pass whose enumeration succeeded, <b>including one
+    /// that found no trees</b>: a registry that answered "nothing here" has proved
+    /// it can be read, which is the only thing this ladder is measuring.
+    /// </para>
+    /// </summary>
+    private TimeSpan _faultWait;
+
+    /// <summary>
+    /// Consecutive passes whose registry enumeration threw, reset to zero by the
+    /// first that did not. Published as
+    /// <see cref="LatticeMetrics.WalGcSchedulerConsecutiveFaults"/> so an operator
+    /// can tell a single absorbed blip from a registry the scheduler has not been
+    /// able to read for hours.
+    /// </summary>
+    private int _consecutiveFaults;
 
     /// <summary>
     /// Pass counter used to drop cadence state for trees the registry no longer
@@ -828,6 +866,8 @@ internal sealed class LatticeWalGcScheduler(
         }
 
         _quietWait = minInterval;
+        _faultWait = minInterval;
+        _consecutiveFaults = 0;
 
         try
         {
@@ -839,7 +879,7 @@ internal sealed class LatticeWalGcScheduler(
 
             while (!stoppingToken.IsCancellationRequested)
             {
-                var wait = await RunPassAsync(minInterval, interval, stoppingToken).ConfigureAwait(false);
+                var decision = await RunPassAsync(minInterval, interval, stoppingToken).ConfigureAwait(false);
 
                 // Observed here rather than inside RunPassAsync, because this
                 // site post-dominates every return from it - the cancelled
@@ -848,10 +888,42 @@ internal sealed class LatticeWalGcScheduler(
                 // relaxing quiet wait is the only positive signature a loop that
                 // is alive and failing every pass has, so it must be recorded on
                 // exactly the passes that write nothing else.
-                LatticeMetrics.WalGcSchedulerWait.Record(wait.TotalSeconds, LatticeTenantLabel.Platform);
+                LatticeMetrics.WalGcSchedulerWait.Record(decision.Wait.TotalSeconds, LatticeTenantLabel.Platform);
+
+                // The same post-dominating site, for the same reason, and
+                // deliberately not folded into the observation above (issue
+                // #3064). That one answers "how long is the scheduler about to
+                // sleep"; these answer "which of the two silo-wide ladders
+                // produced that, and how long has the registry been unreadable".
+                // They are distinct questions because Wait and BackoffLevel
+                // diverge on the scheduled path, where the sleep is the time
+                // until the next tree falls due and the ladder is parked at the
+                // floor - so publishing the wait in place of the level would
+                // report a climbing backoff on a perfectly healthy silo.
+                //
+                // Recorded unconditionally, on every pass and every path,
+                // including the very first and including a silo that owns no tree
+                // at all. That siting is load-bearing and must not be moved onto
+                // the fault path: primed only when a fault occurs, an absent
+                // series would mean either "nothing has gone wrong" or "this
+                // build is not deployed", and this epic confused exactly those
+                // two more than once at real cost. Nor can it share
+                // LatticeMetrics.WalGcInterval's site, which is per-tree and
+                // therefore silent on precisely the zero-tree silo that most
+                // needs a liveness witness. Recorded here, an absent series is a
+                // statement about the deployment and never about the system's
+                // health.
+                LatticeMetrics.WalGcSchedulerBackoff.Record(
+                    decision.BackoffLevel.TotalSeconds,
+                    WalGcBackoffCauseTag(decision.Cause),
+                    LatticeTenantLabel.Platform);
+                LatticeMetrics.WalGcSchedulerConsecutiveFaults.Record(
+                    _consecutiveFaults,
+                    WalGcBackoffCauseTag(decision.Cause),
+                    LatticeTenantLabel.Platform);
 
                 WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.Waiting, tree: null, _time);
-                if (!await SafeDelayAsync(wait, stoppingToken).ConfigureAwait(false))
+                if (!await SafeDelayAsync(decision.Wait, stoppingToken).ConfigureAwait(false))
                 {
                     Terminate(WalGcSchedulerTermination.Cancelled, WalGcSchedulerPhase.Stopped);
                     return;
@@ -972,6 +1044,36 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
+    /// One scheduling pass's decision: how long to sleep, and the scheduler-wide
+    /// backoff state that produced it (issue #3064).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A pass used to return a bare <see cref="TimeSpan"/>, which is why the
+    /// scheduler's most important distinction - "I could not read the registry"
+    /// versus "I read it and there is nothing to do" - was invisible both to the
+    /// caller and to metering. Returning the cause alongside the wait makes that
+    /// distinction impossible to drop: a new return path cannot compile without
+    /// stating which arm it is.
+    /// </para>
+    /// <para>
+    /// <paramref name="BackoffLevel"/> is the scheduler-wide backoff <i>in force</i>,
+    /// which is not always <paramref name="Wait"/>: an ordinary scheduled pass
+    /// sleeps until the next tree is due, but no backoff is in force, so it reports
+    /// the floor. Publishing the sleep instead would make a silo with a long quiet
+    /// cadence indistinguishable from one that had backed off, which is the
+    /// ambiguity this whole change exists to remove.
+    /// </para>
+    /// </remarks>
+    /// <param name="Wait">How long to sleep before the next pass.</param>
+    /// <param name="Cause">Which silo-wide ladder, if any, produced this pass's backoff.</param>
+    /// <param name="BackoffLevel">The scheduler-wide backoff currently in force.</param>
+    private readonly record struct PassDecision(
+        TimeSpan Wait,
+        BackoffCause Cause,
+        TimeSpan BackoffLevel);
+
+    /// <summary>
     /// Runs one scheduling pass: collects every registered tree whose adaptive
     /// interval has elapsed, updates each collected tree's next due time from
     /// what its pass reclaimed, and returns how long to sleep before the next
@@ -984,7 +1086,7 @@ internal sealed class LatticeWalGcScheduler(
     /// rather than killing the scheduler.
     /// </para>
     /// </summary>
-    private async Task<TimeSpan> RunPassAsync(TimeSpan minInterval, TimeSpan interval, CancellationToken stoppingToken)
+    private async Task<PassDecision> RunPassAsync(TimeSpan minInterval, TimeSpan interval, CancellationToken stoppingToken)
     {
         // The heartbeat, and its placement is the whole point of it: above the
         // try, above the registry call, above anything that can fail. Every
@@ -1040,8 +1142,8 @@ internal sealed class LatticeWalGcScheduler(
     /// <param name="minInterval">The adaptive floor.</param>
     /// <param name="interval">The adaptive ceiling.</param>
     /// <param name="stoppingToken">Cancelled when the silo is shutting down.</param>
-    /// <returns>How long to sleep before the next pass.</returns>
-    private async Task<TimeSpan> RunPassCoreAsync(
+    /// <returns>How long to sleep before the next pass, and why.</returns>
+    private async Task<PassDecision> RunPassCoreAsync(
         TimeSpan minInterval,
         TimeSpan interval,
         CancellationToken stoppingToken)
@@ -1076,8 +1178,14 @@ internal sealed class LatticeWalGcScheduler(
             //
             // Guarded on the stopping token rather than on the exception type
             // alone, so that a bound firing can never be absorbed as a shutdown.
+            //
+            // Reported as Scheduled rather than Faulted (issue #3064): the
+            // registry told us nothing, but we did not ask it to - we withdrew
+            // the question. Laddering a shutdown onto the fault path would make
+            // every orderly restart contribute to the consecutive-fault streak
+            // that is meant to mean "the registry cannot be read".
             RecordEnumeration(WalGcEnumerationOutcome.Cancelled);
-            return minInterval;
+            return new PassDecision(minInterval, BackoffCause.Scheduled, minInterval);
         }
         catch (TimeoutException)
         {
@@ -1086,10 +1194,23 @@ internal sealed class LatticeWalGcScheduler(
             // of the bound we chose, and folding the second into the first would
             // let a decision of ours present as a finding about the system.
             RecordEnumeration(WalGcEnumerationOutcome.TimedOut);
+            RecordPassReach(LatticeMetrics.ReachRegistryTimedOut);
             logger.LogWarning(
-                "WAL GC scheduler abandoned the registry enumeration after {Budget}; will retry on the next tick.",
-                EnumerationBudget);
-            return Quiet(minInterval, interval);
+                "WAL GC scheduler abandoned the registry enumeration after {Budget} ({ConsecutiveFaults} consecutive); will retry on the next tick.",
+                EnumerationBudget,
+                _consecutiveFaults + 1);
+
+            // Laddered on the fault path, not the quiet one (issue #3064). The
+            // two arms stay distinct in WalGcSchedulerEnumerations, which is
+            // where the registry-versus-our-bound distinction belongs; for the
+            // purpose of choosing a backoff they are the same event, because
+            // both mean the registry did not answer. A backoff that relaxes on
+            // an absence of information is the inversion this issue exists to
+            // remove, and a timed-out enumeration is the exact shape the
+            // wedged-registry incident took.
+            _consecutiveFaults++;
+            var timedOutWait = Faulted(minInterval, interval);
+            return new PassDecision(timedOutWait, BackoffCause.Faulted, timedOutWait);
         }
         catch (Exception ex)
         {
@@ -1101,15 +1222,32 @@ internal sealed class LatticeWalGcScheduler(
             // #3060, and at debug level the one line that names the cause was
             // absent from every deployed log stream, leaving a silo whose sweep
             // had stopped with no evidence anywhere at any level.
+            //
+            // Laddered separately from the quiet path and to a far lower ceiling
+            // (issue #3064): this wait is how long the scheduler stays blind to
+            // the fault clearing, and sharing the quiet ceiling made that up to a
+            // full WalGcInterval - an hour at stock defaults - during which a
+            // recovered silo looks identical to a dead one.
             RecordEnumeration(WalGcEnumerationOutcome.Faulted);
+            _consecutiveFaults++;
             logger.LogWarning(
                 ex,
-                "WAL GC scheduler failed to enumerate trees; will retry on the next tick.");
+                "WAL GC scheduler failed to enumerate trees ({ConsecutiveFaults} consecutive); will retry on the next tick.",
+                _consecutiveFaults);
             RecordPassReach(LatticeMetrics.ReachRegistryFailed);
-            return Quiet(minInterval, interval);
+            var faultWait = Faulted(minInterval, interval);
+            return new PassDecision(faultWait, BackoffCause.Faulted, faultWait);
         }
 
         RecordEnumeration(ClassifyEnumeration(treeIds));
+
+        // The registry answered. That is the whole of what the faulted ladder
+        // measures, so it resets here rather than further down: a success that
+        // finds no trees is still proof the registry can be read, and gating the
+        // reset on having found something would leave an empty silo laddered on
+        // the fault path forever.
+        _faultWait = minInterval;
+        _consecutiveFaults = 0;
 
         var generation = ++_generation;
         var nowTicks = _time.GetUtcNow().UtcTicks;
@@ -1125,7 +1263,7 @@ internal sealed class LatticeWalGcScheduler(
             if (stoppingToken.IsCancellationRequested)
             {
                 RecordPassReach(LatticeMetrics.ReachLoopCancelled);
-                return minInterval;
+                return new PassDecision(minInterval, BackoffCause.Scheduled, minInterval);
             }
             if (string.IsNullOrEmpty(treeId))
             {
@@ -1194,7 +1332,8 @@ internal sealed class LatticeWalGcScheduler(
             // a quiet tree would, so an empty silo costs nothing while a silo
             // whose first tree is about to register still picks it up promptly.
             RecordPassReach(LatticeMetrics.ReachNoDueTree);
-            return Quiet(minInterval, interval);
+            var quietWait = Quiet(minInterval, interval);
+            return new PassDecision(quietWait, BackoffCause.Empty, quietWait);
         }
 
         _quietWait = minInterval;
@@ -1202,11 +1341,14 @@ internal sealed class LatticeWalGcScheduler(
         if (wait <= 0)
         {
             RecordPassReach(LatticeMetrics.ReachPassCompletedImmediate);
-            return TimeSpan.Zero;
+            return new PassDecision(TimeSpan.Zero, BackoffCause.Scheduled, minInterval);
         }
 
         RecordPassReach(LatticeMetrics.ReachPassCompletedScheduled);
-        return TimeSpan.FromTicks(wait > interval.Ticks ? interval.Ticks : wait);
+        return new PassDecision(
+            TimeSpan.FromTicks(wait > interval.Ticks ? interval.Ticks : wait),
+            BackoffCause.Scheduled,
+            minInterval);
     }
 
     /// <summary>
@@ -1259,6 +1401,91 @@ internal sealed class LatticeWalGcScheduler(
 
         return WalGcEnumerationOutcome.AllBlank;
     }
+
+    /// <summary>
+    /// Which of the scheduler's two silo-wide backoff ladders produced a pass's
+    /// backoff level, or that neither did.
+    /// <para>
+    /// The scheduler backs off for two reasons that were, until issue #3064,
+    /// byte-identical downstream: the registry <b>could not be read</b>, and the
+    /// registry <b>was read and holds nothing to collect</b>. One is the estate
+    /// being unreadable; the other is the estate being idle. They shared a
+    /// ladder and had no tag between them, so an operator reading a long backoff
+    /// could not tell a wedged silo from an empty one - the single most
+    /// important distinction this scheduler has.
+    /// </para>
+    /// <para>
+    /// The split is on principle rather than tuning. <see cref="Empty"/> backs
+    /// off on <b>true information</b>: it asked, it was answered, and the answer
+    /// was "nothing". <see cref="Faulted"/> backs off on <b>an absence of
+    /// information</b> - it learned nothing, and then used having-learned-nothing
+    /// as grounds to look less often. Only the second is inverted, which is why
+    /// only the second is bounded (see <see cref="FaultRetryCeiling"/>) while an
+    /// idle silo is still free to relax all the way to its configured interval.
+    /// </para>
+    /// <para>
+    /// <see cref="Scheduled"/> is the steady state, and it does double duty as
+    /// the deployment witness: it is recorded on every healthy pass, so the
+    /// presence of this tag's series proves the build shipped, and its
+    /// disappearance is itself the transition signal.
+    /// </para>
+    /// <para>
+    /// The <see cref="InstrumentedEnumAttribute"/> names
+    /// <c>orleans.lattice.wal.gc.scheduler_backoff</c> only, because the
+    /// attribute is single-use. These members arm the <c>cause</c> tag of
+    /// <see cref="LatticeMetrics.WalGcSchedulerConsecutiveFaults"/> identically -
+    /// the two are recorded side by side at one site from one
+    /// <see cref="PassDecision"/>, so they cannot diverge - and the arming
+    /// relation the attribute asserts is one-directional, so covering one
+    /// instrument covers every member.
+    /// </para>
+    /// </summary>
+    [InstrumentedEnum(
+        typeof(LatticeWalGcScheduler),
+        "orleans.lattice.wal.gc.scheduler_backoff",
+        LatticeMetrics.TagWalGcBackoffCause)]
+    private enum BackoffCause
+    {
+        /// <summary>
+        /// The registry answered and at least one collectable tree is tracked,
+        /// so the pass sleeps until the next one falls due. No silo-wide backoff
+        /// is in force and the reported level is the floor.
+        /// </summary>
+        Scheduled = 0,
+
+        /// <summary>
+        /// The registry could not be read - it threw, or our own enumeration
+        /// bound fired. The scheduler learned nothing about the estate, so this
+        /// is the ladder that is bounded.
+        /// </summary>
+        Faulted = 1,
+
+        /// <summary>
+        /// The registry was read successfully and holds no collectable tree.
+        /// A legitimate cheap-idle relax on true information.
+        /// </summary>
+        Empty = 2,
+    }
+
+    /// <summary>
+    /// Maps a <see cref="BackoffCause"/> to its metric tag.
+    /// <para>
+    /// A single, uniquely-named mapping method is load-bearing rather than
+    /// stylistic: the repository's dashboard tag-domain resolver derives a
+    /// tag's value domain by descending into exactly one uniquely-named helper,
+    /// and declines to descend into a method name declared more than once under
+    /// <c>src/</c>. Passing a struct member or a local at the emission site
+    /// leaves the domain underivable and the panel unverifiable.
+    /// </para>
+    /// </summary>
+    /// <param name="cause">The ladder that produced the pass's backoff level.</param>
+    /// <returns>The <see cref="LatticeMetrics.TagWalGcBackoffCause"/> tag.</returns>
+    private static KeyValuePair<string, object?> WalGcBackoffCauseTag(BackoffCause cause) => cause switch
+    {
+        BackoffCause.Faulted => LatticeMetrics.WalGcBackoffFaulted,
+        BackoffCause.Empty => LatticeMetrics.WalGcBackoffEmpty,
+        _ => LatticeMetrics.WalGcBackoffScheduled,
+    };
 
     /// <summary>
     /// Runs one GC pass for a single tree, publishes its metering, and returns
@@ -1835,14 +2062,74 @@ internal sealed class LatticeWalGcScheduler(
 
     /// <summary>
     /// Returns the current no-collectable-tree wait and relaxes it for next
-    /// time, so a silo with an empty or faulting registry retries promptly once
-    /// and then backs off on the same geometric schedule a quiet tree does,
-    /// instead of polling at the floor indefinitely.
+    /// time, so a silo with an empty registry retries promptly once and then
+    /// backs off on the same geometric schedule a quiet tree does, instead of
+    /// polling at the floor indefinitely.
     /// </summary>
     private TimeSpan Quiet(TimeSpan minInterval, TimeSpan interval)
     {
         var wait = _quietWait < minInterval ? minInterval : _quietWait;
         _quietWait = Relax(wait, minInterval, interval);
+        return wait;
+    }
+
+    /// <summary>
+    /// The ceiling the <b>faulted</b> ladder relaxes toward (issue #3064),
+    /// clamped into the operator's own band.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Derived from <see cref="ReactivationMinBlockAge"/> rather than written as a
+    /// literal, and the derivation is the argument for the value. That constant is
+    /// already this scheduler's answer to "how long should we let a stuck condition
+    /// sit before we act on it" - it is the age at which a blocked tree is
+    /// considered genuinely stuck rather than briefly busy. A registry the
+    /// scheduler cannot read is the same question about the whole silo, so it gets
+    /// the same answer, and a later tuning of one is a tuning of both. Pinning a
+    /// second independent literal here would let the two drift apart silently.
+    /// </para>
+    /// <para>
+    /// Clamped <b>up</b> to <paramref name="minInterval"/> so it can never sit
+    /// below the floor, and <b>down</b> to <paramref name="interval"/> so an
+    /// operator who deliberately configured a tighter band than five minutes is
+    /// not overridden upward by this constant. An operator asking for faster
+    /// collection is not asking for slower fault recovery.
+    /// </para>
+    /// </remarks>
+    /// <param name="minInterval">The configured adaptive floor.</param>
+    /// <param name="interval">The configured adaptive ceiling.</param>
+    /// <returns>The faulted ladder's ceiling.</returns>
+    private static TimeSpan FaultRetryCeiling(TimeSpan minInterval, TimeSpan interval)
+    {
+        if (ReactivationMinBlockAge > interval)
+        {
+            return interval;
+        }
+
+        return ReactivationMinBlockAge < minInterval ? minInterval : ReactivationMinBlockAge;
+    }
+
+    /// <summary>
+    /// Returns the current failed-enumeration wait and relaxes it for next time
+    /// (issue #3064). Identical in shape to <see cref="Quiet"/> and deliberately
+    /// so - only the ceiling differs, because only the ceiling is what was wrong.
+    /// </summary>
+    /// <remarks>
+    /// The wait is clamped to the ceiling on the way <i>out</i> as well as on the
+    /// way in, so a ladder inherited from a wider configuration (an operator
+    /// narrowing <c>WalGcInterval</c> at runtime) cannot return a wait above the
+    /// ceiling that configuration now implies.
+    /// </remarks>
+    private TimeSpan Faulted(TimeSpan minInterval, TimeSpan interval)
+    {
+        var ceiling = FaultRetryCeiling(minInterval, interval);
+        var wait = _faultWait < minInterval ? minInterval : _faultWait;
+        if (wait > ceiling)
+        {
+            wait = ceiling;
+        }
+
+        _faultWait = Relax(wait, minInterval, ceiling);
         return wait;
     }
 

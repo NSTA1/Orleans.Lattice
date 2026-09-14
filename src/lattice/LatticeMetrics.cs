@@ -1467,6 +1467,112 @@ public static class LatticeMetrics
             description: "Adaptive WAL garbage-collection interval selected per tree, tagged by tree.");
 
     /// <summary>
+    /// Tag key naming <b>why</b> the WAL GC scheduler selected the wait it did on
+    /// a pass, carried by <see cref="WalGcSchedulerBackoff"/> and
+    /// <see cref="WalGcSchedulerConsecutiveFaults"/> (issue #3064).
+    /// </summary>
+    /// <remarks>
+    /// The scheduler runs two independent scheduler-wide ladders and, before this
+    /// tag existed, fed both into one unlabelled wait. A registry that could not
+    /// be read and a silo with nothing to collect therefore produced byte-identical
+    /// scheduler behaviour, which is the single most important distinction this
+    /// scheduler has and it was unobservable.
+    /// </remarks>
+    public const string TagWalGcBackoffCause = "cause";
+
+    /// <summary>
+    /// <see cref="TagWalGcBackoffCause"/> = <c>scheduled</c> - the pass enumerated
+    /// the registry, found trees, and selected an ordinary per-tree cadence. No
+    /// scheduler-wide backoff is in force.
+    /// </summary>
+    /// <remarks>
+    /// This is the steady-state arm, and it is also the <b>deployment witness</b>
+    /// for the whole instrument pair: it is recorded on a healthy pass, which is
+    /// the common case, so the series is present on any silo running this build.
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> WalGcBackoffScheduled =
+        new(TagWalGcBackoffCause, "scheduled");
+
+    /// <summary>
+    /// <see cref="TagWalGcBackoffCause"/> = <c>faulted</c> - the registry
+    /// enumeration threw, so the pass learned nothing at all about what wanted
+    /// collecting. This is the alarm arm.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalGcBackoffFaulted =
+        new(TagWalGcBackoffCause, "faulted");
+
+    /// <summary>
+    /// <see cref="TagWalGcBackoffCause"/> = <c>empty</c> - the registry
+    /// enumeration <b>succeeded</b> and reported no collectable tree. A correct
+    /// observation of an idle silo, and deliberately not an alarm.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalGcBackoffEmpty =
+        new(TagWalGcBackoffCause, "empty");
+
+    /// <summary>
+    /// Histogram of the scheduler-wide WAL garbage-collection backoff currently in
+    /// force, in seconds, tagged with <see cref="TagWalGcBackoffCause"/> (issue
+    /// #3064). Distinct from <see cref="WalGcInterval"/>, which is the adaptive
+    /// cadence of a single <i>tree</i>; this is the whole scheduler's retry wait
+    /// after a pass that collected nothing.
+    /// <para>
+    /// <b>Why this exists.</b> A WAL GC sweep that has backed off to its ceiling
+    /// and one that is dead emit byte-identical scrapes: every per-tree series
+    /// simply freezes, because a pass that collects nothing writes no per-tree
+    /// series at all. An operator could not distinguish "asleep for an hour" from
+    /// "the subsystem is gone", and that ambiguity cost the investigation behind
+    /// issues #3064 / #3065 several days. This instrument is the discriminator.
+    /// </para>
+    /// <para>
+    /// <b>Reading it.</b> <c>cause=scheduled</c> reports the floor and means no
+    /// backoff is in force. <c>cause=faulted</c> is the registry enumeration
+    /// throwing, and its ladder is capped well below the quiet ceiling so recovery
+    /// is bounded. <c>cause=empty</c> is a successful enumeration of an idle silo
+    /// and relaxes to the full <see cref="LatticeOptions.WalGcInterval"/> ceiling.
+    /// The two ladders have <b>disjoint ranges above the fault ceiling</b>, so a
+    /// high reading is self-identifying even before the tag is read.
+    /// </para>
+    /// <para>
+    /// <b>Priming, and why the site must not move.</b> This is recorded once per
+    /// pass from the scheduler's own loop, on <b>every</b> path - including the
+    /// very first pass, and including a silo with no trees at all. That siting is
+    /// load-bearing and deliberately <b>not</b> on the fault path. Primed at a site
+    /// that only runs when a fault occurs, an absent series would mean either "no
+    /// fault has happened" or "this build is not deployed" - and this epic
+    /// confused exactly those two, more than once, at serious cost. Recorded
+    /// unconditionally, an absent series means <b>only</b> "this build is not
+    /// deployed, or the scheduler never started", which is a fact about the
+    /// deployment and never about the system's health. Do not "tidy" this onto the
+    /// fault path, and do not make it conditional on having trees:
+    /// <see cref="WalGcInterval"/> is silent on a zero-tree silo and so cannot
+    /// serve as the witness there, which is precisely why this one does not share
+    /// its site.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> WalGcSchedulerBackoff =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.gc.scheduler_backoff", unit: "s",
+            description: "Scheduler-wide WAL garbage-collection backoff currently in force, tagged by cause.");
+
+    /// <summary>
+    /// Histogram of consecutive failed WAL GC registry enumerations, tagged with
+    /// <see cref="TagWalGcBackoffCause"/> (issue #3064). Reset to zero by any pass
+    /// whose enumeration succeeded, so it is a <i>current streak</i> rather than a
+    /// lifetime total - which is why it is a histogram and not a counter, a counter
+    /// being unable to go back down.
+    /// <para>
+    /// Recorded beside <see cref="WalGcSchedulerBackoff"/> at the same
+    /// unconditional per-pass site, so the same priming argument applies verbatim:
+    /// a zero here is a measured zero, and an absent series is a statement about
+    /// the build rather than about the registry. A streak that keeps returning to
+    /// zero is transient fault absorption; one that only climbs is a registry the
+    /// scheduler cannot read, and it is operator-actionable.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalGcSchedulerConsecutiveFaults =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.gc.scheduler_consecutive_faults", unit: "{fault}",
+            description: "Consecutive failed WAL garbage-collection registry enumerations, tagged by cause.");
+
+    /// <summary>
     /// Histogram of retained WAL bytes remaining after a garbage-collection pass,
     /// tagged with <see cref="TagTree"/>. Sampled from the pass's own
     /// <see cref="LatticeWalGcReport.RetainedBytesAfter"/>, so it costs no extra
@@ -4054,8 +4160,9 @@ public static class LatticeMetrics
     /// <para>
     /// <b>The completeness invariant, and the bound it actually takes.</b>
     /// Every terminating path out of a pass carries exactly one exit arm, so
-    /// <c>pass_entered</c> accounts for the five exit arms
+    /// <c>pass_entered</c> accounts for the seven exit arms
     /// (<see cref="ReachRegistryCancelled"/>, <see cref="ReachRegistryFailed"/>,
+    /// <see cref="ReachRegistryTimedOut"/>,
     /// <see cref="ReachLoopCancelled"/>, <see cref="ReachNoDueTree"/>,
     /// <see cref="ReachPassCompletedImmediate"/> and
     /// <see cref="ReachPassCompletedScheduled"/>). The relation is <b>not</b> an
@@ -4202,6 +4309,34 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> ReachRegistryFailed =
         new(TagStage, "registry_failed");
+
+    /// <summary>
+    /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass
+    /// that ended because the scheduler's own enumeration budget fired.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kept apart from <see cref="ReachRegistryFailed"/> for the reason the
+    /// scheduler keeps the two <c>catch</c> arms apart: a fault is a property
+    /// of the registry and a timeout is a property of the bound we chose, so
+    /// folding the second into the first would let a decision of ours present
+    /// as a finding about the system.
+    /// </para>
+    /// <para>
+    /// This arm was <b>missing</b> from the layer as first shipped, and the
+    /// way it was missed is the reason it is documented at length. The
+    /// <c>catch (TimeoutException)</c> it accounts for was inserted ahead of
+    /// the general fault arm by a later change, and an insertion is invisible
+    /// to every detector that reasons about the arms already present: the
+    /// balance relation sees only the exits a fixture drives, and no fixture
+    /// drove this one. The same insertion silently migrated an unrelated
+    /// file's fault tests onto the new arm. An exit added between two covered
+    /// exits is the cheapest coverage hole in the file to open and the most
+    /// expensive to notice.
+    /// </para>
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> ReachRegistryTimedOut =
+        new(TagStage, "registry_timed_out");
 
     /// <summary>
     /// <see cref="TagStage"/> value on <see cref="WalGcPassReach"/> for a pass
