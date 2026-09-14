@@ -195,4 +195,96 @@ public class ShardRootGrainDirtyLeavesTests
         Assert.That(snapshot.DirtyLeaves, Has.Count.EqualTo(1));
         Assert.That(snapshot.DirtyLeaves[0], Is.EqualTo(leafId));
     }
+
+    [Test]
+    public async Task RetainDirtyLeafAsync_lifts_the_mark_above_the_watermark_so_the_drain_preserves_it()
+    {
+        // Issue 2926: when the compaction walk skips a leaf that will not
+        // compact, it must first lift that leaf's dirty mark above the
+        // watermark the pass will drain to. Otherwise the shard completes,
+        // ClearDirtyLeavesUpToAsync removes every entry at-or-below the
+        // advance, and the one leaf that most needed compacting has its
+        // dirty signal silently discarded.
+        var (grain, state, _, leafId) = CreateGrain();
+
+        await grain.DeleteAsync("k1");
+        var snapshot = await grain.GetDirtyLeavesSinceLastCompactionAsync();
+
+        await grain.RetainDirtyLeafAsync(leafId, snapshot.ObservedAdvance);
+
+        Assert.That(state.State.DirtyLeavesSinceLastCompaction[leafId.ToString()],
+            Is.GreaterThan(snapshot.ObservedAdvance),
+            "the retained mark must be strictly greater than the pass watermark");
+
+        // The drain that follows a completing shard must leave it behind.
+        await grain.ClearDirtyLeavesUpToAsync(snapshot.ObservedAdvance);
+
+        Assert.That(state.State.DirtyLeavesSinceLastCompaction.ContainsKey(leafId.ToString()),
+            Is.True,
+            "a retained leaf survives the drain of the pass that skipped it");
+    }
+
+    [Test]
+    public async Task RetainDirtyLeafAsync_lifts_a_mark_that_already_exceeds_the_activation_seed()
+    {
+        // The re-activation shape, and the reason the watermark floor cannot
+        // be dropped. MarkLeafDirtyAsync seeds its clock from LastDirtyAdvance,
+        // which only moves on a drain. So after a re-activation between the
+        // snapshot and the retain - LastDirtyAdvance stale, the leaf's mark
+        // (and hence the pass watermark) well above it - a tick from that seed
+        // lands far below the watermark, the max-merge keeps the existing mark
+        // instead, and that mark is exactly the watermark: not strictly above
+        // it, and so squarely in the drain's path.
+        var leafId = GrainId.Create("leaf", "dirty-tree-leaf-0");
+        var existingMark = new HybridLogicalClock
+        {
+            WallClockTicks = DateTime.UtcNow.Ticks + TimeSpan.FromHours(1).Ticks,
+        };
+
+        var state = new FakePersistentState<ShardRootState>();
+        state.State.LastDirtyAdvance = HybridLogicalClock.Zero;
+        state.State.DirtyLeavesSinceLastCompaction[leafId.ToString()] = existingMark;
+
+        var (grain, _, _, _) = CreateGrain(state);
+
+        // The watermark the in-flight pass will drain to is the mark it
+        // observed, which is the existing one.
+        await grain.RetainDirtyLeafAsync(leafId, existingMark);
+
+        Assert.That(state.State.DirtyLeavesSinceLastCompaction[leafId.ToString()],
+            Is.GreaterThan(existingMark),
+            "a stale activation seed must not let the retained mark stay at the watermark");
+
+        await grain.ClearDirtyLeavesUpToAsync(existingMark);
+
+        Assert.That(state.State.DirtyLeavesSinceLastCompaction.ContainsKey(leafId.ToString()),
+            Is.True);
+    }
+
+    [Test]
+    public async Task RetainDirtyLeafAsync_marks_a_leaf_that_has_no_existing_entry()
+    {
+        // Retain is called with a leaf id taken from the pass's own snapshot,
+        // but that snapshot can outlive a concurrent drain that removed the
+        // entry. Retain must then re-create it above the watermark rather
+        // than leave the leaf unmarked.
+        //
+        // This is also the arm that pins the OTHER floor: with no existing
+        // mark to floor on, only flooring at `above` keeps the result ahead
+        // of a watermark that the activation seed is nowhere near. Hence a
+        // watermark deliberately far in the future - one close to `now` would
+        // be cleared by an ordinary tick and the clause would prove nothing.
+        var (grain, state, _, leafId) = CreateGrain();
+
+        var watermark = new HybridLogicalClock
+        {
+            WallClockTicks = DateTime.UtcNow.Ticks + TimeSpan.FromHours(1).Ticks,
+        };
+        Assert.That(state.State.DirtyLeavesSinceLastCompaction, Is.Empty);
+
+        await grain.RetainDirtyLeafAsync(leafId, watermark);
+
+        Assert.That(state.State.DirtyLeavesSinceLastCompaction[leafId.ToString()],
+            Is.GreaterThan(watermark));
+    }
 }

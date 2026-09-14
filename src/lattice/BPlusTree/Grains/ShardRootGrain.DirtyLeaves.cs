@@ -305,6 +305,44 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
+    public async Task RetainDirtyLeafAsync(GrainId leafId, HybridLogicalClock above)
+    {
+        await PrepareForOperationAsync();
+
+        // Floor the mark clock at the watermark the caller is about to drain
+        // to, then let MarkLeafDirtyAsync tick strictly past that floor. That
+        // single floor is sufficient, and deliberately so:
+        //
+        //  - Tick is guaranteed to return strictly greater than its input, so
+        //    the ticked value exceeds `above`.
+        //  - MarkLeafDirtyAsync then max-merges, so the stored mark is either
+        //    that ticked value or an existing mark that is already greater
+        //    still. Both exceed `above`.
+        //
+        // The floor cannot be dropped, though: a re-activation seeds the clock
+        // from LastDirtyAdvance, which only moves on a drain and which the
+        // snapshot's observed advance legitimately exceeds. A tick from that
+        // stale seed can land below the watermark, and for a leaf with no
+        // surviving entry the max-merge has nothing to rescue it, so the mark
+        // would be written at-or-below the watermark and the drain would take
+        // it - the exact silent loss this method exists to prevent.
+        //
+        // An earlier revision also floored on the leaf's existing mark. That
+        // clause was removed because it could not be made to fail: it is
+        // reachable only when an existing mark already exceeds the floor, which
+        // is precisely the case the max-merge above already handles.
+        if (!_dirtyMarkClockInitialized)
+        {
+            _dirtyMarkClock = state.State.LastDirtyAdvance;
+            _dirtyMarkClockInitialized = true;
+        }
+
+        if (above > _dirtyMarkClock) _dirtyMarkClock = above;
+
+        await MarkLeafDirtyAsync(leafId);
+    }
+
+    /// <inheritdoc />
     public async Task ClearDirtyLeavesUpToAsync(HybridLogicalClock advance)
     {
         await PrepareForOperationAsync();
