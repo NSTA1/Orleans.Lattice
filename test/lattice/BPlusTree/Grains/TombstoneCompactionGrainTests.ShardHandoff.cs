@@ -32,8 +32,17 @@ public partial class TombstoneCompactionGrainTests
 {
     /// <summary>
     /// A shard whose dirty list spans two batches and whose last leaf never
-    /// compacts: the shape that leaves a persisted list behind when the
-    /// shard is finally abandoned.
+    /// compacts <em>and</em> whose dirty mark cannot be retained: the shape
+    /// that leaves a persisted list behind when the shard is finally
+    /// abandoned.
+    /// <para>
+    /// Before issue 2926 the leaf fault alone was enough, because the walk
+    /// re-threw it at the shard. It no longer does: a leaf that will not
+    /// compact is skipped and retained, and the shard completes. The retain
+    /// failure is now the mid-walk, shard-scoped fault this fixture needs -
+    /// which is the same class of fault, reached through the one production
+    /// path that still produces it, rather than a weakened assertion.
+    /// </para>
     /// </summary>
     private static (GrainId First, GrainId Second, GrainId Wedged, IShardRootGrain ShardRoot)
         SetupWedgedMultiBatchShard(IGrainFactory grainFactory, int shardIndex, HybridLogicalClock advance)
@@ -49,6 +58,14 @@ public partial class TombstoneCompactionGrainTests
         grainFactory.GetGrain<IBPlusLeafGrain>(wedged)
             .CompactTombstonesAsync(Arg.Any<TimeSpan>())
             .Returns<int>(_ => throw new TimeoutException("leaf activation exceeded the request timeout"));
+
+        // ... and whose mark cannot be lifted above the pass watermark either,
+        // so the walk refuses to advance past it rather than letting the drain
+        // discard the blocker. That refusal is what carries the fault to the
+        // shard, which is the precondition this fixture is about.
+        shardRoot.RetainDirtyLeafAsync(wedged, Arg.Any<HybridLogicalClock>())
+            .Returns(_ => Task.FromException(
+                new TimeoutException("shard root unavailable while retaining the blocker")));
 
         return (first, second, wedged, shardRoot);
     }
