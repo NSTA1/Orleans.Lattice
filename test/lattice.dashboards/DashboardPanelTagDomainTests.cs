@@ -166,8 +166,33 @@ public sealed class DashboardPanelTagDomainTests
             // particular has to be legible beside healed, because the gap
             // between them is what separates a sweep that reaches the leaf
             // from one that clears the pin.
+            //
+            // The five drive arms (issue #2692) record what a touch achieved
+            // rather than that it was issued, and are charted with their full
+            // interpretation on panel 2692 below.
             ["Replication|2783|orleans.lattice.wal.gc.blocked_leaf_reactivations|outcome"] =
-                ["attempted"],
+                [
+                    "attempted", "drove_already_driving", "drove_lifted",
+                    "drove_memory_refused", "drove_no_advance", "drove_not_driven",
+                ],
+
+            // Panel 2692 is the converse of 2783: it charts only the five drive
+            // verdicts (issue #2692), so the reachability arms it omits are the
+            // ones 2783 exists to chart. The two panels partition the domain
+            // between them, and the rate panel 71 carries no outcome matcher at
+            // all, so every arm remains charted somewhere.
+            //
+            // This list grew by three (completed, faulted, unresolvable) when
+            // issue #2938 armed them. That growth is the whole hazard of a
+            // declared-omission list: it is a statement about the complement of
+            // a domain, so widening the domain silently makes every existing
+            // list short without touching a line of it. Nothing here changed,
+            // and this entry was wrong the moment #2938 merged.
+            ["Replication|2692|orleans.lattice.wal.gc.blocked_leaf_reactivations|outcome"] =
+                [
+                    "abandoned", "attempted", "completed", "faulted", "healed",
+                    "rearmed", "undelivered", "unresolvable",
+                ],
 
             // Panel 34 alerts on entry into saturation only. The healthy,
             // throttled, and unknown transitions are charted by the
@@ -390,10 +415,18 @@ public sealed class DashboardPanelTagDomainTests
             // is produced by a total mapping over the outcome enum rather than
             // by a hand-written list, so the resolver's ability to follow the
             // hop is what keeps a newly added arm in scope for the charting
-            // gate below. All four terminal arms and all four lifecycle arms
-            // are derivable; a drop here means the hop stopped resolving.
+            // gate below. Issue #2692 added a second such mapping over a second
+            // enum, so the domain is now the union of three disjoint groups:
+            // four lifecycle arms, four terminal arms, and five drive verdicts.
+            // All thirteen are derivable; a drop here means the hop stopped
+            // resolving for one of the two mappings.
             AssertDomain("orleans_lattice_wal_gc_blocked_leaf_reactivations_total", "outcome",
-                ["abandoned", "attempted", "completed", "faulted", "healed", "rearmed", "undelivered", "unresolvable"]);
+                [
+                    "abandoned", "attempted", "completed", "drove_already_driving",
+                    "drove_lifted", "drove_memory_refused", "drove_no_advance",
+                    "drove_not_driven", "faulted", "healed", "rearmed",
+                    "undelivered", "unresolvable",
+                ]);
 
             // Collection-built tag list plus a static string-returning helper
             // resolved across files.

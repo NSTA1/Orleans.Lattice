@@ -53,7 +53,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     {
         var factory = FactoryWithTrees(treeIds);
         var leaf = Substitute.For<IBPlusLeafGrain>();
-        leaf.GetTreeIdAsync().Returns(_ => Task.FromResult<string?>(treeIds.FirstOrDefault()));
+        leaf.DriveStarvedCheckpointAsync().Returns(_ => Task.FromResult(LeafStarvationDriveOutcome.Lifted));
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
         return (factory, leaf);
     }
@@ -97,7 +97,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await TickAsync(time);
         await TickAsync(time);
 
-        await leaf.DidNotReceive().GetTreeIdAsync();
+        await leaf.DidNotReceive().DriveStarvedCheckpointAsync();
 
         await scheduler.StopAsync(CancellationToken.None);
     }
@@ -120,7 +120,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // the already-shipped activation-time repair applicable.
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(6));
 
-        await leaf.Received().GetTreeIdAsync();
+        await leaf.Received().DriveStarvedCheckpointAsync();
         factory.Received().GetGrain<IBPlusLeafGrain>(BlockedLeafGrainId());
 
         await scheduler.StopAsync(CancellationToken.None);
@@ -147,7 +147,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // and all naming the same consumer.
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(10));
 
-        await leaf.Received(1).GetTreeIdAsync();
+        await leaf.Received(1).DriveStarvedCheckpointAsync();
 
         await scheduler.StopAsync(CancellationToken.None);
     }
@@ -173,7 +173,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await StartAndRunFirstPassAsync(scheduler, time);
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(20));
 
-        await leaf.DidNotReceive().GetTreeIdAsync();
+        await leaf.DidNotReceive().DriveStarvedCheckpointAsync();
         factory.DidNotReceive().GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>());
 
         await scheduler.StopAsync(CancellationToken.None);
@@ -197,7 +197,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await StartAndRunFirstPassAsync(scheduler, time);
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(20));
 
-        await leaf.DidNotReceive().GetTreeIdAsync();
+        await leaf.DidNotReceive().DriveStarvedCheckpointAsync();
 
         await scheduler.StopAsync(CancellationToken.None);
     }
@@ -221,18 +221,18 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         var scheduler = CreateScheduler(factory, gc, Adaptive(), time);
         await StartAndRunFirstPassAsync(scheduler, time);
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(6));
-        await leaf.Received(1).GetTreeIdAsync();
+        await leaf.Received(1).DriveStarvedCheckpointAsync();
 
         // The first leaf healed; a second dormant leaf is now at the head.
         consumerId = $"{ILeafCursorReporter.MaterialiserConsumerIdPrefix}{StrandedTree}_{GrainId.Create("bplusleaf", "leaf-second")}";
         await TickAsync(time);
         await TickAsync(time);
 
-        await leaf.Received(1).GetTreeIdAsync();
+        await leaf.Received(1).DriveStarvedCheckpointAsync();
 
         // ...and it is reactivated once it has served the minimum itself.
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(6));
-        await leaf.Received(2).GetTreeIdAsync();
+        await leaf.Received(2).DriveStarvedCheckpointAsync();
 
         await scheduler.StopAsync(CancellationToken.None);
     }
@@ -254,7 +254,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await StartAndRunFirstPassAsync(scheduler, time);
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(10));
 
-        await leaf.DidNotReceive().GetTreeIdAsync();
+        await leaf.DidNotReceive().DriveStarvedCheckpointAsync();
         factory.DidNotReceive().GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>());
 
         await scheduler.StopAsync(CancellationToken.None);
@@ -271,13 +271,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Returns(_ => Task.FromResult(BlockedReportNaming(BlockedConsumerId())));
         var time = new VirtualTimeProvider();
         var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
-        leaf.GetTreeIdAsync().Returns<Task<string?>>(_ => throw new TimeoutException("silo busy"));
+        leaf.DriveStarvedCheckpointAsync().Returns<Task<LeafStarvationDriveOutcome>>(_ => throw new TimeoutException("silo busy"));
 
         var scheduler = CreateScheduler(factory, gc, Adaptive(), time);
         await StartAndRunFirstPassAsync(scheduler, time);
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(6));
 
-        await leaf.Received().GetTreeIdAsync();
+        await leaf.Received().DriveStarvedCheckpointAsync();
 
         // The pass still completed and the tree is still being collected.
         await gc.Received().RunOnceAsync(StrandedTree, Arg.Any<CancellationToken>());
@@ -320,7 +320,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // fourth attempt, but short of the 30-minute re-arm backoff.
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(60));
 
-        await leaf.Received(3).GetTreeIdAsync();
+        await leaf.Received(3).DriveStarvedCheckpointAsync();
 
         Assert.Multiple(() =>
         {
@@ -357,7 +357,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await StartAndRunFirstPassAsync(scheduler, time);
 
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(6));
-        await leaf.Received(1).GetTreeIdAsync();
+        await leaf.Received(1).DriveStarvedCheckpointAsync();
 
         // The capture succeeded, the pin lifted, and the tree reclaims again.
         blocked = false;
@@ -403,7 +403,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await TickAsync(time);
         await TickAsync(time);
 
-        await leaf.DidNotReceive().GetTreeIdAsync();
+        await leaf.DidNotReceive().DriveStarvedCheckpointAsync();
         Assert.That(
             recorder.Counted.Select(m => m.Tag(LatticeMetrics.TagOutcome) as string),
             Does.Not.Contain("healed"),
@@ -455,7 +455,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // fourth touch lands at +70 and the fifth is not due until +85.
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(75));
 
-        await leaf.Received(4).GetTreeIdAsync();
+        await leaf.Received(4).DriveStarvedCheckpointAsync();
 
         Assert.Multiple(() =>
         {
@@ -553,7 +553,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Returns(_ => Task.FromResult(BlockedReportNaming(BlockedConsumerId())));
         var time = new VirtualTimeProvider();
         var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
-        leaf.GetTreeIdAsync().Returns<Task<string?>>(_ => throw new TimeoutException("silo busy"));
+        leaf.DriveStarvedCheckpointAsync().Returns<Task<LeafStarvationDriveOutcome>>(_ => throw new TimeoutException("silo busy"));
 
         using var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, StrandedTree);
         var scheduler = CreateScheduler(factory, gc, Adaptive(floor: SweepPass), time);
@@ -562,7 +562,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // Touches at +5, +20, +35, +50 and +65, still one cooldown apart.
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(75));
 
-        await leaf.Received(5).GetTreeIdAsync();
+        await leaf.Received(5).DriveStarvedCheckpointAsync();
 
         Assert.Multiple(() =>
         {
@@ -588,7 +588,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Returns(_ => Task.FromResult(BlockedReportNaming(BlockedConsumerId())));
         var time = new VirtualTimeProvider();
         var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
-        leaf.GetTreeIdAsync().Returns<Task<string?>>(_ => throw new TimeoutException("silo busy"));
+        leaf.DriveStarvedCheckpointAsync().Returns<Task<LeafStarvationDriveOutcome>>(_ => throw new TimeoutException("silo busy"));
 
         using var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, StrandedTree);
         var scheduler = CreateScheduler(factory, gc, Adaptive(floor: SweepPass), time);
@@ -711,8 +711,16 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         {
             Assert.That(primed, Is.EquivalentTo(new[]
                 {
+                    // Four lifecycle arms, named individually because no enum
+                    // backs them.
                     "attempted", "healed", "abandoned", "rearmed",
+                    // Four terminal arms, primed by walking ReactivationOutcome
+                    // (issue #2938).
                     "completed", "unresolvable", "faulted", "undelivered",
+                    // Five drive verdicts, primed by walking
+                    // LeafStarvationDriveOutcome (issue #2692).
+                    "drove_lifted", "drove_no_advance", "drove_memory_refused",
+                    "drove_not_driven", "drove_already_driving",
                 }),
                 "every outcome must be minted, so a reader can tell a measured zero from a missing build.");
             Assert.That(recorder.Measurements.Select(m => m.Value), Is.All.Zero,

@@ -139,6 +139,7 @@ public sealed class InstrumentedEnumArmingTests
         "ShardHealingDecision",
         "ScanPagePhase",
         "WalGcCursorFloorState",
+        "LeafStarvationDriveOutcome",
     ];
 
     private static readonly Lazy<IReadOnlyList<Type>> MarkedEnums = new(() =>

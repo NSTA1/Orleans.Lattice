@@ -523,6 +523,14 @@ internal static class TypeAliases
     // rather than a bare OutOfMemoryException.
     internal const string LeafSnapshotUnaffordable = "ol.lsu";
 
+    // What a starvation drive achieved on one leaf, returned to the WAL GC
+    // blocked-leaf sweep (issue 2692 Half B). Crosses the IBPlusLeafGrain
+    // boundary. An enum rather than a bool because "drove and lifted the pin",
+    // "drove and lifted nothing", and "refused for memory pressure" call for
+    // three different responses, and the sweep it replaced could not tell any
+    // of them apart.
+    internal const string LeafStarvationDriveOutcome = "ol.sdo";
+
     // WAL saturation back-pressure surface (push + poll + await
     // shapes exposed to callers driving offered load into ILattice;
     // see IWalSaturationSignal / IWalSaturationObserver).

@@ -689,6 +689,89 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Guards against a second starvation drive stacking on this activation
+    /// (issue #2692 Half B).
+    /// </summary>
+    /// <remarks>
+    /// A plain field tested and set in adjacent statements with no await
+    /// between, exactly as <c>_snapshotCaptureInFlight</c> is: an Orleans
+    /// activation yields only at an await, so the check-and-set cannot be torn
+    /// by an interleaved turn even though the drive is
+    /// <see cref="AlwaysInterleaveAttribute"/>.
+    /// </remarks>
+    private bool _starvationDriveInFlight;
+
+    /// <inheritdoc />
+    public async Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointAsync()
+    {
+        if (string.IsNullOrEmpty(state.State.TreeId))
+        {
+            return LeafStarvationDriveOutcome.NotDriven;
+        }
+
+        if (_starvationDriveInFlight)
+        {
+            return LeafStarvationDriveOutcome.AlreadyDriving;
+        }
+
+        _starvationDriveInFlight = true;
+
+        SemaphoreSlim? replayPermit = null;
+        try
+        {
+            // Take a permit from the same per-silo gate every activation replay
+            // takes one from, and hold it for the same duration. The drive does
+            // precisely the work an activation replay does, so it adds no
+            // concurrency the gate was not already sized for, and it must not be
+            // exempt: a sweep that bypassed the gate would reintroduce the
+            // unbounded-replay pathology of issue #2862 through a side door.
+            replayPermit = await AcquireReplayPermitAsync(CancellationToken.None);
+
+            var advanced = await ReplayWalSinceCheckpointAsync(null, CancellationToken.None);
+
+            // Advancing the checkpoint is only HALF of what the pin needs. An
+            // unusable pin at Zero is a leaf whose min(checkpoint, coverage) has
+            // no real offset, so a leaf that is now checkpointed but still
+            // uncovered keeps blocking exactly as before. The existing coverage
+            // repair cannot help a starved leaf on its own, because its
+            // predicate is "checkpointed WITHOUT coverage" and a starved leaf
+            // fails the first half: it was never checkpointed at all. Replay
+            // makes that predicate reachable, so the repair belongs here, driven
+            // in the same call rather than deferred to an activation that is not
+            // going to happen.
+            var options = await GetOptionsAsync();
+            var partitionCount = Math.Max(1, options.WalPartitions);
+            await TryRepairZeroCoverageAsync(partitionCount, CancellationToken.None);
+
+            // Report the property the pin actually depends on, not a proxy for
+            // it. `advanced` alone is the same class of mistake this issue is
+            // about: it is an output correlated with a usable pin, and the
+            // correlation breaks in both directions - a checkpoint can advance
+            // and leave the partition uncovered, so the tree still cannot trim
+            // and the sweep would nevertheless have recorded a success. Both
+            // halves are asserted here, against the same predicate the WAL GC
+            // cursor floor evaluates.
+            return advanced && !HasCheckpointedPartitionWithoutCoverage(partitionCount)
+                ? LeafStarvationDriveOutcome.Lifted
+                : LeafStarvationDriveOutcome.NoAdvance;
+        }
+        catch (Exception ex) when (IsReadMemoryPressure(ex))
+        {
+            // A leaf that was refused for heap pressure was never given its
+            // chance, so it is not a structurally stuck leaf and must not be
+            // reported as one. Swallowed rather than rethrown because the sweep
+            // treats a fault as a leaf worth abandoning, and this one is worth
+            // retrying once pressure lifts.
+            return LeafStarvationDriveOutcome.MemoryRefused;
+        }
+        finally
+        {
+            replayPermit?.Release();
+            _starvationDriveInFlight = false;
+        }
+    }
+
+    /// <summary>
     /// Records one <see cref="LatticeMetrics.WalReplayPermitQueueWait"/> sample
     /// for this activation's wait on the replay concurrency gate (issue #2873).
     /// </summary>

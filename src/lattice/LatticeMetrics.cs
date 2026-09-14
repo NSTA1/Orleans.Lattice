@@ -3160,14 +3160,17 @@ public static class LatticeMetrics
     /// tagged by tree and outcome
     /// (<c>attempted</c>/<c>healed</c>/<c>abandoned</c>).
     /// <para>
-    /// All three outcomes share one instrument so that a zero on
-    /// <c>healed</c> is a measured zero rather than an unpublished series. That
+    /// All ten outcomes share one instrument so that a zero on
+    /// <c>healed</c> is a published series rather than an absent one. That
     /// distinction is load-bearing here: a sweep that reactivates a leaf and
     /// moves on cannot tell "the pin lifted" from "the capture failed again",
     /// and a deployment can sit indefinitely in the second state while the
     /// first is what the sweep was built to produce. Counting only successes
     /// would make those two indistinguishable from outside the process, which
     /// is the same ambiguity that hid the defect this sweep exists to clear.
+    /// Note the limit of what a zero buys: it separates a published arm from an
+    /// absent one, and does not establish that the arm's recording path is
+    /// reachable (issue #2942).
     /// </para>
     /// <para>
     /// <c>abandoned</c> is the alarm condition. It means a leaf stayed blocked
@@ -3226,11 +3229,24 @@ public static class LatticeMetrics
     /// three, so every zero it reports is an earned one.
     /// </para>
     /// <para>
+    /// The <b>drive verdict</b> arms (issue #2692 Half B) are held to both
+    /// conditions by construction rather than by promise, because they were
+    /// added one commit after the two above were established and there was no
+    /// reason to re-earn them the slow way. Arming is exhaustive because
+    /// priming walks <c>LeafStarvationDriveOutcome</c> itself and
+    /// <c>DriveOutcomeTag</c> throws on an unmapped member, gated by
+    /// <c>DriveOutcomeTag_arms_every_declared_starvation_drive_verdict</c>.
+    /// Reachability is established by
+    /// <c>ExecuteAsync_records_each_drive_verdict_on_its_own_arm_and_no_other</c>
+    /// as a 5x5 identity matrix on the same principle as the 4x4 above.
+    /// </para>
+    /// <para>
     /// The check is deliberately one-directional - every terminal outcome must
     /// have an arm, not every arm must be a terminal outcome - because
     /// <c>attempted</c>, <c>healed</c>, <c>abandoned</c> and <c>rearmed</c> are
-    /// lifecycle events rather than members of that enum. A symmetric check
-    /// would reject four legitimate arms. The accepted cost is that the four
+    /// lifecycle events rather than members of that enum, as are the five drive
+    /// verdicts, which belong to a different enum again. A symmetric check would
+    /// reject nine legitimate arms. The accepted cost is that the four
     /// lifecycle arms are unguarded in both directions: were <c>healed</c>
     /// dropped from the recording path, no fixture here would catch it. The
     /// general form that would cover them without re-introducing that arity
@@ -3239,7 +3255,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcBlockedLeafReactivations =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
-            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Two disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it. All eight are zero-primed per tree per pass. Read a zero on a terminal arm as measured: those arms are gated for exhaustive arming and each is proven to advance by its own positive control (issues #2938, #2942). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving, issue #2692) are what came of driving a starved leaf's replay forward. All thirteen are zero-primed per tree per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
@@ -3456,6 +3472,94 @@ public static class LatticeMetrics
         LeafReplayBarrierOutcomes.Add(0, treeTag, ReplayBarrierFaulted, tenantTag);
         LeafReplayBarrierOutcomes.Add(0, treeTag, ReplayBarrierCanceled, tenantTag);
     }
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a starvation drive that
+    /// advanced the leaf's persisted checkpoint <b>and</b> left no checkpointed
+    /// partition uncovered, so its durable materialiser pin resolves to a real
+    /// offset (issue #2692 Half B).
+    /// </summary>
+    /// <remarks>
+    /// The only affirmative arm in the drive set, and the one that answers the
+    /// question <c>healed</c> could not. <c>healed</c> is credited when a
+    /// consumer stops blocking, which is a tree-level reading taken a pass
+    /// later; this is credited per leaf at the moment of repair, so a sweep that
+    /// repairs leaves while the tree stays blocked for an unrelated reason is
+    /// distinguishable from one that repairs nothing. Both halves of the pin
+    /// predicate are asserted before this is emitted, because a checkpoint that
+    /// advances while its partition stays uncovered leaves the tree blocked
+    /// exactly as it was.
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationDroveLifted =
+        new(TagOutcome, "drove_lifted");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a starvation drive that
+    /// ran to completion and left the leaf's pin still unusable (issue #2692
+    /// Half B).
+    /// </summary>
+    /// <remarks>
+    /// Not a failure and not an error: the checkpoint advance is clamped behind
+    /// any unresolved prepared-saga mutation and is re-asserted monotonic before
+    /// it is written, so a drive can execute in full and lift nothing. This arm
+    /// is what makes the sweep readable at all. Its predecessor touched the leaf
+    /// with a read-only call, reported <c>Completed</c>, and left no series
+    /// anywhere separating "drove the leaf and lifted its pin" from "reached the
+    /// leaf and achieved nothing" - so the sweep was not failing loudly, it was
+    /// succeeding vacuously. Collapsing this into
+    /// <see cref="BlockedLeafReactivationDroveLifted"/> reproduces that defect.
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationDroveNoAdvance =
+        new(TagOutcome, "drove_no_advance");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a starvation drive
+    /// abandoned because the process was under heap pressure (issue #2692
+    /// Half B).
+    /// </summary>
+    /// <remarks>
+    /// Kept apart from <see cref="BlockedLeafReactivationDroveNoAdvance"/>
+    /// because the two call for opposite responses. A leaf that drove and lifted
+    /// nothing is blocked on something structural and more attempts will not
+    /// help; a leaf refused for heap pressure was never given its chance, and
+    /// retrying once pressure lifts is the correct remedy. Folded together they
+    /// would report a transient resource stall as a permanent structural block,
+    /// which is the reading that would stop anyone looking further.
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationDroveMemoryRefused =
+        new(TagOutcome, "drove_memory_refused");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a drive that reached a
+    /// leaf with no tree id bound, which does no replay and must not consume a
+    /// replay permit (issue #2692 Half B).
+    /// </summary>
+    /// <remarks>
+    /// Expected to stay at zero. It is published because the sweep selects
+    /// leaves reported as blocking consumers, and one that turns out to have no
+    /// tree id would mean the blocking report and the grain disagree - worth
+    /// seeing as a number rather than inferring from the absence of the other
+    /// arms.
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationDroveNotDriven =
+        new(TagOutcome, "drove_not_driven");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a drive declined because
+    /// one was already in flight on that activation (issue #2692 Half B).
+    /// </summary>
+    /// <remarks>
+    /// Separates sweep contention from leaf starvation. Without it a leaf whose
+    /// drives keep colliding is indistinguishable from one that keeps driving
+    /// and lifting nothing, and only the second is a reason to look at the leaf.
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationDroveAlreadyDriving =
+        new(TagOutcome, "drove_already_driving");
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a

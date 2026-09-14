@@ -138,6 +138,42 @@ public partial class BPlusLeafGrainTests
     };
 
     /// <summary>
+    /// Entry points that DRIVE the replay rather than reading a projection or
+    /// answering from state, each with the reason it fits neither of the two
+    /// classifications above. They must never be given
+    /// <c>await AwaitReplayBarrierAsync()</c>, which is why they cannot simply be
+    /// filed as data entry points.
+    /// </summary>
+    /// <remarks>
+    /// This third category was added by issue #2692 Half B, and it exists because
+    /// the binary taxonomy genuinely did not fit - not to work around a red test.
+    /// Filing the drive as data would have made
+    /// <see cref="Every_data_entry_point_waits_for_the_replay_barrier"/> pass, but
+    /// for a reason unrelated to that test's meaning: the drive does not complete
+    /// against a wedged leaf because it is performing a replay of its own, not
+    /// because it is queued behind one. It would also have left that test's
+    /// failure message standing as an instruction to add the barrier await, which
+    /// is precisely the edit that must never be made here - a drive that awaited
+    /// the barrier would wait for the replay it exists to supersede.
+    /// </remarks>
+    private static readonly IReadOnlyDictionary<string, string> BarrierReplayDriverEntryPoints =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["DriveStarvedCheckpointAsync"] =
+                "Issue #2692 Half B. Awaiting the barrier would make it a no-op for the population it "
+                + "exists to serve: a starved leaf is one whose activation replay SUCCEEDED and "
+                + "latched, so the barrier is already satisfied and awaiting it returns immediately "
+                + "having replayed nothing. On the complementary #2871 population - a leaf whose "
+                + "barrier is outstanding - it blocks, and that is correct rather than a defect: "
+                + "there is nothing for a catch-up drive to do on a leaf that never completed its "
+                + "first replay, and #2871's reactivation path owns that population. Its behaviour is "
+                + "asserted in BPlusLeafGrainTests.StarvedCheckpointDrive, which drives a leaf whose "
+                + "barrier is already satisfied and requires the persisted checkpoint offset to "
+                + "advance - an assertion that is only satisfiable by a call that does NOT merely "
+                + "await the barrier, since awaiting it there is a no-op.",
+        };
+
+    /// <summary>
     /// A leaf whose replay is wedged at a known point, with the handle that frees
     /// it. The replay is parked inside the WAL head read, which is past the
     /// snapshot rehydrate and past the permit acquisition, so the leaf is in the
@@ -284,15 +320,25 @@ public partial class BPlusLeafGrainTests
             "reflection found no members on IBPlusLeafGrain, so this guard would be vacuous");
 
         var unclassified = declared
-            .Where(n => !BarrierMetadataEntryPoints.ContainsKey(n) && !BarrierDataEntryPoints.Contains(n))
+            .Where(n => !BarrierMetadataEntryPoints.ContainsKey(n)
+                && !BarrierDataEntryPoints.Contains(n)
+                && !BarrierReplayDriverEntryPoints.ContainsKey(n))
             .ToList();
 
+        // Generalised from a metadata/data pair test to a count across all three
+        // categories. A pairwise check written against two sets silently stops
+        // covering the moment a third is added, which would exempt the newest and
+        // least-settled classification from the very guard that keeps the
+        // inventory coherent.
         var bothWays = declared
-            .Where(n => BarrierMetadataEntryPoints.ContainsKey(n) && BarrierDataEntryPoints.Contains(n))
+            .Where(n => (BarrierMetadataEntryPoints.ContainsKey(n) ? 1 : 0)
+                + (BarrierDataEntryPoints.Contains(n) ? 1 : 0)
+                + (BarrierReplayDriverEntryPoints.ContainsKey(n) ? 1 : 0) > 1)
             .ToList();
 
         var stale = BarrierMetadataEntryPoints.Keys
             .Concat(BarrierDataEntryPoints)
+            .Concat(BarrierReplayDriverEntryPoints.Keys)
             .Where(n => !declared.Contains(n, StringComparer.Ordinal))
             .ToList();
 
