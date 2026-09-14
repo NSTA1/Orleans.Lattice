@@ -775,7 +775,7 @@ shows which driver is the source of each.
 | `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass | GC trim removed at least one entry. |
 | `ship.duration` | Shipper grain via `IReplicationTransport.SendAsync` | Every send call (success or failure). |
 | `peer.fell_off_log` | Maintenance grain fall-off probe | Detector confirms peer's HWM precedes sender's oldest HLC. |
-| `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait_ms` / `apply.causal_violations_blocked` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
+| `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
 | `dead_letter.enqueued` (reason=schema) | Shipper grain (permanent encode failure) | Schema-shape encode throw. |
 | `dead_letter.removed` | (already wired) | Operator discards/replays. |
 

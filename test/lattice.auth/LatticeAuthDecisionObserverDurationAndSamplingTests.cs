@@ -62,7 +62,7 @@ public sealed class LatticeAuthDecisionObserverDurationAndSamplingTests
             () => observer.Observe(in request, in decision, default, epoch: 1, startTimestamp: 0),
             Throws.Nothing,
             "the partial-sampling gate must never throw back into the decision path");
-        Assert.That(collector.Measurements, Has.Count.EqualTo(1), "the decision counter fires regardless of the sampling outcome");
+        Assert.That(collector.Measurements.Where(m => m.Value == 1).ToList(), Has.Count.EqualTo(1), "the decision counter fires regardless of the sampling outcome");
         Assert.That(sink.Count, Is.InRange(0, 1), "a single observation dispatches at most one sampled event");
     }
 

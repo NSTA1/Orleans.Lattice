@@ -407,15 +407,14 @@
     },
     {
       "id": 102,
-      "title": "Per-key saga work - p95 per-key duration vs serial-gap wait (ms)",
-      "description": "saga.perkey.duration: per-key work inside the saga loop. saga.wait.serial_gap: time the saga sat idle between per-key operations. A growing serial_gap relative to perkey.duration indicates the saga is queue-bound rather than work-bound.",
+      "title": "Per-key saga work - p95 per-key duration (ms)",
+      "description": "saga.perkey.duration: per-key work inside the saga loop, derived as the batch's elapsed time divided by its entry count. Compare against saga.prepare.duration to see how much of the saga envelope the data writes account for.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
-        { "refId": "K", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_perkey_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 perkey.duration" },
-        { "refId": "W", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_wait_serial_gap_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 wait.serial_gap" }
+        { "refId": "K", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_perkey_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 perkey.duration" }
       ]
     },
     {

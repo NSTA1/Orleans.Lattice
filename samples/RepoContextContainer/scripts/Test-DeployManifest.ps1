@@ -617,9 +617,84 @@ if ($dockerUsable) {
 
 
 # ---------------------------------------------------------------------------
+_Section 'DECLARATION DENOMINATOR (the status is a verdict; the count is not)'
+# ---------------------------------------------------------------------------
 
-Write-Host ''
-Write-Host 'TOTALS' -ForegroundColor White
+# WHY THIS SECTION EXISTS. The #2983 mutation test neutered the acquisition to
+# return an empty hashtable, and the assertion on the STATUS passed: an empty
+# reading is still a successful reading, so it reports Available over nine
+# unresolved rows. Only the population assertion caught it. A manifest carrying
+# the verdict without the denominator reproduces that blind spot in the artefact
+# a run is scored from, where no test is watching at all.
+
+$pair = _AgreeingPair
+$recordTotal = @(@(Get-AttributionVariable) + @(Get-AttributionGrant)).Count
+
+# All keys resolved.
+$fullManifest = New-DeployManifest -Declared $pair.Declared -Effective $pair.Effective `
+	-Label 'denominator-full' -CgroupCpuQuota 6 `
+	-DeclarationStatus 'Available' -DeclarationReason 'test'
+$fullText = Format-DeployManifest -Manifest $fullManifest
+
+_Assert -Name 'an Available manifest RECORDS the resolved count' `
+	-Condition ($fullText -match "DECLARATION_RESOLVED=$recordTotal of $recordTotal") `
+	-Detail 'the count is missing, so a reader sees a verdict with no denominator'
+
+# The M1 shape, made visible. Resolution ran and returned nothing.
+$emptyManifest = New-DeployManifest -Declared @{} -Effective $pair.Effective `
+	-Label 'denominator-empty' -CgroupCpuQuota 6 `
+	-DeclarationStatus 'Available' -DeclarationReason 'test'
+$emptyText = Format-DeployManifest -Manifest $emptyManifest
+
+# THE DISCRIMINATING ARM. If the count were a constant, or derived from the
+# record list rather than from what actually resolved, it would read the same
+# here as above and detect nothing. The status is identical in both manifests -
+# only this number distinguishes them.
+_Assert -Name 'an EMPTY Available resolution reports 0, not the record count' `
+	-Condition ($emptyText -match "DECLARATION_RESOLVED=0 of $recordTotal") `
+	-Detail 'the count does not track what resolved, so it cannot catch an empty reading'
+
+_Assert -Name 'both manifests carry the SAME status, so only the count separates them' `
+	-Condition (($fullText -match 'DECLARATION_STATUS=Available') -and ($emptyText -match 'DECLARATION_STATUS=Available')) `
+	-Detail 'if the statuses differ this pair proves nothing about the count'
+
+# NotAttempted must NOT render `0 of N`. Zero-resolved-because-we-looked and
+# zero-resolved-because-we-did-not are different claims, and #2966 is the
+# precedent for refusing to spend one token on both.
+$notAttempted = New-DeployManifest -Declared @{} -Effective $pair.Effective `
+	-Label 'denominator-notattempted' -CgroupCpuQuota 6 `
+	-DeclarationStatus 'NotAttempted' -DeclarationReason 'test'
+$notAttemptedText = Format-DeployManifest -Manifest $notAttempted
+
+_Assert -Name 'a NotAttempted manifest does NOT render a count' `
+	-Condition ($notAttemptedText -notmatch 'DECLARATION_RESOLVED=\d') `
+	-Detail 'a never-attempted resolution is reporting a measured zero'
+
+_Assert -Name 'a NotAttempted manifest renders the not-resolved placeholder instead' `
+	-Condition ($notAttemptedText -match 'DECLARATION_RESOLVED=<not-resolved>') `
+	-Detail 'the placeholder discipline is not applied to the count line'
+
+# Round-trip. The count has to survive being written and read back, or it is
+# console decoration rather than something a later reader can cite.
+$fullRead = Read-DeployManifest -Text $fullText
+_Assert -Name 'the resolved count ROUND-TRIPS through a read' `
+	-Condition ($fullRead.DeclarationResolvedCount -eq $recordTotal -and $fullRead.DeclarationRecordCount -eq $recordTotal) `
+	-Detail "got $($fullRead.DeclarationResolvedCount) of $($fullRead.DeclarationRecordCount)"
+
+$emptyRead = Read-DeployManifest -Text $emptyText
+_Assert -Name 'a zero resolved count round-trips as 0, not as null' `
+	-Condition ($null -ne $emptyRead.DeclarationResolvedCount -and $emptyRead.DeclarationResolvedCount -eq 0) `
+	-Detail 'a measured zero is being lost, which is the finding this exists to preserve'
+
+# THE TRI-STATE, ONE LAYER UP. A legacy manifest carries no count line at all,
+# and must read back as "not measured" rather than as a measured zero - the same
+# distinction the declared column already makes, applied to the denominator.
+$legacyRead = Read-DeployManifest -Text $notAttemptedText
+_Assert -Name 'an unmeasured count reads back as $null, NOT as 0' `
+	-Condition ($null -eq $legacyRead.DeclarationResolvedCount) `
+	-Detail 'an unmeasured baseline would be scored as a measured-and-empty one'
+
+
 Write-Host ('  Total {0}   Passed {1}   Failed {2}   Skipped {3}' -f `
 	($script:_PassCount + $script:_FailCount), $script:_PassCount, $script:_FailCount, $script:_SkipCount)
 

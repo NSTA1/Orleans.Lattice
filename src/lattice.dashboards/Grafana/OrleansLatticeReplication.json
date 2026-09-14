@@ -248,7 +248,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_dependency_wait_ms_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_dependency_wait_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)",
           "legendFormat": "p95"
         }
       ]
