@@ -16,7 +16,9 @@ The add-on `orleans.lattice.tenancy` meter is charted by the bundled Per-Tenant 
 
 ### How to read the Tags column
 
-Each table's **Tags** column lists only the dimensions specific to that instrument. The derived `tenant` label is **not** repeated on every row: it is present on every instrument on every meter, and is described once in [The derived `tenant` label](#the-derived-tenant-label) below. A row that names no tag therefore still carries `tenant`.
+Each table's **Tags** column lists every dimension the instrument's series actually carries, **including the derived `tenant` label**. That label is present on every instrument on every meter, and what its values mean is described once in [The derived `tenant` label](#the-derived-tenant-label) below.
+
+It is spelled out on every row rather than factored out, because the column documents a **series identity**: a row that omits `tenant` describes an identity narrower than the real one, and a query built from that row matches nothing. A platform-scoped instrument is not an exception - it carries `tenant` with the reserved `_platform_` value, so the label is still part of its identity. `MetricDocTenantDimensionTests.EveryInstrumentRowDocumentsTheTenantDimension` enforces this, so a row that leaves `tenant` out fails the build.
 
 ### Per-operation vs per-record contract
 
@@ -32,7 +34,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 
 | Instrument | Type | Tags | Dashboard | Panel(s) |
 |------------|------|------|-----------|----------|
-| `orleans.lattice.build.info` | observable gauge (`{build}`) | `version`, `sha` | Overview | Deployed build (version / commit) |
+| `orleans.lattice.build.info` | observable gauge (`{build}`) | `version`, `sha`, `tenant` | Overview | Deployed build (version / commit) |
 | `orleans.lattice.shard.reads` | counter (`{op}`, **per-operation**) | `tree`, `shard`, `tenant` | Overview | Cluster throughput (ops/s) |
 | `orleans.lattice.shard.writes` | counter (`{op}`, **per-operation**) | `tree`, `shard`, `tenant` | Overview | Cluster throughput (ops/s), Per-tree write throughput (operations/s and records/s) |
 | `orleans.lattice.shard.records_written` | counter (`{record}`, **per-record**) | `tree`, `shard`, `tenant` | Overview | Per-tree write throughput (operations/s and records/s) |
