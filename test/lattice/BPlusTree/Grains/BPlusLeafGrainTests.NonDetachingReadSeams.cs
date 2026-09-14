@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -188,6 +189,142 @@ public partial class BPlusLeafGrainTests
                 "the split path takes its pivot from the retained frame");
             Assert.That(reason, Is.EqualTo(LeafBisectRefusalReason.None));
         });
+    }
+
+    [Test]
+    public async Task Reading_every_live_raw_entry_does_not_detach_the_hydration_frame()
+    {
+        // Issue #2834. This seam was the last convertible whole-cache reader on
+        // the leaf. It resisted conversion because its loop body needs each
+        // key's merge mode, and the only accessor that answered that
+        // (Cache.GetMergeMode) trims the resident footprint protecting just the
+        // one block it touched - so under a windowed walk it could evict a block
+        // of the window being enumerated. Cache.GetMergeModeWithoutHydrating
+        // reads the side-map without hydrating, touching or trimming, which is
+        // what makes the call-site conversion sound.
+        var grain = await WindowedLeafAsync();
+
+        var live = await grain.GetLiveRawEntriesAsync();
+
+        AssertFrameSurvived(grain,
+            "reading every live raw entry must not forfeit the cheap frame-only division");
+        Assert.That(live, Is.Not.Empty);
+    }
+
+    [Test]
+    public async Task An_unconverted_whole_cache_accessor_still_detaches_in_this_harness()
+    {
+        // POSITIVE CONTROL for every AssertFrameSurvived arm above.
+        //
+        // Those arms all assert an ABSENCE - that no seam released the frame -
+        // and an absence assertion is only evidence when the same harness is
+        // shown to observe the corresponding presence. Without this arm a
+        // harness that silently stopped attaching a frame at all, or that
+        // stopped recording seams, would turn every arm above green while
+        // proving nothing.
+        //
+        // EntriesForTest is deliberately the probe: it is the one surface this
+        // fixture is otherwise forbidden to touch (see the class remarks),
+        // precisely because it reaches Cache.UnderlyingRows and detaches before
+        // any assertion could run. Here that is the point.
+        var grain = await WindowedLeafAsync();
+
+        Assert.That(grain.CacheForTest.HasPendingHydration, Is.True,
+            "the control must start attached, or it cannot demonstrate a detach");
+
+        _ = grain.EntriesForTest;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.CacheForTest.LastDetachSeam,
+                Is.EqualTo(LeafSnapshotDetachSeam.UnderlyingRowsAccessor),
+                "the harness observes a whole-cache accessor releasing the frame, "
+                + "so the None assertions above can redden");
+            Assert.That(grain.CacheForTest.HasPendingHydration, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task The_converted_live_raw_seam_carries_the_same_merge_modes_as_a_fully_hydrated_leaf()
+    {
+        // The conversion changed WHICH merge-mode accessor the loop body calls,
+        // so the mode - not merely the key set - is the property under test.
+        // Buffering a window and looking modes up afterwards would pass a
+        // key-set comparison and fail this one, because EvictBlock drops an
+        // evicted row's entry from the merge-mode map and the later lookup
+        // answers null where a mode exists.
+        var rows = HydrationRows();
+        var windowed = await RehydratedLeafAsync(rows, residentBudgetBytes: NonDetachingBudgetBytes);
+        var full = await RehydratedLeafAsync(rows, partialHydrationEnabled: false);
+
+        static (string Key, LatticeMergeMode? Mode)[] Project(List<LwwEntry> entries)
+            => entries
+                .OrderBy(e => e.Key, StringComparer.Ordinal)
+                .Select(e => (e.Key, e.MergeMode))
+                .ToArray();
+
+        var windowedRows = Project(await windowed.GetLiveRawEntriesAsync());
+        var fullRows = Project(await full.GetLiveRawEntriesAsync());
+
+        // Non-vacuity: the corpus must actually carry a non-null mode, or the
+        // comparison below would hold trivially for any broken accessor that
+        // answered null everywhere.
+        Assert.That(fullRows.Count(r => r.Mode is not null), Is.GreaterThan(0),
+            "the corpus must carry merge modes, or this arm proves nothing");
+
+        Assert.That(windowedRows, Is.EqualTo(fullRows));
+    }
+
+    [Test]
+    public async Task A_budget_that_exceeds_the_leaf_leaves_the_windowed_walk_whole_leaf_resident()
+    {
+        // Issue #2836, stated as an executable fact rather than a warning.
+        //
+        // The seam conversions above bound PEAK residency only through
+        // TrimToBudget, and TrimToBudget evicts nothing while the resident
+        // footprint is under budget. Raise LeafHydrationResidentBytes above the
+        // leaf and every converted walk becomes windowed in shape and
+        // whole-leaf in cost - silently, because the answers are unchanged and
+        // the frame is still attached.
+        //
+        // Worse since issue #2843: the frame is now RETAINED across a completed
+        // ranged hydration rather than detached, so its bytes sit on top of a
+        // fully resident leaf. Retention is correct - it is what preserves the
+        // cheap division - but it means this regime costs strictly more than it
+        // did before, which is exactly why the configuration needs an advisory
+        // (see LatticeOptionsResolver.LeafHydrationBudgetUnderminesWindowing).
+        var rows = HydrationRows();
+        var grain = await RehydratedLeafAsync(rows, residentBudgetBytes: 8L * 1024 * 1024);
+
+        _ = await grain.GetLiveRawEntriesAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.CacheForTest.HydratedRowCount, Is.EqualTo(rows.Length),
+                "nothing was evictable, so the windowed walk left the whole leaf resident");
+            Assert.That(grain.CacheForTest.HasPendingHydration, Is.True,
+                "the frame is retained on top of a fully resident leaf (issue #2843)");
+            Assert.That(grain.CacheForTest.ResidentFootprintBytes,
+                Is.GreaterThan(grain.CacheForTest.StateBytes),
+                "the retained frame is additive, so this regime costs more than a detach would have");
+        });
+    }
+
+    [Test]
+    public async Task A_budget_below_the_leaf_keeps_the_windowed_walk_below_whole_leaf_residency()
+    {
+        // CONTROL for the arm directly above. That arm asserts a degradation;
+        // this one asserts the same harness observes the healthy case, so the
+        // degradation arm cannot be passing because the fixture is incapable of
+        // ever seeing eviction. If this arm ever matched the row count, the one
+        // above would be measuring nothing.
+        var rows = HydrationRows();
+        var grain = await RehydratedLeafAsync(rows, residentBudgetBytes: NonDetachingBudgetBytes);
+
+        _ = await grain.GetLiveRawEntriesAsync();
+
+        Assert.That(grain.CacheForTest.HydratedRowCount, Is.LessThan(rows.Length),
+            "under a pinned budget TrimToBudget sheds windows behind the walk");
     }
 
     [Test]
