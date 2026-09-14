@@ -226,7 +226,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private static readonly ObservableGauge<int> WithheldReplayPermitsGauge =
         LatticeMetrics.Meter.CreateObservableGauge(
-            "orleans.lattice.wal.replay.permits_withheld",
+            LatticeMetrics.WalReplayPermitsWithheldName,
             static () => new Measurement<int>(
                 Volatile.Read(ref _withheldReplayPermits),
                 LatticeTenantLabel.Platform),
