@@ -18,25 +18,52 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// container environment variable, two artefacts that never meet.
 /// </para>
 /// <para>
-/// Issue #2279 ruled that library code must not second-guess that override, so
-/// the first remedy shipped was the record alone. Issue #2816 overturned the
-/// sizing half of that ruling, and the fixture now asserts the sizing behaviour
+/// Issue #2279's disposition was that library code must not second-guess that
+/// override, so the first remedy shipped was the record alone. Issue #2816
+/// overturned the sizing half, and the fixture now asserts the sizing behaviour
 /// the earlier revision of this comment said would never exist. The reversal
 /// turns on <b>minimum, not replacement</b>: the default takes the lesser of the
 /// runtime figure and the enforced cgroup grant, so it can only ever lower the
 /// ceiling. An operator lowering <c>DOTNET_PROCESSOR_COUNT</c> is still obeyed
-/// exactly; what the gate refuses is to admit more concurrent CPU-bound replays
-/// than the kernel will schedule in parallel, which is a different question from
-/// how many threads the process should run. The tests below pin both halves: the
+/// exactly; what the gate refuses is to admit more concurrent replays than the
+/// kernel will schedule in parallel, which is a different question from how many
+/// threads the process should run. The tests below pin both halves: the
 /// arithmetic in
 /// <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain.ResolveDefaultReplayCeiling"/>,
 /// and the record's load-bearing property that it can never itself break an
 /// activation.
 /// </para>
+/// <para>
+/// <b>Two claims this fixture used to repeat have since been shown false, and
+/// the tests below now pin their corrections</b> (issue #2784). The replay is
+/// not "CPU bound" - issues #2781, #2804 and #2862 established that a
+/// whole-window replay exhausts the managed heap first - and issue #2279's text
+/// contains no ruling about reading the CPU quota at this site, a misattribution
+/// that propagated from a code comment through three issues before anyone read
+/// #2279 itself. The record therefore also reports the resolved heap ceiling,
+/// so the dimension the gate is <em>not</em> denominated in is legible beside
+/// the ones it is.
+/// </para>
 /// </summary>
 [TestFixture]
 public sealed class BPlusLeafGrainReplayGateObservabilityTests
 {
+    /// <summary>
+    /// A fixed, deterministic stand-in for the resolved heap ceiling, so the
+    /// record's content assertions never depend on the host's real heap. The
+    /// figure is run 10's measured ceiling - 9 GiB, which is 75% of that run's
+    /// 12 GiB cgroup grant - so the rendered record matches the one an operator
+    /// reads.
+    /// </summary>
+    private static readonly Func<long> ProbeHeapCeiling = static () => 9_663_676_416L;
+
+    /// <summary>
+    /// A ceiling the probe could not resolve. Renders as an explicit "unknown"
+    /// and contributes no digits, which matters for any assertion that pins a
+    /// distinctive numeral elsewhere in the record.
+    /// </summary>
+    private static readonly Func<long> UnknownHeapCeiling = static () => 0L;
+
     [Test]
     public void Default_ceiling_is_capped_by_the_enforced_container_cpu_grant()
     {
@@ -152,7 +179,7 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
         var sink = new CapturingLogger();
 
         BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
-            max: 6, configured: 6, containerCpuGrant: 6, () => sink);
+            max: 6, configured: 6, containerCpuGrant: 6, ProbeHeapCeiling, () => sink);
 
         Assert.That(sink.Entries, Has.Count.EqualTo(1),
             "sizing the gate must leave exactly one record; this line is the only in-process evidence "
@@ -191,8 +218,8 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
         // than only the resolved one is what lets a reader tell "nobody pinned
         // this" apart from "somebody pinned it to exactly the processor count",
         // which are different situations with different remedies.
-        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 16, configured: 0, containerCpuGrant: 16, () => unset);
-        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 16, configured: 16, containerCpuGrant: 16, () => pinned);
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 16, configured: 0, containerCpuGrant: 16, ProbeHeapCeiling, () => unset);
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(max: 16, configured: 16, containerCpuGrant: 16, ProbeHeapCeiling, () => pinned);
 
         Assert.That(unset.Entries[0], Is.Not.EqualTo(pinned.Entries[0]),
             "an unset option and one pinned to the same resolved ceiling must not render identically, "
@@ -212,7 +239,7 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
         // the assertion cannot be satisfied by the ceiling or the processor count
         // happening to render the same digits.
         BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
-            max: 6, configured: 0, containerCpuGrant: 37, () => sink);
+            max: 6, configured: 0, containerCpuGrant: 37, UnknownHeapCeiling, () => sink);
 
         Assert.That(sink.Entries[0], Does.Contain("37"),
             "the quota-derived grant must be written down, because the whole failure mode is the "
@@ -226,9 +253,9 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
         var unreadable = new CapturingLogger();
 
         BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
-            max: 6, configured: 0, containerCpuGrant: 6, () => readable);
+            max: 6, configured: 0, containerCpuGrant: 6, ProbeHeapCeiling, () => readable);
         BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
-            max: 6, configured: 0, containerCpuGrant: null, () => unreadable);
+            max: 6, configured: 0, containerCpuGrant: null, ProbeHeapCeiling, () => unreadable);
 
         Assert.Multiple(() =>
         {
@@ -246,7 +273,7 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
         var sink = new CapturingLogger { Enabled = false };
 
         BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
-            max: 6, configured: 6, containerCpuGrant: 6, () => sink);
+            max: 6, configured: 6, containerCpuGrant: 6, ProbeHeapCeiling, () => sink);
 
         Assert.That(sink.Entries, Is.Empty,
             "the record must respect the level filter rather than formatting unconditionally");
@@ -266,6 +293,7 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
                 max: 6,
                 configured: 6,
                 containerCpuGrant: 6,
+                ProbeHeapCeiling,
                 () => throw new InvalidOperationException("Injected logging-sink fault.")),
             "a faulting logger resolution must not escape the gate-sizing record; the caller is on the "
             + "leaf activation path, where an escaping exception is an activation failure");
@@ -281,7 +309,7 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
 
         Assert.DoesNotThrow(
             () => BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
-                max: 6, configured: 6, containerCpuGrant: 6, () => sink),
+                max: 6, configured: 6, containerCpuGrant: 6, ProbeHeapCeiling, () => sink),
             "a sink that throws while writing must not escape either");
     }
 
@@ -292,8 +320,132 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
         // is the ordinary shape in a bare unit-test host rather than an error.
         Assert.DoesNotThrow(
             () => BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
-                max: 6, configured: 6, containerCpuGrant: 6, () => null),
+                max: 6, configured: 6, containerCpuGrant: 6, ProbeHeapCeiling, () => null),
             "a null logger must be treated as 'nowhere to record it', not as a fault");
+    }
+
+    [Test]
+    public void Resolved_gate_record_reports_the_resolved_heap_ceiling()
+    {
+        // Deliverable 2 of issue #2784. The record reported three CPU-derived
+        // figures and no memory figure at all, which made the dimension mismatch
+        // unreadable at the exact place the sizing decision is written down: an
+        // operator could see the ceiling, the processor count and the cgroup CPU
+        // grant agree perfectly while the heap the replays actually exhaust went
+        // unmentioned. Acceptance run 10 died of a managed OOM twice with all
+        // three CPU figures reading 6.
+        var sink = new CapturingLogger();
+
+        // 424242424 is deliberately a value that appears nowhere else in the
+        // record, so the assertion cannot be satisfied by the ceiling, the
+        // processor count or the grant happening to render the same digits.
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+            max: 6, configured: 0, containerCpuGrant: 6, static () => 424_242_424L, () => sink);
+
+        Assert.That(sink.Entries[0], Does.Contain("424242424"),
+            "the resolved heap ceiling must be written down beside the CPU figures; it is the quantity "
+            + "the adaptive layer measures occupancy against, and the one a whole-window replay actually "
+            + "exhausts");
+    }
+
+    [Test]
+    public void Resolved_gate_record_distinguishes_an_unknown_heap_ceiling_from_a_resolved_one()
+    {
+        // Pre-registered as a finding rather than a null result: a ceiling that
+        // renders "unknown" on the acceptance rig would contradict run 10's
+        // measured 9 GiB and would mean the figure the gate ought to be
+        // denominated in is unreadable at the one moment it is reported. That is
+        // worth knowing, so it must not render as an empty slot a reader would
+        // mistake for a zero or a formatting fault.
+        var resolved = new CapturingLogger();
+        var unknown = new CapturingLogger();
+
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+            max: 6, configured: 0, containerCpuGrant: 6, ProbeHeapCeiling, () => resolved);
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+            max: 6, configured: 0, containerCpuGrant: 6, UnknownHeapCeiling, () => unknown);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(unknown.Entries[0], Does.Contain("unknown"),
+                "an unresolvable heap ceiling must say so explicitly");
+            Assert.That(resolved.Entries[0], Does.Not.Contain("unknown"),
+                "a ceiling that was read must not render as though it had not been");
+            Assert.That(resolved.Entries[0], Does.Contain("9663676416"),
+                "and the resolved figure must be the one the probe returned, not a rounded or "
+                + "unit-converted restatement a reader would have to reverse");
+        });
+    }
+
+    [Test]
+    public void Resolved_gate_record_does_not_claim_the_replay_is_cpu_bound()
+    {
+        // Deliverable 1 of issue #2784, and the reason this clause exists rather
+        // than the correction being left to review: the record asserted flatly
+        // that a whole-window WAL replay "is CPU bound". Issues #2781, #2804 and
+        // #2862 established the opposite - the binding resource is the managed
+        // heap, with every observed fault bottoming out in
+        // LatticeGrainStorageSerializer.Deserialize -> Reader.ReadBytes. A false
+        // claim in the one record an operator reads at startup is worse than
+        // silence, because it actively directs the reader at the wrong resource.
+        var sink = new CapturingLogger();
+
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+            max: 6, configured: 0, containerCpuGrant: 6, ProbeHeapCeiling, () => sink);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sink.Entries[0], Does.Not.Contain("CPU bound"),
+                "the record must not assert the replay is CPU bound; three issues established that it "
+                + "exhausts the heap first");
+            Assert.That(sink.Entries[0], Does.Contain("#2781"),
+                "and it must cite the issues that established the binding resource, so a reader who "
+                + "doubts the heap figure's relevance can follow the evidence rather than take it on "
+                + "trust");
+        });
+    }
+
+    [Test]
+    public void Resolved_gate_record_swallows_a_heap_probe_fault()
+    {
+        // The heap ceiling arrives as an accessor for the same reason the logger
+        // does, and it inherits the same obligation. Issue #2256 established on
+        // this exact path that a throw here once leaked a replay permit
+        // permanently. A heap probe reads GCMemoryInfo and the cgroup
+        // filesystem, both of which are environmental, so this arm is not
+        // hypothetical padding - it is the same class of fault as the logging
+        // one and must be contained in the same place.
+        Assert.DoesNotThrow(
+            () => BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+                max: 6,
+                configured: 6,
+                containerCpuGrant: 6,
+                static () => throw new InvalidOperationException("Injected heap-probe fault."),
+                () => new CapturingLogger()),
+            "a faulting heap probe must not escape the gate-sizing record; the caller is on the leaf "
+            + "activation path, where an escaping exception is an activation failure");
+    }
+
+    [Test]
+    public void Resolved_gate_record_does_not_read_the_heap_when_information_is_disabled()
+    {
+        // The accessor exists so the probe is paid for only when the record is
+        // actually written. Asserting the count rather than the record's absence
+        // is what makes this clause perturbable: hoisting the read above the
+        // level check would leave every other test in this fixture green.
+        var probes = 0;
+        var sink = new CapturingLogger { Enabled = false };
+
+        BPlusLeafGrain.LogResolvedReplayConcurrencyGate(
+            max: 6,
+            configured: 6,
+            containerCpuGrant: 6,
+            () => { probes++; return 1L; },
+            () => sink);
+
+        Assert.That(probes, Is.Zero,
+            "a process with Information logging disabled must not pay for a heap probe it will not "
+            + "report");
     }
 
     /// <summary>
