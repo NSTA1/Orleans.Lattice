@@ -723,6 +723,15 @@ internal sealed class LatticeWalGcScheduler(
     /// </summary>
     private async Task<TimeSpan> RunPassAsync(TimeSpan minInterval, TimeSpan interval, CancellationToken stoppingToken)
     {
+        // Reachability layer (issue #3075). Taken as the very first statement,
+        // above every exit below, so that every terminating path out of this
+        // method is accounted for against it. Advancing rather than priming is
+        // load-bearing: Add(0) is idempotent on a counter, so a primed series
+        // establishes only that the region was reached at least once and can
+        // never say it was reached on this pass - which is the question a flat
+        // wal.gc.interval or wal.gc.passes actually raises.
+        RecordPassReach(LatticeMetrics.ReachPassEntered);
+
         IReadOnlyList<string> treeIds;
         try
         {
@@ -731,6 +740,7 @@ internal sealed class LatticeWalGcScheduler(
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
+            RecordPassReach(LatticeMetrics.ReachRegistryCancelled);
             return minInterval;
         }
         catch (Exception ex)
@@ -741,6 +751,7 @@ internal sealed class LatticeWalGcScheduler(
             logger.LogDebug(
                 ex,
                 "WAL GC scheduler failed to enumerate trees; will retry on the next tick.");
+            RecordPassReach(LatticeMetrics.ReachRegistryFailed);
             return Quiet(minInterval, interval);
         }
 
@@ -757,12 +768,24 @@ internal sealed class LatticeWalGcScheduler(
             var treeId = treeIds[i];
             if (stoppingToken.IsCancellationRequested)
             {
+                RecordPassReach(LatticeMetrics.ReachLoopCancelled);
                 return minInterval;
             }
             if (string.IsNullOrEmpty(treeId))
             {
                 continue;
             }
+
+            // Recorded for every enumerated tree, due or not. Paired with
+            // tree_collected below: the difference between the two is the set
+            // skipped by the not-yet-due continue further down, which is the
+            // healthy majority on any given pass rather than a fault.
+            var seenTreeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+            LatticeMetrics.WalGcReach.Add(
+                1,
+                seenTreeTag,
+                LatticeMetrics.ReachTreeSeen,
+                LatticeTenantLabel.ForTree(treeId));
 
             if (!_cadence.TryGetValue(treeId, out var cadence))
             {
@@ -813,6 +836,7 @@ internal sealed class LatticeWalGcScheduler(
             // No collectable tree is registered yet. Relax on the same schedule
             // a quiet tree would, so an empty silo costs nothing while a silo
             // whose first tree is about to register still picks it up promptly.
+            RecordPassReach(LatticeMetrics.ReachNoDueTree);
             return Quiet(minInterval, interval);
         }
 
@@ -820,9 +844,11 @@ internal sealed class LatticeWalGcScheduler(
         var wait = earliestDueTicks - _time.GetUtcNow().UtcTicks;
         if (wait <= 0)
         {
+            RecordPassReach(LatticeMetrics.ReachPassCompletedImmediate);
             return TimeSpan.Zero;
         }
 
+        RecordPassReach(LatticeMetrics.ReachPassCompletedScheduled);
         return TimeSpan.FromTicks(wait > interval.Ticks ? interval.Ticks : wait);
     }
 
@@ -841,6 +867,15 @@ internal sealed class LatticeWalGcScheduler(
     {
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        // Reachability layer (issue #3075), above every exit of this method and
+        // therefore above both wal.gc.passes and the wal.gc.interval record at
+        // the tail. This is the arm that licenses reading a flat interval or
+        // passes series as measured rather than as never-executed: without it,
+        // a pass that returned early here and a pass that ran and found nothing
+        // are the same absence. It must stay above PrimeRetentionSeries, whose
+        // own latch makes it silent from the second collection onward.
+        LatticeMetrics.WalGcReach.Add(1, treeTag, LatticeMetrics.ReachTreeCollected, tenantTag);
 
         // Zero-prime the WAL-retention series a reader has to interpret an
         // absence on. A Counter publishes no series until its first Add, so a
@@ -1241,6 +1276,34 @@ internal sealed class LatticeWalGcScheduler(
         in KeyValuePair<string, object?> treeTag,
         in KeyValuePair<string, object?> tenantTag)
         => LatticeMetrics.WalGcPasses.Add(delta, treeTag, outcome, tenantTag);
+
+    /// <summary>
+    /// Records one pass-level arm of the WAL GC reachability layer (issue
+    /// #3075) under the reserved <see cref="LatticeMetrics.TreeNone"/> tree.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The sentinel is structurally required, not a convenience. Two of the
+    /// exits this layer covers are the <c>catch</c> arms of the tree-registry
+    /// enumeration itself: at those points obtaining the tree list is the
+    /// operation that failed, so there is no tree id to label the measurement
+    /// with and there never can be. The tenant is the reserved platform value
+    /// for the same reason - a pass belongs to the silo, not to any tenant.
+    /// </para>
+    /// <para>
+    /// Every arm advances by one. A zero-priming layer cannot answer the
+    /// question this one exists for: <c>Add(0)</c> is idempotent on a counter's
+    /// exported value, so primed-once and primed-continuously are
+    /// byte-identical, and a primed series therefore proves only that the
+    /// region was reached at least once - never that it was reached now.
+    /// </para>
+    /// </remarks>
+    private static void RecordPassReach(in KeyValuePair<string, object?> stage)
+        => LatticeMetrics.WalGcReach.Add(
+            1,
+            LatticeMetrics.TreeNoneTag,
+            stage,
+            LatticeTenantLabel.Platform);
 
     /// <summary>
     /// Maps the cursor-floor state of a pass that trimmed nothing onto the
