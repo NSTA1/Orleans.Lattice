@@ -695,6 +695,187 @@ _Assert -Name 'an unmeasured count reads back as $null, NOT as 0' `
 	-Detail 'an unmeasured baseline would be scored as a measured-and-empty one'
 
 
+# ---------------------------------------------------------------------------
+_Section 'MANIFEST VINTAGE (#2992 - a cross-vintage read reported as drift)'
+
+function _Delta {
+	param([string] $Name, [string] $Kind, [string] $Was = '', [string] $Now = '')
+	return [pscustomobject]@{
+		Name = $Name; Kind = $Kind; Was = $Was; Now = $Now; Attribution = 'test'
+	}
+}
+
+_Assert -Name 'two equal vintages are Same' `
+	-Condition ((Get-VintageRelation -BaselineVintage 1 -CurrentVintage 1) -eq 'Same')
+
+_Assert -Name 'a lower baseline vintage is BaselineOlder' `
+	-Condition ((Get-VintageRelation -BaselineVintage 1 -CurrentVintage 2) -eq 'BaselineOlder')
+
+_Assert -Name 'a lower current vintage is CurrentOlder' `
+	-Condition ((Get-VintageRelation -BaselineVintage 2 -CurrentVintage 1) -eq 'CurrentOlder')
+
+# The case every pre-#2992 baseline is in. Unknown has to sort OLDER than any
+# known vintage; sorting it as newest, or as equal, would make the legacy
+# baselines this exists for the one population it cannot reason about.
+_Assert -Name 'an UNKNOWN baseline vintage sorts as OLDER, not as equal' `
+	-Condition ((Get-VintageRelation -BaselineVintage $null -CurrentVintage 1) -eq 'BaselineOlder')
+
+_Assert -Name 'an UNKNOWN current vintage sorts as OLDER too' `
+	-Condition ((Get-VintageRelation -BaselineVintage 1 -CurrentVintage $null) -eq 'CurrentOlder')
+
+# Two unknowns cannot be ordered, and guessing an order would let a legacy pair
+# excuse a delta that the pre-#2992 behaviour reported. Indeterminate explains
+# nothing, so legacy-versus-legacy behaves EXACTLY as it did before this change.
+_Assert -Name 'two unknown vintages are Indeterminate, not Same' `
+	-Condition ((Get-VintageRelation -BaselineVintage $null -CurrentVintage $null) -eq 'Indeterminate')
+
+# THE HEALTHY CASE, AND IT IS GRADED FIRST. Every baseline captured before
+# #2992 is cross-vintage against every reading taken after it. If that alone
+# refused, this guard would refuse its own installation on every rig, and a
+# guard that cries wolf gets switched off rather than fixed.
+$healthy = Get-ComparabilityVerdict -Deltas @() -Relation 'BaselineOlder'
+_Assert -Name 'HEALTHY CASE: cross-vintage with NO explicable delta stays COMPARABLE' `
+	-Condition ($healthy.Comparable -and $healthy.ExplainedCount -eq 0) `
+	-Detail 'this would refuse every legacy baseline on every rig'
+
+$healthyDrift = Get-ComparabilityVerdict `
+	-Deltas @((_Delta -Name 'A' -Kind 'Changed' -Was '1' -Now '2')) -Relation 'BaselineOlder'
+_Assert -Name 'HEALTHY CASE: real drift across vintages is still COMPARABLE and still reported' `
+	-Condition ($healthyDrift.Comparable -and $healthyDrift.ExplainedCount -eq 0) `
+	-Detail 'a vintage difference must not suppress a value both instruments could read'
+
+# The #2992 shape itself: the newer instrument populates cells the older one
+# left empty, and each reads as a pinned variable.
+$pinned = Get-ComparabilityVerdict `
+	-Deltas @(
+		(_Delta -Name 'EMBED_INTRA_THREADS' -Kind 'Pinned' -Now '4'),
+		(_Delta -Name 'embedder.cpus' -Kind 'Pinned' -Now '2')
+	) `
+	-Relation 'BaselineOlder'
+_Assert -Name 'a newer instrument populating empty cells is NOT comparable' `
+	-Condition (-not $pinned.Comparable -and $pinned.ExplainedCount -eq 2)
+
+_Assert -Name 'the incomparability NAMES the keys rather than only counting them' `
+	-Condition ($pinned.ExplainedNames -contains 'EMBED_INTRA_THREADS' -and $pinned.Summary -match 'embedder\.cpus')
+
+# The mirror, which is not hypothetical: a deploy checkout that has not been
+# updated runs the OLDER script and loses cells the baseline recorded.
+$unpinned = Get-ComparabilityVerdict `
+	-Deltas @((_Delta -Name 'EMBED_INTRA_THREADS' -Kind 'Unpinned' -Was '4')) `
+	-Relation 'CurrentOlder'
+_Assert -Name 'a STALE reading losing cells the baseline had is NOT comparable either' `
+	-Condition (-not $unpinned.Comparable -and $unpinned.ExplainedCount -eq 1)
+
+# Direction matters. A newer reader cannot explain a cell going EMPTY, so the
+# excusal is not symmetric and must not be applied by kind alone.
+_Assert -Name 'BaselineOlder does NOT excuse an Unpinned delta (wrong direction)' `
+	-Condition ((Get-ComparabilityVerdict -Deltas @((_Delta -Name 'A' -Kind 'Unpinned' -Was '1')) -Relation 'BaselineOlder').Comparable)
+
+_Assert -Name 'CurrentOlder does NOT excuse a Pinned delta (wrong direction)' `
+	-Condition ((Get-ComparabilityVerdict -Deltas @((_Delta -Name 'A' -Kind 'Pinned' -Now '1')) -Relation 'CurrentOlder').Comparable)
+
+# 'Changed' is the one kind no vintage difference can ever explain. Two
+# instruments disagreeing about a value they can BOTH read is drift whatever
+# wrote them, and excusing it would rebuild the silent-pass defect this fixes.
+foreach ($rel in 'BaselineOlder', 'CurrentOlder', 'Indeterminate', 'Same') {
+	_Assert -Name "a Changed delta is NEVER explained by vintage ($rel)" `
+		-Condition ((Get-ComparabilityVerdict -Deltas @((_Delta -Name 'A' -Kind 'Changed' -Was '1' -Now '2')) -Relation $rel).Comparable)
+}
+
+_Assert -Name 'Indeterminate explains nothing, so legacy-vs-legacy is unchanged' `
+	-Condition ((Get-ComparabilityVerdict -Deltas @((_Delta -Name 'A' -Kind 'Pinned' -Now '1')) -Relation 'Indeterminate').Comparable)
+
+# --- the field itself, through the real render/read path ---
+
+$vintagePair = _AgreeingPair
+$vintageManifest = New-DeployManifest `
+	-Label 'vintage' -Declared $vintagePair.Declared -Effective $vintagePair.Effective `
+	-DeclarationStatus 'Available' -DeclarationReason 'test' -CgroupCpuQuota '4'
+$vintageText = Format-DeployManifest -Manifest $vintageManifest
+
+_Assert -Name 'a freshly built manifest CARRIES a vintage' `
+	-Condition ($null -ne $vintageManifest.ManifestVintage)
+
+_Assert -Name 'the rendered manifest records MANIFEST_VINTAGE' `
+	-Condition ($vintageText -match '(?m)^MANIFEST_VINTAGE=\d+$')
+
+$vintageRead = Read-DeployManifest -Text $vintageText
+_Assert -Name 'the vintage ROUND-TRIPS through a read' `
+	-Condition ($vintageRead.ManifestVintage -eq $vintageManifest.ManifestVintage) `
+	-Detail "got $($vintageRead.ManifestVintage)"
+
+# The tri-state again, one field further on. A legacy manifest carries no line,
+# and must read back as UNKNOWN and never as vintage 0 - a numeric default would
+# make every legacy baseline claim to be the oldest KNOWN instrument, which is a
+# comparability claim it is not entitled to make.
+$legacyVintage = Read-DeployManifest -Text ($vintageText -replace '(?m)^MANIFEST_VINTAGE=\d+\r?\n', '')
+_Assert -Name 'an ABSENT vintage line reads back as $null, NOT as 0' `
+	-Condition ($null -eq $legacyVintage.ManifestVintage) `
+	-Detail "got '$($legacyVintage.ManifestVintage)'"
+
+_Assert -Name 'a MALFORMED vintage value reads back as unknown, not as a guess' `
+	-Condition ($null -eq (Read-DeployManifest -Text ($vintageText -replace '(?m)^MANIFEST_VINTAGE=\d+$', 'MANIFEST_VINTAGE=v2-beta')).ManifestVintage)
+
+# AMENDMENT 25 applied to the new field: re-rendering a legacy manifest must not
+# STAMP it with the current vintage. Promoting an old file to a capability it
+# never had is the same hazard the DECLARATION_STATUS absence protects against.
+_Assert -Name 'RE-RENDERING a legacy manifest does not PROMOTE it to the current vintage' `
+	-Condition ((Format-DeployManifest -Manifest $legacyVintage) -notmatch '(?m)^MANIFEST_VINTAGE=') `
+	-Detail 'a legacy baseline would silently claim comparability it does not have'
+
+# --- end to end, through the real Compare path ---
+
+# The exact #2992 reading: a baseline whose instrument left three cells empty,
+# against a current reading that populates them. Before this change the pair
+# produced three Pinned deltas and a NotAttributable verdict naming
+# configuration drift on a rig where nothing had moved. The three keys are the
+# ones that were ACTUALLY thin in run-13-postfix.manifest, not a stand-in, so
+# this reproduces the reading rather than approximating its shape.
+$thinKeys = @('EMBED_INTRA_THREADS', 'embedder.cpus', 'embedder.mem_limit')
+$thinPair = _AgreeingPair
+$thinDeclared = @{}
+$thinEffective = @{}
+foreach ($k in $thinPair.Effective.Keys) { $thinDeclared[$k] = 'same'; $thinEffective[$k] = 'same' }
+foreach ($k in $thinKeys) { $thinEffective[$k] = '' }
+
+$thinManifest = New-DeployManifest `
+	-Label 'thin' -Declared $thinDeclared -Effective $thinEffective `
+	-DeclarationStatus 'Available' -DeclarationReason 'test' -CgroupCpuQuota '4'
+$thinBaseline = Read-DeployManifest -Text (
+	(Format-DeployManifest -Manifest $thinManifest) -replace '(?m)^MANIFEST_VINTAGE=\d+\r?\n', '')
+
+# NOT wrapped in @(). Compare-DeployManifest returns `,$deltas`, so an @()
+# around it yields a ONE-element array whose single element is the real array -
+# and Get-ComparabilityVerdict still reports Comparable=$false off it, because
+# $_.Kind member-enumerates to three values and -eq 'Pinned' matches. A
+# verdict-only assertion passes on that; only the COUNT assertion below catches
+# it. Assigned bare, exactly as Assert-DeployManifest.ps1 does, so this test
+# exercises the shape production actually passes.
+$e2eDeltas = Compare-DeployManifest -Baseline $thinBaseline -Current $vintageManifest
+$e2eRelation = Get-VintageRelation -BaselineVintage $thinBaseline.ManifestVintage -CurrentVintage $vintageManifest.ManifestVintage
+$e2eComparability = Get-ComparabilityVerdict -Deltas $e2eDeltas -Relation $e2eRelation
+
+_Assert -Name 'END TO END: the real compare path sees the legacy baseline as OLDER' `
+	-Condition ($e2eRelation -eq 'BaselineOlder') -Detail "got $e2eRelation"
+
+_Assert -Name 'END TO END: a thin legacy baseline is reported INCOMPARABLE, not as drift' `
+	-Condition (-not $e2eComparability.Comparable -and $e2eComparability.ExplainedCount -gt 0) `
+	-Detail "explained $($e2eComparability.ExplainedCount) of $($e2eDeltas.Count) delta(s)"
+
+# The denominator, not the verdict: prove the deltas this excused were REAL
+# ones the old path would have counted, rather than an empty population that
+# any comparability claim would satisfy. Asserting the COUNT as well as the
+# verdict, because a verdict assertion cannot detect an empty population - the
+# M1 lesson, which has already fired once inside these very tests.
+_Assert -Name 'END TO END: the excused population is exactly the three thin keys' `
+	-Condition ($e2eComparability.ExplainedCount -eq 3 -and @($e2eDeltas).Count -eq 3) `
+	-Detail "explained $($e2eComparability.ExplainedCount) of $(@($e2eDeltas).Count)"
+
+_Assert -Name 'END TO END: the excused deltas are ones the OLD path called unattributable' `
+	-Condition ((Get-AttributionVerdict -Deltas $e2eDeltas).Attributable -eq $false) `
+	-Detail 'an empty delta set would make the incomparability claim vacuous'
+
+
 Write-Host ('  Total {0}   Passed {1}   Failed {2}   Skipped {3}' -f `
 	($script:_PassCount + $script:_FailCount), $script:_PassCount, $script:_FailCount, $script:_SkipCount)
 
