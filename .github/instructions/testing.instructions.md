@@ -316,6 +316,37 @@ check at the moment of the rename. So place the fixture in
 namespace carry the selection. Matching on a coincidence in the type name is a
 green you did not earn, and it expires without telling you.
 
+### A hosted service has NOT started when `StartAsync` returns
+
+`BackgroundService.StartAsync` stores the task that `ExecuteAsync` returns and
+then returns. **It does not await entry into the loop body.** So a fixture that
+asserts on a hosted service's state immediately after `await service.StartAsync(ct)`
+is asserting on a service that has not started, and the assertion passes or fails
+on timing rather than on behaviour. That is the worst failure shape available:
+green for the wrong reason today, flaky later, and the flake arrives far from the
+fixture that caused it.
+
+Measured on `LatticeWalGcScheduler` with three throwaway probes, same build and
+same scheduler, with nothing varying but whether the loop had been entered:
+
+| observation point | terminations counter | phase census |
+|---|---|---|
+| immediately after `await StartAsync` | 0 | `unstarted` |
+| after a 500 ms settle | 4 | `disabled` |
+
+**Remedy: synchronise on the service's `ExecuteTask` before asserting**, or use a
+fixture helper that does. The WAL GC cadence harness in `test/lattice/` exposes
+`StartArmedAsync` for exactly this; prefer it over a bare `StartAsync`.
+
+**The boundary is part of the finding and is not severable from it: this is about
+ENTERING `ExecuteAsync`, and it says nothing about how far into the loop body
+execution has reached.** A fixture that needs the service to have reached a
+particular phase must still synchronise on that phase. Reading this as "wait 500
+ms and the service is ready" is the same defect one step along, and it presents
+as a flake rather than as a failure.
+
+The scope is every hosted service in the repository, not the WAL GC scheduler
+alone.
 ## File Organization
 
 - One test class per file, mirroring the source layout:
