@@ -430,6 +430,23 @@ public sealed class TuningEnvSentinelHygieneTests
             $". '{module}'; "
             + "Get-TuningKnob | ForEach-Object { $_.Name }";
 
+        // -Command is safe HERE SPECIFICALLY, and only because of what the next line reads.
+        // pwsh -Command collapses every non-zero exit to 1, so it destroys the distinction
+        // between one failure and another; zero is the single value it preserves intact. The
+        // assertion below is zero-vs-non-zero, so nothing this call can observe is lost.
+        //
+        // If a future edit ever reads a SPECIFIC value here (to tell "module missing" from
+        // "module threw", say), it must move to -File first: measured, a script really exiting
+        // 3 reports 3 through -File and 1 through -Command. RunPreflight below already reads
+        // specific values (Refused = 2) and is on -File for exactly this reason.
+        //
+        // Do not take "use -File everywhere" away from that. -File has the opposite fault: it
+        // discards a trailing $LASTEXITCODE when a script ends without an explicit exit,
+        // turning a leaked 7 into a reported 0 (issue #2718). The rule is the pairing of what a
+        // site reads with the channel it reads through, not a preferred flag.
+        //
+        // Nothing enforces this. It is prose, and no test asserts that this call site and its
+        // assertion still agree.
         var (exit, output) = RunShell(["-NoProfile", "-Command", script]);
 
         Assert.That(exit, Is.Zero, $"listing the registered knobs failed: {output.Trim()}");
