@@ -302,6 +302,60 @@ public partial class BPlusLeafGrainTests
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
 
+    /// <summary>
+    /// Whether an invoked entry point ANSWERED within <paramref name="within"/> -
+    /// completed, faulted, or cancelled - rather than staying parked on the replay
+    /// barrier. Never throws, whatever the call did.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A fault is an answer, and reading it as anything else reopens the exact
+    /// hole these fixtures exist to close.</b> The enumerating tests below used
+    /// <c>call.Wait(timeout)</c> directly, which returns <see langword="false"/> on
+    /// timeout but <b>throws</b> <see cref="AggregateException"/> when the task
+    /// completed faulted or cancelled. A data entry point that lost its barrier
+    /// await does not necessarily return cleanly: with the barrier gone it runs
+    /// straight into an unreplayed projection, or into the argument validation that
+    /// used to sit behind the await, and faults. That is still a site answering
+    /// without waiting - the defect - but the throw escaped the loop, so the site
+    /// was never added to the report and the assertion that names the uncovered
+    /// sites never ran.
+    /// </para>
+    /// <para>
+    /// The truncation is the worse half. Because the throw leaves the
+    /// <c>foreach</c> entirely, <b>every entry point after the faulting one is
+    /// never invoked at all</b>. The fixture would then fail on the first uncovered
+    /// site and stay silent about the rest, which is the uncovered-sibling failure
+    /// this whole inventory is built to prevent, re-entering through the harness
+    /// that checks for it. A coverage claim that stops at its first finding is a
+    /// count again.
+    /// </para>
+    /// <para>
+    /// Demonstrated rather than assumed: removing the barrier await from
+    /// <c>GetAsync</c> and rebuilding made
+    /// <see cref="Every_data_entry_point_waits_for_the_replay_barrier"/> fail with
+    /// a bare <c>AggregateException : Value cannot be null. (Parameter 'key')</c>
+    /// and no mention of the inventory, where the whole point of that assertion is
+    /// to answer with the list of uncovered sites. The eight subjects in #2909's
+    /// mutation matrix all happened to return cleanly, so the matrix scored eight
+    /// kills and this was never exercised.
+    /// </para>
+    /// </remarks>
+    private static bool Answered(Task call, TimeSpan within)
+    {
+        try
+        {
+            call.Wait(within);
+        }
+        catch (AggregateException)
+        {
+            // Faulted or cancelled. It did not wait for the replay, which is the
+            // only property being measured here; how it finished is irrelevant.
+        }
+
+        return call.IsCompleted;
+    }
+
     [Test]
     public void Every_grain_interface_entry_point_carries_an_explicit_classification()
     {
@@ -383,7 +437,7 @@ public partial class BPlusLeafGrainTests
             var call = InvokeEntryPoint(leaf.Grain, method);
             Observe(call);
 
-            if (call.Wait(TimeSpan.FromMilliseconds(50)))
+            if (Answered(call, TimeSpan.FromMilliseconds(50)))
             {
                 served.Add(method.Name + "(" + method.GetParameters().Length + " args)");
             }
@@ -428,7 +482,7 @@ public partial class BPlusLeafGrainTests
             var call = InvokeEntryPoint(leaf.Grain, method);
             Observe(call);
 
-            if (!call.Wait(TimeSpan.FromMilliseconds(250)))
+            if (!Answered(call, TimeSpan.FromMilliseconds(250)))
             {
                 blocked.Add(method.Name);
             }
