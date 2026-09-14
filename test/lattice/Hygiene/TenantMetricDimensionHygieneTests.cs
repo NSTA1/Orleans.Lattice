@@ -210,6 +210,19 @@ public sealed class TenantMetricDimensionHygieneTests
         // is served by leaf.activation_failures, which is tree-tagged and tenant-
         // labelled.
         "WalReplayPermitAdaptations",
+        // wal.gc.scheduler_backoff / wal.gc.scheduler_consecutive_faults - the
+        // SCHEDULER-WIDE backoff level and consecutive-fault streak (issue #3064).
+        // Deliberately not tree-tagged, and no tenant is derivable: both describe one
+        // silo's WAL GC service loop before it has any tree to speak of. The faulted
+        // arm is recorded on a pass whose registry enumeration threw, so the scheduler
+        // does not know which trees exist, let alone which tenants own them; the empty
+        // arm is recorded on a silo that has none. Deriving a tenant would attribute a
+        // silo-wide outage to whichever tenant's tree the scheduler happened to read
+        // last, which is not a fact about that tenant. A tenant-scoped consumer asking
+        // whether its own tree is being collected is served by wal.gc.passes and
+        // wal.gc.interval, both of which are tree-tagged and tenant-labelled.
+        "WalGcSchedulerBackoff",
+        "WalGcSchedulerConsecutiveFaults",
         "WriteFailures",
         // repocontext.retrieval.ann.search - every approximate-plane outcome, tagged by
         // serving state (bootstrapping / exhaustive / approximate). Which plane answered
