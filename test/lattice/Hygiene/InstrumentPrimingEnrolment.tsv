@@ -287,6 +287,7 @@ src/lattice/LatticeMetrics.cs#SagaTerminalDecisionDuration	unresolved	reason=dim
 src/lattice/LatticeMetrics.cs#ScanPageCeilingOutcomes	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ScanPageLeafReadOutcomes	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ScanPageStalls	unresolved	reason=dimension tree: no declaration found for TreeId
+src/lattice/LatticeMetrics.cs#ScanPageZeroProgressStalls	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ScanStallFutilityOutcomes	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ScanStallResumptions	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#SetDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree, StageTagTenant): tag argument(s) stageTagTree, StageTagTenant are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read

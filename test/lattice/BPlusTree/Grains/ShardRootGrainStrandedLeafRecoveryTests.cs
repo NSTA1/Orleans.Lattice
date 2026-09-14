@@ -611,7 +611,8 @@ public class ShardRootGrainStrandedLeafRecoveryTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(slow, Is.Zero, "both arms are primed at zero, so a zero here is measured");
+            Assert.That(slow, Is.Zero,
+                "nothing has stalled yet, so neither arm has been armed");
             Assert.That(stranded, Is.Zero);
         });
 
@@ -626,6 +627,80 @@ public class ShardRootGrainStrandedLeafRecoveryTests
                 "every fire below the threshold is a measured slow fire");
             Assert.That(stranded, Is.EqualTo(1),
                 "and exactly the threshold fire is measured as stranded");
+        });
+
+        harness.Drain();
+    }
+
+    /// <summary>
+    /// The two arms must exist as series before either has fired. An absent
+    /// series and a series reading zero are byte-identical at the query, so an
+    /// operator watching for a stranded leaf on an unprimed counter cannot tell
+    /// "no leaf is stranded" from "nothing ever wired this".
+    /// <para>
+    /// This arm drives <c>OnActivateAsync</c> - the priming site - rather than
+    /// merely constructing the grain. A first revision asserted that both arms
+    /// read zero on a freshly constructed grain and called that "primed"; that
+    /// is an assertion of <em>absence</em>, and deleting the priming call
+    /// entirely left it green. The check that matters is that a measurement was
+    /// actually published for each arm, so it is counted here rather than
+    /// summed.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Both_outcome_arms_are_primed_at_activation()
+    {
+        var slowWrites = 0;
+        var strandedWrites = 0;
+        var nonZero = 0;
+
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.ScanPageZeroProgressStalls,
+            l => l.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>
+            {
+                if (!ReferenceEquals(instrument, LatticeMetrics.ScanPageZeroProgressStalls))
+                {
+                    return;
+                }
+
+                foreach (var tag in tags)
+                {
+                    if (tag.Key != LatticeMetrics.TagOutcome)
+                    {
+                        continue;
+                    }
+
+                    if (value != 0)
+                    {
+                        Interlocked.Increment(ref nonZero);
+                    }
+                    else if ((string?)tag.Value == "slow")
+                    {
+                        Interlocked.Increment(ref slowWrites);
+                    }
+                    else if ((string?)tag.Value == "stranded")
+                    {
+                        Interlocked.Increment(ref strandedWrites);
+                    }
+                }
+            }));
+
+        var harness = CreateHarness();
+        Assert.That(slowWrites + strandedWrites, Is.Zero,
+            "control: construction alone must not publish the series, or this arm would pass "
+            + "without the activation hook running at all");
+
+        await ((IGrainBase)harness.Grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(slowWrites, Is.EqualTo(1),
+                "activation must publish the slow arm as a zero, so a later zero is measured");
+            Assert.That(strandedWrites, Is.EqualTo(1),
+                "activation must publish the stranded arm too: priming only one leaves the arm "
+                + "an operator actually watches for indistinguishable from unwired");
+            Assert.That(nonZero, Is.Zero,
+                "priming must not fabricate a stall it did not observe");
         });
 
         harness.Drain();
