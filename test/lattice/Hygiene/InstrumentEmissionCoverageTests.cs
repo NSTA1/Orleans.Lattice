@@ -108,17 +108,7 @@ public sealed class InstrumentEmissionCoverageTests
     /// which is the failure mode this whole gate exists to remove.
     /// </remarks>
     private static readonly IReadOnlyDictionary<string, string> Exempt =
-        new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["orleans.lattice.saga.wait.serial_gap"] =
-                "Issue #2932: specified by the Phase A instrumentation effort and consumed by a "
-                + "dashboard panel, a metrics doc row and the throughput rig's diagnostic reporter, "
-                + "but never wired. Its sibling SagaPerKeyDuration emits at AtomicWriteGrain.cs:2629 "
-                + "and step2-instrumentation.md names the same loop as this instrument's site, so "
-                + "this is an unfinished implementation with a known remedy, not a dead instrument. "
-                + "Wiring it adds behaviour and is deliberately kept out of the change that removes "
-                + "the genuinely dead ones.",
-        };
+        new Dictionary<string, string>(StringComparer.Ordinal);
 
     /// <summary>
     /// The gate. Every synchronous declaration must have an emission site somewhere
